@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { analyzeCompany, getGeminiConfig, searchPotentialClients, generateMailGroupStrategy } from './services/geminiService';
 import { exportToPPT } from './services/exportService';
 import { saveHistory, getHistory, getAllFilesFromDB, saveAutomationTask, getAutomationQueue, deleteAutomationTask, saveFileToDB } from './services/db';
-import { fetchGlobalConfig, fetchSharedKnowledgeBase, backupUserHistory } from './services/githubService';
+import { fetchGlobalConfig, fetchSharedKnowledgeBase, backupUserHistory, fetchCRMFromCloud, saveCRMToCloud, fetchUserHistoryFromCloud, checkGitHubStatus, fetchApiConfigsFromCloud } from './services/githubService';
 import { checkLimit, incrementUsage, updateLocalConfig } from './services/limitService';
 import { ModuleType, AnalysisResult, DiscoveryState, Client, User, HistoryItem, AutomationResult, ClientSearchResult } from './types';
 import { ModuleBackground } from './components/ModuleBackground';
@@ -47,6 +47,7 @@ const App: React.FC = () => {
   const [kbCount, setKbCount] = useState(0); 
   const [systemNotice, setSystemNotice] = useState('');
   const [isBackup, setIsBackup] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   
   const [discoveryState, setDiscoveryState] = useState<DiscoveryState>({
     product: '', country: '', industry: '', clientType: '', results: [], hasSearched: false
@@ -82,29 +83,62 @@ const App: React.FC = () => {
   useEffect(() => {
     const loadData = async () => {
         try {
+            // 1. Load Local DB Data First
             const h = await getHistory(); setHistory(h);
             const q = await getAutomationQueue(); setAutomationResults(q);
             const files = await getAllFilesFromDB(); setKbCount(files.length);
             
-            // Sync from GitHub on Load
-            const globalConfig = await fetchGlobalConfig();
-            if (globalConfig) {
-                updateLocalConfig(globalConfig);
-                if(globalConfig.systemNotice) setSystemNotice(globalConfig.systemNotice);
+            // 2. Sync from GitHub if connected
+            if (checkGitHubStatus().ok && currentUser) {
+                // Config
+                const globalConfig = await fetchGlobalConfig();
+                if (globalConfig) {
+                    updateLocalConfig(globalConfig);
+                    if(globalConfig.systemNotice) setSystemNotice(globalConfig.systemNotice);
+                }
+                
+                // KB (if local empty)
+                if (files.length === 0) {
+                    const sharedKB = await fetchSharedKnowledgeBase();
+                    for (const f of sharedKB) { await saveFileToDB(f); }
+                    if(sharedKB.length > 0) setKbCount(sharedKB.length);
+                }
+
+                // CRM
+                const cloudCRM = await fetchCRMFromCloud();
+                if(cloudCRM.length > 0) {
+                    setCrmClients(cloudCRM);
+                    localStorage.setItem('tradeScoutClients', JSON.stringify(cloudCRM));
+                }
+
+                // History
+                const cloudHistory = await fetchUserHistoryFromCloud(currentUser.username);
+                if(cloudHistory.length > 0) {
+                    // Merge strategies: prefer cloud if conflict, or simply union by ID
+                    const existingIds = new Set(h.map(i => i.id));
+                    const newItems = cloudHistory.filter(i => !existingIds.has(i.id));
+                    if (newItems.length > 0) {
+                        for(const item of newItems) await saveHistory(item);
+                        setHistory(prev => [...newItems, ...prev]); // update state
+                    }
+                }
+                
+                // API Keys (Sync local cache for user if needed, though mostly used by services)
+                const apiKeys = await fetchApiConfigsFromCloud();
+                if (apiKeys.length > 0) {
+                    localStorage.setItem('trade_scout_api_configs', JSON.stringify(apiKeys));
+                }
             }
-            
-            // Sync KB from GitHub if local is empty or admin updated
-            if (files.length === 0) {
-                const sharedKB = await fetchSharedKnowledgeBase();
-                for (const f of sharedKB) { await saveFileToDB(f); }
-                if(sharedKB.length > 0) setKbCount(sharedKB.length);
-            }
-        } catch (e) {}
+        } catch (e) {
+            console.error("Sync Error", e);
+        }
     };
+    
     if (currentUser) loadData();
     
+    // Fallback load from localStorage for CRM if offline
     const savedClients = localStorage.getItem('tradeScoutClients');
-    if (savedClients) { try { setCrmClients(JSON.parse(savedClients)); } catch(e) {} }
+    if (savedClients && crmClients.length === 0) { try { setCrmClients(JSON.parse(savedClients)); } catch(e) {} }
   }, [currentUser]); 
 
   useEffect(() => {
@@ -452,16 +486,20 @@ const App: React.FC = () => {
       setActiveModule(ModuleType.DISCOVERY);
   };
 
-  const handleBackupHistory = async () => {
+  const handleSyncToGitHub = async () => {
       if(!currentUser) return;
-      setIsBackup(true);
+      setIsSyncing(true);
       try {
+          // 1. Sync History
           await backupUserHistory(currentUser.username, history);
-          alert("History synced to GitHub 'data/history' folder!");
+          // 2. Sync CRM
+          await saveCRMToCloud(crmClients);
+          
+          alert("所有数据（历史记录、CRM 客户）已同步到 GitHub!");
       } catch (e: any) {
-          alert("Backup failed: " + e.message);
+          alert("同步失败: " + e.message);
       } finally {
-          setIsBackup(false);
+          setIsSyncing(false);
       }
   };
 
@@ -549,7 +587,7 @@ const App: React.FC = () => {
               <div className="p-4 border-b bg-slate-50 font-bold text-slate-700 flex justify-between items-center">
                   <span>Recent Analysis</span>
                   <div className="flex gap-2">
-                      <button onClick={handleBackupHistory} className="text-blue-600 hover:text-blue-800" title="Sync to GitHub">{isBackup ? <Loader2 className="animate-spin" size={16}/> : <Cloud size={16}/>}</button>
+                      <button onClick={handleSyncToGitHub} className="text-blue-600 hover:text-blue-800" title="Sync to GitHub">{isSyncing ? <Loader2 className="animate-spin" size={16}/> : <Cloud size={16}/>}</button>
                       <button onClick={() => setHistoryOpen(false)} className="text-slate-400 hover:text-slate-700">✕</button>
                   </div>
               </div>
@@ -633,6 +671,7 @@ const App: React.FC = () => {
                         clients={crmClients} 
                         setClients={setCrmClients} 
                         onBatchAnalyze={handleBatchAnalyzeFromCRM} 
+                        history={history}
                     />
                 )}
                 {activeModule === ModuleType.PROMO_GENERATOR && (

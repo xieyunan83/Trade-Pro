@@ -1,4 +1,5 @@
 
+
 export enum ModuleType {
   DISCOVERY = 'discovery',
   BACKGROUND = 'background',
@@ -248,4 +249,14 @@ export interface KeywordExtractionResult {
   industryTerms: string[];
   tier1Keywords: string[];
   tier2Keywords: string[];
+}
+
+export type TaskType = 'default' | 'analysis' | 'search' | 'email' | 'keywords' | 'chat';
+
+export interface ApiConfig {
+    id: string;
+    apiKey: string;
+    baseUrl: string;
+    modelId?: string;
+    taskAssignment?: TaskType;
 }

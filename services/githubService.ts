@@ -1,15 +1,15 @@
 
+
 import { Octokit } from "@octokit/rest";
-import { GlobalConfig, KnowledgeFile, HistoryItem } from "../types";
+import { GlobalConfig, KnowledgeFile, HistoryItem, User, Client, ApiConfig } from "../types";
 
 // Keys for LocalStorage Fallback
 const LS_TOKEN = "GH_TOKEN";
 const LS_OWNER = "GH_OWNER";
 const LS_REPO = "GH_REPO";
 
-// Helper to get credentials (Env Vars take priority, then LocalStorage)
+// Helper to get credentials
 const getCredentials = () => {
-    // 1. Try Environment Variables
     const envToken = process.env.VITE_GITHUB_TOKEN;
     const envOwner = process.env.VITE_GITHUB_OWNER;
     const envRepo = process.env.VITE_GITHUB_REPO;
@@ -18,7 +18,6 @@ const getCredentials = () => {
         return { token: envToken, owner: envOwner, repo: envRepo, source: 'ENV' };
     }
 
-    // 2. Try LocalStorage (Manual Input)
     const lsToken = localStorage.getItem(LS_TOKEN);
     const lsOwner = localStorage.getItem(LS_OWNER);
     const lsRepo = localStorage.getItem(LS_REPO);
@@ -33,6 +32,9 @@ const getCredentials = () => {
 // Paths in the repo
 const PATH_CONFIG = "data/config.json";
 const PATH_KB = "data/kb.json";
+const PATH_USERS = "data/users.json";
+const PATH_API_KEYS = "data/api_keys.json";
+const PATH_CRM = "data/crm.json";
 const PATH_HISTORY_PREFIX = "data/history/";
 
 const getOctokit = () => {
@@ -88,32 +90,6 @@ const saveFileContent = async (path: string, content: any, message: string, sha?
 
 // --- PUBLIC METHODS ---
 
-export const fetchGlobalConfig = async (): Promise<GlobalConfig | null> => {
-    const res = await getFileContent(PATH_CONFIG);
-    return res ? res.content as GlobalConfig : null;
-};
-
-export const saveGlobalConfig = async (config: GlobalConfig) => {
-    const existing = await getFileContent(PATH_CONFIG);
-    await saveFileContent(PATH_CONFIG, config, "Update Admin Config", existing?.sha);
-};
-
-export const fetchSharedKnowledgeBase = async (): Promise<KnowledgeFile[]> => {
-    const res = await getFileContent(PATH_KB);
-    return res ? res.content as KnowledgeFile[] : [];
-};
-
-export const saveSharedKnowledgeBase = async (files: KnowledgeFile[]) => {
-    const existing = await getFileContent(PATH_KB);
-    await saveFileContent(PATH_KB, files, "Update Knowledge Base", existing?.sha);
-};
-
-export const backupUserHistory = async (username: string, history: HistoryItem[]) => {
-    const path = `${PATH_HISTORY_PREFIX}${username}_history.json`;
-    const existing = await getFileContent(path);
-    await saveFileContent(path, history, `Backup history for ${username}`, existing?.sha);
-};
-
 export const checkGitHubStatus = () => {
     const { token, owner, repo, source } = getCredentials();
     if (!token) return { ok: false, msg: "Missing Token", source };
@@ -122,7 +98,6 @@ export const checkGitHubStatus = () => {
     return { ok: true, msg: "Connected", source };
 };
 
-// NEW: Manual Configuration (Saved to LocalStorage)
 export const setManualGitHubConfig = (token: string, owner: string, repo: string) => {
     localStorage.setItem(LS_TOKEN, token);
     localStorage.setItem(LS_OWNER, owner);
@@ -134,3 +109,68 @@ export const clearManualGitHubConfig = () => {
     localStorage.removeItem(LS_OWNER);
     localStorage.removeItem(LS_REPO);
 };
+
+// 1. Global Config
+export const fetchGlobalConfig = async (): Promise<GlobalConfig | null> => {
+    const res = await getFileContent(PATH_CONFIG);
+    return res ? res.content as GlobalConfig : null;
+};
+export const saveGlobalConfig = async (config: GlobalConfig) => {
+    const existing = await getFileContent(PATH_CONFIG);
+    await saveFileContent(PATH_CONFIG, config, "Update Admin Config", existing?.sha);
+};
+
+// 2. Knowledge Base
+export const fetchSharedKnowledgeBase = async (): Promise<KnowledgeFile[]> => {
+    const res = await getFileContent(PATH_KB);
+    return res ? res.content as KnowledgeFile[] : [];
+};
+export const saveSharedKnowledgeBase = async (files: KnowledgeFile[]) => {
+    const existing = await getFileContent(PATH_KB);
+    await saveFileContent(PATH_KB, files, "Update Knowledge Base", existing?.sha);
+};
+
+// 3. Users
+export const fetchUsersFromCloud = async (): Promise<User[]> => {
+    const res = await getFileContent(PATH_USERS);
+    return res ? res.content as User[] : [];
+};
+export const saveUsersToCloud = async (users: User[]) => {
+    const existing = await getFileContent(PATH_USERS);
+    await saveFileContent(PATH_USERS, users, "Update Users List", existing?.sha);
+};
+
+// 4. API Keys
+export const fetchApiConfigsFromCloud = async (): Promise<ApiConfig[]> => {
+    const res = await getFileContent(PATH_API_KEYS);
+    return res ? res.content as ApiConfig[] : [];
+};
+export const saveApiConfigsToCloud = async (configs: ApiConfig[]) => {
+    const existing = await getFileContent(PATH_API_KEYS);
+    await saveFileContent(PATH_API_KEYS, configs, "Update API Configurations", existing?.sha);
+};
+
+// 5. CRM Clients
+export const fetchCRMFromCloud = async (): Promise<Client[]> => {
+    const res = await getFileContent(PATH_CRM);
+    return res ? res.content as Client[] : [];
+};
+export const saveCRMToCloud = async (clients: Client[]) => {
+    const existing = await getFileContent(PATH_CRM);
+    await saveFileContent(PATH_CRM, clients, "Update CRM Clients", existing?.sha);
+};
+
+// 6. User History
+export const fetchUserHistoryFromCloud = async (username: string): Promise<HistoryItem[]> => {
+    const path = `${PATH_HISTORY_PREFIX}${username}_history.json`;
+    const res = await getFileContent(path);
+    return res ? res.content as HistoryItem[] : [];
+};
+export const saveUserHistoryToCloud = async (username: string, history: HistoryItem[]) => {
+    const path = `${PATH_HISTORY_PREFIX}${username}_history.json`;
+    const existing = await getFileContent(path);
+    await saveFileContent(path, history, `Update history for ${username}`, existing?.sha);
+};
+
+// Export alias for compatibility
+export const backupUserHistory = saveUserHistoryToCloud;

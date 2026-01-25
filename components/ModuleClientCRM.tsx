@@ -1,19 +1,20 @@
 
 import React, { useState, useEffect } from 'react';
-import { Client } from '../types';
-import { exportClientsToExcel } from '../services/exportService';
+import { Client, HistoryItem } from '../types';
+import { exportClientsToExcel, exportBatchAnalysisToPPT } from '../services/exportService';
 import { 
     Users, Filter, Package, Plus, Search, Calendar, 
-    Clock, AlertCircle, Save, Edit3, Trash2, X, ShieldCheck, CheckSquare, Square, PlayCircle, Globe, ShoppingBag, Download
+    Clock, AlertCircle, Save, Edit3, Trash2, X, ShieldCheck, CheckSquare, Square, PlayCircle, Globe, ShoppingBag, Download, FileSpreadsheet
 } from 'lucide-react';
 
 interface Props {
     clients: Client[];
     setClients: React.Dispatch<React.SetStateAction<Client[]>>;
     onBatchAnalyze?: (clients: Client[]) => void;
+    history: HistoryItem[];
 }
 
-export const ModuleClientCRM: React.FC<Props> = ({ clients, setClients, onBatchAnalyze }) => {
+export const ModuleClientCRM: React.FC<Props> = ({ clients, setClients, onBatchAnalyze, history }) => {
     // --- State ---
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [isModalOpen, setIsModalOpen] = useState(false);
@@ -107,6 +108,36 @@ export const ModuleClientCRM: React.FC<Props> = ({ clients, setClients, onBatchA
         }
     };
 
+    // --- Batch Download PPT Logic ---
+    const runBatchDownload = () => {
+        const selectedClients = clients.filter(c => selectedIds.has(c.id));
+        const analyzedClients = selectedClients.filter(c => c.hasAnalyzed);
+        
+        if (analyzedClients.length === 0) {
+            alert("选中的客户中没有已完成背景调查的记录。请先进行调查。(No analyzed clients selected)");
+            return;
+        }
+
+        const reports = analyzedClients.map(client => {
+            // Find matched analysis in history
+            // Match priority: Exact website -> Website includes name -> Exact Name
+            return history.find(h => {
+                const hUrl = h.domain.toLowerCase().replace(/https?:\/\//, '').replace(/\/$/, '');
+                const cUrl = (client.website || '').toLowerCase().replace(/https?:\/\//, '').replace(/\/$/, '');
+                if (hUrl && cUrl && hUrl === cUrl) return true;
+                if (h.data.companyInfo.name === client.name) return true;
+                return false;
+            })?.data;
+        }).filter(Boolean);
+
+        if (reports.length === 0) {
+            alert("找不到选中客户的历史分析数据。可能已被删除。(History data not found for selected clients)");
+            return;
+        }
+
+        exportBatchAnalysisToPPT(reports as any[]);
+    };
+
     // --- Stats Logic ---
     const today = new Date().toISOString().split('T')[0];
     const stats = {
@@ -155,7 +186,7 @@ export const ModuleClientCRM: React.FC<Props> = ({ clients, setClients, onBatchA
     };
 
     return (
-        <div className="max-w-7xl mx-auto space-y-6 animate-fade-in pb-10">
+        <div className="max-w-7xl mx-auto space-y-6 animate-fade-in pb-20">
             
             {/* Header Area */}
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -365,12 +396,20 @@ export const ModuleClientCRM: React.FC<Props> = ({ clients, setClients, onBatchA
                         <span className="text-blue-400 text-lg mr-1">{selectedIds.size}</span> Selected
                     </div>
                     <div className="h-8 w-px bg-slate-700"></div>
-                    <button 
-                        onClick={runBatchAnalysis}
-                        className="bg-purple-600 hover:bg-purple-500 text-white px-5 py-2 rounded-xl font-bold text-sm flex items-center gap-2 transition-colors shadow-lg"
-                    >
-                        <PlayCircle size={16} /> Batch Background Check
-                    </button>
+                    <div className="flex gap-3">
+                        <button 
+                            onClick={runBatchAnalysis}
+                            className="bg-purple-600 hover:bg-purple-500 text-white px-5 py-2 rounded-xl font-bold text-sm flex items-center gap-2 transition-colors shadow-lg"
+                        >
+                            <PlayCircle size={16} /> Batch Background Check
+                        </button>
+                        <button 
+                            onClick={runBatchDownload}
+                            className="bg-slate-700 hover:bg-slate-600 text-white px-5 py-2 rounded-xl font-bold text-sm flex items-center gap-2 transition-colors border border-slate-600 hover:border-slate-500"
+                        >
+                            <FileSpreadsheet size={16} /> Download Reports
+                        </button>
+                    </div>
                 </div>
             )}
 

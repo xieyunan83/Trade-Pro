@@ -162,6 +162,80 @@ export const exportToPPT = (data: AnalysisResult) => {
 };
 
 /**
+ * BATCH EXPORT ANALYSIS REPORTS (FROM CRM)
+ * Takes pure AnalysisResult objects.
+ */
+export const exportBatchAnalysisToPPT = async (analyses: AnalysisResult[]) => {
+    if (!window.PptxGenJS || !window.JSZip || !window.saveAs) {
+        alert("Export engines (PptxGenJS/JSZip) loading... Please wait.");
+        return;
+    }
+
+    if (analyses.length === 0) {
+        alert("没有可用的分析报告数据 (No analysis data provided).");
+        return;
+    }
+
+    try {
+        const zip = new JSZip();
+        const folder = zip.folder("Analysis_Reports");
+
+        for (const analysis of analyses) {
+            const pptx = new PptxGenJS();
+            pptx.layout = 'LAYOUT_16x9';
+            pptx.author = '楠哥的小助理';
+            pptx.title = `${sanitize(analysis.companyInfo.name)} Analysis`;
+
+            generateAnalysisSlides(pptx, analysis);
+            
+            // If email strategy exists in the analysis object, add it
+            if (analysis.generatedEmails) {
+                addEmailStrategySlidesFromGroup(pptx, analysis.generatedEmails);
+            }
+
+            const blob = await pptx.write({ outputType: 'blob' });
+            const safeName = sanitize(analysis.companyInfo.name).replace(/[^a-z0-9\u4e00-\u9fa5]/gi, '_');
+            folder.file(`${safeName}_Analysis.pptx`, blob);
+        }
+
+        // Generate Master Strategy from all analyses
+        // NOTE: This uses the first client's "businessScope" as rudimentary context if available
+        const strategyPptx = new PptxGenJS();
+        strategyPptx.layout = 'LAYOUT_16x9';
+        strategyPptx.author = '楠哥的小助理';
+        strategyPptx.title = `Master Outreach Strategy`;
+
+        let slide = strategyPptx.addSlide();
+        slide.background = { color: COLORS.DARK_BG };
+        slide.addText("MASTER OUTREACH STRATEGY", { x: 0.5, y: 1.5, fontSize: 36, bold: true, color: "FFFFFF", align: 'center' });
+        slide.addText("批量客户开发策略汇总", { x: 0.5, y: 2.2, fontSize: 24, color: "CBD5E1", align: 'center' });
+
+        // Try to generate a consolidated strategy if we have KB files
+        try {
+           let kbFiles = [];
+           try { kbFiles = await getAllFilesFromDB(); } catch(e) {}
+           
+           if (kbFiles.length > 0) {
+               const mailGroup = await generateConsolidatedEmailStrategy(analyses, kbFiles, "Consolidated CRM Batch");
+               addEmailStrategySlidesFromGroup(strategyPptx, mailGroup);
+           }
+        } catch(e) {
+            console.error("Failed to generate consolidated strategy for batch", e);
+        }
+
+        const strategyBlob = await strategyPptx.write({ outputType: 'blob' });
+        zip.file("Master_Strategy_Suggestion.pptx", strategyBlob);
+
+        const content = await zip.generateAsync({ type: "blob" });
+        saveAs(content, `Batch_Analysis_Reports_${Date.now()}.zip`);
+
+    } catch (e: any) {
+        console.error("Batch Analysis Export Error", e);
+        alert(`Failed to generate Zip: ${e.message}`);
+    }
+};
+
+/**
  * AUTOMATION FULL REPORT PPT (Single)
  */
 export const exportAutomationReportToPPT = (result: AutomationResult) => {
@@ -198,94 +272,13 @@ export const exportAutomationReportToPPT = (result: AutomationResult) => {
  * 2. ONE Separate PPT for Email Strategy (Consolidated or Collection).
  */
 export const exportBatchAutomationReportsToPPT = async (results: AutomationResult[]) => {
-    if (!window.PptxGenJS || !window.JSZip || !window.saveAs) {
-        alert("Export engines (PptxGenJS/JSZip) loading... Please wait.");
-        return;
-    }
-
     const completed = results.filter(r => r.status === 'completed' && r.analysis);
-    if (completed.length === 0) {
-        alert("没有已完成的报告可供导出 (No completed reports to export).");
-        return;
+    const analyses = completed.map(r => r.analysis).filter(Boolean) as AnalysisResult[];
+    if (analyses.length === 0) {
+         alert("没有已完成的报告可供导出 (No completed reports).");
+         return;
     }
-
-    try {
-        const zip = new JSZip();
-        const folder = zip.folder("Client_Analysis_Reports");
-
-        // 1. Generate Individual PPTs (Background Info ONLY)
-        for (const res of completed) {
-            const pptx = new PptxGenJS();
-            pptx.layout = 'LAYOUT_16x9';
-            pptx.author = '楠哥的小助理';
-            pptx.title = `${sanitize(res.clientName)} Analysis`;
-
-            if (res.analysis) {
-                generateAnalysisSlides(pptx, res.analysis);
-            }
-
-            const blob = await pptx.write({ outputType: 'blob' });
-            const safeName = sanitize(res.clientName).replace(/[^a-z0-9\u4e00-\u9fa5]/gi, '_');
-            folder.file(`${safeName}_Analysis.pptx`, blob);
-        }
-
-        // 2. Generate Independent Strategy PPT
-        const strategyPptx = new PptxGenJS();
-        strategyPptx.layout = 'LAYOUT_16x9';
-        strategyPptx.author = '楠哥的小助理';
-        strategyPptx.title = `Master Outreach Strategy`;
-
-        // Cover for Strategy PPT
-        let slide = strategyPptx.addSlide();
-        slide.background = { color: COLORS.DARK_BG };
-        slide.addText("MASTER OUTREACH STRATEGY", { x: 0.5, y: 1.5, fontSize: 36, bold: true, color: "FFFFFF", align: 'center' });
-        slide.addText("开发信策略独立报告", { x: 0.5, y: 2.2, fontSize: 24, color: "CBD5E1", align: 'center' });
-        slide.addText(`Total Clients Targeted: ${completed.length}`, { x: 0.5, y: 3.5, fontSize: 14, color: "94A3B8", align: 'center' });
-
-        const isEconomy = completed[0].mode === 'economy';
-
-        // Extract context from the first result to guide the strategy generation
-        const batchContext = completed[0].productContext || "General Inquiry";
-
-        if (isEconomy) {
-            // ECONOMY: Generate ONE consolidated strategy now
-            let kbFiles = [];
-            try { kbFiles = await getAllFilesFromDB(); } catch(e) {}
-            
-            const analyses = completed.map(c => c.analysis).filter(Boolean) as AnalysisResult[];
-            // NOTE: This might take a few seconds, user needs visual feedback.
-            // Since we can't easily show loading state in this function call without UI context, 
-            // we assume the user is waiting.
-            
-            // Pass the context explicitly to ensure strategy uses the user's keywords/intent
-            const mailGroup = await generateConsolidatedEmailStrategy(analyses, kbFiles, batchContext);
-            
-            addEmailStrategySlidesFromGroup(strategyPptx, mailGroup);
-        } else {
-            // DETAILED: Aggregate individual strategies into one file
-            for (const res of completed) {
-                if (res.mailGroup) {
-                    // Title Slide for this Client
-                    let divider = strategyPptx.addSlide();
-                    divider.background = { color: "F1F5F9" };
-                    divider.addText(`Strategy For: ${sanitize(res.clientName)}`, { x: 0.5, y: 2.5, fontSize: 28, bold: true, color: COLORS.DARK_BG, align: 'center' });
-                    
-                    addEmailStrategySlidesFromGroup(strategyPptx, res.mailGroup);
-                }
-            }
-        }
-
-        const strategyBlob = await strategyPptx.write({ outputType: 'blob' });
-        zip.file("Master_Email_Strategy.pptx", strategyBlob);
-
-        // 3. Save Zip
-        const content = await zip.generateAsync({ type: "blob" });
-        saveAs(content, `TradeScout_Batch_Reports_${Date.now()}.zip`);
-
-    } catch (e: any) {
-        console.error("Batch Export Error", e);
-        alert(`Failed to generate Batch ZIP: ${e.message}`);
-    }
+    await exportBatchAnalysisToPPT(analyses);
 };
 
 // --- INTERNAL HELPERS ---
@@ -423,12 +416,7 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
         slide.addShape(pptx.ShapeType.rect, headerRect);
         slide.addText("财务趋势与预测 (Financial Trends & Forecast)", headerStyle);
 
-        // Chart Data Preparation
         const labels = data.financialTrends.map(t => t.year);
-        
-        // FIX: Scale large numbers down to Millions if they are raw values
-        // If value > 1,000,000, divide by 1,000,000. 
-        // This ensures 12,900,000,000 becomes 12,900 (matches label 'Millions')
         const revenueData = data.financialTrends.map(t => {
             const val = t.revenue || 0;
             return val > 1000000 ? val / 1000000 : val;
@@ -451,7 +439,6 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
             }
         ];
 
-        // Add Chart
         slide.addChart(pptx.ChartType.bar, chartData, {
             x: 0.5, y: 1.2, w: 9.0, h: 3.5,
             barDir: 'col',
@@ -459,55 +446,48 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
             showLegend: true,
             legendPos: 'b',
             showTitle: false,
-            // barGapWidthPct: 50,
             chartColors: [COLORS.ACCENT_BLUE, COLORS.ACCENT_PURPLE],
             showValue: true
         });
 
-        // Summary Text
         slide.addText("分析说明: 图表单位为百万美元 (USD Millions)。展示了该企业过去5年的财务估算及未来2年的AI预测趋势。", { 
             x: 0.5, y: 4.8, w: 9, h: 0.5, 
             fontSize: 10, color: COLORS.TEXT_MUTED, align: 'center', italic: true 
         });
     }
 
-    // --- SLIDE 4: BUSINESS MODEL & SCOPE (商业模式) ---
+    // --- SLIDE 4: BUSINESS MODEL & SCOPE ---
     slide = pptx.addSlide();
     addFooter(slide);
     slide.addShape(pptx.ShapeType.rect, headerRect);
     slide.addText("商业模式与供应链 (Business Model)", headerStyle);
 
-    // Grid Layout for multiple small sections
     const boxStyle = { fill: "FFFFFF", line: { color: "E2E8F0" } };
     const titleStyle = { fontSize: 10, bold: true, color: COLORS.ACCENT_BLUE };
     const contentStyle = { fontSize: 9, color: COLORS.TEXT_MAIN, valign: "middle" as const };
 
-    // Box 1: Business Scope
     slide.addShape(pptx.ShapeType.rect, { x: 0.5, y: 1.2, w: 4.4, h: 1.8, ...boxStyle });
     slide.addText("业务范围 (Scope)", { x: 0.6, y: 1.3, ...titleStyle });
     slide.addText(`核心产品: ${data.businessScope.coreProducts.join(', ')}\n\n定位: ${data.businessScope.brandPositioning}\n\n价格敏感度: ${data.businessScope.priceSensitivity}`, 
         { x: 0.6, y: 1.5, w: 4.2, h: 1.4, ...contentStyle, wrap: true });
 
-    // Box 2: Supply Chain
     slide.addShape(pptx.ShapeType.rect, { x: 5.1, y: 1.2, w: 4.4, h: 1.8, ...boxStyle });
     slide.addText("供应链角色 (Supply Chain)", { x: 5.2, y: 1.3, ...titleStyle });
     slide.addText(`角色: ${data.supplyChain.role}\n\n服务模式: ${data.supplyChain.serviceType}\n\n目标客户: ${data.targetAudience.join(', ')}`,
         { x: 5.2, y: 1.5, w: 4.2, h: 1.4, ...contentStyle, wrap: true });
 
-    // Box 3: Channels
     slide.addShape(pptx.ShapeType.rect, { x: 0.5, y: 3.2, w: 9.0, h: 1.5, ...boxStyle });
     slide.addText("销售渠道与采购 (Channels & Procurement)", { x: 0.6, y: 3.3, ...titleStyle });
     slide.addText(`销售渠道: ${data.businessModel.channels.join(', ')}\n\n电商平台: ${data.businessModel.ecommercePresence.join(', ')}\n\n采购习惯: ${data.businessModel.procurementInfo}`,
         { x: 0.6, y: 3.5, w: 8.8, h: 1.1, ...contentStyle, wrap: true });
 
 
-    // --- SLIDE 5: SWOT ANALYSIS (态势分析) ---
+    // --- SLIDE 5: SWOT ANALYSIS ---
     slide = pptx.addSlide();
     addFooter(slide);
     slide.addShape(pptx.ShapeType.rect, headerRect);
     slide.addText("SWOT 态势分析", headerStyle);
 
-    // 4 Quadrants
     const drawQuad = (title: string, items: string[], x: number, y: number, color: string) => {
         slide.addShape(pptx.ShapeType.rect, { x, y, w: 4.4, h: 2.0, fill: "FFFFFF", line: { color: color, width: 2 } });
         slide.addText(title, { x: x+0.1, y: y+0.1, fontSize: 11, bold: true, color: color });
@@ -521,7 +501,7 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
     drawQuad("THREATS (威胁)", data.swot?.threats, 5.1, 3.3, "F59E0B");
 
 
-    // --- SLIDE 6: DECISION MAKERS (关键决策人) ---
+    // --- SLIDE 6: DECISION MAKERS ---
     slide = pptx.addSlide();
     addFooter(slide);
     slide.addShape(pptx.ShapeType.rect, headerRect);
@@ -535,7 +515,6 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
             { text: "类型", options: { bold: true, fill: "E2E8F0", w: 1.0, valign: "middle" } }
         ];
         
-        // Take top 10 to fit on slide
         const rows = data.decisionMakers.slice(0, 10).map(dm => [
             { text: sanitize(dm.name), options: { valign: "middle" } },
             { text: sanitize(dm.title), options: { valign: "middle" } },
@@ -548,7 +527,7 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
         slide.addText("未在公开渠道发现关键联系人信息。", { x: 0.5, y: 2.5, w: 9, align: 'center', fontSize: 14, color: COLORS.TEXT_MUTED });
     }
 
-    // --- SLIDE 6.5: WEBSITE PRODUCT CATALOG (NEW) ---
+    // --- SLIDE 6.5: WEBSITE PRODUCT CATALOG ---
     if (data.websiteCategories && data.websiteCategories.length > 0) {
         slide = pptx.addSlide();
         addFooter(slide);
@@ -560,7 +539,6 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
             { text: "包含产品 (Key Items)", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF", w: 6.0, valign: "middle", align: 'center' } }
         ];
 
-        // Prepare rows (max 10 categories to fit slide)
         const catRows = data.websiteCategories.slice(0, 10).map(cat => [
             { text: sanitize(cat.categoryName), options: { valign: "middle", align: 'center' } },
             { text: sanitize(cat.items.join(', ')), options: { valign: "middle", align: 'center' } }
@@ -571,35 +549,30 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
             fontSize: 9, rowH: 0.4, 
             border: { pt: 1, color: "CBD5E1" }, 
             valign: 'middle',
-            align: 'center' // Table-wide center alignment as requested
+            align: 'center' 
         });
     }
 
-    // --- SLIDE 7: PRODUCTS (产品分析) ---
+    // --- SLIDE 7: PRODUCTS ---
     slide = pptx.addSlide();
     addFooter(slide);
     slide.addShape(pptx.ShapeType.rect, headerRect);
     slide.addText("产品与市场策略 (Products & Strategy)", headerStyle);
 
-    // Strategy Summary
     slide.addShape(pptx.ShapeType.rect, { x: 0.5, y: 1.0, w: 9, h: 0.8, fill: "F0F9FF", line: { color: "BAE6FD" } });
     slide.addText(`市场趋势: ${sanitize(data.marketTrends)}`, { x: 0.6, y: 1.1, w: 8.8, h: 0.6, fontSize: 9, color: "0C4A6E", wrap: true, valign: "middle" });
 
-    // Top 3 Products Detail
     if (data.products && data.products.length > 0) {
         data.products.slice(0, 3).forEach((prod, i) => {
             const x = 0.5 + i * 3.1;
             const y = 2.0;
             
-            // Box
             slide.addShape(pptx.ShapeType.rect, { x, y, w: 2.9, h: 3.0, fill: "FFFFFF", line: { color: "E2E8F0" } });
             
-            // Content
             slide.addText(sanitize(prod.name), { x: x+0.1, y: y+0.1, w: 2.7, h: 0.5, fontSize: 10, bold: true, valign: 'top' });
             slide.addText(`零售价: ${sanitize(prod.retailPrice)}`, { x: x+0.1, y: y+0.6, fontSize: 9, color: COLORS.TEXT_MUTED });
             slide.addText(`预估FOB: ¥${sanitize(prod.estimatedFOBPriceCNY)}`, { x: x+0.1, y: y+0.9, fontSize: 9, color: "D97706", bold: true });
             
-            // Strategy
             slide.addText("切入点:", { x: x+0.1, y: y+1.3, fontSize: 9, bold: true });
             slide.addText(sanitize(prod.pitchPoint || "暂无"), { x: x+0.1, y: y+1.5, w: 2.7, h: 0.6, fontSize: 8, color: COLORS.TEXT_MAIN, wrap: true, valign: 'top' });
             
@@ -608,8 +581,7 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
         });
     }
 
-
-    // --- SLIDE 8: ACTION PLAN (行动计划) ---
+    // --- SLIDE 8: ACTION PLAN ---
     slide = pptx.addSlide();
     addFooter(slide);
     slide.addShape(pptx.ShapeType.rect, headerRect);
@@ -630,7 +602,6 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
         slide.addText("暂无具体行动计划。", { x: 0.5, y: 2.5, w: 9, align: 'center', color: COLORS.TEXT_MUTED });
     }
     
-    // Competitors on same slide if space
     if (data.similarCompanies && data.similarCompanies.length > 0) {
         const yStart = 3.5;
         slide.addText("潜在竞品/同行 (Competitors)", { x: 0.5, y: yStart, fontSize: 12, bold: true, color: COLORS.ACCENT_BLUE });
@@ -646,11 +617,5 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
             { text: sanitize(c.mainProducts), options: { valign: "middle" } }
         ]);
         slide.addTable([headers, ...rows], { x: 0.5, y: yStart + 0.4, w: 9.0, fontSize: 9, rowH: 0.4, border: { pt: 1, color: "CBD5E1" }, valign: "middle" });
-    }
-
-    // --- SLIDE 9: EMAIL STRATEGY (NEW: Included if generatedEmails exists) ---
-    // If not exists (Economy mode before consolidation), it will skip this.
-    if (data.generatedEmails) {
-        addEmailStrategySlidesFromGroup(pptx, data.generatedEmails);
     }
 };

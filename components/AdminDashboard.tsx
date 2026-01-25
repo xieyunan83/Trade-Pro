@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { User, KnowledgeFile, GlobalConfig } from '../types';
 import { getAllUsers, saveUser, deleteUser, getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/db';
 import { testApiKey, ApiConfig, getGeminiConfig } from '../services/geminiService';
-import { saveGlobalConfig, fetchGlobalConfig, saveSharedKnowledgeBase, checkGitHubStatus, setManualGitHubConfig, clearManualGitHubConfig } from '../services/githubService';
+import { saveGlobalConfig, fetchGlobalConfig, saveSharedKnowledgeBase, checkGitHubStatus, setManualGitHubConfig, clearManualGitHubConfig, fetchUsersFromCloud, saveUsersToCloud, fetchApiConfigsFromCloud, saveApiConfigsToCloud } from '../services/githubService';
 import { Users, Database, Plus, Trash2, Shield, UploadCloud, FileText, Loader2, LogOut, Key, Save, CheckCircle2, AlertTriangle, Info, Play, Workflow, Cloud, Download, Upload, ExternalLink, HelpCircle, Link2 } from 'lucide-react';
 
 interface Props {
@@ -75,8 +75,6 @@ const CloudLimitManager: React.FC = () => {
     });
     const [loading, setLoading] = useState(false);
     const [msg, setMsg] = useState<{type: 'success' | 'error', text: string} | null>(null);
-
-    // Manual Config Form State
     const [manualToken, setManualToken] = useState('');
     const [manualOwner, setManualOwner] = useState('');
     const [manualRepo, setManualRepo] = useState('');
@@ -293,20 +291,46 @@ const CloudLimitManager: React.FC = () => {
 const SystemSettings: React.FC = () => {
     const [configs, setConfigs] = useState<ApiConfig[]>([]);
     const [isTesting, setIsTesting] = useState<string | null>(null);
+    const [isSyncing, setIsSyncing] = useState(false);
     const [status, setStatus] = useState<{ id: string, type: 'success'|'error', msg: string } | null>(null);
 
     useEffect(() => {
-        const loaded = getGeminiConfig();
-        if (loaded.length > 0) {
-            setConfigs(loaded);
-        } else {
-            setConfigs([{ id: Date.now().toString(), apiKey: '', baseUrl: '', modelId: 'gemini-1.5-pro', taskAssignment: 'default' }]);
-        }
+        const load = async () => {
+            // Priority load from Cloud if available
+            if (checkGitHubStatus().ok) {
+                const cloudConfigs = await fetchApiConfigsFromCloud();
+                if (cloudConfigs.length > 0) {
+                    setConfigs(cloudConfigs);
+                    // Sync local cache
+                    localStorage.setItem('trade_scout_api_configs', JSON.stringify(cloudConfigs));
+                    return;
+                }
+            }
+            const loaded = getGeminiConfig();
+            if (loaded.length > 0) {
+                setConfigs(loaded);
+            } else {
+                setConfigs([{ id: Date.now().toString(), apiKey: '', baseUrl: '', modelId: 'gemini-1.5-pro', taskAssignment: 'default' }]);
+            }
+        };
+        load();
     }, []);
 
     const saveConfigs = (newConfigs: ApiConfig[]) => {
         setConfigs(newConfigs);
         localStorage.setItem('trade_scout_api_configs', JSON.stringify(newConfigs));
+    };
+
+    const handleSyncToCloud = async () => {
+        setIsSyncing(true);
+        try {
+            await saveApiConfigsToCloud(configs);
+            alert("API 配置已同步到 GitHub!");
+        } catch (e: any) {
+            alert("同步失败: " + e.message);
+        } finally {
+            setIsSyncing(false);
+        }
     };
 
     const updateConfig = (id: string, field: keyof ApiConfig, value: string) => {
@@ -348,9 +372,15 @@ const SystemSettings: React.FC = () => {
                 <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
                     <Key className="text-blue-600" /> API 密钥配置池 (Configuration Pool)
                 </h3>
-                <button onClick={addConfig} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-blue-700 transition-colors">
-                    <Plus size={16} /> 添加新密钥
-                </button>
+                <div className="flex gap-2">
+                    <button onClick={handleSyncToCloud} disabled={isSyncing} className="bg-purple-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-purple-700 transition-colors disabled:opacity-50">
+                        {isSyncing ? <Loader2 className="animate-spin" size={16}/> : <UploadCloud size={16}/>}
+                        同步到云端
+                    </button>
+                    <button onClick={addConfig} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-blue-700 transition-colors">
+                        <Plus size={16} /> 添加新密钥
+                    </button>
+                </div>
             </div>
             
             <div className="flex flex-col gap-4">
@@ -442,23 +472,50 @@ const SystemSettings: React.FC = () => {
 const UserManagement: React.FC = () => {
     const [users, setUsers] = useState<User[]>([]);
     const [isAdding, setIsAdding] = useState(false);
+    const [isSyncing, setIsSyncing] = useState(false);
     const [newUser, setNewUser] = useState<{username: string, password: string, role: 'user' | 'admin'}>({ username: '', password: '', role: 'user' });
 
-    const loadUsers = async () => { setUsers(await getAllUsers()); };
+    const loadUsers = async () => { 
+        // Try Cloud first
+        if (checkGitHubStatus().ok) {
+            const cloudUsers = await fetchUsersFromCloud();
+            if (cloudUsers.length > 0) {
+                 setUsers(cloudUsers);
+                 // Sync to local
+                 for(const u of cloudUsers) await saveUser(u);
+                 return;
+            }
+        }
+        setUsers(await getAllUsers()); 
+    };
+
     useEffect(() => { loadUsers(); }, []);
+
+    const handleSyncToCloud = async () => {
+        setIsSyncing(true);
+        try {
+            await saveUsersToCloud(users);
+            alert("用户列表已同步到 GitHub!");
+        } catch (e: any) {
+            alert("同步失败: " + e.message);
+        } finally {
+            setIsSyncing(false);
+        }
+    };
 
     const handleAddUser = async (e: React.FormEvent) => {
         e.preventDefault();
-        await saveUser({ ...newUser, isFirstLogin: true, createdAt: Date.now() });
+        const u: User = { ...newUser, isFirstLogin: true, createdAt: Date.now() };
+        await saveUser(u);
         setNewUser({ username: '', password: '', role: 'user' });
         setIsAdding(false);
-        loadUsers();
+        setUsers([...users, u]);
     };
 
     const handleDelete = async (username: string) => {
         if (username !== 'admin' && confirm(`确认删除用户 ${username}?`)) {
             await deleteUser(username);
-            loadUsers();
+            setUsers(users.filter(u => u.username !== username));
         }
     };
 
@@ -466,9 +523,15 @@ const UserManagement: React.FC = () => {
         <div>
             <div className="flex justify-between items-center mb-6">
                 <h3 className="text-xl font-bold text-slate-800">系统用户管理</h3>
-                <button onClick={() => setIsAdding(true)} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-blue-700">
-                    <Plus size={16} /> 添加用户
-                </button>
+                <div className="flex gap-2">
+                    <button onClick={handleSyncToCloud} disabled={isSyncing} className="bg-purple-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-purple-700 disabled:opacity-50">
+                        {isSyncing ? <Loader2 className="animate-spin" size={16}/> : <UploadCloud size={16}/>}
+                        同步到云端
+                    </button>
+                    <button onClick={() => setIsAdding(true)} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-blue-700">
+                        <Plus size={16} /> 添加用户
+                    </button>
+                </div>
             </div>
             {isAdding && (
                 <form onSubmit={handleAddUser} className="bg-slate-50 p-6 rounded-xl border border-slate-200 mb-8 animate-fade-in">

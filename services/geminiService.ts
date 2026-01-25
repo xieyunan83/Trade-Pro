@@ -1,6 +1,7 @@
 
+
 import { GoogleGenAI, Type, Part } from "@google/genai";
-import { AnalysisResult, ClientSearchResult, DecisionMaker, ChatMessage, KnowledgeFile, KeywordExtractionResult, MailGroup, EmailTemplateRequest } from "../types";
+import { AnalysisResult, ClientSearchResult, DecisionMaker, ChatMessage, KnowledgeFile, KeywordExtractionResult, MailGroup, EmailTemplateRequest, ApiConfig, TaskType } from "../types";
 import { getAllFilesFromDB } from "./db";
 
 // API Keys Configuration
@@ -24,14 +25,8 @@ Do NOT use English for descriptions unless it is a proper noun (like a specific 
 Structure the report professionally in Chinese.
 `;
 
-export type TaskType = 'default' | 'analysis' | 'search' | 'email' | 'keywords' | 'chat';
-
-export interface ApiConfig {
-    id: string;
-    apiKey: string;
-    baseUrl: string;
-    modelId?: string;
-    taskAssignment?: TaskType;
+export interface TaskTypeAssignment {
+    task: TaskType;
 }
 
 const extractJson = (text: string, isArray: boolean = false): any => {
