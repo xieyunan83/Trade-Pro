@@ -3,8 +3,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { User, KnowledgeFile, GlobalConfig } from '../types';
 import { getAllUsers, saveUser, deleteUser, getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/db';
 import { testApiKey, ApiConfig, getGeminiConfig } from '../services/geminiService';
-import { saveGlobalConfig, fetchGlobalConfig, saveSharedKnowledgeBase, checkGitHubStatus } from '../services/githubService';
-import { Users, Database, Plus, Trash2, Shield, UploadCloud, FileText, Loader2, LogOut, Key, Save, CheckCircle2, AlertTriangle, Info, Play, Workflow, Cloud, Download, Upload } from 'lucide-react';
+import { saveGlobalConfig, fetchGlobalConfig, saveSharedKnowledgeBase, checkGitHubStatus, setManualGitHubConfig, clearManualGitHubConfig } from '../services/githubService';
+import { Users, Database, Plus, Trash2, Shield, UploadCloud, FileText, Loader2, LogOut, Key, Save, CheckCircle2, AlertTriangle, Info, Play, Workflow, Cloud, Download, Upload, ExternalLink, HelpCircle, Link2 } from 'lucide-react';
 
 interface Props {
     onLogout: () => void;
@@ -74,13 +74,18 @@ const CloudLimitManager: React.FC = () => {
         systemNotice: ''
     });
     const [loading, setLoading] = useState(false);
-    const [msg, setMsg] = useState('');
+    const [msg, setMsg] = useState<{type: 'success' | 'error', text: string} | null>(null);
+
+    // Manual Config Form State
+    const [manualToken, setManualToken] = useState('');
+    const [manualOwner, setManualOwner] = useState('');
+    const [manualRepo, setManualRepo] = useState('');
 
     useEffect(() => {
         if (status.ok) {
             loadRemoteConfig();
         }
-    }, []);
+    }, [status.ok]);
 
     const loadRemoteConfig = async () => {
         setLoading(true);
@@ -96,81 +101,191 @@ const CloudLimitManager: React.FC = () => {
 
     const handleSave = async () => {
         setLoading(true);
-        setMsg('');
+        setMsg(null);
         try {
             const toSave = { ...config, lastUpdated: Date.now() };
             await saveGlobalConfig(toSave);
             setConfig(toSave);
-            setMsg('成功保存到 GitHub！用户将在下次登录时更新配置。');
+            setMsg({ type: 'success', text: '成功！设置已同步到 GitHub。用户重启 App 后生效。' });
         } catch (e: any) {
-            setMsg(`错误: ${e.message}`);
+            setMsg({ type: 'error', text: `保存失败: ${e.message}。请检查 Token 权限或仓库是否存在。` });
         } finally {
             setLoading(false);
         }
     };
 
+    const handleManualConnect = () => {
+        if (!manualToken || !manualOwner || !manualRepo) {
+            alert("请填写所有字段 (Token, Owner, Repo)");
+            return;
+        }
+        setManualGitHubConfig(manualToken, manualOwner, manualRepo);
+        setStatus(checkGitHubStatus());
+        alert("已保存配置！正在尝试连接...");
+    };
+
+    const handleDisconnect = () => {
+        if(confirm("确定要断开连接并清除配置吗？")) {
+            clearManualGitHubConfig();
+            setStatus(checkGitHubStatus());
+        }
+    };
+
     return (
-        <div className="max-w-2xl">
+        <div className="max-w-3xl">
             <div className="flex items-center justify-between mb-6">
                 <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-                    <Cloud className="text-blue-600" /> GitHub 云端存储 (Cloud Storage)
+                    <Cloud className="text-blue-600" /> GitHub 云端数据库 (Cloud DB)
                 </h3>
-                <div className={`px-3 py-1 rounded-full text-xs font-bold border ${status.ok ? 'bg-green-50 text-green-700 border-green-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
-                    {status.ok ? '已连接 (Connected)' : '未连接 (Disconnected)'}
+                <div className={`px-3 py-1 rounded-full text-xs font-bold border flex items-center gap-2 ${status.ok ? 'bg-green-50 text-green-700 border-green-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
+                    {status.ok ? (
+                        <>
+                            <CheckCircle2 size={12}/> 
+                            已连接 ({status.source === 'ENV' ? '环境变量' : '手动配置'})
+                        </>
+                    ) : (
+                        <>
+                            <AlertTriangle size={12}/> 未连接 (Disconnected)
+                        </>
+                    )}
                 </div>
             </div>
 
-            {!status.ok && (
-                <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-red-800 text-sm mb-6">
-                    <strong>配置缺失：</strong> 请在部署平台的环境变量中添加 VITE_GITHUB_TOKEN, VITE_GITHUB_OWNER, 和 VITE_GITHUB_REPO。
+            {!status.ok ? (
+                <div className="space-y-6">
+                    <div className="p-5 bg-red-50 border border-red-200 rounded-xl text-red-800 text-sm space-y-3">
+                        <div className="flex items-center gap-2 font-bold text-lg">
+                            <AlertTriangle size={20} />
+                            配置缺失 (Configuration Missing)
+                        </div>
+                        <p>环境变量未生效？不用担心，您可以在下方手动填入配置，立即连接。</p>
+                        <div className="pt-2">
+                            <a 
+                                href="https://github.com/settings/tokens/new?scopes=repo&description=TradeScoutApp" 
+                                target="_blank" 
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-2 bg-red-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-red-700 transition-colors"
+                            >
+                                <ExternalLink size={16} /> 第一步：点击生成 Token (必须勾选 repo)
+                            </a>
+                        </div>
+                    </div>
+
+                    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                        <h4 className="font-bold text-slate-800 mb-4 flex items-center gap-2"><Link2 size={18}/> 手动连接 (Manual Connection)</h4>
+                        <div className="grid grid-cols-1 gap-4">
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 mb-1">GitHub Personal Access Token (以 ghp_ 开头)</label>
+                                <input 
+                                    type="password" 
+                                    className="w-full p-3 border border-slate-300 rounded-xl font-mono text-sm"
+                                    placeholder="ghp_xxxxxxxxxxxx"
+                                    value={manualToken}
+                                    onChange={e => setManualToken(e.target.value)}
+                                />
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 mb-1">Owner (用户名)</label>
+                                    <input 
+                                        type="text" 
+                                        className="w-full p-3 border border-slate-300 rounded-xl"
+                                        placeholder="例如: NanGe"
+                                        value={manualOwner}
+                                        onChange={e => setManualOwner(e.target.value)}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 mb-1">Repo (仓库名)</label>
+                                    <input 
+                                        type="text" 
+                                        className="w-full p-3 border border-slate-300 rounded-xl"
+                                        placeholder="例如: trade-data"
+                                        value={manualRepo}
+                                        onChange={e => setManualRepo(e.target.value)}
+                                    />
+                                </div>
+                            </div>
+                            <button 
+                                onClick={handleManualConnect}
+                                className="mt-2 bg-blue-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-blue-700 transition-colors"
+                            >
+                                立即连接 (Connect Now)
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            ) : (
+                <div className={`bg-slate-50 p-6 rounded-xl border border-slate-200 mb-6`}>
+                    <div className="flex items-center justify-between mb-4">
+                        <h4 className="font-bold text-slate-700 flex items-center gap-2"><Shield size={16}/> 每日用户额度限制 (Daily User Limits)</h4>
+                        <div className="flex items-center gap-3">
+                             <span className="text-xs text-slate-400 bg-white px-2 py-1 rounded border">最后更新: {new Date(config.lastUpdated).toLocaleString()}</span>
+                             {status.source === 'LOCAL' && (
+                                 <button onClick={handleDisconnect} className="text-xs text-red-500 hover:underline">断开连接</button>
+                             )}
+                        </div>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-6 mb-6">
+                        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                            <label className="block text-xs font-bold text-slate-500 mb-2">每日最大搜索次数 (Searches/Day)</label>
+                            <div className="flex items-center gap-2">
+                                <input 
+                                    type="number" 
+                                    className="w-full p-2 border border-slate-300 rounded-lg font-mono text-lg font-bold text-blue-600"
+                                    value={config.dailyLimits.search}
+                                    onChange={(e) => setConfig({...config, dailyLimits: {...config.dailyLimits, search: parseInt(e.target.value)}})}
+                                />
+                                <span className="text-xs font-bold text-slate-400">次</span>
+                            </div>
+                        </div>
+                        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                            <label className="block text-xs font-bold text-slate-500 mb-2">每日最大深度背调次数 (Analysis/Day)</label>
+                            <div className="flex items-center gap-2">
+                                <input 
+                                    type="number" 
+                                    className="w-full p-2 border border-slate-300 rounded-lg font-mono text-lg font-bold text-purple-600"
+                                    value={config.dailyLimits.analysis}
+                                    onChange={(e) => setConfig({...config, dailyLimits: {...config.dailyLimits, analysis: parseInt(e.target.value)}})}
+                                />
+                                <span className="text-xs font-bold text-slate-400">次</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="mb-6">
+                        <label className="block text-xs font-bold text-slate-500 mb-2 flex items-center gap-1"><Info size={12}/> 系统公告 (System Notice)</label>
+                        <div className="relative">
+                            <input 
+                                type="text" 
+                                className="w-full p-3 pl-10 border border-slate-300 rounded-xl"
+                                placeholder="例如：系统将于今晚午夜维护，请提前保存数据..."
+                                value={config.systemNotice}
+                                onChange={(e) => setConfig({...config, systemNotice: e.target.value})}
+                            />
+                            <Info className="absolute left-3 top-3.5 text-slate-400" size={18} />
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-1 pl-1">此消息将显示在所有用户的侧边栏上方。</p>
+                    </div>
+
+                    <button 
+                        onClick={handleSave} 
+                        disabled={loading || !status.ok}
+                        className="bg-slate-900 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-slate-700 disabled:opacity-50 transition-colors w-full justify-center"
+                    >
+                        {loading ? <Loader2 className="animate-spin" size={18}/> : <UploadCloud size={18}/>}
+                        推送配置到云端 (Push Config to GitHub)
+                    </button>
+                    
+                    {msg && (
+                        <div className={`mt-4 p-3 rounded-lg text-sm font-bold flex items-center gap-2 ${msg.type === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                            {msg.type === 'success' ? <CheckCircle2 size={16}/> : <AlertTriangle size={16}/>}
+                            {msg.text}
+                        </div>
+                    )}
                 </div>
             )}
-
-            <div className="bg-slate-50 p-6 rounded-xl border border-slate-200 mb-6">
-                <h4 className="font-bold text-slate-700 mb-4 flex items-center gap-2"><Shield size={16}/> 每日用户额度限制 (每位用户)</h4>
-                
-                <div className="grid grid-cols-2 gap-6 mb-4">
-                    <div>
-                        <label className="block text-xs font-bold text-slate-500 mb-1">每日最大搜索次数</label>
-                        <input 
-                            type="number" 
-                            className="w-full p-3 border border-slate-300 rounded-xl"
-                            value={config.dailyLimits.search}
-                            onChange={(e) => setConfig({...config, dailyLimits: {...config.dailyLimits, search: parseInt(e.target.value)}})}
-                        />
-                    </div>
-                    <div>
-                        <label className="block text-xs font-bold text-slate-500 mb-1">每日最大深度背调次数</label>
-                        <input 
-                            type="number" 
-                            className="w-full p-3 border border-slate-300 rounded-xl"
-                            value={config.dailyLimits.analysis}
-                            onChange={(e) => setConfig({...config, dailyLimits: {...config.dailyLimits, analysis: parseInt(e.target.value)}})}
-                        />
-                    </div>
-                </div>
-
-                <div className="mb-4">
-                    <label className="block text-xs font-bold text-slate-500 mb-1">系统公告 (向用户显示)</label>
-                    <input 
-                        type="text" 
-                        className="w-full p-3 border border-slate-300 rounded-xl"
-                        placeholder="例如：系统将于今晚午夜维护..."
-                        value={config.systemNotice}
-                        onChange={(e) => setConfig({...config, systemNotice: e.target.value})}
-                    />
-                </div>
-
-                <button 
-                    onClick={handleSave} 
-                    disabled={loading || !status.ok}
-                    className="bg-slate-900 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-slate-700 disabled:opacity-50 transition-colors"
-                >
-                    {loading ? <Loader2 className="animate-spin" size={18}/> : <UploadCloud size={18}/>}
-                    推送配置到 GitHub (Push Config)
-                </button>
-                {msg && <div className="mt-3 text-sm font-bold text-blue-600">{msg}</div>}
-            </div>
         </div>
     );
 };

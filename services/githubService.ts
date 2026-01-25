@@ -2,31 +2,57 @@
 import { Octokit } from "@octokit/rest";
 import { GlobalConfig, KnowledgeFile, HistoryItem } from "../types";
 
-// These MUST be set in your Deployment Environment Variables
-const GITHUB_TOKEN = process.env.VITE_GITHUB_TOKEN;
-const OWNER = process.env.VITE_GITHUB_OWNER;
-const REPO = process.env.VITE_GITHUB_REPO;
+// Keys for LocalStorage Fallback
+const LS_TOKEN = "GH_TOKEN";
+const LS_OWNER = "GH_OWNER";
+const LS_REPO = "GH_REPO";
+
+// Helper to get credentials (Env Vars take priority, then LocalStorage)
+const getCredentials = () => {
+    // 1. Try Environment Variables
+    const envToken = process.env.VITE_GITHUB_TOKEN;
+    const envOwner = process.env.VITE_GITHUB_OWNER;
+    const envRepo = process.env.VITE_GITHUB_REPO;
+
+    if (envToken && envToken.trim() !== '') {
+        return { token: envToken, owner: envOwner, repo: envRepo, source: 'ENV' };
+    }
+
+    // 2. Try LocalStorage (Manual Input)
+    const lsToken = localStorage.getItem(LS_TOKEN);
+    const lsOwner = localStorage.getItem(LS_OWNER);
+    const lsRepo = localStorage.getItem(LS_REPO);
+
+    if (lsToken && lsToken.trim() !== '') {
+        return { token: lsToken, owner: lsOwner, repo: lsRepo, source: 'LOCAL' };
+    }
+
+    return { token: '', owner: '', repo: '', source: 'NONE' };
+};
 
 // Paths in the repo
 const PATH_CONFIG = "data/config.json";
 const PATH_KB = "data/kb.json";
 const PATH_HISTORY_PREFIX = "data/history/";
 
-const octokit = GITHUB_TOKEN ? new Octokit({ auth: GITHUB_TOKEN }) : null;
-
-const isConfigured = () => {
-    return !!(octokit && OWNER && REPO);
+const getOctokit = () => {
+    const { token } = getCredentials();
+    return token ? new Octokit({ auth: token }) : null;
 };
 
 // --- HELPER: Read/Write File ---
 
 const getFileContent = async (path: string): Promise<{ sha: string, content: any } | null> => {
-    if (!isConfigured()) return null;
+    const { token, owner, repo } = getCredentials();
+    const octokit = getOctokit();
+    
+    if (!token || !owner || !repo || !octokit) return null;
+
     try {
         // @ts-ignore
         const { data } = await octokit.rest.repos.getContent({
-            owner: OWNER!,
-            repo: REPO!,
+            owner: owner!,
+            repo: repo!,
             path: path,
         });
         
@@ -41,15 +67,18 @@ const getFileContent = async (path: string): Promise<{ sha: string, content: any
 };
 
 const saveFileContent = async (path: string, content: any, message: string, sha?: string) => {
-    if (!isConfigured()) throw new Error("GitHub Integration not configured (Missing Token/Repo).");
+    const { token, owner, repo } = getCredentials();
+    const octokit = getOctokit();
+
+    if (!token || !owner || !repo || !octokit) throw new Error("GitHub Integration not configured.");
     
     const contentString = JSON.stringify(content, null, 2);
     const contentEncoded = btoa(unescape(encodeURIComponent(contentString)));
 
     // @ts-ignore
     await octokit.rest.repos.createOrUpdateFileContents({
-        owner: OWNER!,
-        repo: REPO!,
+        owner: owner!,
+        repo: repo!,
         path: path,
         message: message,
         content: contentEncoded,
@@ -76,8 +105,6 @@ export const fetchSharedKnowledgeBase = async (): Promise<KnowledgeFile[]> => {
 
 export const saveSharedKnowledgeBase = async (files: KnowledgeFile[]) => {
     const existing = await getFileContent(PATH_KB);
-    // Files can be large, we strip the base64 data if it's too huge for a single JSON in future optimizations
-    // For now, save as is.
     await saveFileContent(PATH_KB, files, "Update Knowledge Base", existing?.sha);
 };
 
@@ -88,8 +115,22 @@ export const backupUserHistory = async (username: string, history: HistoryItem[]
 };
 
 export const checkGitHubStatus = () => {
-    if (!GITHUB_TOKEN) return { ok: false, msg: "Missing VITE_GITHUB_TOKEN" };
-    if (!OWNER) return { ok: false, msg: "Missing VITE_GITHUB_OWNER" };
-    if (!REPO) return { ok: false, msg: "Missing VITE_GITHUB_REPO" };
-    return { ok: true, msg: "Connected" };
+    const { token, owner, repo, source } = getCredentials();
+    if (!token) return { ok: false, msg: "Missing Token", source };
+    if (!owner) return { ok: false, msg: "Missing Owner", source };
+    if (!repo) return { ok: false, msg: "Missing Repo", source };
+    return { ok: true, msg: "Connected", source };
+};
+
+// NEW: Manual Configuration (Saved to LocalStorage)
+export const setManualGitHubConfig = (token: string, owner: string, repo: string) => {
+    localStorage.setItem(LS_TOKEN, token);
+    localStorage.setItem(LS_OWNER, owner);
+    localStorage.setItem(LS_REPO, repo);
+};
+
+export const clearManualGitHubConfig = () => {
+    localStorage.removeItem(LS_TOKEN);
+    localStorage.removeItem(LS_OWNER);
+    localStorage.removeItem(LS_REPO);
 };
