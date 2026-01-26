@@ -17,7 +17,7 @@ import { ClientFinder } from './components/ClientFinder';
 import { Login } from './components/Login';
 import { AdminDashboard } from './components/AdminDashboard';
 import { 
-  LayoutDashboard, PackageSearch, Users, PenTool, Network, Search, Loader2, Menu, Globe, Zap, FileSpreadsheet, History, Clock, ChevronRight, AlertTriangle, RefreshCw, LogOut, Briefcase, Ruler, CheckCircle2, Hourglass, StopCircle, PlayCircle, Layers, Mail, Cloud, Download, Info, Link2, X
+  LayoutDashboard, PackageSearch, Users, PenTool, Network, Search, Loader2, Menu, Globe, Zap, FileSpreadsheet, History, Clock, ChevronRight, AlertTriangle, RefreshCw, LogOut, Briefcase, Ruler, CheckCircle2, Hourglass, StopCircle, PlayCircle, Layers, Mail, Cloud, Download, Info, Link2, X, Database
 } from 'lucide-react';
 
 declare global {
@@ -47,6 +47,7 @@ const App: React.FC = () => {
   const [kbCount, setKbCount] = useState(0); 
   const [systemNotice, setSystemNotice] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isKBSyncing, setIsKBSyncing] = useState(false); // Specific loading state for KB
   
   const [discoveryState, setDiscoveryState] = useState<DiscoveryState>({
     product: '', country: '', industry: '', clientType: '', results: [], hasSearched: false
@@ -101,11 +102,9 @@ const App: React.FC = () => {
                     if(globalConfig.systemNotice) setSystemNotice(globalConfig.systemNotice);
                 }
                 
-                // KB (if local empty)
+                // KB (Only if local is empty, auto-sync)
                 if (files.length === 0) {
-                    const sharedKB = await fetchSharedKnowledgeBase();
-                    for (const f of sharedKB) { await saveFileToDB(f); }
-                    if(sharedKB.length > 0) setKbCount(sharedKB.length);
+                    await handleManualKBSync();
                 }
 
                 // CRM
@@ -155,7 +154,8 @@ const App: React.FC = () => {
       
       const check = checkGitHubStatus();
       if (check.ok) {
-          alert("连接成功！请刷新页面以同步数据。");
+          alert("连接成功！即将同步数据...");
+          await handleManualKBSync();
           setCloudModalOpen(false);
           window.location.reload(); 
       } else {
@@ -163,9 +163,22 @@ const App: React.FC = () => {
       }
   };
 
-  // ... (Keep existing automation & analysis logic identical) ...
-  // To keep snippet short, I am omitting the middle logic which hasn't changed.
-  // Assuming performSingleAnalysis, handleAddToCRM, etc. are here.
+  const handleManualKBSync = async () => {
+      if (!checkGitHubStatus().ok) return;
+      setIsKBSyncing(true);
+      try {
+          const sharedKB = await fetchSharedKnowledgeBase();
+          if (sharedKB && sharedKB.length > 0) {
+              for (const f of sharedKB) { await saveFileToDB(f); }
+              setKbCount(sharedKB.length);
+          }
+      } catch (e) {
+          console.error("KB Sync Failed", e);
+      } finally {
+          setIsKBSyncing(false);
+      }
+  };
+
   const handleAnalyzeInput = (input: string = domainInput) => {
       if (!input.trim()) return;
       const lines = input.split(/[\n;]+/).map(s => s.trim()).filter(s => s.length > 0);
@@ -272,9 +285,18 @@ const App: React.FC = () => {
             <button onClick={() => setCloudModalOpen(true)} className="w-full flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-600 rounded-xl text-xs font-bold hover:bg-blue-100 transition-colors">
                 <Cloud size={14} /> 云端数据库连接 (Cloud Config)
             </button>
-            <div className="px-4 py-2 bg-green-50 rounded-xl border border-green-100 flex items-center gap-2 mb-2">
-                <CheckCircle2 size={16} className="text-green-600" />
-                <div><div className="text-[10px] font-black text-green-800 uppercase tracking-wide">Knowledge Base</div><div className="text-[10px] text-green-600">{kbCount} Files Loaded</div></div>
+            <div 
+                onClick={handleManualKBSync}
+                className={`px-4 py-2 bg-green-50 rounded-xl border border-green-100 flex items-center gap-2 mb-2 cursor-pointer hover:bg-green-100 transition-colors ${isKBSyncing ? 'opacity-70' : ''}`}
+                title="Click to Sync Knowledge Base"
+            >
+                {isKBSyncing ? <Loader2 size={16} className="text-green-600 animate-spin" /> : <CheckCircle2 size={16} className="text-green-600" />}
+                <div>
+                    <div className="text-[10px] font-black text-green-800 uppercase tracking-wide">Knowledge Base</div>
+                    <div className="text-[10px] text-green-600">
+                        {kbCount} Files Loaded {kbCount === 0 && !isKBSyncing && "(Click to Sync)"}
+                    </div>
+                </div>
             </div>
             <button onClick={() => setHistoryOpen(!historyOpen)} className="w-full flex items-center justify-between px-4 py-3 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-xl text-sm font-bold transition-colors">
                 <span className="flex items-center gap-2"><History size={18} /> 历史记录</span><ChevronRight size={16} className={`transition-transform ${historyOpen ? 'rotate-90' : ''}`} />
@@ -329,6 +351,18 @@ const App: React.FC = () => {
                           </div>
                       </div>
                       <button onClick={handleManualConnect} className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700">连接并同步 (Connect & Sync)</button>
+                      
+                      <div className="pt-4 border-t border-slate-100 mt-2">
+                          <button 
+                            onClick={handleManualKBSync} 
+                            disabled={isKBSyncing || !checkGitHubStatus().ok}
+                            className="w-full bg-green-50 text-green-700 border border-green-200 py-2 rounded-xl font-bold hover:bg-green-100 flex items-center justify-center gap-2 disabled:opacity-50"
+                          >
+                              {isKBSyncing ? <Loader2 className="animate-spin" size={16}/> : <Database size={16}/>} 
+                              强制拉取知识库 (Force Pull KB)
+                          </button>
+                          <p className="text-[10px] text-slate-400 mt-2 text-center">如果首页显示 "0 Files Loaded" 但云端有文件，请点击此按钮。</p>
+                      </div>
                   </div>
               </div>
           </div>
