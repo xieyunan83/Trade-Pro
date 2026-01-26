@@ -49,12 +49,9 @@ const getFileSha = async (path: string): Promise<string | undefined> => {
     if (!token || !owner || !repo || !octokit) return undefined;
 
     try {
-        // 1. Get the default branch (main/master)
         const { data: repoData } = await octokit.rest.repos.get({ owner, repo });
         const defaultBranch = repoData.default_branch;
 
-        // 2. Get the tree of the default branch recursively
-        // This is the most robust way to find a file's SHA without downloading it.
         const { data: treeData } = await octokit.rest.git.getTree({
             owner: owner!,
             repo: repo!,
@@ -62,7 +59,6 @@ const getFileSha = async (path: string): Promise<string | undefined> => {
             recursive: 'true',
         });
 
-        // 3. Find the file in the tree
         const fileNode = treeData.tree.find((node: any) => node.path === path);
         return fileNode?.sha;
     } catch (e) {
@@ -89,8 +85,9 @@ const getFileContent = async (path: string): Promise<{ sha: string, content: any
         
         // Success with content
         if ('content' in data && !Array.isArray(data) && data.content) {
-            // Handle encoding manually to prevent issues with special chars
-            const decoded = new TextDecoder().decode(Uint8Array.from(atob(data.content), c => c.charCodeAt(0)));
+            // Clean Base64 string (remove newlines) before decoding
+            const cleanBase64 = data.content.replace(/\s/g, '');
+            const decoded = new TextDecoder().decode(Uint8Array.from(atob(cleanBase64), c => c.charCodeAt(0)));
             return { sha: data.sha, content: JSON.parse(decoded) };
         }
     } catch (e: any) {
@@ -106,7 +103,9 @@ const getFileContent = async (path: string): Promise<{ sha: string, content: any
                         repo: repo!,
                         file_sha: sha
                     });
-                    const decoded = new TextDecoder().decode(Uint8Array.from(atob(blob.data.content), c => c.charCodeAt(0)));
+                    // IMPORTANT: Blob content also needs cleaning of newlines
+                    const cleanBase64 = blob.data.content.replace(/\s/g, '');
+                    const decoded = new TextDecoder().decode(Uint8Array.from(atob(cleanBase64), c => c.charCodeAt(0)));
                     return { sha: sha, content: JSON.parse(decoded) };
                 }
             } catch (blobError) {
@@ -137,7 +136,7 @@ const saveFileContent = async (path: string, content: any, message: string, sha?
         path: path,
         message: message,
         content: contentEncoded,
-        sha: sha // If undefined, creates new file. If defined, updates.
+        sha: sha 
     });
 };
 

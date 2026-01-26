@@ -1,4 +1,5 @@
 
+// ... imports unchanged ...
 import React, { useState, useEffect, useRef } from 'react';
 import { analyzeCompany, getGeminiConfig, searchPotentialClients, generateMailGroupStrategy } from './services/geminiService';
 import { exportToPPT } from './services/exportService';
@@ -31,6 +32,7 @@ declare global {
 }
 
 const App: React.FC = () => {
+  // ... state declarations unchanged ...
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [hasKey, setHasKey] = useState<boolean | null>(null);
   
@@ -47,7 +49,7 @@ const App: React.FC = () => {
   const [kbCount, setKbCount] = useState(0); 
   const [systemNotice, setSystemNotice] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
-  const [isKBSyncing, setIsKBSyncing] = useState(false); // Specific loading state for KB
+  const [isKBSyncing, setIsKBSyncing] = useState(false); 
   
   const [discoveryState, setDiscoveryState] = useState<DiscoveryState>({
     product: '', country: '', industry: '', clientType: '', results: [], hasSearched: false
@@ -61,7 +63,6 @@ const App: React.FC = () => {
   const [pendingBatch, setPendingBatch] = useState<string[]>([]);
   const [pendingBatchContext, setPendingBatchContext] = useState<string>('');
   
-  // Cloud Connect Modal for Users
   const [cloudModalOpen, setCloudModalOpen] = useState(false);
   const [manualToken, setManualToken] = useState('');
   const [manualOwner, setManualOwner] = useState('');
@@ -69,6 +70,7 @@ const App: React.FC = () => {
 
   const shouldStopRef = useRef(false);
 
+  // ... useEffects unchanged ...
   useEffect(() => {
     const checkKey = async () => {
       const configs = getGeminiConfig();
@@ -104,7 +106,8 @@ const App: React.FC = () => {
                 
                 // KB (Only if local is empty, auto-sync)
                 if (files.length === 0) {
-                    await handleManualKBSync();
+                    // Auto-sync quietly on load, no alert
+                    handleManualKBSync(true); 
                 }
 
                 // CRM
@@ -155,7 +158,7 @@ const App: React.FC = () => {
       const check = checkGitHubStatus();
       if (check.ok) {
           alert("连接成功！即将同步数据...");
-          await handleManualKBSync();
+          await handleManualKBSync(false);
           setCloudModalOpen(false);
           window.location.reload(); 
       } else {
@@ -163,7 +166,7 @@ const App: React.FC = () => {
       }
   };
 
-  const handleManualKBSync = async () => {
+  const handleManualKBSync = async (silent: boolean = false) => {
       if (!checkGitHubStatus().ok) return;
       setIsKBSyncing(true);
       try {
@@ -171,14 +174,19 @@ const App: React.FC = () => {
           if (sharedKB && sharedKB.length > 0) {
               for (const f of sharedKB) { await saveFileToDB(f); }
               setKbCount(sharedKB.length);
+              if (!silent) alert(`✅ 同步成功！已从云端拉取 ${sharedKB.length} 个知识库文件。`);
+          } else {
+              if (!silent) alert("⚠️ 云端知识库为空或读取失败。");
           }
-      } catch (e) {
+      } catch (e: any) {
           console.error("KB Sync Failed", e);
+          if (!silent) alert(`❌ 同步失败: ${e.message}`);
       } finally {
           setIsKBSyncing(false);
       }
   };
 
+  // ... rest of the component logic (handleAnalyzeInput, etc.) remains unchanged ...
   const handleAnalyzeInput = (input: string = domainInput) => {
       if (!input.trim()) return;
       const lines = input.split(/[\n;]+/).map(s => s.trim()).filter(s => s.length > 0);
@@ -286,7 +294,7 @@ const App: React.FC = () => {
                 <Cloud size={14} /> 云端数据库连接 (Cloud Config)
             </button>
             <div 
-                onClick={handleManualKBSync}
+                onClick={() => handleManualKBSync(false)}
                 className={`px-4 py-2 bg-green-50 rounded-xl border border-green-100 flex items-center gap-2 mb-2 cursor-pointer hover:bg-green-100 transition-colors ${isKBSyncing ? 'opacity-70' : ''}`}
                 title="Click to Sync Knowledge Base"
             >
@@ -305,6 +313,7 @@ const App: React.FC = () => {
         </div>
       </aside>
       
+      {/* ... History Sidebar ... */}
       {historyOpen && (
           <div className="fixed inset-y-0 left-72 w-80 bg-white shadow-2xl z-20 border-r border-slate-200 transform transition-transform animate-fade-in flex flex-col">
               <div className="p-4 border-b bg-slate-50 font-bold text-slate-700 flex justify-between items-center">
@@ -354,7 +363,7 @@ const App: React.FC = () => {
                       
                       <div className="pt-4 border-t border-slate-100 mt-2">
                           <button 
-                            onClick={handleManualKBSync} 
+                            onClick={() => handleManualKBSync(false)} 
                             disabled={isKBSyncing || !checkGitHubStatus().ok}
                             className="w-full bg-green-50 text-green-700 border border-green-200 py-2 rounded-xl font-bold hover:bg-green-100 flex items-center justify-center gap-2 disabled:opacity-50"
                           >
@@ -370,6 +379,7 @@ const App: React.FC = () => {
 
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col overflow-hidden relative">
+        {/* ... Header and Content ... */}
         <header className="bg-white border-b px-6 py-4 flex items-center gap-4 shadow-sm z-10 min-h-[96px]">
           <button onClick={() => setMobileMenuOpen(true)} className="md:hidden p-2 text-slate-500"><Menu size={24} /></button>
           <div className="flex-1 relative group">
@@ -388,6 +398,7 @@ const App: React.FC = () => {
         </header>
 
         <div className="flex-1 overflow-y-auto p-6 relative custom-scrollbar">
+          {/* ... Rest of the main content components (unchanged) ... */}
           {cooldownTime > 0 && (
               <div className="absolute inset-0 bg-white/90 z-50 flex flex-col items-center justify-center backdrop-blur-sm animate-fade-in cursor-wait">
                   <div className="relative"><Hourglass size={64} className="text-blue-600 animate-pulse" /><div className="absolute -top-2 -right-2 bg-red-500 text-white w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs">{cooldownTime}</div></div>
@@ -474,7 +485,7 @@ const App: React.FC = () => {
         </div>
       </main>
       
-      {/* BATCH STRATEGY MODAL */}
+      {/* Batch Modal (unchanged) */}
       {batchModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
               <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl animate-fade-in">
