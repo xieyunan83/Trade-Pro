@@ -41,33 +41,34 @@ const getOctokit = () => {
     return token ? new Octokit({ auth: token }) : null;
 };
 
-// --- HELPER: Get File SHA (Robust) ---
-// Gets SHA by listing directory, avoiding download limits
+// --- HELPER: Get File SHA (Robust via Git Tree API) ---
+// Gets SHA by reading the git tree, which works for large files and avoids download limits.
 const getFileSha = async (path: string): Promise<string | undefined> => {
     const { token, owner, repo } = getCredentials();
     const octokit = getOctokit();
     if (!token || !owner || !repo || !octokit) return undefined;
 
     try {
-        const parts = path.split('/');
-        const filename = parts.pop();
-        const dir = parts.join('/');
+        // 1. Get the default branch (main/master)
+        const { data: repoData } = await octokit.rest.repos.get({ owner, repo });
+        const defaultBranch = repoData.default_branch;
 
-        // @ts-ignore
-        const { data } = await octokit.rest.repos.getContent({
+        // 2. Get the tree of the default branch recursively
+        // This is the most robust way to find a file's SHA without downloading it.
+        const { data: treeData } = await octokit.rest.git.getTree({
             owner: owner!,
             repo: repo!,
-            path: dir,
+            tree_sha: defaultBranch,
+            recursive: 'true',
         });
 
-        if (Array.isArray(data)) {
-            const fileItem = data.find((item: any) => item.name === filename);
-            return fileItem?.sha;
-        }
+        // 3. Find the file in the tree
+        const fileNode = treeData.tree.find((node: any) => node.path === path);
+        return fileNode?.sha;
     } catch (e) {
-        // File likely doesn't exist
+        console.warn(`[GitHub] Failed to get SHA for ${path}. It might not exist yet.`, e);
+        return undefined;
     }
-    return undefined;
 };
 
 // --- HELPER: Read File Content (Large File Support) ---
@@ -78,7 +79,7 @@ const getFileContent = async (path: string): Promise<{ sha: string, content: any
     if (!token || !owner || !repo || !octokit) return null;
 
     try {
-        // 1. Try standard get content
+        // 1. Try standard get content (works for <1MB)
         // @ts-ignore
         const { data } = await octokit.rest.repos.getContent({
             owner: owner!,
@@ -88,12 +89,14 @@ const getFileContent = async (path: string): Promise<{ sha: string, content: any
         
         // Success with content
         if ('content' in data && !Array.isArray(data) && data.content) {
-            const decoded = decodeURIComponent(escape(atob(data.content)));
+            // Handle encoding manually to prevent issues with special chars
+            const decoded = new TextDecoder().decode(Uint8Array.from(atob(data.content), c => c.charCodeAt(0)));
             return { sha: data.sha, content: JSON.parse(decoded) };
         }
     } catch (e: any) {
-        // 2. Fallback for Large Files (Blob API)
+        // 2. Fallback for Large Files (Blob API via Git Data)
         if (e.status === 403 || (e.message && e.message.includes('too large'))) {
+            console.log(`[GitHub] File ${path} too large for standard API, switching to Blob API...`);
             try {
                 const sha = await getFileSha(path);
                 if (sha) {
@@ -103,14 +106,14 @@ const getFileContent = async (path: string): Promise<{ sha: string, content: any
                         repo: repo!,
                         file_sha: sha
                     });
-                    const decoded = decodeURIComponent(escape(atob(blob.data.content)));
+                    const decoded = new TextDecoder().decode(Uint8Array.from(atob(blob.data.content), c => c.charCodeAt(0)));
                     return { sha: sha, content: JSON.parse(decoded) };
                 }
             } catch (blobError) {
-                console.error(`Blob fetch failed for ${path}`, blobError);
+                console.error(`[GitHub] Blob fetch failed for ${path}`, blobError);
             }
         } else if (e.status !== 404) {
-            console.error(`GitHub Read Error [${path}]`, e);
+            console.error(`[GitHub] Read Error [${path}]`, e);
         }
     }
     return null;
@@ -123,8 +126,9 @@ const saveFileContent = async (path: string, content: any, message: string, sha?
 
     if (!token || !owner || !repo || !octokit) throw new Error("GitHub Integration not configured.");
     
+    // Encode content to Base64 safely for UTF-8
     const contentString = JSON.stringify(content, null, 2);
-    const contentEncoded = btoa(unescape(encodeURIComponent(contentString)));
+    const contentEncoded = btoa(new TextEncoder().encode(contentString).reduce((data, byte) => data + String.fromCharCode(byte), ''));
 
     // @ts-ignore
     await octokit.rest.repos.createOrUpdateFileContents({
