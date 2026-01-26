@@ -1,5 +1,4 @@
 
-// ... imports unchanged ...
 import React, { useState, useEffect, useRef } from 'react';
 import { analyzeCompany, getGeminiConfig, searchPotentialClients, generateMailGroupStrategy } from './services/geminiService';
 import { exportToPPT } from './services/exportService';
@@ -32,7 +31,6 @@ declare global {
 }
 
 const App: React.FC = () => {
-  // ... state declarations unchanged ...
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [hasKey, setHasKey] = useState<boolean | null>(null);
   
@@ -70,7 +68,6 @@ const App: React.FC = () => {
 
   const shouldStopRef = useRef(false);
 
-  // ... useEffects unchanged ...
   useEffect(() => {
     const checkKey = async () => {
       const configs = getGeminiConfig();
@@ -106,7 +103,6 @@ const App: React.FC = () => {
                 
                 // KB (Only if local is empty, auto-sync)
                 if (files.length === 0) {
-                    // Auto-sync quietly on load, no alert
                     handleManualKBSync(true); 
                 }
 
@@ -186,7 +182,6 @@ const App: React.FC = () => {
       }
   };
 
-  // ... rest of the component logic (handleAnalyzeInput, etc.) remains unchanged ...
   const handleAnalyzeInput = (input: string = domainInput) => {
       if (!input.trim()) return;
       const lines = input.split(/[\n;]+/).map(s => s.trim()).filter(s => s.length > 0);
@@ -198,6 +193,7 @@ const App: React.FC = () => {
           setPendingBatch(lines); setPendingBatchContext('Manual Input'); setBatchModalOpen(true);
       }
   };
+
   const performSingleAnalysis = async (domain: string) => {
     setLoading(true); setErrorMsg(null); setActiveModule(ModuleType.BACKGROUND); setMobileMenuOpen(false);
     try {
@@ -206,20 +202,181 @@ const App: React.FC = () => {
       await saveHistory(historyItem); setHistory(prev => [historyItem, ...prev]); updateCrmStatus(result);
     } catch (e: any) { setErrorMsg(`Error: ${e.message}`); } finally { setLoading(false); }
   };
+
   const loadFromHistory = (item: HistoryItem) => { setAnalysisData(item.data); setDomainInput(item.domain); setActiveModule(ModuleType.BACKGROUND); setHistoryOpen(false); setErrorMsg(null); };
   const handleExportReport = () => { if (analysisData) exportToPPT(analysisData); };
-  const handleAddToCRM = () => { if (!analysisData) return; const newClient: Client = { id: Date.now().toString(), name: analysisData.companyInfo.name, website: analysisData.companyInfo.website, country: analysisData.companyInfo.headquarters.split(',').pop()?.trim() || 'Global', type: '进口商', status: '新建/潜在', productType: analysisData.businessScope.coreProducts[0] || 'N/A', priceRange: analysisData.businessScope.priceSensitivity || 'Medium', isSampleNeeded: false, hasAnalyzed: true, lastOrderDate: '', lastContactSent: '', lastContactReceived: '', nextFollowUpDate: new Date().toISOString().split('T')[0], activityLog: `Added from Deep Analysis. Rev: ${analysisData.financials.revenueEstimate}.` }; setCrmClients(prev => [newClient, ...prev]); alert("Added to CRM!"); };
-  const handleBatchAddToCRM = (results: ClientSearchResult[]) => { /* ... existing ... */ };
-  const updateCrmStatus = (analysis: AnalysisResult) => { /* ... existing ... */ };
+  
+  const handleAddToCRM = () => { 
+      if (!analysisData) return; 
+      const newClient: Client = { 
+          id: Date.now().toString(), 
+          name: analysisData.companyInfo.name, 
+          website: analysisData.companyInfo.website, 
+          country: analysisData.companyInfo.headquarters.split(',').pop()?.trim() || 'Global', 
+          type: '进口商', 
+          status: '新建/潜在', 
+          productType: analysisData.businessScope.coreProducts[0] || 'N/A', 
+          priceRange: analysisData.businessScope.priceSensitivity || 'Medium', 
+          isSampleNeeded: false, 
+          hasAnalyzed: true, 
+          lastOrderDate: '', 
+          lastContactSent: '', 
+          lastContactReceived: '', 
+          nextFollowUpDate: new Date().toISOString().split('T')[0], 
+          activityLog: `Added from Deep Analysis. Rev: ${analysisData.financials.revenueEstimate}.` 
+      }; 
+      setCrmClients(prev => [newClient, ...prev]); 
+      alert("Added to CRM!"); 
+  };
+
+  const handleBatchAddToCRM = (results: ClientSearchResult[]) => {
+      if (results.length === 0) return;
+      const newClients: Client[] = results.map(r => ({
+          id: Date.now() + Math.random().toString(36).substr(2, 9),
+          name: r.name,
+          website: r.website,
+          country: r.country,
+          type: '进口商',
+          status: '新建/潜在',
+          productType: 'TBD',
+          priceRange: 'Medium',
+          isSampleNeeded: false,
+          hasAnalyzed: false,
+          lastOrderDate: '',
+          lastContactSent: '',
+          lastContactReceived: '',
+          nextFollowUpDate: new Date().toISOString().split('T')[0],
+          activityLog: `Batch added from Discovery. Desc: ${r.description.substring(0, 50)}...`
+      }));
+      
+      setCrmClients(prev => {
+          const existingWebsites = new Set(prev.map(c => c.website?.toLowerCase()));
+          const filtered = newClients.filter(c => !existingWebsites.has(c.website?.toLowerCase()));
+          if (filtered.length < newClients.length) {
+              alert(`Added ${filtered.length} new clients. (${newClients.length - filtered.length} duplicates skipped)`);
+          } else {
+              alert(`Added ${filtered.length} clients to CRM!`);
+          }
+          return [...filtered, ...prev];
+      });
+  };
+
+  const updateCrmStatus = (analysis: AnalysisResult) => {
+      setCrmClients(prev => prev.map(c => {
+          if (
+              (c.website && analysis.companyInfo.website.toLowerCase().includes(c.website.toLowerCase())) || 
+              (c.name.toLowerCase() === analysis.companyInfo.name.toLowerCase())
+          ) {
+              return { ...c, hasAnalyzed: true, activityLog: c.activityLog + `\n[${new Date().toLocaleDateString()}] Analyzed.` };
+          }
+          return c;
+      }));
+  };
+
   const stopAutomation = () => { shouldStopRef.current = true; setIsAutomating(false); };
-  const handleStartQueueGeneration = async (keyword: string, productContext: string, countries: string[], productImages: string[], clientType: string) => { await generateQueue(keyword, productContext, countries, productImages, clientType); const freshQueue = await getAutomationQueue(); const pending = freshQueue.filter(t => t.status === 'pending'); await processBatchQueue(pending); };
-  const generateQueue = async (keyword: string, productContext: string, countries: string[], productImages: string[], clientType: string) => { /* ... existing ... */ return []; };
-  const processBatchQueue = async (tasks: AutomationResult[]) => { /* ... existing ... */ };
+
+  const handleStartQueueGeneration = async (keyword: string, productContext: string, countries: string[], productImages: string[], clientType: string) => { 
+      await generateQueue(keyword, productContext, countries, productImages, clientType); 
+      const freshQueue = await getAutomationQueue(); 
+      const pending = freshQueue.filter(t => t.status === 'pending'); 
+      await processBatchQueue(pending); 
+  };
+
+  const generateQueue = async (keyword: string, productContext: string, countries: string[], productImages: string[], clientType: string) => { 
+      try {
+          const countryStr = countries.join(', ');
+          const searchResults = await searchPotentialClients(keyword, countryStr, '', clientType, 20);
+          
+          if (searchResults.length === 0) {
+              alert("No new clients found for automation queue.");
+              return [];
+          }
+
+          const newTasks: AutomationResult[] = searchResults.map(r => ({
+              id: Math.random().toString(36).substr(2, 9),
+              clientName: r.name,
+              website: r.website,
+              country: r.country,
+              status: 'pending',
+              productContext: productContext,
+              productImages: productImages,
+              mode: 'detailed'
+          }));
+          
+          for (const t of newTasks) await saveAutomationTask(t);
+          setAutomationResults(prev => [...prev, ...newTasks]);
+          return newTasks;
+      } catch (e) {
+          console.error("Queue Gen Failed", e);
+          return [];
+      }
+  };
+
+  const processBatchQueue = async (tasks: AutomationResult[]) => { 
+      if (tasks.length === 0) return;
+      setIsAutomating(true);
+      shouldStopRef.current = false;
+      
+      for (const task of tasks) {
+          if (shouldStopRef.current) break;
+          
+          setAutomationResults(prev => prev.map(t => t.id === task.id ? { ...t, status: 'analyzing' } : t));
+          
+          try {
+              const limit = checkLimit('analysis');
+              if (!limit.allowed) throw new Error("Daily Analysis Limit Exceeded");
+
+              const analysis = await analyzeCompany(task.website, task.mode || 'detailed');
+              incrementUsage('analysis');
+              updateCrmStatus(analysis);
+              
+              let mailGroup;
+              if (task.mode === 'detailed') {
+                  setAutomationResults(prev => prev.map(t => t.id === task.id ? { ...t, status: 'generating_email', analysis } : t));
+                  const kbFiles = await getAllFilesFromDB();
+                  mailGroup = await generateMailGroupStrategy(analysis, task.productImages || [], kbFiles);
+              }
+              
+              const completedTask: AutomationResult = { ...task, status: 'completed', analysis, mailGroup };
+              await saveAutomationTask(completedTask);
+              setAutomationResults(prev => prev.map(t => t.id === task.id ? completedTask : t));
+              
+          } catch (e: any) {
+              const failedTask: AutomationResult = { ...task, status: 'failed' };
+              await saveAutomationTask(failedTask);
+              setAutomationResults(prev => prev.map(t => t.id === task.id ? failedTask : t));
+          }
+          
+          // Cool down
+          await new Promise(r => setTimeout(r, 2000));
+      }
+      setIsAutomating(false);
+  };
+
   const handleBatchAnalyzeExisting = async (results: ClientSearchResult[]) => { setPendingBatch(results.map(r => r.website)); setPendingBatchContext('Discovery Batch'); setBatchModalOpen(true); };
   const handleBatchAnalyzeFromCRM = async (clients: Client[]) => { const targets = clients.map(c => c.name); setPendingBatch(targets); setPendingBatchContext('CRM Batch'); setBatchModalOpen(true); };
-  const confirmBatchStart = async (mode: 'detailed' | 'economy') => { setBatchModalOpen(false); setActiveModule(ModuleType.PROMO_GENERATOR); const newTasks: AutomationResult[] = pendingBatch.map(target => ({ id: Math.random().toString(36).substr(2, 9), clientName: target, website: target, country: 'Global', status: 'pending', productContext: pendingBatchContext, productImages: [], mode: mode })); setAutomationResults(prev => [...prev, ...newTasks]); for (const task of newTasks) { await saveAutomationTask(task); } await processBatchQueue(newTasks); };
+  
+  const confirmBatchStart = async (mode: 'detailed' | 'economy') => { 
+      setBatchModalOpen(false); 
+      setActiveModule(ModuleType.PROMO_GENERATOR); 
+      const newTasks: AutomationResult[] = pendingBatch.map(target => ({ 
+          id: Math.random().toString(36).substr(2, 9), 
+          clientName: target, 
+          website: target, 
+          country: 'Global', 
+          status: 'pending', 
+          productContext: pendingBatchContext, 
+          productImages: [], 
+          mode: mode 
+      })); 
+      setAutomationResults(prev => [...prev, ...newTasks]); 
+      for (const task of newTasks) { await saveAutomationTask(task); } 
+      await processBatchQueue(newTasks); 
+  };
+
   const handleRunPending = async () => { const pending = automationResults.filter(t => t.status === 'pending' || t.status === 'failed'); await processBatchQueue(pending); };
-  const handleRunSingle = async (id: string) => { /* ... existing ... */ };
+  const handleRunSingle = async (id: string) => { const task = automationResults.find(t => t.id === id); if (task) await processBatchQueue([task]); };
+  
   const handleDeleteTask = async (id: string) => { if(confirm("Delete?")) { await deleteAutomationTask(id); setAutomationResults(prev => prev.filter(t => t.id !== id)); } };
   const handleLogout = () => { setCurrentUser(null); setAnalysisData(null); setDomainInput(''); setActiveModule(ModuleType.DISCOVERY); };
   const handleSyncToGitHub = async () => { if(!currentUser) return; setIsSyncing(true); try { await backupUserHistory(currentUser.username, history); await saveCRMToCloud(crmClients); alert("数据同步成功!"); } catch (e: any) { alert("同步失败: " + e.message); } finally { setIsSyncing(false); } };
@@ -313,7 +470,7 @@ const App: React.FC = () => {
         </div>
       </aside>
       
-      {/* ... History Sidebar ... */}
+      {/* History Sidebar */}
       {historyOpen && (
           <div className="fixed inset-y-0 left-72 w-80 bg-white shadow-2xl z-20 border-r border-slate-200 transform transition-transform animate-fade-in flex flex-col">
               <div className="p-4 border-b bg-slate-50 font-bold text-slate-700 flex justify-between items-center">
@@ -379,7 +536,6 @@ const App: React.FC = () => {
 
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col overflow-hidden relative">
-        {/* ... Header and Content ... */}
         <header className="bg-white border-b px-6 py-4 flex items-center gap-4 shadow-sm z-10 min-h-[96px]">
           <button onClick={() => setMobileMenuOpen(true)} className="md:hidden p-2 text-slate-500"><Menu size={24} /></button>
           <div className="flex-1 relative group">
@@ -398,7 +554,6 @@ const App: React.FC = () => {
         </header>
 
         <div className="flex-1 overflow-y-auto p-6 relative custom-scrollbar">
-          {/* ... Rest of the main content components (unchanged) ... */}
           {cooldownTime > 0 && (
               <div className="absolute inset-0 bg-white/90 z-50 flex flex-col items-center justify-center backdrop-blur-sm animate-fade-in cursor-wait">
                   <div className="relative"><Hourglass size={64} className="text-blue-600 animate-pulse" /><div className="absolute -top-2 -right-2 bg-red-500 text-white w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs">{cooldownTime}</div></div>
@@ -474,7 +629,7 @@ const App: React.FC = () => {
                         </div>
                         <button onClick={handleExportReport} className="flex items-center gap-2 bg-slate-900 hover:bg-blue-600 transition-colors text-white px-6 py-3 rounded-2xl font-bold shadow-lg"><FileSpreadsheet size={18} /> 下载 PPT 报告</button>
                     </div>
-                    {activeModule === ModuleType.BACKGROUND && <ModuleBackground data={analysisData} />}
+                    {activeModule === ModuleType.BACKGROUND && <ModuleBackground data={analysisData} onAddToCRM={handleAddToCRM} />}
                     {activeModule === ModuleType.PRODUCTS && <ModuleProducts data={analysisData} />}
                     {activeModule === ModuleType.DECISION_MAKERS && <ModuleDecisionMakers data={analysisData} />}
                     {activeModule === ModuleType.SIMILAR && <ModuleSimilar data={analysisData} onAnalyze={handleAnalyzeInput} />}
@@ -485,7 +640,7 @@ const App: React.FC = () => {
         </div>
       </main>
       
-      {/* Batch Modal (unchanged) */}
+      {/* Batch Modal */}
       {batchModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
               <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl animate-fade-in">

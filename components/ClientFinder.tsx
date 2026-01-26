@@ -453,12 +453,21 @@ export const ClientFinder: React.FC<Props> = ({ onSelect, state, onStateChange, 
                                       </p>
                                   </td>
                                   <td className="px-6 py-4 text-right">
-                                      <button 
-                                        onClick={() => onSelect(client.website)} 
-                                        className="text-slate-900 hover:text-blue-600 font-bold text-xs border border-slate-200 hover:border-blue-300 px-3 py-1.5 rounded-lg transition-all shadow-sm"
-                                      >
-                                          Detailed Analysis
-                                      </button>
+                                      <div className="flex justify-end gap-2">
+                                          <button 
+                                            onClick={() => onSelect(client.website)} 
+                                            className="text-slate-900 hover:text-blue-600 font-bold text-xs border border-slate-200 hover:border-blue-300 px-3 py-1.5 rounded-lg transition-all shadow-sm flex items-center gap-1"
+                                          >
+                                              <Search size={14} /> Detailed
+                                          </button>
+                                          <button 
+                                            onClick={() => onBatchAddToCRM([client])}
+                                            className="text-slate-500 hover:text-green-600 border border-slate-200 hover:border-green-300 px-2 py-1.5 rounded-lg transition-all shadow-sm"
+                                            title="Add to CRM"
+                                          >
+                                              <Archive size={16} />
+                                          </button>
+                                      </div>
                                   </td>
                               </tr>
                           ))}
