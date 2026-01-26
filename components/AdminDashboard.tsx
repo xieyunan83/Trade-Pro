@@ -1,10 +1,10 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { User, KnowledgeFile, GlobalConfig } from '../types';
+import { User, KnowledgeFile, GlobalConfig, ApiConfig } from '../types';
 import { getAllUsers, saveUser, deleteUser, getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/db';
-import { testApiKey, ApiConfig, getGeminiConfig } from '../services/geminiService';
-import { saveGlobalConfig, fetchGlobalConfig, saveSharedKnowledgeBase, checkGitHubStatus, setManualGitHubConfig, clearManualGitHubConfig, fetchUsersFromCloud, saveUsersToCloud, fetchApiConfigsFromCloud, saveApiConfigsToCloud } from '../services/githubService';
-import { Users, Database, Plus, Trash2, Shield, UploadCloud, FileText, Loader2, LogOut, Key, Save, CheckCircle2, AlertTriangle, Info, Play, Workflow, Cloud, Download, Upload, ExternalLink, HelpCircle, Link2 } from 'lucide-react';
+import { testApiKey, getGeminiConfig } from '../services/geminiService';
+import { saveGlobalConfig, fetchGlobalConfig, saveSharedKnowledgeBase, checkGitHubStatus, setManualGitHubConfig, clearManualGitHubConfig, fetchUsersFromCloud, saveUsersToCloud, fetchApiConfigsFromCloud, saveApiConfigsToCloud, fetchSharedKnowledgeBase as fetchKBCloud } from '../services/githubService';
+import { Users, Database, Plus, Trash2, Shield, UploadCloud, FileText, Loader2, LogOut, Key, Save, CheckCircle2, AlertTriangle, Info, Play, Workflow, Cloud, Download, Upload, ExternalLink, HelpCircle, Link2, RefreshCw } from 'lucide-react';
 
 interface Props {
     onLogout: () => void;
@@ -13,6 +13,14 @@ interface Props {
 
 export const AdminDashboard: React.FC<Props> = ({ onLogout, currentUser }) => {
     const [activeTab, setActiveTab] = useState<'users' | 'kb' | 'settings' | 'limits'>('users');
+    const [githubStatus, setGithubStatus] = useState(checkGitHubStatus());
+    // refreshKey is used to force re-mounting of tabs when connection changes, ensuring data is re-fetched
+    const [refreshKey, setRefreshKey] = useState(0); 
+
+    const handleConnectionChange = () => {
+        setGithubStatus(checkGitHubStatus());
+        setRefreshKey(prev => prev + 1);
+    };
 
     return (
         <div className="min-h-screen bg-slate-100 flex flex-col">
@@ -55,10 +63,11 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, currentUser }) => {
                     </div>
 
                     <div className="p-8">
-                        {activeTab === 'users' && <UserManagement />}
-                        {activeTab === 'kb' && <KnowledgeManagement />}
-                        {activeTab === 'settings' && <SystemSettings />}
-                        {activeTab === 'limits' && <CloudLimitManager />}
+                        {/* We use 'key' to force re-mount when refreshKey changes */}
+                        {activeTab === 'users' && <UserManagement key={refreshKey} />}
+                        {activeTab === 'kb' && <KnowledgeManagement key={refreshKey} />}
+                        {activeTab === 'settings' && <SystemSettings key={refreshKey} />}
+                        {activeTab === 'limits' && <CloudLimitManager onConnectionChange={handleConnectionChange} />}
                     </div>
                 </div>
             </div>
@@ -66,7 +75,11 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, currentUser }) => {
     );
 };
 
-const CloudLimitManager: React.FC = () => {
+interface CloudLimitManagerProps {
+    onConnectionChange: () => void;
+}
+
+const CloudLimitManager: React.FC<CloudLimitManagerProps> = ({ onConnectionChange }) => {
     const [status, setStatus] = useState(checkGitHubStatus());
     const [config, setConfig] = useState<GlobalConfig>({
         lastUpdated: Date.now(),
@@ -112,20 +125,36 @@ const CloudLimitManager: React.FC = () => {
         }
     };
 
-    const handleManualConnect = () => {
+    const handleManualConnect = async () => {
         if (!manualToken || !manualOwner || !manualRepo) {
             alert("请填写所有字段 (Token, Owner, Repo)");
             return;
         }
+        setLoading(true);
         setManualGitHubConfig(manualToken, manualOwner, manualRepo);
-        setStatus(checkGitHubStatus());
-        alert("已保存配置！正在尝试连接...");
+        
+        // Test connection by fetching config
+        const check = checkGitHubStatus();
+        setStatus(check);
+        
+        if (check.ok) {
+            try {
+                await loadRemoteConfig();
+                alert("连接成功！已从云端拉取最新配置。");
+                onConnectionChange(); // Notify parent to refresh other tabs
+            } catch (e) {
+                alert("凭证格式正确，但无法读取仓库。请检查仓库是否存在或 Token 权限。");
+            }
+        }
+        setLoading(false);
     };
 
     const handleDisconnect = () => {
         if(confirm("确定要断开连接并清除配置吗？")) {
             clearManualGitHubConfig();
-            setStatus(checkGitHubStatus());
+            const check = checkGitHubStatus();
+            setStatus(check);
+            onConnectionChange();
         }
     };
 
@@ -156,7 +185,7 @@ const CloudLimitManager: React.FC = () => {
                             <AlertTriangle size={20} />
                             配置缺失 (Configuration Missing)
                         </div>
-                        <p>环境变量未生效？不用担心，您可以在下方手动填入配置，立即连接。</p>
+                        <p>要启用云端存储，您需要配置 GitHub Token。如果您更换了浏览器或设备，需要在此处重新输入凭证才能连接到之前的云端数据。</p>
                         <div className="pt-2">
                             <a 
                                 href="https://github.com/settings/tokens/new?scopes=repo&description=TradeScoutApp" 
@@ -206,10 +235,16 @@ const CloudLimitManager: React.FC = () => {
                             </div>
                             <button 
                                 onClick={handleManualConnect}
-                                className="mt-2 bg-blue-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-blue-700 transition-colors"
+                                disabled={loading}
+                                className="mt-2 bg-blue-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-blue-700 transition-colors flex items-center gap-2"
                             >
+                                {loading ? <Loader2 className="animate-spin" size={18}/> : null}
                                 立即连接 (Connect Now)
                             </button>
+                        </div>
+                        <div className="mt-4 p-3 bg-yellow-50 text-yellow-700 text-xs rounded-lg border border-yellow-100 flex items-start gap-2">
+                            <Info size={14} className="mt-0.5 shrink-0"/>
+                            注意：手动配置仅保存在当前浏览器的缓存中。如果您更换电脑或浏览器，需要重新输入上述信息才能访问云端数据。
                         </div>
                     </div>
                 </div>
@@ -294,17 +329,19 @@ const SystemSettings: React.FC = () => {
     const [isSyncing, setIsSyncing] = useState(false);
     const [status, setStatus] = useState<{ id: string, type: 'success'|'error', msg: string } | null>(null);
 
+    // Initial load logic handles cloud fetching
     useEffect(() => {
         const load = async () => {
             // Priority load from Cloud if available
             if (checkGitHubStatus().ok) {
-                const cloudConfigs = await fetchApiConfigsFromCloud();
-                if (cloudConfigs.length > 0) {
-                    setConfigs(cloudConfigs);
-                    // Sync local cache
-                    localStorage.setItem('trade_scout_api_configs', JSON.stringify(cloudConfigs));
-                    return;
-                }
+                try {
+                    const cloudConfigs = await fetchApiConfigsFromCloud();
+                    if (cloudConfigs.length > 0) {
+                        setConfigs(cloudConfigs);
+                        localStorage.setItem('trade_scout_api_configs', JSON.stringify(cloudConfigs));
+                        return;
+                    }
+                } catch(e) { console.error("Cloud config fetch error", e); }
             }
             const loaded = getGeminiConfig();
             if (loaded.length > 0) {
@@ -314,7 +351,7 @@ const SystemSettings: React.FC = () => {
             }
         };
         load();
-    }, []);
+    }, []); // Empty dependency array means this runs on mount (or remount via key prop)
 
     const saveConfigs = (newConfigs: ApiConfig[]) => {
         setConfigs(newConfigs);
@@ -373,7 +410,7 @@ const SystemSettings: React.FC = () => {
                     <Key className="text-blue-600" /> API 密钥配置池 (Configuration Pool)
                 </h3>
                 <div className="flex gap-2">
-                    <button onClick={handleSyncToCloud} disabled={isSyncing} className="bg-purple-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-purple-700 transition-colors disabled:opacity-50">
+                    <button onClick={handleSyncToCloud} disabled={isSyncing || !checkGitHubStatus().ok} className="bg-purple-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-purple-700 transition-colors disabled:opacity-50">
                         {isSyncing ? <Loader2 className="animate-spin" size={16}/> : <UploadCloud size={16}/>}
                         同步到云端
                     </button>
@@ -478,13 +515,15 @@ const UserManagement: React.FC = () => {
     const loadUsers = async () => { 
         // Try Cloud first
         if (checkGitHubStatus().ok) {
-            const cloudUsers = await fetchUsersFromCloud();
-            if (cloudUsers.length > 0) {
-                 setUsers(cloudUsers);
-                 // Sync to local
-                 for(const u of cloudUsers) await saveUser(u);
-                 return;
-            }
+            try {
+                const cloudUsers = await fetchUsersFromCloud();
+                if (cloudUsers.length > 0) {
+                     setUsers(cloudUsers);
+                     // Sync to local
+                     for(const u of cloudUsers) await saveUser(u);
+                     return;
+                }
+            } catch(e) { console.error("Cloud user fetch error", e); }
         }
         setUsers(await getAllUsers()); 
     };
@@ -524,7 +563,7 @@ const UserManagement: React.FC = () => {
             <div className="flex justify-between items-center mb-6">
                 <h3 className="text-xl font-bold text-slate-800">系统用户管理</h3>
                 <div className="flex gap-2">
-                    <button onClick={handleSyncToCloud} disabled={isSyncing} className="bg-purple-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-purple-700 disabled:opacity-50">
+                    <button onClick={handleSyncToCloud} disabled={isSyncing || !checkGitHubStatus().ok} className="bg-purple-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-purple-700 disabled:opacity-50">
                         {isSyncing ? <Loader2 className="animate-spin" size={16}/> : <UploadCloud size={16}/>}
                         同步到云端
                     </button>
@@ -579,7 +618,21 @@ const KnowledgeManagement: React.FC = () => {
     const [isSyncing, setIsSyncing] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
-    const loadFiles = async () => { setFiles(await getAllFilesFromDB()); };
+    const loadFiles = async () => { 
+        // Try Cloud first if empty
+        let localFiles = await getAllFilesFromDB();
+        if (localFiles.length === 0 && checkGitHubStatus().ok) {
+            try {
+                const cloudFiles = await fetchKBCloud();
+                if (cloudFiles.length > 0) {
+                    for(const f of cloudFiles) await saveFileToDB(f);
+                    localFiles = cloudFiles;
+                }
+            } catch(e) { console.error("Cloud KB fetch error", e); }
+        }
+        setFiles(localFiles); 
+    };
+    
     useEffect(() => { loadFiles(); }, []);
 
     const processFiles = async (fileList: FileList | null) => {
@@ -616,10 +669,15 @@ const KnowledgeManagement: React.FC = () => {
         <div>
              <div className="flex justify-between items-center mb-6">
                  <h3 className="text-xl font-bold text-slate-800">知识库文件管理</h3>
-                 <button onClick={handleSyncToGitHub} disabled={isSyncing || files.length === 0} className="bg-purple-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-purple-700 disabled:opacity-50">
-                     {isSyncing ? <Loader2 className="animate-spin" size={16}/> : <UploadCloud size={16}/>}
-                     同步给所有用户 (GitHub)
-                 </button>
+                 <div className="flex gap-2">
+                    <button onClick={loadFiles} className="bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-slate-50 transition-colors">
+                        <RefreshCw size={16}/> 刷新
+                    </button>
+                    <button onClick={handleSyncToGitHub} disabled={isSyncing || files.length === 0 || !checkGitHubStatus().ok} className="bg-purple-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-purple-700 disabled:opacity-50">
+                        {isSyncing ? <Loader2 className="animate-spin" size={16}/> : <UploadCloud size={16}/>}
+                        同步给所有用户 (GitHub)
+                    </button>
+                 </div>
              </div>
              
              <div onClick={() => fileInputRef.current?.click()} className="border-2 border-dashed border-slate-300 rounded-xl p-8 flex flex-col items-center justify-center text-slate-400 hover:border-blue-500 hover:bg-blue-50 cursor-pointer mb-6 transition-all">

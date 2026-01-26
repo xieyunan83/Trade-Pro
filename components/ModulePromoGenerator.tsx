@@ -1,11 +1,11 @@
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { extractKeywordsFromMedia } from '../services/geminiService';
 import { exportKeywordsToExcel, exportAutomationReportToPPT, exportBatchAutomationReportsToPPT } from '../services/exportService';
 import { KeywordExtractionResult, KnowledgeFile, AutomationResult } from '../types';
 import { 
     ImagePlus, Download, FileText, Settings2, Box, Layers, 
-    UploadCloud, Loader2, FileSpreadsheet, Sparkles, Zap, CheckCircle2, AlertTriangle, ChevronDown, ChevronRight, Globe, X, File, Image as ImageIcon, Tag, PlayCircle, Trash2, Type, Package
+    UploadCloud, Loader2, FileSpreadsheet, Sparkles, Zap, CheckCircle2, AlertTriangle, ChevronDown, ChevronRight, Globe, X, File, Image as ImageIcon, Tag, PlayCircle, Trash2, Type, Package, Move, Maximize
 } from 'lucide-react';
 
 type Tab = 'keywords' | 'composer';
@@ -19,16 +19,33 @@ interface Props {
     onDelete?: (id: string) => void;
 }
 
+// Updated Interfaces for Dual Units & Canvas Objects
+interface DualUnitDim {
+    cm: string;
+    in: string;
+}
+
 interface Dimensions {
-  l: string;
-  w: string;
-  h: string;
+  l: DualUnitDim;
+  w: DualUnitDim;
+  h: DualUnitDim;
 }
 
 interface FontSettings {
   title: number;
   sub: number;
   footer: number;
+}
+
+interface CanvasObject {
+    id: string;
+    img: HTMLImageElement;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    rotation: number;
+    type: 'package' | 'product';
 }
 
 // Updated Comprehensive Regions List
@@ -49,6 +66,12 @@ const CLIENT_TYPES = [
     { value: 'Retailer/Supermarket', label: 'Retailer/Supermarket (零售/商超)' },
     { value: 'Promo/Premium Agency', label: 'Promo/Premium (促销/礼品公司)' }
 ];
+
+const INITIAL_DIMS: Dimensions = {
+    l: { cm: '0', in: '0' },
+    w: { cm: '0', in: '0' },
+    h: { cm: '0', in: '0' }
+};
 
 export const ModulePromoGenerator: React.FC<Props> = ({ 
     onStartAutomation, 
@@ -83,12 +106,19 @@ export const ModulePromoGenerator: React.FC<Props> = ({
   // Font State
   const [fonts, setFonts] = useState<FontSettings>({ title: 60, sub: 50, footer: 40 });
   
-  // Image & Dims State
-  const [packageImg, setPackageImg] = useState<string | null>(null);
-  const [packageDims, setPackageDims] = useState<Dimensions>({ l: '10', w: '5', h: '15' });
-  
-  const [productImgs, setProductImgs] = useState<string[]>([]);
-  const [productDims, setProductDims] = useState<Dimensions>({ l: '8', w: '4', h: '10' });
+  // Image Objects (Interactive)
+  const [canvasObjects, setCanvasObjects] = useState<CanvasObject[]>([]);
+  const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+
+  // Dimensions State (Dual Unit)
+  const [packageDims, setPackageDims] = useState<Dimensions>({ 
+      l: { cm: '10', in: '3.94' }, w: { cm: '5', in: '1.97' }, h: { cm: '15', in: '5.91' } 
+  });
+  const [productDims, setProductDims] = useState<Dimensions>({ 
+      l: { cm: '8', in: '3.15' }, w: { cm: '4', in: '1.57' }, h: { cm: '10', in: '3.94' } 
+  });
 
   // --- AUTOMATION HANDLERS ---
 
@@ -173,12 +203,35 @@ export const ModulePromoGenerator: React.FC<Props> = ({
       onStartAutomation(selectedKeyword, context, selectedCountries, productImages, selectedClientType);
   };
 
-  // --- COMPOSER HELPERS & LOGIC ---
+  // --- COMPOSER HELPERS ---
 
-  const toInch = (cmStr: string) => {
-    const cm = parseFloat(cmStr);
-    if (isNaN(cm) || cm === 0) return "0";
-    return (cm / 2.54).toFixed(2);
+  const convertAndSetDim = (
+      setDims: React.Dispatch<React.SetStateAction<Dimensions>>,
+      dimKey: keyof Dimensions,
+      unit: 'cm' | 'in',
+      value: string
+  ) => {
+      setDims(prev => {
+          const valNum = parseFloat(value);
+          if (isNaN(valNum)) {
+              return { ...prev, [dimKey]: { ...prev[dimKey], [unit]: value } }; // allow typing
+          }
+          
+          let cmVal = '';
+          let inVal = '';
+
+          if (unit === 'cm') {
+              cmVal = value;
+              inVal = (valNum / 2.54).toFixed(2);
+              if (inVal.endsWith('.00')) inVal = inVal.slice(0, -3);
+          } else {
+              inVal = value;
+              cmVal = (valNum * 2.54).toFixed(2);
+              if (cmVal.endsWith('.00')) cmVal = cmVal.slice(0, -3);
+          }
+
+          return { ...prev, [dimKey]: { cm: cmVal, in: inVal } };
+      });
   };
 
   const loadImage = (src: string): Promise<HTMLImageElement> => {
@@ -191,10 +244,12 @@ export const ModulePromoGenerator: React.FC<Props> = ({
     });
   };
 
+  // --- CANVAS DRAWING ---
+
   const draw3DDimensions = (ctx: CanvasRenderingContext2D, startX: number, startY: number, dims: Dimensions) => {
-      const hVal = parseFloat(dims.h) || 0;
-      const wVal = parseFloat(dims.w) || 0;
-      const lVal = parseFloat(dims.l) || 0;
+      const hVal = parseFloat(dims.h.cm) || 0;
+      const wVal = parseFloat(dims.w.cm) || 0;
+      const lVal = parseFloat(dims.l.cm) || 0;
 
       if (hVal === 0 && wVal === 0 && lVal === 0) return;
 
@@ -216,8 +271,8 @@ export const ModulePromoGenerator: React.FC<Props> = ({
           
           ctx.textAlign = 'right';
           ctx.textBaseline = 'middle';
-          ctx.fillText(`H: ${dims.h}cm`, originX - 15, originY - axisLength / 2 - 20);
-          ctx.fillText(`${toInch(dims.h)}"`, originX - 15, originY - axisLength / 2 + 20);
+          ctx.fillText(`H: ${dims.h.cm}cm`, originX - 15, originY - axisLength / 2 - 20);
+          ctx.fillText(`${dims.h.in}"`, originX - 15, originY - axisLength / 2 + 20);
       }
 
       // 2. Length
@@ -229,7 +284,7 @@ export const ModulePromoGenerator: React.FC<Props> = ({
 
           ctx.textAlign = 'center';
           ctx.textBaseline = 'top';
-          ctx.fillText(`L: ${dims.l}cm / ${toInch(dims.l)}"`, originX + axisLength / 2, originY + 20);
+          ctx.fillText(`L: ${dims.l.cm}cm / ${dims.l.in}"`, originX + axisLength / 2, originY + 20);
       }
 
       // 3. Width (Diagonal)
@@ -245,22 +300,23 @@ export const ModulePromoGenerator: React.FC<Props> = ({
 
           ctx.textAlign = 'left';
           ctx.textBaseline = 'bottom';
-          ctx.fillText(`W: ${dims.w}cm`, originX + dx + 10, originY - dy);
-          ctx.fillText(`${toInch(dims.w)}"`, originX + dx + 10, originY - dy + 35);
+          ctx.fillText(`W: ${dims.w.cm}cm`, originX + dx + 10, originY - dy);
+          ctx.fillText(`${dims.w.in}"`, originX + dx + 10, originY - dy + 35);
       }
   };
 
-  const drawCanvas = async () => {
+  const drawCanvas = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    // Background
     ctx.textBaseline = 'alphabetic'; 
     ctx.fillStyle = '#FFFFFF';
     ctx.fillRect(0, 0, 1500, 1500);
 
-    // Header Text
+    // Text Header
     ctx.fillStyle = '#1e3a8a';
     ctx.textAlign = 'left';
     ctx.font = `bold ${fonts.title}px Arial`;
@@ -271,70 +327,51 @@ export const ModulePromoGenerator: React.FC<Props> = ({
     ctx.fillText(functionText, 80, 100 + fonts.title + 20);
     ctx.fillText(materialsText, 80, 100 + fonts.title + fonts.sub + 40);
 
+    // Zone Labels
     const headerHeight = 350;
     const leftX = 80; 
     const rightX = 780;
     const topY = headerHeight;
-    const sectionWidth = 640; 
-    const imgAreaHeight = 800;
 
-    // Left Section: Package
-    if (packageImg) {
-        try {
-            const img = await loadImage(packageImg);
-            const scale = Math.min(sectionWidth / img.width, imgAreaHeight / img.height);
-            const w = img.width * scale;
-            const h = img.height * scale;
-            const x = leftX + (sectionWidth - w) / 2;
-            const y = topY + (imgAreaHeight - h) / 2;
-            ctx.drawImage(img, x, y, w, h);
-        } catch (e) {}
-    }
-
-    const pkgAnchorX = leftX + 180; 
-    const pkgAnchorY = 1320; 
-    draw3DDimensions(ctx, pkgAnchorX, pkgAnchorY, packageDims);
-
-    // Right Section: Product Images
-    const count = productImgs.length;
-    if (count > 0) {
-        let cols = 1; let rows = 1;
-        if (count === 2) { cols = 1; rows = 2; }
-        else if (count >= 3) { cols = 2; rows = Math.ceil(count/2); }
-
-        const cellW = (sectionWidth - (cols - 1) * 20) / cols;
-        const cellH = (imgAreaHeight - (rows - 1) * 20) / rows;
-
-        for (let i = 0; i < Math.min(count, 6); i++) {
-            try {
-                const img = await loadImage(productImgs[i]);
-                const col = i % cols;
-                const row = Math.floor(i / cols);
-                let cx = rightX + col * (cellW + 20);
-                if (count === 3 && i === 2) cx = rightX + (sectionWidth - cellW) / 2; 
-
-                const cy = topY + row * (cellH + 20);
-                const scale = Math.min(cellW / img.width, cellH / img.height);
-                const w = img.width * scale;
-                const h = img.height * scale;
-                const x = cx + (cellW - w) / 2;
-                const y = cy + (cellH - h) / 2;
-                ctx.drawImage(img, x, y, w, h);
-            } catch (e) {}
-        }
-    }
-
-    const prodAnchorX = rightX + 180;
-    const prodAnchorY = 1320;
-    draw3DDimensions(ctx, prodAnchorX, prodAnchorY, productDims);
-
-    // Labels
     ctx.textBaseline = 'alphabetic'; 
     ctx.font = 'bold 30px Arial';
     ctx.fillStyle = '#64748b';
     ctx.textAlign = 'left';
     ctx.fillText("Packaging", leftX, topY - 20);
     ctx.fillText("Product", rightX, topY - 20);
+
+    // Draw Images
+    canvasObjects.forEach(obj => {
+        ctx.save();
+        ctx.translate(obj.x + obj.width / 2, obj.y + obj.height / 2);
+        ctx.rotate(obj.rotation * Math.PI / 180);
+        ctx.drawImage(obj.img, -obj.width / 2, -obj.height / 2, obj.width, obj.height);
+        
+        // Highlight Selected
+        if (obj.id === selectedObjectId) {
+            ctx.strokeStyle = '#2563eb';
+            ctx.lineWidth = 4;
+            ctx.strokeRect(-obj.width / 2, -obj.height / 2, obj.width, obj.height);
+            
+            // Corner indicators
+            ctx.fillStyle = '#2563eb';
+            const size = 10;
+            ctx.fillRect(-obj.width/2 - size, -obj.height/2 - size, size*2, size*2);
+            ctx.fillRect(obj.width/2 - size, -obj.height/2 - size, size*2, size*2);
+            ctx.fillRect(obj.width/2 - size, obj.height/2 - size, size*2, size*2);
+            ctx.fillRect(-obj.width/2 - size, obj.height/2 - size, size*2, size*2);
+        }
+        ctx.restore();
+    });
+
+    // Draw Dimension Widgets (Static Anchors for now, as requested logic implies standard layout)
+    const pkgAnchorX = leftX + 180; 
+    const pkgAnchorY = 1320; 
+    draw3DDimensions(ctx, pkgAnchorX, pkgAnchorY, packageDims);
+
+    const prodAnchorX = rightX + 180;
+    const prodAnchorY = 1320;
+    draw3DDimensions(ctx, prodAnchorX, prodAnchorY, productDims);
 
     // Footer
     if (contactInfo) {
@@ -343,36 +380,127 @@ export const ModulePromoGenerator: React.FC<Props> = ({
         ctx.textAlign = 'center';
         ctx.fillText(contactInfo, 750, 1460);
     }
-  };
+  }, [productName, functionText, materialsText, contactInfo, fonts, canvasObjects, selectedObjectId, packageDims, productDims]);
 
   useEffect(() => {
     if (activeTab === 'composer') {
-        const timer = setTimeout(() => drawCanvas(), 500);
-        return () => clearTimeout(timer);
+        requestAnimationFrame(drawCanvas);
     }
-  }, [activeTab, productName, functionText, materialsText, contactInfo, packageImg, productImgs, packageDims, productDims, fonts]);
+  }, [activeTab, drawCanvas]);
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>, type: 'package' | 'product') => {
+  // --- CANVAS INTERACTION HANDLERS ---
+
+  const handleCanvasMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
+      // Calculate mouse position relative to canvas coordinate system (1500x1500)
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const mouseX = (e.clientX - rect.left) * scaleX;
+      const mouseY = (e.clientY - rect.top) * scaleY;
+
+      // Find clicked object (iterate reverse to pick top-most)
+      let clickedId: string | null = null;
+      for (let i = canvasObjects.length - 1; i >= 0; i--) {
+          const obj = canvasObjects[i];
+          if (
+              mouseX >= obj.x && 
+              mouseX <= obj.x + obj.width && 
+              mouseY >= obj.y && 
+              mouseY <= obj.y + obj.height
+          ) {
+              clickedId = obj.id;
+              setDragOffset({ x: mouseX - obj.x, y: mouseY - obj.y });
+              break;
+          }
+      }
+
+      setSelectedObjectId(clickedId);
+      if (clickedId) setIsDragging(true);
+  };
+
+  const handleCanvasMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+      if (!isDragging || !selectedObjectId) return;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const mouseX = (e.clientX - rect.left) * scaleX;
+      const mouseY = (e.clientY - rect.top) * scaleY;
+
+      setCanvasObjects(prev => prev.map(obj => {
+          if (obj.id === selectedObjectId) {
+              return { ...obj, x: mouseX - dragOffset.x, y: mouseY - dragOffset.y };
+          }
+          return obj;
+      }));
+  };
+
+  const handleCanvasMouseUp = () => {
+      setIsDragging(false);
+  };
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'package' | 'product') => {
     if (e.target.files && e.target.files[0]) {
         const file = e.target.files[0];
         const reader = new FileReader();
-        reader.onload = (ev) => {
+        reader.onload = async (ev) => {
             const result = ev.target?.result as string;
-            if (type === 'package') setPackageImg(result);
-            else {
-                if (productImgs.length < 6) setProductImgs([...productImgs, result]);
-                else alert("Max 6 product images allowed");
-            }
+            const img = await loadImage(result);
+            
+            // Initial positioning logic
+            const headerHeight = 350;
+            const targetWidth = 400; // default width
+            const scale = targetWidth / img.width;
+            const height = img.height * scale;
+            
+            // Zones: Left (Packaging) center ~320+80=400, Right (Product) center ~780+320=1100
+            const startX = type === 'package' ? 200 : 900;
+            const startY = headerHeight + 50;
+
+            const newObj: CanvasObject = {
+                id: Date.now().toString(),
+                img,
+                x: startX,
+                y: startY,
+                width: targetWidth,
+                height: height,
+                rotation: 0,
+                type
+            };
+            setCanvasObjects(prev => [...prev, newObj]);
+            setSelectedObjectId(newObj.id);
         };
         reader.readAsDataURL(file);
     }
+  };
+
+  const updateSelectedObject = (key: keyof CanvasObject, val: number) => {
+      if (!selectedObjectId) return;
+      setCanvasObjects(prev => prev.map(obj => {
+          if (obj.id === selectedObjectId) {
+              return { ...obj, [key]: val };
+          }
+          return obj;
+      }));
+  };
+
+  const deleteSelected = () => {
+      if(selectedObjectId) {
+          setCanvasObjects(prev => prev.filter(o => o.id !== selectedObjectId));
+          setSelectedObjectId(null);
+      }
   };
 
   const downloadImage = () => {
       const canvas = canvasRef.current;
       if (!canvas) return;
       const link = document.createElement('a');
-      link.download = `Promo_${Date.now()}.jpg`;
+      link.download = `SpecSheet_${Date.now()}.jpg`;
       link.href = canvas.toDataURL('image/jpeg', 0.9);
       link.click();
   };
@@ -648,44 +776,136 @@ export const ModulePromoGenerator: React.FC<Props> = ({
                     </div>
                 </div>
 
+                {/* Selected Image Controls */}
+                {selectedObjectId && (
+                    <div className="bg-blue-50 p-5 rounded-xl border border-blue-200 animate-fade-in">
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="font-bold text-blue-800 flex gap-2"><Move size={18}/> Image Adjustment</h3>
+                            <button onClick={() => { if(selectedObjectId) { setCanvasObjects(prev => prev.filter(o => o.id !== selectedObjectId)); setSelectedObjectId(null); } }} className="text-red-500 hover:text-red-700 bg-white p-1.5 rounded-lg shadow-sm border border-red-100"><Trash2 size={16}/></button>
+                        </div>
+                        <div className="space-y-3">
+                            <div>
+                                <div className="flex justify-between text-xs text-blue-700 font-bold mb-1">
+                                    <span>Scale / Size</span>
+                                    <span>{canvasObjects.find(o => o.id === selectedObjectId)?.width.toFixed(0)}px</span>
+                                </div>
+                                <input 
+                                    type="range" 
+                                    min="50" 
+                                    max="800" 
+                                    value={canvasObjects.find(o => o.id === selectedObjectId)?.width || 100} 
+                                    onChange={(e) => {
+                                        const newW = parseInt(e.target.value);
+                                        const obj = canvasObjects.find(o => o.id === selectedObjectId);
+                                        if (obj) {
+                                            const ratio = obj.height / obj.width;
+                                            updateSelectedObject('width', newW);
+                                            updateSelectedObject('height', newW * ratio);
+                                        }
+                                    }}
+                                    className="w-full accent-blue-600"
+                                />
+                            </div>
+                        </div>
+                    </div>
+                )}
+
                 {/* Package Upload & Dims */}
                 <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
-                    <h3 className="font-bold text-slate-800 mb-3 flex gap-2"><Package size={18}/> Packaging</h3>
-                    <label className="block w-full text-center p-2 bg-orange-50 text-orange-700 border border-orange-200 rounded cursor-pointer mb-3">
-                        <ImagePlus size={16} className="inline mr-2"/> Upload Package
+                    <h3 className="font-bold text-slate-800 mb-3 flex gap-2"><Package size={18}/> Packaging (Free Drag)</h3>
+                    <label className="block w-full text-center p-2 bg-orange-50 text-orange-700 border border-orange-200 rounded cursor-pointer mb-3 hover:bg-orange-100 transition-colors">
+                        <ImagePlus size={16} className="inline mr-2"/> Add Package Image
                         <input type="file" className="hidden" accept="image/*" onChange={e => handleImageUpload(e, 'package')} />
                     </label>
-                    <div className="grid grid-cols-3 gap-2">
-                        {['h', 'l', 'w'].map(d => (
-                            <div key={d}><span className="text-[10px] text-slate-400 uppercase">{d.toUpperCase()} (cm)</span><input type="number" className="w-full p-1 border rounded" value={(packageDims as any)[d]} onChange={e => setPackageDims({...packageDims, [d]: e.target.value})}/></div>
+                    <div className="grid grid-cols-1 gap-3">
+                        {(['l', 'w', 'h'] as const).map(d => (
+                            <div key={d} className="flex items-center gap-2">
+                                <span className="text-xs font-bold text-slate-400 w-4 uppercase">{d}</span>
+                                <div className="flex gap-1 flex-1">
+                                    <div className="relative flex-1">
+                                        <input 
+                                            type="text" 
+                                            className="w-full p-1.5 pl-1 border rounded text-xs" 
+                                            placeholder="cm"
+                                            value={packageDims[d].cm}
+                                            onChange={e => convertAndSetDim(setPackageDims, d, 'cm', e.target.value)}
+                                        />
+                                        <span className="absolute right-1 top-1.5 text-[10px] text-slate-400">cm</span>
+                                    </div>
+                                    <div className="relative flex-1">
+                                        <input 
+                                            type="text" 
+                                            className="w-full p-1.5 pl-1 border rounded text-xs bg-slate-50" 
+                                            placeholder="in"
+                                            value={packageDims[d].in}
+                                            onChange={e => convertAndSetDim(setPackageDims, d, 'in', e.target.value)}
+                                        />
+                                        <span className="absolute right-1 top-1.5 text-[10px] text-slate-400">in</span>
+                                    </div>
+                                </div>
+                            </div>
                         ))}
                     </div>
                 </div>
 
                 {/* Product Upload & Dims */}
                 <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
-                    <h3 className="font-bold text-slate-800 mb-3 flex gap-2"><Box size={18}/> Product (Max 6)</h3>
-                    <div className="flex flex-wrap gap-2 mb-3">
-                        {productImgs.map((src, i) => <img key={i} src={src} className="w-10 h-10 object-cover rounded border"/>)}
-                        <label className="w-10 h-10 flex items-center justify-center bg-green-50 border border-green-200 rounded cursor-pointer"><ImagePlus size={16}/><input type="file" className="hidden" accept="image/*" onChange={e => handleImageUpload(e, 'product')} /></label>
-                    </div>
-                    <div className="grid grid-cols-3 gap-2">
-                        {['h', 'l', 'w'].map(d => (
-                             <div key={d}><span className="text-[10px] text-slate-400 uppercase">{d.toUpperCase()} (cm)</span><input type="number" className="w-full p-1 border rounded" value={(productDims as any)[d]} onChange={e => setProductDims({...productDims, [d]: e.target.value})}/></div>
+                    <h3 className="font-bold text-slate-800 mb-3 flex gap-2"><Box size={18}/> Product (Free Drag)</h3>
+                    <label className="block w-full text-center p-2 bg-green-50 text-green-700 border border-green-200 rounded cursor-pointer mb-3 hover:bg-green-100 transition-colors">
+                        <ImagePlus size={16} className="inline mr-2"/> Add Product Image
+                        <input type="file" className="hidden" accept="image/*" onChange={e => handleImageUpload(e, 'product')} />
+                    </label>
+                    <div className="grid grid-cols-1 gap-3">
+                        {(['l', 'w', 'h'] as const).map(d => (
+                            <div key={d} className="flex items-center gap-2">
+                                <span className="text-xs font-bold text-slate-400 w-4 uppercase">{d}</span>
+                                <div className="flex gap-1 flex-1">
+                                    <div className="relative flex-1">
+                                        <input 
+                                            type="text" 
+                                            className="w-full p-1.5 pl-1 border rounded text-xs" 
+                                            placeholder="cm"
+                                            value={productDims[d].cm}
+                                            onChange={e => convertAndSetDim(setProductDims, d, 'cm', e.target.value)}
+                                        />
+                                        <span className="absolute right-1 top-1.5 text-[10px] text-slate-400">cm</span>
+                                    </div>
+                                    <div className="relative flex-1">
+                                        <input 
+                                            type="text" 
+                                            className="w-full p-1.5 pl-1 border rounded text-xs bg-slate-50" 
+                                            placeholder="in"
+                                            value={productDims[d].in}
+                                            onChange={e => convertAndSetDim(setProductDims, d, 'in', e.target.value)}
+                                        />
+                                        <span className="absolute right-1 top-1.5 text-[10px] text-slate-400">in</span>
+                                    </div>
+                                </div>
+                            </div>
                         ))}
                     </div>
                 </div>
 
-                <button onClick={downloadImage} className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl shadow-lg flex items-center justify-center gap-2">
+                <button onClick={downloadImage} className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl shadow-lg flex items-center justify-center gap-2 hover:bg-blue-700 transition-colors">
                     <Download size={20} /> Download High-Res JPG
                 </button>
               </div>
 
               {/* Canvas Preview */}
-              <div className="lg:col-span-8 bg-slate-200 rounded-xl p-4 flex items-center justify-center min-h-[600px] relative">
-                 <div className="absolute top-4 left-4 bg-red-600 text-white px-3 py-1 rounded-full text-xs font-bold shadow-md">v3.4 Safe Layout</div>
-                 <div className="shadow-2xl bg-white w-full max-w-[600px] aspect-square">
-                    <canvas ref={canvasRef} width={1500} height={1500} className="w-full h-full"/>
+              <div className="lg:col-span-8 bg-slate-200 rounded-xl p-4 flex items-center justify-center min-h-[600px] relative overflow-hidden">
+                 <div className="absolute top-4 left-4 bg-red-600 text-white px-3 py-1 rounded-full text-xs font-bold shadow-md z-10">v3.5 Interactive</div>
+                 <div className="absolute top-4 right-4 text-slate-500 text-xs font-bold z-10 flex items-center gap-1"><Maximize size={12}/> Click Image to Drag & Resize</div>
+                 <div className="shadow-2xl bg-white w-full max-w-[600px] aspect-square cursor-crosshair">
+                    <canvas 
+                        ref={canvasRef} 
+                        width={1500} 
+                        height={1500} 
+                        className="w-full h-full"
+                        onMouseDown={handleCanvasMouseDown}
+                        onMouseMove={handleCanvasMouseMove}
+                        onMouseUp={handleCanvasMouseUp}
+                        onMouseLeave={handleCanvasMouseUp}
+                    />
                  </div>
               </div>
             </div>
