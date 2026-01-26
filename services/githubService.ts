@@ -1,5 +1,4 @@
 
-
 import { Octokit } from "@octokit/rest";
 import { GlobalConfig, KnowledgeFile, HistoryItem, User, Client, ApiConfig } from "../types";
 
@@ -42,8 +41,36 @@ const getOctokit = () => {
     return token ? new Octokit({ auth: token }) : null;
 };
 
-// --- HELPER: Read/Write File ---
+// --- HELPER: Get File SHA (Robust) ---
+// Gets SHA by listing directory, avoiding download limits
+const getFileSha = async (path: string): Promise<string | undefined> => {
+    const { token, owner, repo } = getCredentials();
+    const octokit = getOctokit();
+    if (!token || !owner || !repo || !octokit) return undefined;
 
+    try {
+        const parts = path.split('/');
+        const filename = parts.pop();
+        const dir = parts.join('/');
+
+        // @ts-ignore
+        const { data } = await octokit.rest.repos.getContent({
+            owner: owner!,
+            repo: repo!,
+            path: dir,
+        });
+
+        if (Array.isArray(data)) {
+            const fileItem = data.find((item: any) => item.name === filename);
+            return fileItem?.sha;
+        }
+    } catch (e) {
+        // File likely doesn't exist
+    }
+    return undefined;
+};
+
+// --- HELPER: Read File Content (Large File Support) ---
 const getFileContent = async (path: string): Promise<{ sha: string, content: any } | null> => {
     const { token, owner, repo } = getCredentials();
     const octokit = getOctokit();
@@ -51,6 +78,7 @@ const getFileContent = async (path: string): Promise<{ sha: string, content: any
     if (!token || !owner || !repo || !octokit) return null;
 
     try {
+        // 1. Try standard get content
         // @ts-ignore
         const { data } = await octokit.rest.repos.getContent({
             owner: owner!,
@@ -58,16 +86,37 @@ const getFileContent = async (path: string): Promise<{ sha: string, content: any
             path: path,
         });
         
-        if ('content' in data && !Array.isArray(data)) {
+        // Success with content
+        if ('content' in data && !Array.isArray(data) && data.content) {
             const decoded = decodeURIComponent(escape(atob(data.content)));
             return { sha: data.sha, content: JSON.parse(decoded) };
         }
     } catch (e: any) {
-        if (e.status !== 404) console.error(`GitHub Read Error [${path}]`, e);
+        // 2. Fallback for Large Files (Blob API)
+        if (e.status === 403 || (e.message && e.message.includes('too large'))) {
+            try {
+                const sha = await getFileSha(path);
+                if (sha) {
+                    // @ts-ignore
+                    const blob = await octokit.rest.git.getBlob({
+                        owner: owner!,
+                        repo: repo!,
+                        file_sha: sha
+                    });
+                    const decoded = decodeURIComponent(escape(atob(blob.data.content)));
+                    return { sha: sha, content: JSON.parse(decoded) };
+                }
+            } catch (blobError) {
+                console.error(`Blob fetch failed for ${path}`, blobError);
+            }
+        } else if (e.status !== 404) {
+            console.error(`GitHub Read Error [${path}]`, e);
+        }
     }
     return null;
 };
 
+// --- HELPER: Save File Content ---
 const saveFileContent = async (path: string, content: any, message: string, sha?: string) => {
     const { token, owner, repo } = getCredentials();
     const octokit = getOctokit();
@@ -116,8 +165,8 @@ export const fetchGlobalConfig = async (): Promise<GlobalConfig | null> => {
     return res ? res.content as GlobalConfig : null;
 };
 export const saveGlobalConfig = async (config: GlobalConfig) => {
-    const existing = await getFileContent(PATH_CONFIG);
-    await saveFileContent(PATH_CONFIG, config, "Update Admin Config", existing?.sha);
+    const sha = await getFileSha(PATH_CONFIG);
+    await saveFileContent(PATH_CONFIG, config, "Update Admin Config", sha);
 };
 
 // 2. Knowledge Base
@@ -126,8 +175,8 @@ export const fetchSharedKnowledgeBase = async (): Promise<KnowledgeFile[]> => {
     return res ? res.content as KnowledgeFile[] : [];
 };
 export const saveSharedKnowledgeBase = async (files: KnowledgeFile[]) => {
-    const existing = await getFileContent(PATH_KB);
-    await saveFileContent(PATH_KB, files, "Update Knowledge Base", existing?.sha);
+    const sha = await getFileSha(PATH_KB);
+    await saveFileContent(PATH_KB, files, "Update Knowledge Base", sha);
 };
 
 // 3. Users
@@ -136,8 +185,8 @@ export const fetchUsersFromCloud = async (): Promise<User[]> => {
     return res ? res.content as User[] : [];
 };
 export const saveUsersToCloud = async (users: User[]) => {
-    const existing = await getFileContent(PATH_USERS);
-    await saveFileContent(PATH_USERS, users, "Update Users List", existing?.sha);
+    const sha = await getFileSha(PATH_USERS);
+    await saveFileContent(PATH_USERS, users, "Update Users List", sha);
 };
 
 // 4. API Keys
@@ -146,8 +195,8 @@ export const fetchApiConfigsFromCloud = async (): Promise<ApiConfig[]> => {
     return res ? res.content as ApiConfig[] : [];
 };
 export const saveApiConfigsToCloud = async (configs: ApiConfig[]) => {
-    const existing = await getFileContent(PATH_API_KEYS);
-    await saveFileContent(PATH_API_KEYS, configs, "Update API Configurations", existing?.sha);
+    const sha = await getFileSha(PATH_API_KEYS);
+    await saveFileContent(PATH_API_KEYS, configs, "Update API Configurations", sha);
 };
 
 // 5. CRM Clients
@@ -156,8 +205,8 @@ export const fetchCRMFromCloud = async (): Promise<Client[]> => {
     return res ? res.content as Client[] : [];
 };
 export const saveCRMToCloud = async (clients: Client[]) => {
-    const existing = await getFileContent(PATH_CRM);
-    await saveFileContent(PATH_CRM, clients, "Update CRM Clients", existing?.sha);
+    const sha = await getFileSha(PATH_CRM);
+    await saveFileContent(PATH_CRM, clients, "Update CRM Clients", sha);
 };
 
 // 6. User History
@@ -168,8 +217,8 @@ export const fetchUserHistoryFromCloud = async (username: string): Promise<Histo
 };
 export const saveUserHistoryToCloud = async (username: string, history: HistoryItem[]) => {
     const path = `${PATH_HISTORY_PREFIX}${username}_history.json`;
-    const existing = await getFileContent(path);
-    await saveFileContent(path, history, `Update history for ${username}`, existing?.sha);
+    const sha = await getFileSha(path);
+    await saveFileContent(path, history, `Update history for ${username}`, sha);
 };
 
 // Export alias for compatibility
