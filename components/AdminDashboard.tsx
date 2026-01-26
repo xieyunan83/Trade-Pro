@@ -31,7 +31,7 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, currentUser }) => {
                     </div>
                     <div>
                         <h1 className="font-bold text-lg leading-tight">管理员控制台</h1>
-                        <p className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">系统管理 (System Management)</p>
+                        <p className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">System Management</p>
                     </div>
                 </div>
                 <div className="flex items-center gap-4">
