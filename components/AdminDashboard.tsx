@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { User, KnowledgeFile, GlobalConfig, ApiConfig } from '../types';
-import { getAllUsers, saveUser, deleteUser, getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/db';
+import { getAllUsers, saveUser, deleteUser, getAllFilesFromDB, saveFileToDB, deleteFileFromDB, clearDB } from '../services/db';
 import { testApiKey, getGeminiConfig } from '../services/geminiService';
 import { saveGlobalConfig, fetchGlobalConfig, checkGitHubStatus, setManualGitHubConfig, clearManualGitHubConfig, fetchUsersFromCloud, saveUsersToCloud, fetchApiConfigsFromCloud, saveApiConfigsToCloud, fetchDocumentsFromRepo } from '../services/githubService';
 import { Users, Database, Plus, Trash2, Shield, UploadCloud, FileText, Loader2, LogOut, Key, Save, CheckCircle2, AlertTriangle, Info, Play, Workflow, Cloud, Download, Upload, ExternalLink, HelpCircle, Link2, RefreshCw, ArrowDownCircle, Github, FolderOpen } from 'lucide-react';
@@ -12,11 +12,19 @@ interface Props {
 }
 
 export const AdminDashboard: React.FC<Props> = ({ onLogout, currentUser }) => {
-    const [activeTab, setActiveTab] = useState<'users' | 'kb' | 'settings' | 'limits'>('users');
+    // Default to 'limits' tab (Connection) if not connected, otherwise 'users'
+    const [activeTab, setActiveTab] = useState<'users' | 'kb' | 'settings' | 'limits'>(
+        checkGitHubStatus().ok ? 'users' : 'limits'
+    );
     const [refreshKey, setRefreshKey] = useState(0); 
 
     const handleConnectionChange = () => {
         setRefreshKey(prev => prev + 1);
+        // If just connected, switch to settings or users to show data is loaded
+        if (checkGitHubStatus().ok) {
+            // Wait a tick for localstorage to settle
+            setTimeout(() => setActiveTab('settings'), 100);
+        }
     };
 
     return (
@@ -27,7 +35,7 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, currentUser }) => {
                         <Shield size={20} />
                     </div>
                     <div>
-                        <h1 className="font-bold text-lg leading-tight">管理员控制台</h1>
+                        <h1 className="font-bold text-lg leading-tight">管理员控制台 (Admin Console)</h1>
                         <p className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">System Management</p>
                     </div>
                 </div>
@@ -45,21 +53,22 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, currentUser }) => {
             <div className="flex-1 p-6 max-w-6xl mx-auto w-full">
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden min-h-[600px]">
                     <div className="flex border-b border-slate-200 bg-slate-50 overflow-x-auto">
-                        <button onClick={() => setActiveTab('users')} className={`px-6 py-4 font-bold text-sm flex items-center gap-2 transition-colors whitespace-nowrap ${activeTab === 'users' ? 'bg-white text-blue-600 border-t-2 border-t-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>
-                            <Users size={18} /> 用户管理
-                        </button>
-                        <button onClick={() => setActiveTab('kb')} className={`px-6 py-4 font-bold text-sm flex items-center gap-2 transition-colors whitespace-nowrap ${activeTab === 'kb' ? 'bg-white text-blue-600 border-t-2 border-t-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>
-                            <Database size={18} /> 知识库管理
+                        <button onClick={() => setActiveTab('limits')} className={`px-6 py-4 font-bold text-sm flex items-center gap-2 transition-colors whitespace-nowrap ${activeTab === 'limits' ? 'bg-white text-blue-600 border-t-2 border-t-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>
+                            <Cloud size={18} /> ① 云端连接 (Connection)
                         </button>
                         <button onClick={() => setActiveTab('settings')} className={`px-6 py-4 font-bold text-sm flex items-center gap-2 transition-colors whitespace-nowrap ${activeTab === 'settings' ? 'bg-white text-blue-600 border-t-2 border-t-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>
-                            <Key size={18} /> API 密钥配置
+                            <Key size={18} /> ② API 密钥配置
                         </button>
-                        <button onClick={() => setActiveTab('limits')} className={`px-6 py-4 font-bold text-sm flex items-center gap-2 transition-colors whitespace-nowrap ${activeTab === 'limits' ? 'bg-white text-blue-600 border-t-2 border-t-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>
-                            <Cloud size={18} /> 云端同步与额度
+                        <button onClick={() => setActiveTab('users')} className={`px-6 py-4 font-bold text-sm flex items-center gap-2 transition-colors whitespace-nowrap ${activeTab === 'users' ? 'bg-white text-blue-600 border-t-2 border-t-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>
+                            <Users size={18} /> ③ 用户管理
+                        </button>
+                        <button onClick={() => setActiveTab('kb')} className={`px-6 py-4 font-bold text-sm flex items-center gap-2 transition-colors whitespace-nowrap ${activeTab === 'kb' ? 'bg-white text-blue-600 border-t-2 border-t-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>
+                            <Database size={18} /> ④ 知识库
                         </button>
                     </div>
 
                     <div className="p-8">
+                        {/* Pass refreshKey to force re-render/re-fetch when connection changes */}
                         {activeTab === 'users' && <UserManagement key={refreshKey} />}
                         {activeTab === 'kb' && <KnowledgeManagement key={refreshKey} />}
                         {activeTab === 'settings' && <SystemSettings key={refreshKey} />}
@@ -113,7 +122,7 @@ const CloudLimitManager: React.FC<CloudLimitManagerProps> = ({ onConnectionChang
             const toSave = { ...config, lastUpdated: Date.now() };
             await saveGlobalConfig(toSave);
             setConfig(toSave);
-            setMsg({ type: 'success', text: '成功！设置已同步到 GitHub。用户重启 App 后生效。' });
+            setMsg({ type: 'success', text: '配置已保存到云端！其他浏览器连接后将自动应用此配置。' });
         } catch (e: any) {
             setMsg({ type: 'error', text: `保存失败: ${e.message}。请检查 Token 权限或仓库是否存在。` });
         } finally {
@@ -127,6 +136,7 @@ const CloudLimitManager: React.FC<CloudLimitManagerProps> = ({ onConnectionChang
             return;
         }
         setLoading(true);
+        // Save to LocalStorage immediately so subsequent fetches use it
         setManualGitHubConfig(manualToken, manualOwner, manualRepo);
         
         // Test connection by fetching config
@@ -135,12 +145,15 @@ const CloudLimitManager: React.FC<CloudLimitManagerProps> = ({ onConnectionChang
         
         if (check.ok) {
             try {
-                await loadRemoteConfig();
-                alert("连接成功！已从云端拉取最新配置。");
+                await loadRemoteConfig(); // Try fetching global config
+                setMsg({ type: 'success', text: "连接成功！已从云端拉取最新配置。" });
                 onConnectionChange(); // Notify parent to refresh other tabs
             } catch (e) {
-                alert("凭证格式正确，但无法读取仓库。请检查仓库是否存在或 Token 权限。");
+                setMsg({ type: 'error', text: "连接成功，但无法读取 config.json。如果是新仓库，请点击保存以初始化。" });
+                onConnectionChange(); 
             }
+        } else {
+             setMsg({ type: 'error', text: "连接失败，请检查凭证。" });
         }
         setLoading(false);
     };
@@ -150,6 +163,7 @@ const CloudLimitManager: React.FC<CloudLimitManagerProps> = ({ onConnectionChang
             clearManualGitHubConfig();
             const check = checkGitHubStatus();
             setStatus(check);
+            setMsg(null);
             onConnectionChange();
         }
     };
@@ -157,9 +171,12 @@ const CloudLimitManager: React.FC<CloudLimitManagerProps> = ({ onConnectionChang
     return (
         <div className="max-w-3xl">
             <div className="flex items-center justify-between mb-6">
-                <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-                    <Cloud className="text-blue-600" /> GitHub 云端数据库 (Cloud DB)
-                </h3>
+                <div>
+                    <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                        <Cloud className="text-blue-600" /> GitHub 云端数据库 (Cloud DB)
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-1">这是系统的大脑。连接后，所有配置、用户和数据将同步到您的 GitHub 仓库。</p>
+                </div>
                 <div className={`px-3 py-1 rounded-full text-xs font-bold border flex items-center gap-2 ${status.ok ? 'bg-green-50 text-green-700 border-green-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
                     {status.ok ? (
                         <>
@@ -176,29 +193,14 @@ const CloudLimitManager: React.FC<CloudLimitManagerProps> = ({ onConnectionChang
 
             {!status.ok ? (
                 <div className="space-y-6">
-                    <div className="p-5 bg-red-50 border border-red-200 rounded-xl text-red-800 text-sm space-y-3">
-                        <div className="flex items-center gap-2 font-bold text-lg">
-                            <AlertTriangle size={20} />
-                            配置缺失 (Configuration Missing)
+                    <div className="bg-white p-6 rounded-xl border border-blue-200 shadow-md">
+                        <h4 className="font-bold text-slate-800 mb-4 flex items-center gap-2 text-lg"><Link2 size={20}/> 首次配置 / 新设备连接</h4>
+                        <div className="text-sm text-slate-600 mb-4">
+                            在新浏览器或设备上，您只需输入一次 GitHub 凭证。连接成功后，系统将自动拉取之前保存的所有 API Key 和用户设置。
                         </div>
-                        <p>要启用云端存储，您需要配置 GitHub Token。如果您更换了浏览器或设备，需要在此处重新输入凭证才能连接到之前的云端数据。</p>
-                        <div className="pt-2">
-                            <a 
-                                href="https://github.com/settings/tokens/new?scopes=repo&description=TradeScoutApp" 
-                                target="_blank" 
-                                rel="noreferrer"
-                                className="inline-flex items-center gap-2 bg-red-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-red-700 transition-colors"
-                            >
-                                <ExternalLink size={16} /> 第一步：点击生成 Token (必须勾选 repo)
-                            </a>
-                        </div>
-                    </div>
-
-                    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-                        <h4 className="font-bold text-slate-800 mb-4 flex items-center gap-2"><Link2 size={18}/> 手动连接 (Manual Connection)</h4>
                         <div className="grid grid-cols-1 gap-4">
                             <div>
-                                <label className="block text-xs font-bold text-slate-500 mb-1">GitHub Personal Access Token (以 ghp_ 开头)</label>
+                                <label className="block text-xs font-bold text-slate-500 mb-1">GitHub Personal Access Token</label>
                                 <input 
                                     type="password" 
                                     className="w-full p-3 border border-slate-300 rounded-xl font-mono text-sm"
@@ -232,24 +234,21 @@ const CloudLimitManager: React.FC<CloudLimitManagerProps> = ({ onConnectionChang
                             <button 
                                 onClick={handleManualConnect}
                                 disabled={loading}
-                                className="mt-2 bg-blue-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-blue-700 transition-colors flex items-center gap-2"
+                                className="mt-2 bg-blue-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-blue-700 transition-colors flex items-center gap-2 justify-center shadow-lg"
                             >
-                                {loading ? <Loader2 className="animate-spin" size={18}/> : null}
-                                立即连接 (Connect Now)
+                                {loading ? <Loader2 className="animate-spin" size={18}/> : <Cloud size={18}/>}
+                                连接并同步数据 (Connect & Sync)
                             </button>
-                        </div>
-                        <div className="mt-4 p-3 bg-yellow-50 text-yellow-700 text-xs rounded-lg border border-yellow-100 flex items-start gap-2">
-                            <Info size={14} className="mt-0.5 shrink-0"/>
-                            注意：手动配置仅保存在当前浏览器的缓存中。如果您更换电脑或浏览器，需要重新输入上述信息才能访问云端数据。
                         </div>
                     </div>
                 </div>
             ) : (
-                <div className={`bg-slate-50 p-6 rounded-xl border border-slate-200 mb-6`}>
-                    <div className="flex items-center justify-between mb-4">
+                <div className={`bg-slate-50 p-6 rounded-xl border border-slate-200 mb-6 animate-fade-in`}>
+                     {/* Configuration Form (Existing) */}
+                     <div className="flex items-center justify-between mb-4">
                         <h4 className="font-bold text-slate-700 flex items-center gap-2"><Shield size={16}/> 每日用户额度限制 (Daily User Limits)</h4>
                         <div className="flex items-center gap-3">
-                             <span className="text-xs text-slate-400 bg-white px-2 py-1 rounded border">最后更新: {new Date(config.lastUpdated).toLocaleString()}</span>
+                             <span className="text-xs text-slate-400 bg-white px-2 py-1 rounded border">云端状态: 正常</span>
                              {status.source === 'LOCAL' && (
                                  <button onClick={handleDisconnect} className="text-xs text-red-500 hover:underline">断开连接</button>
                              )}
@@ -258,53 +257,43 @@ const CloudLimitManager: React.FC<CloudLimitManagerProps> = ({ onConnectionChang
                     
                     <div className="grid grid-cols-2 gap-6 mb-6">
                         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                            <label className="block text-xs font-bold text-slate-500 mb-2">每日最大搜索次数 (Searches/Day)</label>
-                            <div className="flex items-center gap-2">
-                                <input 
-                                    type="number" 
-                                    className="w-full p-2 border border-slate-300 rounded-lg font-mono text-lg font-bold text-blue-600"
-                                    value={config.dailyLimits.search}
-                                    onChange={(e) => setConfig({...config, dailyLimits: {...config.dailyLimits, search: parseInt(e.target.value)}})}
-                                />
-                                <span className="text-xs font-bold text-slate-400">次</span>
-                            </div>
+                            <label className="block text-xs font-bold text-slate-500 mb-2">每日最大搜索次数</label>
+                            <input 
+                                type="number" 
+                                className="w-full p-2 border border-slate-300 rounded-lg font-mono text-lg font-bold text-blue-600"
+                                value={config.dailyLimits.search}
+                                onChange={(e) => setConfig({...config, dailyLimits: {...config.dailyLimits, search: parseInt(e.target.value)}})}
+                            />
                         </div>
                         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                            <label className="block text-xs font-bold text-slate-500 mb-2">每日最大深度背调次数 (Analysis/Day)</label>
-                            <div className="flex items-center gap-2">
-                                <input 
-                                    type="number" 
-                                    className="w-full p-2 border border-slate-300 rounded-lg font-mono text-lg font-bold text-purple-600"
-                                    value={config.dailyLimits.analysis}
-                                    onChange={(e) => setConfig({...config, dailyLimits: {...config.dailyLimits, analysis: parseInt(e.target.value)}})}
-                                />
-                                <span className="text-xs font-bold text-slate-400">次</span>
-                            </div>
+                            <label className="block text-xs font-bold text-slate-500 mb-2">每日最大深度背调次数</label>
+                            <input 
+                                type="number" 
+                                className="w-full p-2 border border-slate-300 rounded-lg font-mono text-lg font-bold text-purple-600"
+                                value={config.dailyLimits.analysis}
+                                onChange={(e) => setConfig({...config, dailyLimits: {...config.dailyLimits, analysis: parseInt(e.target.value)}})}
+                            />
                         </div>
                     </div>
 
                     <div className="mb-6">
                         <label className="block text-xs font-bold text-slate-500 mb-2 flex items-center gap-1"><Info size={12}/> 系统公告 (System Notice)</label>
-                        <div className="relative">
-                            <input 
-                                type="text" 
-                                className="w-full p-3 pl-10 border border-slate-300 rounded-xl"
-                                placeholder="例如：系统将于今晚午夜维护，请提前保存数据..."
-                                value={config.systemNotice}
-                                onChange={(e) => setConfig({...config, systemNotice: e.target.value})}
-                            />
-                            <Info className="absolute left-3 top-3.5 text-slate-400" size={18} />
-                        </div>
-                        <p className="text-[10px] text-slate-400 mt-1 pl-1">此消息将显示在所有用户的侧边栏上方。</p>
+                        <input 
+                            type="text" 
+                            className="w-full p-3 border border-slate-300 rounded-xl"
+                            placeholder="例如：系统将于今晚维护..."
+                            value={config.systemNotice}
+                            onChange={(e) => setConfig({...config, systemNotice: e.target.value})}
+                        />
                     </div>
 
                     <button 
                         onClick={handleSave} 
                         disabled={loading || !status.ok}
-                        className="bg-slate-900 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-slate-700 disabled:opacity-50 transition-colors w-full justify-center"
+                        className="bg-slate-900 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-slate-700 disabled:opacity-50 transition-colors w-full justify-center shadow-lg"
                     >
                         {loading ? <Loader2 className="animate-spin" size={18}/> : <UploadCloud size={18}/>}
-                        推送配置到云端 (Push Config to GitHub)
+                        保存配置到云端 (Save to Cloud)
                     </button>
                     
                     {msg && (
@@ -323,51 +312,76 @@ const SystemSettings: React.FC = () => {
     const [configs, setConfigs] = useState<ApiConfig[]>([]);
     const [isTesting, setIsTesting] = useState<string | null>(null);
     const [isSyncing, setIsSyncing] = useState(false);
+    const [isLoading, setIsLoading] = useState(false);
     const [status, setStatus] = useState<{ id: string, type: 'success'|'error', msg: string } | null>(null);
+    const [ghStatus] = useState(checkGitHubStatus());
 
     useEffect(() => {
         const load = async () => {
-            // Priority load from Cloud if available
-            if (checkGitHubStatus().ok) {
+            setIsLoading(true);
+            // 1. CLOUD FIRST STRATEGY
+            if (ghStatus.ok) {
                 try {
+                    console.log("Fetching API configs from Cloud...");
                     const cloudConfigs = await fetchApiConfigsFromCloud();
                     if (cloudConfigs.length > 0) {
                         setConfigs(cloudConfigs);
+                        // Update local mirror
                         localStorage.setItem('trade_scout_api_configs', JSON.stringify(cloudConfigs));
-                        return;
+                        setIsLoading(false);
+                        return; // Successfully loaded from cloud, stop here
                     }
                 } catch(e) { console.error("Cloud config fetch error", e); }
             }
+
+            // 2. FALLBACK TO LOCAL
             const loaded = getGeminiConfig();
             if (loaded.length > 0) {
                 setConfigs(loaded);
             } else {
                 setConfigs([{ id: Date.now().toString(), apiKey: '', baseUrl: '', modelId: 'gemini-1.5-pro', taskAssignment: 'default' }]);
             }
+            setIsLoading(false);
         };
         load();
-    }, []);
+    }, [ghStatus.ok]); // Re-run if connection status changes
 
-    const saveConfigs = (newConfigs: ApiConfig[]) => {
+    const saveConfigsToStateAndCloud = async (newConfigs: ApiConfig[]) => {
         setConfigs(newConfigs);
+        // Save Local
         localStorage.setItem('trade_scout_api_configs', JSON.stringify(newConfigs));
-    };
-
-    const handleSyncToCloud = async () => {
-        setIsSyncing(true);
-        try {
-            await saveApiConfigsToCloud(configs);
-            alert("API 配置已同步到 GitHub!");
-        } catch (e: any) {
-            alert("同步失败: " + e.message);
-        } finally {
-            setIsSyncing(false);
+        
+        // Auto-Save Cloud if Connected
+        if (ghStatus.ok) {
+            setIsSyncing(true);
+            try {
+                await saveApiConfigsToCloud(newConfigs);
+            } catch (e) {
+                console.error("Auto-save failed", e);
+            } finally {
+                setIsSyncing(false);
+            }
         }
     };
 
     const updateConfig = (id: string, field: keyof ApiConfig, value: string) => {
         const updated = configs.map(c => c.id === id ? { ...c, [field]: value } : c);
-        saveConfigs(updated);
+        setConfigs(updated); // Optimistic update
+    };
+
+    // Manual Trigger to ensure save
+    const forceSync = async () => {
+        setIsSyncing(true);
+        try {
+            await saveApiConfigsToCloud(configs);
+            // Also save locally
+            localStorage.setItem('trade_scout_api_configs', JSON.stringify(configs));
+            alert("API 配置已成功同步到云端！其他端刷新后可见。");
+        } catch(e:any) {
+            alert("同步失败: " + e.message);
+        } finally {
+            setIsSyncing(false);
+        }
     };
 
     const addConfig = () => {
@@ -378,12 +392,12 @@ const SystemSettings: React.FC = () => {
             modelId: 'gemini-1.5-pro',
             taskAssignment: 'default'
         };
-        saveConfigs([...configs, newConfig]);
+        saveConfigsToStateAndCloud([...configs, newConfig]);
     };
 
     const removeConfig = (id: string) => {
         if (configs.length > 1 && confirm("确认删除此 API 配置？")) {
-            saveConfigs(configs.filter(c => c.id !== id));
+            saveConfigsToStateAndCloud(configs.filter(c => c.id !== id));
         } else if (configs.length === 1) {
             alert("必须保留至少一个配置。");
         }
@@ -393,6 +407,8 @@ const SystemSettings: React.FC = () => {
         if (!config.apiKey) return;
         setIsTesting(config.id);
         setStatus(null);
+        // Save before test to ensure latest state is used
+        localStorage.setItem('trade_scout_api_configs', JSON.stringify(configs));
         const res = await testApiKey(config.apiKey, config.baseUrl, config.modelId);
         setStatus({ id: config.id, type: res.success ? 'success' : 'error', msg: res.message });
         setIsTesting(null);
@@ -401,20 +417,25 @@ const SystemSettings: React.FC = () => {
     return (
         <div className="max-w-6xl">
             <div className="flex justify-between items-center mb-6">
-                <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-                    <Key className="text-blue-600" /> API 密钥配置池 (Configuration Pool)
-                </h3>
+                <div>
+                    <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                        <Key className="text-blue-600" /> API 密钥配置池
+                    </h3>
+                    {ghStatus.ok && <p className="text-xs text-green-600 font-bold mt-1">✓ Cloud Sync Enabled (Auto-Saving)</p>}
+                </div>
                 <div className="flex gap-2">
-                    <button onClick={handleSyncToCloud} disabled={isSyncing || !checkGitHubStatus().ok} className="bg-purple-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-purple-700 transition-colors disabled:opacity-50">
+                    <button onClick={forceSync} disabled={isSyncing || !ghStatus.ok} className="bg-purple-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-purple-700 transition-colors disabled:opacity-50 shadow-md">
                         {isSyncing ? <Loader2 className="animate-spin" size={16}/> : <UploadCloud size={16}/>}
-                        同步到云端
+                        强制同步 (Force Sync)
                     </button>
-                    <button onClick={addConfig} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-blue-700 transition-colors">
+                    <button onClick={addConfig} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-blue-700 transition-colors shadow-md">
                         <Plus size={16} /> 添加新密钥
                     </button>
                 </div>
             </div>
             
+            {isLoading && <div className="p-8 text-center text-slate-500"><Loader2 className="animate-spin inline mr-2"/> Loading Cloud Configs...</div>}
+
             <div className="flex flex-col gap-4">
                 {configs.map((config, index) => (
                     <div key={config.id} className="bg-slate-50 p-6 rounded-xl border border-slate-200 shadow-sm relative group transition-all hover:border-blue-300">
@@ -497,6 +518,11 @@ const SystemSettings: React.FC = () => {
                     </div>
                 ))}
             </div>
+            <div className="mt-6 flex justify-end">
+                 <button onClick={forceSync} disabled={!ghStatus.ok || isSyncing} className="text-slate-400 hover:text-blue-600 text-xs font-bold underline">
+                     Tips: Remember to Save/Sync if Auto-Save fails
+                 </button>
+            </div>
         </div>
     );
 };
@@ -506,30 +532,32 @@ const UserManagement: React.FC = () => {
     const [isAdding, setIsAdding] = useState(false);
     const [isSyncing, setIsSyncing] = useState(false);
     const [newUser, setNewUser] = useState<{username: string, password: string, role: 'user' | 'admin'}>({ username: '', password: '', role: 'user' });
+    const [ghStatus] = useState(checkGitHubStatus());
 
     const loadUsers = async () => { 
-        // Try Cloud first
-        if (checkGitHubStatus().ok) {
+        // 1. CLOUD FIRST
+        if (ghStatus.ok) {
             try {
                 const cloudUsers = await fetchUsersFromCloud();
                 if (cloudUsers.length > 0) {
                      setUsers(cloudUsers);
-                     // Sync to local
+                     // SYNC TO LOCAL INDEXED DB so normal Login works
                      for(const u of cloudUsers) await saveUser(u);
                      return;
                 }
             } catch(e) { console.error("Cloud user fetch error", e); }
         }
+        // 2. Local Fallback
         setUsers(await getAllUsers()); 
     };
 
-    useEffect(() => { loadUsers(); }, []);
+    useEffect(() => { loadUsers(); }, [ghStatus.ok]);
 
     const handleSyncToCloud = async () => {
         setIsSyncing(true);
         try {
             await saveUsersToCloud(users);
-            alert("用户列表已同步到 GitHub!");
+            alert("用户列表已同步到云端！");
         } catch (e: any) {
             alert("同步失败: " + e.message);
         } finally {
@@ -540,46 +568,70 @@ const UserManagement: React.FC = () => {
     const handleAddUser = async (e: React.FormEvent) => {
         e.preventDefault();
         const u: User = { ...newUser, isFirstLogin: true, createdAt: Date.now() };
+        
+        // Update Local
         await saveUser(u);
+        const updatedList = [...users, u];
+        setUsers(updatedList);
+        
+        // Auto Sync Cloud
+        if(ghStatus.ok) {
+            setIsSyncing(true);
+            try { await saveUsersToCloud(updatedList); } 
+            catch(e) { console.error(e); } 
+            finally { setIsSyncing(false); }
+        }
+        
         setNewUser({ username: '', password: '', role: 'user' });
         setIsAdding(false);
-        setUsers([...users, u]);
     };
 
     const handleDelete = async (username: string) => {
         if (username !== 'admin' && confirm(`确认删除用户 ${username}?`)) {
             await deleteUser(username);
-            setUsers(users.filter(u => u.username !== username));
+            const updatedList = users.filter(u => u.username !== username);
+            setUsers(updatedList);
+
+            // Auto Sync Cloud
+            if(ghStatus.ok) {
+                setIsSyncing(true);
+                try { await saveUsersToCloud(updatedList); } 
+                catch(e) { console.error(e); } 
+                finally { setIsSyncing(false); }
+            }
         }
     };
 
     return (
         <div>
             <div className="flex justify-between items-center mb-6">
-                <h3 className="text-xl font-bold text-slate-800">系统用户管理</h3>
+                <div>
+                    <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2"><Users className="text-blue-600"/> 系统用户管理</h3>
+                    {ghStatus.ok && <p className="text-xs text-green-600 font-bold mt-1">✓ Cloud Sync Enabled</p>}
+                </div>
                 <div className="flex gap-2">
-                    <button onClick={handleSyncToCloud} disabled={isSyncing || !checkGitHubStatus().ok} className="bg-purple-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-purple-700 disabled:opacity-50">
+                    <button onClick={handleSyncToCloud} disabled={isSyncing || !ghStatus.ok} className="bg-purple-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-purple-700 disabled:opacity-50 shadow-md">
                         {isSyncing ? <Loader2 className="animate-spin" size={16}/> : <UploadCloud size={16}/>}
-                        同步到云端
+                        强制同步
                     </button>
-                    <button onClick={() => setIsAdding(true)} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-blue-700">
+                    <button onClick={() => setIsAdding(true)} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-blue-700 shadow-md">
                         <Plus size={16} /> 添加用户
                     </button>
                 </div>
             </div>
             {isAdding && (
-                <form onSubmit={handleAddUser} className="bg-slate-50 p-6 rounded-xl border border-slate-200 mb-8 animate-fade-in">
+                <form onSubmit={handleAddUser} className="bg-slate-50 p-6 rounded-xl border border-slate-200 mb-8 animate-fade-in shadow-inner">
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                        <input placeholder="用户名 (Username)" className="p-2 border rounded text-slate-900" value={newUser.username} onChange={e => setNewUser({...newUser, username: e.target.value})} required />
-                        <input placeholder="密码 (Password)" className="p-2 border rounded text-slate-900" value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} required />
-                        <select className="p-2 border rounded text-slate-900" value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value as 'user'|'admin'})}>
+                        <input placeholder="用户名 (Username)" className="p-3 border rounded-xl text-slate-900 shadow-sm" value={newUser.username} onChange={e => setNewUser({...newUser, username: e.target.value})} required />
+                        <input placeholder="密码 (Password)" className="p-3 border rounded-xl text-slate-900 shadow-sm" value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} required />
+                        <select className="p-3 border rounded-xl text-slate-900 shadow-sm" value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value as 'user'|'admin'})}>
                             <option value="user">普通用户 (User)</option>
                             <option value="admin">管理员 (Admin)</option>
                         </select>
                     </div>
-                    <div className="flex gap-2">
-                        <button type="submit" className="bg-green-600 text-white px-4 py-2 rounded font-bold">保存 (Save)</button>
-                        <button type="button" onClick={() => setIsAdding(false)} className="bg-slate-200 text-slate-600 px-4 py-2 rounded font-bold">取消 (Cancel)</button>
+                    <div className="flex gap-2 justify-end">
+                        <button type="button" onClick={() => setIsAdding(false)} className="bg-slate-200 text-slate-600 px-4 py-2 rounded-lg font-bold hover:bg-slate-300">取消 (Cancel)</button>
+                        <button type="submit" className="bg-green-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-700 shadow-md">保存并同步 (Save)</button>
                     </div>
                 </form>
             )}
@@ -611,6 +663,7 @@ const KnowledgeManagement: React.FC = () => {
     const [files, setFiles] = useState<KnowledgeFile[]>([]);
     const [isSyncing, setIsSyncing] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
+    const [ghStatus] = useState(checkGitHubStatus());
     
     // GitHub Config State
     const [ghOwner, setGhOwner] = useState(localStorage.getItem("GH_OWNER") || "");
@@ -621,11 +674,21 @@ const KnowledgeManagement: React.FC = () => {
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const loadFiles = async () => { 
+        // 1. If connected, try fetch from Repo
+        if (ghStatus.ok) {
+            try {
+                const cloudFiles = await fetchDocumentsFromRepo();
+                if(cloudFiles.length > 0) {
+                    setFiles(cloudFiles);
+                    return;
+                }
+            } catch(e) { console.error("KB fetch failed", e); }
+        }
         const localFiles = await getAllFilesFromDB();
         setFiles(localFiles); 
     };
     
-    useEffect(() => { loadFiles(); }, []);
+    useEffect(() => { loadFiles(); }, [ghStatus.ok]);
 
     // --- GitHub Sync Logic ---
     const handleSaveAndSync = async () => {
@@ -699,7 +762,8 @@ const KnowledgeManagement: React.FC = () => {
     return (
         <div className="space-y-8">
              <div className="flex justify-between items-center">
-                 <h3 className="text-xl font-bold text-slate-800">Knowledge Base Management (Mixed Mode)</h3>
+                 <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2"><Database className="text-blue-600"/> Knowledge Base Management</h3>
+                 {ghStatus.ok && <p className="text-xs text-green-600 font-bold mt-1">✓ Connected to Repo</p>}
              </div>
 
              {/* GitHub Config Card */}
@@ -708,7 +772,7 @@ const KnowledgeManagement: React.FC = () => {
                      <div className="bg-white p-1.5 rounded-lg border border-slate-200 text-purple-600">
                         <Github size={18} />
                      </div>
-                     <span className="font-bold text-slate-700 text-sm uppercase tracking-wider">GitHub Repository Knowledge Base</span>
+                     <span className="font-bold text-slate-700 text-sm uppercase tracking-wider">GitHub Repository Connection</span>
                  </div>
                  
                  <div className="p-6 bg-white space-y-6">
@@ -759,10 +823,10 @@ const KnowledgeManagement: React.FC = () => {
                          <button 
                             onClick={handleSaveAndSync} 
                             disabled={isSyncing}
-                            className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 transition-colors disabled:opacity-50"
+                            className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 transition-colors disabled:opacity-50 shadow-lg"
                          >
                              {isSyncing ? <Loader2 size={18} className="animate-spin"/> : <Save size={18}/>}
-                             Save & Sync
+                             Update Connection & Pull Files
                          </button>
                      </div>
                  </div>
@@ -772,7 +836,7 @@ const KnowledgeManagement: React.FC = () => {
              <div>
                  <div className="flex justify-between items-end mb-4">
                      <div className="text-sm font-bold text-slate-600">
-                         Total Loaded Files: <span className="text-slate-900 text-lg">{files.length}</span>
+                         Active Knowledge Base: <span className="text-slate-900 text-lg">{files.length} Files</span>
                      </div>
                      <button onClick={() => fileInputRef.current?.click()} className="text-blue-600 hover:bg-blue-50 px-3 py-2 rounded-lg font-bold text-sm flex items-center gap-2 transition-colors">
                          {isUploading ? <Loader2 size={16} className="animate-spin"/> : <Plus size={16}/>}
