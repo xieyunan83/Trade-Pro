@@ -3,8 +3,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { User, KnowledgeFile, GlobalConfig, ApiConfig } from '../types';
 import { getAllUsers, saveUser, deleteUser, getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/db';
 import { testApiKey, getGeminiConfig } from '../services/geminiService';
-import { saveGlobalConfig, fetchGlobalConfig, saveSharedKnowledgeBase, checkGitHubStatus, setManualGitHubConfig, clearManualGitHubConfig, fetchUsersFromCloud, saveUsersToCloud, fetchApiConfigsFromCloud, saveApiConfigsToCloud, fetchSharedKnowledgeBase as fetchKBCloud } from '../services/githubService';
-import { Users, Database, Plus, Trash2, Shield, UploadCloud, FileText, Loader2, LogOut, Key, Save, CheckCircle2, AlertTriangle, Info, Play, Workflow, Cloud, Download, Upload, ExternalLink, HelpCircle, Link2, RefreshCw, ArrowDownCircle } from 'lucide-react';
+import { saveGlobalConfig, fetchGlobalConfig, checkGitHubStatus, setManualGitHubConfig, clearManualGitHubConfig, fetchUsersFromCloud, saveUsersToCloud, fetchApiConfigsFromCloud, saveApiConfigsToCloud, fetchDocumentsFromRepo } from '../services/githubService';
+import { Users, Database, Plus, Trash2, Shield, UploadCloud, FileText, Loader2, LogOut, Key, Save, CheckCircle2, AlertTriangle, Info, Play, Workflow, Cloud, Download, Upload, ExternalLink, HelpCircle, Link2, RefreshCw, ArrowDownCircle, Github, FolderOpen } from 'lucide-react';
 
 interface Props {
     onLogout: () => void;
@@ -13,12 +13,9 @@ interface Props {
 
 export const AdminDashboard: React.FC<Props> = ({ onLogout, currentUser }) => {
     const [activeTab, setActiveTab] = useState<'users' | 'kb' | 'settings' | 'limits'>('users');
-    const [githubStatus, setGithubStatus] = useState(checkGitHubStatus());
-    // refreshKey is used to force re-mounting of tabs when connection changes, ensuring data is re-fetched
     const [refreshKey, setRefreshKey] = useState(0); 
 
     const handleConnectionChange = () => {
-        setGithubStatus(checkGitHubStatus());
         setRefreshKey(prev => prev + 1);
     };
 
@@ -63,7 +60,6 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, currentUser }) => {
                     </div>
 
                     <div className="p-8">
-                        {/* We use 'key' to force re-mount when refreshKey changes */}
                         {activeTab === 'users' && <UserManagement key={refreshKey} />}
                         {activeTab === 'kb' && <KnowledgeManagement key={refreshKey} />}
                         {activeTab === 'settings' && <SystemSettings key={refreshKey} />}
@@ -613,28 +609,62 @@ const UserManagement: React.FC = () => {
 
 const KnowledgeManagement: React.FC = () => {
     const [files, setFiles] = useState<KnowledgeFile[]>([]);
-    const [isUploading, setIsUploading] = useState(false);
     const [isSyncing, setIsSyncing] = useState(false);
-    const [isPulling, setIsPulling] = useState(false);
+    const [isUploading, setIsUploading] = useState(false);
+    
+    // GitHub Config State
+    const [ghOwner, setGhOwner] = useState(localStorage.getItem("GH_OWNER") || "");
+    const [ghRepo, setGhRepo] = useState(localStorage.getItem("GH_REPO") || "");
+    const [ghPath, setGhPath] = useState(localStorage.getItem("GH_PATH") || "");
+    const [ghToken, setGhToken] = useState(localStorage.getItem("GH_TOKEN") || "");
+
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const loadFiles = async () => { 
         const localFiles = await getAllFilesFromDB();
         setFiles(localFiles); 
-        
-        // Auto-pull if empty
-        if (localFiles.length === 0 && checkGitHubStatus().ok) {
-            handlePullFromGitHub();
-        }
     };
     
     useEffect(() => { loadFiles(); }, []);
 
+    // --- GitHub Sync Logic ---
+    const handleSaveAndSync = async () => {
+        if (!ghOwner || !ghRepo) {
+            alert("Please fill in Owner and Repository.");
+            return;
+        }
+        
+        setIsSyncing(true);
+        // Save Credentials
+        setManualGitHubConfig(ghToken, ghOwner, ghRepo, ghPath);
+
+        try {
+            // 1. Fetch from GitHub
+            const cloudFiles = await fetchDocumentsFromRepo();
+            
+            // 2. Merge into Local DB (Mixed Mode)
+            let newCount = 0;
+            for (const f of cloudFiles) { 
+                await saveFileToDB(f); 
+                newCount++;
+            }
+            
+            // 3. Refresh View
+            await loadFiles();
+            alert(`✅ Sync Complete! Loaded ${newCount} files from GitHub.`);
+        } catch (e: any) {
+            console.error(e);
+            alert(`❌ Sync Failed: ${e.message}. Check permissions or path.`);
+        } finally {
+            setIsSyncing(false);
+        }
+    };
+
+    // --- Local Upload Logic ---
     const processFiles = async (fileList: FileList | null) => {
         if (!fileList) return;
         setIsUploading(true);
         try {
-            const newFiles = [];
             for (let i = 0; i < fileList.length; i++) {
                  const file = fileList[i];
                  const base64 = await new Promise<string>((resolve) => {
@@ -642,20 +672,16 @@ const KnowledgeManagement: React.FC = () => {
                     reader.onload = (e) => resolve((e.target?.result as string).split(',')[1]);
                     reader.readAsDataURL(file);
                  });
-                 const fileObj = { id: (Date.now() + i).toString(), name: file.name, type: file.type || 'application/octet-stream', data: base64, size: file.size };
+                 const fileObj = { 
+                     id: `local_${Date.now()}_${i}`, 
+                     name: file.name, 
+                     type: file.type || 'application/octet-stream', 
+                     data: base64, 
+                     size: file.size 
+                 };
                  await saveFileToDB(fileObj);
-                 newFiles.push(fileObj);
             }
-            const allFiles = await getAllFilesFromDB();
-            setFiles(allFiles);
-            
-            // Auto-Push after upload
-            if (checkGitHubStatus().ok) {
-                await saveSharedKnowledgeBase(allFiles);
-                alert(`上传成功！已同步 ${newFiles.length} 个文件到云端。`);
-            } else {
-                alert(`上传成功！(仅本地，未连接云端)`);
-            }
+            await loadFiles();
         } catch (e: any) {
             alert("Upload Failed: " + e.message);
         } finally {
@@ -665,99 +691,117 @@ const KnowledgeManagement: React.FC = () => {
     };
     
     const handleDelete = async (id: string) => { 
-        if(!confirm("确认删除? (Confirm?)")) return;
+        if(!confirm("Remove this file from local cache?")) return;
         await deleteFileFromDB(id); 
-        const allFiles = await getAllFilesFromDB();
-        setFiles(allFiles);
-        if (checkGitHubStatus().ok) {
-            try { await saveSharedKnowledgeBase(allFiles); } catch (e) {}
-        }
-    };
-
-    const handleSyncToGitHub = async () => {
-        if (files.length === 0 && !confirm("本地知识库为空。推送到云端将清空云端数据！确认继续吗？")) return;
-        setIsSyncing(true);
-        try {
-            await saveSharedKnowledgeBase(files);
-            alert("✅ 推送成功！本地文件已覆盖云端。");
-        } catch (e: any) {
-            alert(`❌ 推送失败: ${e.message}`);
-        } finally {
-            setIsSyncing(false);
-        }
-    };
-
-    const handlePullFromGitHub = async () => {
-        setIsPulling(true);
-        try {
-            const cloudFiles = await fetchKBCloud();
-            if (cloudFiles && cloudFiles.length > 0) {
-                for (const f of cloudFiles) { await saveFileToDB(f); }
-                const updatedLocal = await getAllFilesFromDB();
-                setFiles(updatedLocal);
-                alert(`✅ 拉取成功！已从云端下载 ${cloudFiles.length} 个文件。`);
-            } else {
-                alert("⚠️ 云端知识库为空，或读取失败。");
-            }
-        } catch (e: any) {
-            console.error(e);
-            alert(`❌ 拉取失败: ${e.message}。如果是大文件，请检查网络。`);
-        } finally {
-            setIsPulling(false);
-        }
+        loadFiles();
     };
 
     return (
-        <div>
-             <div className="flex justify-between items-center mb-6">
-                 <h3 className="text-xl font-bold text-slate-800">知识库文件管理</h3>
-                 <div className="flex gap-2">
-                    <button onClick={loadFiles} className="bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-slate-50 transition-colors">
-                        <RefreshCw size={16}/> 刷新本地
-                    </button>
-                    <button 
-                        onClick={handlePullFromGitHub} 
-                        disabled={isPulling || !checkGitHubStatus().ok} 
-                        className="bg-blue-50 text-blue-700 border border-blue-200 px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-blue-100 disabled:opacity-50 transition-colors"
-                    >
-                        {isPulling ? <Loader2 className="animate-spin" size={16}/> : <ArrowDownCircle size={16}/>}
-                        从云端拉取 (Pull)
-                    </button>
-                    <button 
-                        onClick={handleSyncToGitHub} 
-                        disabled={isSyncing || !checkGitHubStatus().ok} 
-                        className="bg-purple-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-purple-700 disabled:opacity-50"
-                    >
-                        {isSyncing ? <Loader2 className="animate-spin" size={16}/> : <UploadCloud size={16}/>}
-                        推送到云端 (Push)
-                    </button>
-                 </div>
-             </div>
-             
-             <div onClick={() => fileInputRef.current?.click()} className="border-2 border-dashed border-slate-300 rounded-xl p-8 flex flex-col items-center justify-center text-slate-400 hover:border-blue-500 hover:bg-blue-50 cursor-pointer mb-6 transition-all">
-                {isUploading ? <Loader2 className="animate-spin text-blue-600" /> : <UploadCloud size={32} />}
-                <span className="mt-2 font-bold text-slate-600">点击上传文件 (PDF/图片)</span>
-                <p className="text-xs text-slate-400 mt-1">上传后自动推送到云端</p>
-                <input type="file" multiple ref={fileInputRef} className="hidden" onChange={(e) => processFiles(e.target.files)} />
+        <div className="space-y-8">
+             <div className="flex justify-between items-center">
+                 <h3 className="text-xl font-bold text-slate-800">Knowledge Base Management (Mixed Mode)</h3>
              </div>
 
-             <div className="bg-blue-50 p-3 rounded-lg border border-blue-100 text-blue-700 text-xs mb-4 flex gap-2">
-                 <Info size={16} className="shrink-0"/>
-                 <p>注意：如果在首页看到 "0 Files Loaded"，请点击上方的【从云端拉取】按钮将数据下载到本地缓存。</p>
+             {/* GitHub Config Card */}
+             <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+                 <div className="p-4 bg-slate-50 border-b border-slate-200 flex items-center gap-2">
+                     <div className="bg-white p-1.5 rounded-lg border border-slate-200 text-purple-600">
+                        <Github size={18} />
+                     </div>
+                     <span className="font-bold text-slate-700 text-sm uppercase tracking-wider">GitHub Repository Knowledge Base</span>
+                 </div>
+                 
+                 <div className="p-6 bg-white space-y-6">
+                     <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                         <div className="space-y-1">
+                             <label className="text-[10px] font-bold text-slate-400 uppercase">Owner (User/Org)</label>
+                             <input 
+                                value={ghOwner} 
+                                onChange={e => setGhOwner(e.target.value)} 
+                                className="w-full bg-slate-800 text-white p-3 rounded-xl font-bold text-sm outline-none focus:ring-2 focus:ring-purple-500" 
+                                placeholder="e.g. NanGe"
+                             />
+                         </div>
+                         <div className="space-y-1">
+                             <label className="text-[10px] font-bold text-slate-400 uppercase">Repository</label>
+                             <input 
+                                value={ghRepo} 
+                                onChange={e => setGhRepo(e.target.value)} 
+                                className="w-full bg-slate-800 text-white p-3 rounded-xl font-bold text-sm outline-none focus:ring-2 focus:ring-purple-500" 
+                                placeholder="e.g. knowledge-base"
+                             />
+                         </div>
+                         <div className="space-y-1">
+                             <label className="text-[10px] font-bold text-slate-400 uppercase">Folder Path (Opt)</label>
+                             <input 
+                                value={ghPath} 
+                                onChange={e => setGhPath(e.target.value)} 
+                                className="w-full bg-slate-800 text-white p-3 rounded-xl font-bold text-sm outline-none focus:ring-2 focus:ring-purple-500" 
+                                placeholder="e.g. docs"
+                             />
+                         </div>
+                         <div className="space-y-1">
+                             <label className="text-[10px] font-bold text-slate-400 uppercase">Token (Optional/Private)</label>
+                             <input 
+                                type="password"
+                                value={ghToken} 
+                                onChange={e => setGhToken(e.target.value)} 
+                                className="w-full bg-slate-800 text-white p-3 rounded-xl font-bold text-sm outline-none focus:ring-2 focus:ring-purple-500" 
+                                placeholder="ghp_..."
+                             />
+                         </div>
+                     </div>
+
+                     <div className="flex items-center justify-between pt-2">
+                         <div className="flex items-center gap-2 text-xs text-slate-400">
+                             {isSyncing && <><Loader2 size={14} className="animate-spin" /> Syncing with GitHub API...</>}
+                         </div>
+                         <button 
+                            onClick={handleSaveAndSync} 
+                            disabled={isSyncing}
+                            className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 transition-colors disabled:opacity-50"
+                         >
+                             {isSyncing ? <Loader2 size={18} className="animate-spin"/> : <Save size={18}/>}
+                             Save & Sync
+                         </button>
+                     </div>
+                 </div>
              </div>
-             
-             <div className="space-y-2">
-                {files.map(f => (
-                    <div key={f.id} className="flex justify-between p-4 border border-slate-200 rounded-xl bg-white items-center shadow-sm hover:shadow-md transition-shadow">
-                        <div className="flex items-center gap-3">
-                            <div className="bg-blue-50 p-2 rounded-lg text-blue-600"><FileText size={18} /></div>
-                            <span className="font-bold text-sm text-slate-800">{f.name}</span>
-                            <span className="text-xs text-slate-400">({(f.size/1024).toFixed(1)} KB)</span>
+
+             {/* Local Files List */}
+             <div>
+                 <div className="flex justify-between items-end mb-4">
+                     <div className="text-sm font-bold text-slate-600">
+                         Total Loaded Files: <span className="text-slate-900 text-lg">{files.length}</span>
+                     </div>
+                     <button onClick={() => fileInputRef.current?.click()} className="text-blue-600 hover:bg-blue-50 px-3 py-2 rounded-lg font-bold text-sm flex items-center gap-2 transition-colors">
+                         {isUploading ? <Loader2 size={16} className="animate-spin"/> : <Plus size={16}/>}
+                         Upload Local File
+                     </button>
+                     <input type="file" multiple ref={fileInputRef} className="hidden" onChange={(e) => processFiles(e.target.files)} />
+                 </div>
+
+                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {files.map(f => (
+                        <div key={f.id} className="flex justify-between p-4 border border-slate-200 rounded-xl bg-white items-center shadow-sm group hover:border-purple-300 transition-all">
+                            <div className="flex items-center gap-3 overflow-hidden">
+                                <div className={`p-2 rounded-lg text-white shrink-0 ${f.id.startsWith('local') ? 'bg-blue-500' : 'bg-slate-800'}`}>
+                                    {f.id.startsWith('local') ? <UploadCloud size={16} /> : <Github size={16} />}
+                                </div>
+                                <div className="overflow-hidden">
+                                    <div className="font-bold text-sm text-slate-800 truncate" title={f.name}>{f.name}</div>
+                                    <div className="text-[10px] text-slate-400">{(f.size/1024).toFixed(1)} KB • {f.id.startsWith('local') ? 'Local Upload' : 'GitHub Sync'}</div>
+                                </div>
+                            </div>
+                            <button onClick={() => handleDelete(f.id)} className="text-slate-300 hover:text-red-500 p-2 rounded-lg transition-colors"><Trash2 size={16}/></button>
                         </div>
-                        <button onClick={() => handleDelete(f.id)} className="text-red-400 hover:text-red-600 p-2 hover:bg-red-50 rounded-lg transition-colors"><Trash2 size={18}/></button>
-                    </div>
-                ))}
-                {files.length === 0 && <div className="text-center text-slate-400 py-10">本地数据库中暂无文件。请点击“从云端拉取”。</div>}
+                    ))}
+                    {files.length === 0 && (
+                        <div className="col-span-full text-center py-10 border-2 border-dashed border-slate-200 rounded-xl text-slate-400">
+                            No files loaded. Configure GitHub above or upload locally.
+                        </div>
+                    )}
+                 </div>
              </div>
         </div>
     );
