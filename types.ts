@@ -1,5 +1,4 @@
 
-
 export enum ModuleType {
   DISCOVERY = 'discovery',
   BACKGROUND = 'background',
@@ -8,7 +7,8 @@ export enum ModuleType {
   STRATEGY = 'strategy',
   SIMILAR = 'similar',
   PROMO_GENERATOR = 'promo_generator',
-  CLIENT_CRM = 'client_crm'
+  CLIENT_CRM = 'client_crm',
+  EMAIL_CAMPAIGN = 'email_campaign' // New Module
 }
 
 export interface User {
@@ -85,6 +85,8 @@ export interface Client {
   nextFollowUpDate: string;
   activityLog: string;
 }
+
+// ... existing interfaces ...
 
 export interface SwotAnalysis {
   strengths: string[];
@@ -259,4 +261,36 @@ export interface ApiConfig {
     baseUrl: string;
     modelId?: string;
     taskAssignment?: TaskType;
+}
+
+// --- NEW TYPES FOR EMAIL MODULE ---
+
+export interface AliyunConfig {
+    accessKeyId: string;
+    accessKeySecret: string;
+    accountName: string; // e.g. offer@service.babyworld.com
+    fromAlias: string;   // e.g. Kevin from BabyWorld
+    replyToAddress: boolean;
+    addressType: 1 | 0; // 1: Random, 0: Fixed
+    tagName: string; // Tag for tracking
+    regionId: string; // cn-hangzhou, ap-southeast-1
+}
+
+export interface EmailTemplate {
+    id: string;
+    name: string;
+    subject: string;
+    senderName?: string; // New field for Sender Alias override
+    body: string; // HTML content
+    lastUpdated: number;
+}
+
+export interface EmailTask {
+    id: string;
+    recipientEmail: string;
+    recipientName: string;
+    companyName: string;
+    status: 'pending' | 'sending' | 'success' | 'failed';
+    error?: string;
+    sentAt?: number;
 }

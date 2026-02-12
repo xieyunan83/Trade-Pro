@@ -14,6 +14,7 @@ import { ModuleStrategy } from './components/ModuleStrategy';
 import { ModuleSimilar } from './components/ModuleSimilar';
 import { ModulePromoGenerator } from './components/ModulePromoGenerator';
 import { ModuleClientCRM } from './components/ModuleClientCRM';
+import { ModuleEmailCampaign } from './components/ModuleEmailCampaign'; // Import
 import { ClientFinder } from './components/ClientFinder';
 import { Login } from './components/Login';
 import { AdminDashboard } from './components/AdminDashboard';
@@ -237,7 +238,7 @@ const App: React.FC = () => {
       );
   }
 
-  const alwaysActiveModules = [ModuleType.DISCOVERY, ModuleType.PROMO_GENERATOR, ModuleType.CLIENT_CRM, ModuleType.STRATEGY];
+  const alwaysActiveModules = [ModuleType.DISCOVERY, ModuleType.PROMO_GENERATOR, ModuleType.CLIENT_CRM, ModuleType.STRATEGY, ModuleType.EMAIL_CAMPAIGN];
 
   return (
     <div className="flex h-screen bg-slate-100 overflow-hidden">
@@ -279,6 +280,7 @@ const App: React.FC = () => {
             { id: ModuleType.STRATEGY, label: '开发策略 (Strategy)', icon: PenTool },
             { id: ModuleType.SIMILAR, label: '同类推荐 (Similar)', icon: Network },
             { id: ModuleType.CLIENT_CRM, label: '客户管理 (CRM)', icon: Briefcase },
+            { id: ModuleType.EMAIL_CAMPAIGN, label: '邮件营销 (DirectMail)', icon: Mail }, // New Item
             { id: ModuleType.PROMO_GENERATOR, label: '营销工具 (Tools)', icon: Ruler },
           ].map(item => (
             <button key={item.id} onClick={() => { setActiveModule(item.id); setMobileMenuOpen(false); }} disabled={!analysisData && !alwaysActiveModules.includes(item.id)} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl text-sm font-bold transition-all ${activeModule === item.id ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800 disabled:opacity-30'}`}>
@@ -430,6 +432,10 @@ const App: React.FC = () => {
                         onBatchAnalyze={handleBatchAnalyzeFromCRM} 
                         history={history}
                     />
+                )}
+                {/* NEW MODULE RENDER */}
+                {activeModule === ModuleType.EMAIL_CAMPAIGN && (
+                    <ModuleEmailCampaign crmClients={crmClients} />
                 )}
                 {activeModule === ModuleType.PROMO_GENERATOR && (
                     <ModulePromoGenerator 
