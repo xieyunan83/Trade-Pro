@@ -1,5 +1,4 @@
 
-// ... imports unchanged ...
 import React, { useState, useEffect, useRef } from 'react';
 import { analyzeCompany, getGeminiConfig, searchPotentialClients, generateMailGroupStrategy } from './services/geminiService';
 import { exportToPPT } from './services/exportService';
@@ -14,7 +13,7 @@ import { ModuleStrategy } from './components/ModuleStrategy';
 import { ModuleSimilar } from './components/ModuleSimilar';
 import { ModulePromoGenerator } from './components/ModulePromoGenerator';
 import { ModuleClientCRM } from './components/ModuleClientCRM';
-import { ModuleEmailCampaign } from './components/ModuleEmailCampaign'; // Import
+import { ModuleEmailCampaign } from './components/ModuleEmailCampaign'; 
 import { ClientFinder } from './components/ClientFinder';
 import { Login } from './components/Login';
 import { AdminDashboard } from './components/AdminDashboard';
@@ -33,7 +32,6 @@ declare global {
 }
 
 const App: React.FC = () => {
-  // ... state declarations unchanged ...
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [hasKey, setHasKey] = useState<boolean | null>(null);
   
@@ -72,7 +70,6 @@ const App: React.FC = () => {
 
   const shouldStopRef = useRef(false);
 
-  // ... useEffects unchanged ...
   useEffect(() => {
     const checkKey = async () => {
       const configs = getGeminiConfig();
@@ -110,7 +107,7 @@ const App: React.FC = () => {
                         updateLocalConfig(globalConfig);
                         if(globalConfig.systemNotice) setSystemNotice(globalConfig.systemNotice);
                     }
-                } catch(e) {} // Silent fail on config
+                } catch(e) {} 
                 
                 // AUTO-SYNC KB (Mixed Mode)
                 setIsKBSyncing(true);
@@ -119,7 +116,6 @@ const App: React.FC = () => {
                     const cloudFiles = await fetchDocumentsFromRepo();
                     if (cloudFiles.length > 0) {
                         for (const f of cloudFiles) { await saveFileToDB(f); }
-                        // Refresh count
                         const allFiles = await getAllFilesFromDB();
                         setKbCount(allFiles.length);
                     }
@@ -167,7 +163,6 @@ const App: React.FC = () => {
       if (crmClients.length > 0) localStorage.setItem('tradeScoutClients', JSON.stringify(crmClients));
   }, [crmClients]);
 
-  // Placeholder for manual connect from App.tsx (legacy modal, but still useful for quick connect)
   const handleManualConnect = async () => {
       if (!manualToken || !manualOwner || !manualRepo) {
           alert("请填写所有字段 (Token, Owner, Repo)");
@@ -185,7 +180,6 @@ const App: React.FC = () => {
       }
   };
 
-  // ... rest of the component logic (handleAnalyzeInput, etc.) remains unchanged ...
   const handleAnalyzeInput = (input: string = domainInput) => {
       if (!input.trim()) return;
       const lines = input.split(/[\n;]+/).map(s => s.trim()).filter(s => s.length > 0);
@@ -197,6 +191,7 @@ const App: React.FC = () => {
           setPendingBatch(lines); setPendingBatchContext('Manual Input'); setBatchModalOpen(true);
       }
   };
+
   const performSingleAnalysis = async (domain: string) => {
     setLoading(true); setErrorMsg(null); setActiveModule(ModuleType.BACKGROUND); setMobileMenuOpen(false);
     try {
@@ -205,21 +200,222 @@ const App: React.FC = () => {
       await saveHistory(historyItem); setHistory(prev => [historyItem, ...prev]); updateCrmStatus(result);
     } catch (e: any) { setErrorMsg(`Error: ${e.message}`); } finally { setLoading(false); }
   };
+
   const loadFromHistory = (item: HistoryItem) => { setAnalysisData(item.data); setDomainInput(item.domain); setActiveModule(ModuleType.BACKGROUND); setHistoryOpen(false); setErrorMsg(null); };
   const handleExportReport = () => { if (analysisData) exportToPPT(analysisData); };
+  
   const handleAddToCRM = () => { if (!analysisData) return; const newClient: Client = { id: Date.now().toString(), name: analysisData.companyInfo.name, website: analysisData.companyInfo.website, country: analysisData.companyInfo.headquarters.split(',').pop()?.trim() || 'Global', type: '进口商', status: '新建/潜在', productType: analysisData.businessScope.coreProducts[0] || 'N/A', priceRange: analysisData.businessScope.priceSensitivity || 'Medium', isSampleNeeded: false, hasAnalyzed: true, lastOrderDate: '', lastContactSent: '', lastContactReceived: '', nextFollowUpDate: new Date().toISOString().split('T')[0], activityLog: `Added from Deep Analysis. Rev: ${analysisData.financials.revenueEstimate}.` }; setCrmClients(prev => [newClient, ...prev]); alert("Added to CRM!"); };
-  const handleBatchAddToCRM = (results: ClientSearchResult[]) => { /* ... existing ... */ };
-  const updateCrmStatus = (analysis: AnalysisResult) => { /* ... existing ... */ };
+  
+  // RESTORED: Handle batch adding clients from Discovery
+  const handleBatchAddToCRM = (results: ClientSearchResult[]) => { 
+      if (!results || results.length === 0) return;
+      const newClients: Client[] = results.map(r => ({
+          id: Date.now() + Math.random().toString(36).substr(2, 9),
+          name: r.name,
+          website: r.website,
+          country: r.country,
+          type: '进口商', 
+          status: '新建/潜在', 
+          productType: discoveryState.product || 'General', 
+          priceRange: 'Unknown', 
+          isSampleNeeded: false, 
+          hasAnalyzed: false, 
+          lastOrderDate: '', 
+          lastContactSent: '', 
+          lastContactReceived: '', 
+          nextFollowUpDate: new Date().toISOString().split('T')[0], 
+          activityLog: `Batch Added from Discovery. Desc: ${r.description}` 
+      }));
+
+      setCrmClients(prev => {
+          const existingWebsites = new Set(prev.map(c => c.website?.toLowerCase()));
+          const unique = newClients.filter(c => !existingWebsites.has(c.website?.toLowerCase()));
+          if (unique.length > 0) alert(`Added ${unique.length} new clients to CRM.`);
+          else alert("All selected clients already exist in CRM.");
+          return [...unique, ...prev];
+      });
+  };
+
+  // RESTORED: Update CRM status if re-analyzed
+  const updateCrmStatus = (analysis: AnalysisResult) => { 
+      setCrmClients(prev => prev.map(c => {
+          if (c.website?.toLowerCase() === analysis.companyInfo.website?.toLowerCase() || c.name === analysis.companyInfo.name) {
+              return { ...c, hasAnalyzed: true, activityLog: c.activityLog + ` [Analyzed ${new Date().toLocaleDateString()}]` };
+          }
+          return c;
+      }));
+  };
+
   const stopAutomation = () => { shouldStopRef.current = true; setIsAutomating(false); };
-  const handleStartQueueGeneration = async (keyword: string, productContext: string, countries: string[], productImages: string[], clientType: string) => { await generateQueue(keyword, productContext, countries, productImages, clientType); const freshQueue = await getAutomationQueue(); const pending = freshQueue.filter(t => t.status === 'pending'); await processBatchQueue(pending); };
-  const generateQueue = async (keyword: string, productContext: string, countries: string[], productImages: string[], clientType: string) => { /* ... existing ... */ return []; };
-  const processBatchQueue = async (tasks: AutomationResult[]) => { /* ... existing ... */ };
-  const handleBatchAnalyzeExisting = async (results: ClientSearchResult[]) => { setPendingBatch(results.map(r => r.website)); setPendingBatchContext('Discovery Batch'); setBatchModalOpen(true); };
-  const handleBatchAnalyzeFromCRM = async (clients: Client[]) => { const targets = clients.map(c => c.name); setPendingBatch(targets); setPendingBatchContext('CRM Batch'); setBatchModalOpen(true); };
-  const confirmBatchStart = async (mode: 'detailed' | 'economy') => { setBatchModalOpen(false); setActiveModule(ModuleType.PROMO_GENERATOR); const newTasks: AutomationResult[] = pendingBatch.map(target => ({ id: Math.random().toString(36).substr(2, 9), clientName: target, website: target, country: 'Global', status: 'pending', productContext: pendingBatchContext, productImages: [], mode: mode })); setAutomationResults(prev => [...prev, ...newTasks]); for (const task of newTasks) { await saveAutomationTask(task); } await processBatchQueue(newTasks); };
-  const handleRunPending = async () => { const pending = automationResults.filter(t => t.status === 'pending' || t.status === 'failed'); await processBatchQueue(pending); };
-  const handleRunSingle = async (id: string) => { /* ... existing ... */ };
-  const handleDeleteTask = async (id: string) => { if(confirm("Delete?")) { await deleteAutomationTask(id); setAutomationResults(prev => prev.filter(t => t.id !== id)); } };
+  
+  // RESTORED: Generate Tasks Logic
+  const handleStartQueueGeneration = async (keyword: string, productContext: string, countries: string[], productImages: string[], clientType: string) => { 
+      await generateQueue(keyword, productContext, countries, productImages, clientType); 
+      const freshQueue = await getAutomationQueue(); 
+      const pending = freshQueue.filter(t => t.status === 'pending'); 
+      await processBatchQueue(pending); 
+  };
+
+  const generateQueue = async (keyword: string, productContext: string, countries: string[], productImages: string[], clientType: string) => { 
+      setBatchModalOpen(false); 
+      // Placeholder generation logic as real one is complex for client-side, 
+      // here we assume we are just adding pending tasks based on a search
+      // For this specific 'PromoGenerator' flow, we often need to search FIRST.
+      // But here we'll assume the user wants to search AND add.
+      // Since this is a complex flow, let's simplify: 
+      // We will perform a search for EACH country, find top 5 results, and add to queue.
+      
+      setIsAutomating(true);
+      const newTasks: AutomationResult[] = [];
+      
+      for (const country of countries) {
+          try {
+              // Quick search (limit 5 per country for automation demo)
+              const results = await searchPotentialClients(keyword, country, '', clientType, 5);
+              for (const res of results) {
+                  newTasks.push({
+                      id: Math.random().toString(36).substr(2, 9),
+                      clientName: res.name,
+                      website: res.website,
+                      country: res.country,
+                      status: 'pending',
+                      productContext: productContext,
+                      productImages: productImages,
+                      mode: 'economy' // Default to economy for generated lists
+                  });
+              }
+          } catch(e) { console.error(e); }
+      }
+      
+      setAutomationResults(prev => [...prev, ...newTasks]);
+      for (const task of newTasks) { await saveAutomationTask(task); }
+      setIsAutomating(false);
+      return newTasks;
+  };
+
+  // RESTORED: Process Automation Queue
+  const processBatchQueue = async (tasksToRun: AutomationResult[]) => { 
+      if (tasksToRun.length === 0) return;
+      setIsAutomating(true);
+      shouldStopRef.current = false;
+
+      for (const task of tasksToRun) {
+          if (shouldStopRef.current) break;
+          
+          // Check limits before running
+          const limit = checkLimit('analysis');
+          if (!limit.allowed) {
+              alert("Daily Analysis Limit Reached. Automation Paused.");
+              break;
+          }
+
+          // Update Status to Analyzing
+          setAutomationResults(prev => prev.map(t => t.id === task.id ? { ...t, status: 'analyzing' } : t));
+
+          try {
+              // 1. Analyze
+              const result = await analyzeCompany(task.website, task.mode || 'detailed');
+              
+              // 2. Generate Email (Only if detailed)
+              let mailGroup;
+              if (task.mode === 'detailed') {
+                  setAutomationResults(prev => prev.map(t => t.id === task.id ? { ...t, status: 'generating_email' } : t));
+                  const kbFiles = await getAllFilesFromDB();
+                  mailGroup = await generateMailGroupStrategy(result, task.productImages || [], kbFiles);
+              }
+
+              // 3. Complete
+              const completedTask: AutomationResult = { 
+                  ...task, 
+                  status: 'completed', 
+                  analysis: result, 
+                  mailGroup: mailGroup 
+              };
+              
+              await saveAutomationTask(completedTask);
+              setAutomationResults(prev => prev.map(t => t.id === task.id ? completedTask : t));
+              
+              incrementUsage('analysis');
+              updateCrmStatus(result); // Also update CRM if matches
+
+          } catch (e: any) {
+              console.error(`Task ${task.id} failed`, e);
+              const failedTask: AutomationResult = { ...task, status: 'failed' };
+              setAutomationResults(prev => prev.map(t => t.id === task.id ? failedTask : t));
+              
+              // Simple Rate Limit Handling
+              if (e.message && e.message.includes('429')) {
+                  setCooldownTime(60);
+                  for(let i=60; i>0; i--) {
+                      if (shouldStopRef.current) break;
+                      setCooldownTime(i);
+                      await new Promise(r => setTimeout(r, 1000));
+                  }
+                  setCooldownTime(0);
+              }
+          }
+          
+          // Safety delay
+          await new Promise(r => setTimeout(r, 2000));
+      }
+      setIsAutomating(false);
+  };
+
+  const handleBatchAnalyzeExisting = async (results: ClientSearchResult[]) => { 
+      if (!results || results.length === 0) return;
+      setPendingBatch(results.map(r => r.website)); 
+      setPendingBatchContext('Discovery Batch'); 
+      setBatchModalOpen(true); 
+  };
+  
+  const handleBatchAnalyzeFromCRM = async (clients: Client[]) => { 
+      if (!clients || clients.length === 0) return;
+      const targets = clients.map(c => c.website || c.name); 
+      setPendingBatch(targets); 
+      setPendingBatchContext('CRM Batch'); 
+      setBatchModalOpen(true); 
+  };
+
+  const confirmBatchStart = async (mode: 'detailed' | 'economy') => { 
+      setBatchModalOpen(false); 
+      setActiveModule(ModuleType.PROMO_GENERATOR); 
+      
+      const newTasks: AutomationResult[] = pendingBatch.map(target => ({ 
+          id: Math.random().toString(36).substr(2, 9), 
+          clientName: target, 
+          website: target, 
+          country: 'Global', 
+          status: 'pending', 
+          productContext: pendingBatchContext, 
+          productImages: [], 
+          mode: mode 
+      })); 
+      
+      setAutomationResults(prev => [...prev, ...newTasks]); 
+      for (const task of newTasks) { 
+          await saveAutomationTask(task); 
+      } 
+      
+      await processBatchQueue(newTasks); 
+  };
+
+  const handleRunPending = async () => { 
+      const pending = automationResults.filter(t => t.status === 'pending' || t.status === 'failed'); 
+      await processBatchQueue(pending); 
+  };
+  
+  const handleRunSingle = async (id: string) => { 
+      const task = automationResults.find(t => t.id === id);
+      if(task) await processBatchQueue([task]);
+  };
+
+  const handleDeleteTask = async (id: string) => { 
+      if(confirm("Delete?")) { 
+          await deleteAutomationTask(id); 
+          setAutomationResults(prev => prev.filter(t => t.id !== id)); 
+      } 
+  };
+
   const handleLogout = () => { setCurrentUser(null); setAnalysisData(null); setDomainInput(''); setActiveModule(ModuleType.DISCOVERY); };
   const handleSyncToGitHub = async () => { if(!currentUser) return; setIsSyncing(true); try { await backupUserHistory(currentUser.username, history); await saveCRMToCloud(crmClients); alert("数据同步成功!"); } catch (e: any) { alert("同步失败: " + e.message); } finally { setIsSyncing(false); } };
   const handleAddClients = (newClients: Client[]) => { setCrmClients(prev => [...prev, ...newClients]); alert(`已成功导入 ${newClients.length} 个客户资料！`); };
@@ -281,7 +477,7 @@ const App: React.FC = () => {
             { id: ModuleType.STRATEGY, label: '开发策略 (Strategy)', icon: PenTool },
             { id: ModuleType.SIMILAR, label: '同类推荐 (Similar)', icon: Network },
             { id: ModuleType.CLIENT_CRM, label: '客户管理 (CRM)', icon: Briefcase },
-            { id: ModuleType.EMAIL_CAMPAIGN, label: '邮件营销 (DirectMail)', icon: Mail }, // New Item
+            { id: ModuleType.EMAIL_CAMPAIGN, label: '邮件营销 (DirectMail)', icon: Mail }, 
             { id: ModuleType.PROMO_GENERATOR, label: '营销工具 (Tools)', icon: Ruler },
           ].map(item => (
             <button key={item.id} onClick={() => { setActiveModule(item.id); setMobileMenuOpen(false); }} disabled={!analysisData && !alwaysActiveModules.includes(item.id)} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl text-sm font-bold transition-all ${activeModule === item.id ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800 disabled:opacity-30'}`}>
@@ -315,7 +511,6 @@ const App: React.FC = () => {
         </div>
       </aside>
       
-      {/* ... History Sidebar and Cloud Modal logic unchanged ... */}
       {/* History Sidebar */}
       {historyOpen && (
           <div className="fixed inset-y-0 left-72 w-80 bg-white shadow-2xl z-20 border-r border-slate-200 transform transition-transform animate-fade-in flex flex-col">
@@ -434,7 +629,6 @@ const App: React.FC = () => {
                         history={history}
                     />
                 )}
-                {/* NEW MODULE RENDER */}
                 {activeModule === ModuleType.EMAIL_CAMPAIGN && (
                     <ModuleEmailCampaign crmClients={crmClients} onAddClients={handleAddClients} />
                 )}
