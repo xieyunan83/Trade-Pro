@@ -7,6 +7,7 @@ const LS_TOKEN = "GH_TOKEN";
 const LS_OWNER = "GH_OWNER";
 const LS_REPO = "GH_REPO";
 const LS_PATH = "GH_PATH"; // New: Folder path for KB
+const LS_REPO_STATUS = "GH_REPO_STATUS"; // New: Track invalid state persistence
 
 // Helper to get credentials
 const getCredentials = () => {
@@ -45,36 +46,83 @@ const getOctokit = () => {
 
 // --- CACHED TREE FETCH ---
 // Prevents multiple 404s and rate limiting by fetching file list once.
-let _treeCache: { timestamp: number, data: any } | null = null;
+// Updated to cache 'null' (failure) as well to prevent spamming 404s.
+let _treeCache: { timestamp: number, data: any | null } | null = null;
+let _treeRequest: Promise<any> | null = null; // Deduplicate in-flight requests
+let _isRepoInvalid = false; // Circuit breaker for 404/403 (Memory)
 const TREE_CACHE_TTL = 10000; // 10 seconds
 
 const getRepoTree = async () => {
     const { owner, repo } = getCredentials();
-    const octokit = getOctokit();
     if (!owner || !repo) return null;
+
+    // 1. Memory Circuit Breaker
+    if (_isRepoInvalid) return null;
+
+    // 2. Persistent Circuit Breaker (LocalStorage)
+    // Prevents 404s even after page reload if config hasn't changed
+    const storedStatus = localStorage.getItem(LS_REPO_STATUS);
+    if (storedStatus) {
+        try {
+            const { owner: badOwner, repo: badRepo } = JSON.parse(storedStatus);
+            if (badOwner === owner && badRepo === repo) {
+                _isRepoInvalid = true; // Sync memory state
+                return null;
+            }
+        } catch(e) { localStorage.removeItem(LS_REPO_STATUS); }
+    }
+
+    const octokit = getOctokit();
 
     const now = Date.now();
     if (_treeCache && (now - _treeCache.timestamp < TREE_CACHE_TTL)) {
         return _treeCache.data;
     }
 
-    try {
-        const { data: repoData } = await octokit.rest.repos.get({ owner, repo });
-        const defaultBranch = repoData.default_branch;
-
-        const { data: treeData } = await octokit.rest.git.getTree({
-            owner,
-            repo,
-            tree_sha: defaultBranch,
-            recursive: 'true',
-        });
-        
-        _treeCache = { timestamp: now, data: treeData };
-        return treeData;
-    } catch (e) {
-        // If repo is empty or doesn't exist, suppress error and return null
-        return null; 
+    // Return existing promise if request is already in flight to prevent parallel 404s
+    if (_treeRequest) {
+        return _treeRequest;
     }
+
+    _treeRequest = (async () => {
+        try {
+            const { data: repoData } = await octokit.rest.repos.get({ owner, repo });
+            const defaultBranch = repoData.default_branch;
+
+            const { data: treeData } = await octokit.rest.git.getTree({
+                owner,
+                repo,
+                tree_sha: defaultBranch,
+                recursive: 'true',
+            });
+            
+            _treeCache = { timestamp: Date.now(), data: treeData };
+            // If success, ensure we clear any invalid status
+            if(localStorage.getItem(LS_REPO_STATUS)) localStorage.removeItem(LS_REPO_STATUS);
+            
+            return treeData;
+        } catch (e: any) {
+            // Robust error status detection (e.status OR e.response.status)
+            const status = e.status || e.response?.status;
+            
+            console.warn(`[GitHub] Repo access failed (${owner}/${repo}). Status: ${status}`, e);
+            
+            // Set circuit breaker for permanent errors (404 Not Found, 403 Forbidden, 401 Unauthorized)
+            if (status === 404 || status === 403 || status === 401) {
+                _isRepoInvalid = true;
+                localStorage.setItem(LS_REPO_STATUS, JSON.stringify({
+                    owner, repo, status: 'INVALID', timestamp: Date.now()
+                }));
+            }
+
+            _treeCache = { timestamp: Date.now(), data: null };
+            return null; 
+        } finally {
+            _treeRequest = null;
+        }
+    })();
+
+    return _treeRequest;
 };
 
 const getFileSha = async (path: string): Promise<string | undefined> => {
@@ -142,7 +190,34 @@ export const checkGitHubStatus = () => {
     const { token, owner, repo, path, source } = getCredentials();
     if (!owner) return { ok: false, msg: "Missing Owner", source };
     if (!repo) return { ok: false, msg: "Missing Repo", source };
+
+    // Check Persistent Invalid State
+    const storedStatus = localStorage.getItem(LS_REPO_STATUS);
+    if (storedStatus) {
+        try {
+            const { owner: badOwner, repo: badRepo } = JSON.parse(storedStatus);
+            if (badOwner === owner && badRepo === repo) {
+                return { ok: false, msg: "Repo Inaccessible (Check Creds)", source };
+            }
+        } catch(e) {}
+    }
+
     return { ok: true, msg: "Connected", source, path };
+};
+
+// Explicit Connection Verification
+export const verifyConnection = async (): Promise<void> => {
+    const { owner, repo } = getCredentials();
+    const octokit = getOctokit();
+    try {
+        await octokit.rest.repos.get({ owner, repo });
+        // If successful, clear any previous error flags
+        localStorage.removeItem(LS_REPO_STATUS);
+        _isRepoInvalid = false;
+    } catch (e: any) {
+        console.error("Connection Verification Failed", e);
+        throw e;
+    }
 };
 
 export const setManualGitHubConfig = (token: string, owner: string, repo: string, path: string = '') => {
@@ -155,6 +230,9 @@ export const setManualGitHubConfig = (token: string, owner: string, repo: string
     
     // Clear cache to force refresh on new config
     _treeCache = null; 
+    _treeRequest = null;
+    _isRepoInvalid = false; 
+    localStorage.removeItem(LS_REPO_STATUS); // Clear persistent error
 };
 
 export const clearManualGitHubConfig = () => {
@@ -162,7 +240,10 @@ export const clearManualGitHubConfig = () => {
     localStorage.removeItem(LS_OWNER);
     localStorage.removeItem(LS_REPO);
     localStorage.removeItem(LS_PATH);
+    localStorage.removeItem(LS_REPO_STATUS);
     _treeCache = null;
+    _treeRequest = null;
+    _isRepoInvalid = false;
 };
 
 // --- FETCH DOCUMENTS FROM REPO FOLDER ---

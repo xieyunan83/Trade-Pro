@@ -2,38 +2,59 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AliyunConfig, EmailTemplate, EmailTask, Client } from '../types';
 import { getAliyunConfig, saveAliyunConfig, loadEmailTemplates, saveEmailTemplate, deleteEmailTemplate, sendSingleMail } from '../services/aliyunService';
-import { Mail, Settings, Layout, Send, Save, Plus, Trash2, PlayCircle, AlertTriangle, CheckCircle2, Loader2, X, Users, RefreshCw, Bold, Italic, Underline, List, Link as LinkIcon, AlignLeft, AlignCenter, AlignRight, Type } from 'lucide-react';
+import { Mail, Settings, Layout, Send, Save, Plus, Trash2, PlayCircle, AlertTriangle, CheckCircle2, Loader2, X, Users, RefreshCw, Bold, Italic, Underline, List, Link as LinkIcon, AlignLeft, AlignCenter, AlignRight, Image as ImageIcon, Upload, Download, FileSpreadsheet } from 'lucide-react';
+
+// Use global XLSX if available
+declare const XLSX: any;
 
 interface Props {
     crmClients: Client[];
+    onAddClients?: (clients: Client[]) => void;
 }
 
 // Simple Rich Text Toolbar Component
-const RichTextToolbar: React.FC<{ onCommand: (cmd: string, val?: string) => void }> = ({ onCommand }) => (
-    <div className="flex items-center gap-1 p-2 border-b border-slate-200 bg-slate-50 rounded-t-xl overflow-x-auto">
-        <button type="button" onClick={() => onCommand('bold')} className="p-2 hover:bg-slate-200 rounded text-slate-600" title="Bold"><Bold size={16}/></button>
-        <button type="button" onClick={() => onCommand('italic')} className="p-2 hover:bg-slate-200 rounded text-slate-600" title="Italic"><Italic size={16}/></button>
-        <button type="button" onClick={() => onCommand('underline')} className="p-2 hover:bg-slate-200 rounded text-slate-600" title="Underline"><Underline size={16}/></button>
-        <div className="w-px h-6 bg-slate-300 mx-1"></div>
-        <button type="button" onClick={() => onCommand('justifyLeft')} className="p-2 hover:bg-slate-200 rounded text-slate-600" title="Align Left"><AlignLeft size={16}/></button>
-        <button type="button" onClick={() => onCommand('justifyCenter')} className="p-2 hover:bg-slate-200 rounded text-slate-600" title="Align Center"><AlignCenter size={16}/></button>
-        <button type="button" onClick={() => onCommand('justifyRight')} className="p-2 hover:bg-slate-200 rounded text-slate-600" title="Align Right"><AlignRight size={16}/></button>
-        <div className="w-px h-6 bg-slate-300 mx-1"></div>
-        <button type="button" onClick={() => onCommand('insertUnorderedList')} className="p-2 hover:bg-slate-200 rounded text-slate-600" title="List"><List size={16}/></button>
-        <button type="button" onClick={() => {
-            const url = prompt('Enter URL:');
-            if(url) onCommand('createLink', url);
-        }} className="p-2 hover:bg-slate-200 rounded text-slate-600" title="Link"><LinkIcon size={16}/></button>
-        <div className="w-px h-6 bg-slate-300 mx-1"></div>
-        <select onChange={(e) => onCommand('fontSize', e.target.value)} className="text-xs border rounded p-1 bg-white">
-            <option value="3">Normal</option>
-            <option value="5">Large</option>
-            <option value="7">Huge</option>
-        </select>
-    </div>
-);
+const RichTextToolbar: React.FC<{ onCommand: (cmd: string, val?: string) => void }> = ({ onCommand }) => {
+    
+    // Unified handler for toolbar buttons to prevent focus loss while enabling interaction
+    const handleAction = (e: React.MouseEvent, cmd: string, promptText?: string) => {
+        e.preventDefault(); // Prevent focus loss from editor
+        e.stopPropagation();
 
-export const ModuleEmailCampaign: React.FC<Props> = ({ crmClients }) => {
+        if (promptText) {
+            // Small delay to ensure UI updates before blocking prompt and allows event to settle
+            setTimeout(() => {
+                const val = prompt(promptText);
+                if (val) onCommand(cmd, val);
+            }, 10);
+        } else {
+            onCommand(cmd);
+        }
+    };
+
+    return (
+        <div className="flex items-center gap-1 p-2 border-b border-slate-200 bg-slate-50 rounded-t-xl overflow-x-auto">
+            <button type="button" onMouseDown={(e) => handleAction(e, 'bold')} className="p-2 hover:bg-slate-200 rounded text-slate-600" title="Bold"><Bold size={16}/></button>
+            <button type="button" onMouseDown={(e) => handleAction(e, 'italic')} className="p-2 hover:bg-slate-200 rounded text-slate-600" title="Italic"><Italic size={16}/></button>
+            <button type="button" onMouseDown={(e) => handleAction(e, 'underline')} className="p-2 hover:bg-slate-200 rounded text-slate-600" title="Underline"><Underline size={16}/></button>
+            <div className="w-px h-6 bg-slate-300 mx-1"></div>
+            <button type="button" onMouseDown={(e) => handleAction(e, 'justifyLeft')} className="p-2 hover:bg-slate-200 rounded text-slate-600" title="Align Left"><AlignLeft size={16}/></button>
+            <button type="button" onMouseDown={(e) => handleAction(e, 'justifyCenter')} className="p-2 hover:bg-slate-200 rounded text-slate-600" title="Align Center"><AlignCenter size={16}/></button>
+            <button type="button" onMouseDown={(e) => handleAction(e, 'justifyRight')} className="p-2 hover:bg-slate-200 rounded text-slate-600" title="Align Right"><AlignRight size={16}/></button>
+            <div className="w-px h-6 bg-slate-300 mx-1"></div>
+            <button type="button" onMouseDown={(e) => handleAction(e, 'insertUnorderedList')} className="p-2 hover:bg-slate-200 rounded text-slate-600" title="List"><List size={16}/></button>
+            <button type="button" onMouseDown={(e) => handleAction(e, 'createLink', 'Enter URL (e.g. https://...):')} className="p-2 hover:bg-slate-200 rounded text-slate-600" title="Link"><LinkIcon size={16}/></button>
+            <button type="button" onMouseDown={(e) => handleAction(e, 'insertImage', 'Enter Image URL:')} className="p-2 hover:bg-slate-200 rounded text-slate-600" title="Insert Image"><ImageIcon size={16}/></button>
+            <div className="w-px h-6 bg-slate-300 mx-1"></div>
+            <select onChange={(e) => onCommand('fontSize', e.target.value)} className="text-xs border rounded p-1 bg-white focus:outline-none">
+                <option value="3">Normal</option>
+                <option value="5">Large</option>
+                <option value="7">Huge</option>
+            </select>
+        </div>
+    );
+};
+
+export const ModuleEmailCampaign: React.FC<Props> = ({ crmClients, onAddClients }) => {
     const [activeTab, setActiveTab] = useState<'settings' | 'templates' | 'campaign'>('campaign');
     const [config, setConfig] = useState<AliyunConfig>(getAliyunConfig());
     const [templates, setTemplates] = useState<EmailTemplate[]>([]);
@@ -48,6 +69,7 @@ export const ModuleEmailCampaign: React.FC<Props> = ({ crmClients }) => {
     // Template Edit State
     const [editingTemplate, setEditingTemplate] = useState<EmailTemplate | null>(null);
     const editorRef = useRef<HTMLDivElement>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
     
     // UI State
     const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success'>('idle');
@@ -99,10 +121,68 @@ export const ModuleEmailCampaign: React.FC<Props> = ({ crmClients }) => {
     };
 
     const execCmd = (cmd: string, val?: string) => {
+        // Ensure editor is focused before executing
+        if (editorRef.current) {
+            editorRef.current.focus();
+        }
         document.execCommand(cmd, false, val);
         if (editorRef.current && editingTemplate) {
             setEditingTemplate({ ...editingTemplate, body: editorRef.current.innerHTML });
         }
+    };
+
+    // --- IMPORT / EXPORT CLIENTS ---
+    const handleDownloadTemplate = () => {
+        if (typeof XLSX === 'undefined') {
+            alert("Export engine not loaded.");
+            return;
+        }
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.json_to_sheet([
+            { "Company Name": "Example Corp", "Email": "contact@example.com", "Contact Name": "John Doe", "Website": "www.example.com", "Country": "USA" }
+        ]);
+        XLSX.utils.book_append_sheet(wb, ws, "Template");
+        XLSX.writeFile(wb, "Client_Import_Template.xlsx");
+    };
+
+    const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (!e.target.files || e.target.files.length === 0) return;
+        if (typeof XLSX === 'undefined') {
+            alert("Import engine not loaded.");
+            return;
+        }
+        const file = e.target.files[0];
+        const reader = new FileReader();
+        reader.onload = (evt) => {
+            const bstr = evt.target?.result;
+            const wb = XLSX.read(bstr, { type: 'binary' });
+            const wsname = wb.SheetNames[0];
+            const ws = wb.Sheets[wsname];
+            const data = XLSX.utils.sheet_to_json(ws);
+            
+            const newClients: Client[] = data.map((row: any) => ({
+                id: Date.now() + Math.random().toString(36).substr(2, 5),
+                name: row["Company Name"] || row["Name"] || "Unknown",
+                website: row["Website"] || "",
+                country: row["Country"] || "Global",
+                type: '进口商',
+                status: '新建/潜在',
+                productType: 'Imported',
+                priceRange: 'Medium',
+                isSampleNeeded: false,
+                lastOrderDate: '',
+                lastContactSent: '',
+                lastContactReceived: '',
+                nextFollowUpDate: '',
+                activityLog: `Imported via Email Campaign. Contact: ${row["Contact Name"] || '-'}, Email: ${row["Email"] || '-'}`
+            }));
+
+            if (onAddClients && newClients.length > 0) {
+                onAddClients(newClients);
+            }
+        };
+        reader.readAsBinaryString(file);
+        if (fileInputRef.current) fileInputRef.current.value = '';
     };
 
     // --- CAMPAIGN HANDLERS ---
@@ -117,8 +197,8 @@ export const ModuleEmailCampaign: React.FC<Props> = ({ crmClients }) => {
             .filter(c => selectedClientIds.has(c.id))
             .map(c => ({
                 id: Math.random().toString(36).substr(2, 9),
-                recipientEmail: (c.website && c.website.includes('@')) ? c.website : `info@${c.website || 'example.com'}`, 
-                recipientName: "Sir/Madam", 
+                recipientEmail: (c.website && c.website.includes('@')) ? c.website : (c.activityLog.match(/Email: ([^\s,]+)/)?.[1] || `info@${c.website || 'example.com'}`), 
+                recipientName: c.activityLog.match(/Contact: ([^\s,]+)/)?.[1] || "Sir/Madam", 
                 companyName: c.name,
                 status: 'pending'
             }));
@@ -181,6 +261,14 @@ export const ModuleEmailCampaign: React.FC<Props> = ({ crmClients }) => {
         if (newSet.has(id)) newSet.delete(id);
         else newSet.add(id);
         setSelectedClientIds(newSet);
+    };
+
+    const toggleSelectAll = () => {
+        if (selectedClientIds.size === crmClients.length) {
+            setSelectedClientIds(new Set());
+        } else {
+            setSelectedClientIds(new Set(crmClients.map(c => c.id)));
+        }
     };
 
     return (
@@ -353,7 +441,7 @@ export const ModuleEmailCampaign: React.FC<Props> = ({ crmClients }) => {
                                 <div className="p-8 space-y-6 flex-1 overflow-y-auto custom-scrollbar">
                                     {/* Row 1: Template Name */}
                                     <div className="grid grid-cols-12 gap-4 items-center">
-                                        <label className="col-span-2 text-right text-sm font-bold text-slate-600">
+                                        <label className="col-span-2 text-right text-sm font-bold text-slate-500">
                                             <span className="text-red-500 mr-1">*</span>模板名称:
                                         </label>
                                         <div className="col-span-10">
@@ -369,7 +457,7 @@ export const ModuleEmailCampaign: React.FC<Props> = ({ crmClients }) => {
 
                                     {/* Row 2: Subject */}
                                     <div className="grid grid-cols-12 gap-4 items-center">
-                                        <label className="col-span-2 text-right text-sm font-bold text-slate-600">
+                                        <label className="col-span-2 text-right text-sm font-bold text-slate-500">
                                             <span className="text-red-500 mr-1">*</span>邮件标题:
                                         </label>
                                         <div className="col-span-10">
@@ -385,7 +473,7 @@ export const ModuleEmailCampaign: React.FC<Props> = ({ crmClients }) => {
 
                                     {/* Row 3: Sender Name */}
                                     <div className="grid grid-cols-12 gap-4 items-center">
-                                        <label className="col-span-2 text-right text-sm font-bold text-slate-600">
+                                        <label className="col-span-2 text-right text-sm font-bold text-slate-500">
                                             <span className="text-red-500 mr-1">*</span>发送人名称:
                                         </label>
                                         <div className="col-span-10">
@@ -400,17 +488,17 @@ export const ModuleEmailCampaign: React.FC<Props> = ({ crmClients }) => {
 
                                     {/* Row 4: Variable Info */}
                                     <div className="grid grid-cols-12 gap-4">
-                                        <label className="col-span-2 text-right text-sm font-bold text-slate-600 mt-1">
+                                        <label className="col-span-2 text-right text-sm font-bold text-slate-500 mt-1">
                                             变量说明:
                                         </label>
-                                        <div className="col-span-10 text-xs text-slate-500 leading-relaxed">
+                                        <div className="col-span-10 text-xs text-slate-400 leading-relaxed">
                                             请用{`{变量名称}`}为邮件正文中需要替换的变量内容占位。例如，{`{Name}`}替换收件人真实姓名、{`{Company}`}替换公司名。变量名可使用英文大小写字母。
                                         </div>
                                     </div>
 
                                     {/* Row 5: Body Editor */}
                                     <div className="grid grid-cols-12 gap-4">
-                                        <label className="col-span-2 text-right text-sm font-bold text-slate-600 mt-2">
+                                        <label className="col-span-2 text-right text-sm font-bold text-slate-500 mt-2">
                                             <span className="text-red-500 mr-1">*</span>邮件正文:
                                         </label>
                                         <div className="col-span-10">
@@ -442,7 +530,7 @@ export const ModuleEmailCampaign: React.FC<Props> = ({ crmClients }) => {
                 </div>
             )}
 
-            {/* Campaign Tab Content (No Changes needed for this request, reusing existing logic) */}
+            {/* Campaign Tab Content */}
             {activeTab === 'campaign' && (
                 <div className="space-y-6">
                     {/* Step 1: Selection */}
@@ -450,38 +538,71 @@ export const ModuleEmailCampaign: React.FC<Props> = ({ crmClients }) => {
                          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm h-[400px] flex flex-col">
                              <div className="flex justify-between items-center mb-4">
                                  <h3 className="font-bold text-slate-800 flex items-center gap-2"><Users size={18}/> 1. Select Clients</h3>
-                                 <span className="text-xs font-bold bg-blue-100 text-blue-700 px-2 py-1 rounded-lg">{selectedClientIds.size} Selected</span>
+                                 <div className="flex gap-2">
+                                     <button onClick={toggleSelectAll} className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded hover:bg-slate-200">
+                                         {selectedClientIds.size === crmClients.length ? 'Deselect All' : 'Select All'}
+                                     </button>
+                                     <span className="text-xs font-bold bg-blue-100 text-blue-700 px-2 py-1 rounded-lg">{selectedClientIds.size} Selected</span>
+                                 </div>
                              </div>
-                             <div className="flex-1 overflow-y-auto custom-scrollbar border border-slate-100 rounded-xl">
-                                 {crmClients.map(c => (
-                                     <div key={c.id} onClick={() => toggleSelectClient(c.id)} className={`p-3 border-b flex items-center gap-3 cursor-pointer hover:bg-slate-50 ${selectedClientIds.has(c.id) ? 'bg-blue-50/50' : ''}`}>
-                                         <div className={`w-4 h-4 rounded border flex items-center justify-center ${selectedClientIds.has(c.id) ? 'bg-blue-600 border-blue-600 text-white' : 'border-slate-300'}`}>
-                                             {selectedClientIds.has(c.id) && <CheckCircle2 size={12}/>}
-                                         </div>
-                                         <div className="overflow-hidden">
-                                             <div className="text-sm font-bold text-slate-800 truncate">{c.name}</div>
-                                             <div className="text-xs text-slate-400 truncate">{c.website}</div>
-                                         </div>
+                             
+                             <div className="flex gap-2 mb-4">
+                                 <button onClick={() => fileInputRef.current?.click()} className="flex-1 bg-white border border-slate-300 text-slate-700 px-3 py-2 rounded-lg text-xs font-bold hover:bg-blue-50 hover:border-blue-300 transition-colors flex items-center justify-center gap-1">
+                                     <Upload size={14} /> Import Excel
+                                 </button>
+                                 <button onClick={handleDownloadTemplate} className="flex-1 bg-white border border-slate-300 text-slate-700 px-3 py-2 rounded-lg text-xs font-bold hover:bg-green-50 hover:border-green-300 transition-colors flex items-center justify-center gap-1">
+                                     <FileSpreadsheet size={14} /> Template
+                                 </button>
+                                 <input type="file" ref={fileInputRef} className="hidden" accept=".xlsx,.xls,.csv" onChange={handleImportFile} />
+                             </div>
+
+                             <div className="flex-1 overflow-y-auto custom-scrollbar border border-slate-100 rounded-xl bg-slate-50/50 relative">
+                                 {crmClients.length === 0 ? (
+                                     <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 p-6 text-center">
+                                         <Upload size={32} className="mb-4 opacity-50" />
+                                         <p className="text-sm font-bold text-slate-500 mb-2">No clients in CRM.</p>
+                                         <p className="text-xs text-slate-400 mb-4 max-w-[200px]">Import from Excel to get started quickly.</p>
+                                         <button onClick={() => fileInputRef.current?.click()} className="text-blue-600 hover:text-blue-800 text-xs font-bold underline flex items-center gap-1">
+                                             <Plus size={12} /> Import Now
+                                         </button>
                                      </div>
-                                 ))}
-                                 {crmClients.length === 0 && <div className="p-4 text-center text-slate-400 text-sm">No clients in CRM.</div>}
+                                 ) : (
+                                     crmClients.map(c => (
+                                         <div key={c.id} onClick={() => toggleSelectClient(c.id)} className={`p-3 border-b flex items-center gap-3 cursor-pointer hover:bg-slate-50 bg-white ${selectedClientIds.has(c.id) ? 'bg-blue-50/50' : ''}`}>
+                                             <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${selectedClientIds.has(c.id) ? 'bg-blue-600 border-blue-600 text-white' : 'border-slate-300'}`}>
+                                                 {selectedClientIds.has(c.id) && <CheckCircle2 size={12}/>}
+                                             </div>
+                                             <div className="overflow-hidden">
+                                                 <div className="text-sm font-bold text-slate-800 truncate">{c.name}</div>
+                                                 <div className="text-xs text-slate-400 truncate">{c.website}</div>
+                                             </div>
+                                         </div>
+                                     ))
+                                 )}
                              </div>
                          </div>
 
                          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm h-[400px] flex flex-col">
                              <h3 className="font-bold text-slate-800 flex items-center gap-2 mb-4"><Layout size={18}/> 2. Select Template</h3>
                              <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2">
-                                 {templates.map(t => (
-                                     <div key={t.id} onClick={() => setSelectedTemplateId(t.id)} className={`p-4 rounded-xl border cursor-pointer transition-all ${selectedTemplateId === t.id ? 'bg-orange-50 border-orange-500 ring-1 ring-orange-500' : 'bg-slate-50 border-slate-200 hover:border-orange-300'}`}>
-                                         <div className="flex justify-between">
-                                            <h4 className="font-bold text-slate-800 text-sm truncate">{t.name}</h4>
-                                            {selectedTemplateId === t.id && <CheckCircle2 size={16} className="text-orange-500"/>}
-                                         </div>
-                                         <p className="text-xs text-slate-500 truncate mt-1">{t.subject}</p>
-                                         <p className="text-[10px] text-slate-400 mt-1">From: {t.senderName || config.fromAlias || 'Default'}</p>
+                                 {templates.length === 0 ? (
+                                     <div className="h-full flex flex-col items-center justify-center text-slate-400 p-6 text-center border-2 border-dashed border-slate-100 rounded-xl bg-slate-50/30">
+                                         <Layout size={32} className="mb-2 opacity-50" />
+                                         <p className="text-sm">No templates found.</p>
+                                         <button onClick={() => setActiveTab('templates')} className="text-xs text-blue-600 hover:underline mt-2">Create New Template</button>
                                      </div>
-                                 ))}
-                                 {templates.length === 0 && <div className="p-4 text-center text-slate-400 text-sm">No templates. Go to Templates tab.</div>}
+                                 ) : (
+                                     templates.map(t => (
+                                         <div key={t.id} onClick={() => setSelectedTemplateId(t.id)} className={`p-4 rounded-xl border cursor-pointer transition-all ${selectedTemplateId === t.id ? 'bg-orange-50 border-orange-500 ring-1 ring-orange-500' : 'bg-slate-50 border-slate-200 hover:border-orange-300'}`}>
+                                             <div className="flex justify-between">
+                                                <h4 className="font-bold text-slate-800 text-sm truncate">{t.name}</h4>
+                                                {selectedTemplateId === t.id && <CheckCircle2 size={16} className="text-orange-500"/>}
+                                             </div>
+                                             <p className="text-xs text-slate-500 truncate mt-1">{t.subject}</p>
+                                             <p className="text-[10px] text-slate-400 mt-1">From: {t.senderName || config.fromAlias || 'Default'}</p>
+                                         </div>
+                                     ))
+                                 )}
                              </div>
                          </div>
                     </div>

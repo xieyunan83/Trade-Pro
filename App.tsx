@@ -222,6 +222,7 @@ const App: React.FC = () => {
   const handleDeleteTask = async (id: string) => { if(confirm("Delete?")) { await deleteAutomationTask(id); setAutomationResults(prev => prev.filter(t => t.id !== id)); } };
   const handleLogout = () => { setCurrentUser(null); setAnalysisData(null); setDomainInput(''); setActiveModule(ModuleType.DISCOVERY); };
   const handleSyncToGitHub = async () => { if(!currentUser) return; setIsSyncing(true); try { await backupUserHistory(currentUser.username, history); await saveCRMToCloud(crmClients); alert("数据同步成功!"); } catch (e: any) { alert("同步失败: " + e.message); } finally { setIsSyncing(false); } };
+  const handleAddClients = (newClients: Client[]) => { setCrmClients(prev => [...prev, ...newClients]); alert(`已成功导入 ${newClients.length} 个客户资料！`); };
 
   if (hasKey === null) return <div className="h-screen flex items-center justify-center bg-slate-50"><Loader2 className="animate-spin text-blue-600" size={40} /></div>;
   if (!currentUser) return <Login onLogin={setCurrentUser} />;
@@ -435,7 +436,7 @@ const App: React.FC = () => {
                 )}
                 {/* NEW MODULE RENDER */}
                 {activeModule === ModuleType.EMAIL_CAMPAIGN && (
-                    <ModuleEmailCampaign crmClients={crmClients} />
+                    <ModuleEmailCampaign crmClients={crmClients} onAddClients={handleAddClients} />
                 )}
                 {activeModule === ModuleType.PROMO_GENERATOR && (
                     <ModulePromoGenerator 

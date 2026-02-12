@@ -3,7 +3,19 @@ import React, { useState, useEffect, useRef } from 'react';
 import { User, KnowledgeFile, GlobalConfig, ApiConfig } from '../types';
 import { getAllUsers, saveUser, deleteUser, getAllFilesFromDB, saveFileToDB, deleteFileFromDB, clearDB } from '../services/db';
 import { testApiKey, getGeminiConfig } from '../services/geminiService';
-import { saveGlobalConfig, fetchGlobalConfig, checkGitHubStatus, setManualGitHubConfig, clearManualGitHubConfig, fetchUsersFromCloud, saveUsersToCloud, fetchApiConfigsFromCloud, saveApiConfigsToCloud, fetchDocumentsFromRepo } from '../services/githubService';
+import { 
+    saveGlobalConfig, 
+    fetchGlobalConfig, 
+    checkGitHubStatus, 
+    setManualGitHubConfig, 
+    clearManualGitHubConfig, 
+    fetchUsersFromCloud, 
+    saveUsersToCloud, 
+    fetchApiConfigsFromCloud, 
+    saveApiConfigsToCloud, 
+    fetchDocumentsFromRepo,
+    verifyConnection 
+} from '../services/githubService';
 import { Users, Database, Plus, Trash2, Shield, UploadCloud, FileText, Loader2, LogOut, Key, Save, CheckCircle2, AlertTriangle, Info, Play, Workflow, Cloud, Download, Upload, ExternalLink, HelpCircle, Link2, RefreshCw, ArrowDownCircle, Github, FolderOpen } from 'lucide-react';
 
 interface Props {
@@ -136,26 +148,43 @@ const CloudLimitManager: React.FC<CloudLimitManagerProps> = ({ onConnectionChang
             return;
         }
         setLoading(true);
-        // Save to LocalStorage immediately so subsequent fetches use it
+        // 1. Save Config Locally First
         setManualGitHubConfig(manualToken, manualOwner, manualRepo);
         
-        // Test connection by fetching config
-        const check = checkGitHubStatus();
-        setStatus(check);
-        
-        if (check.ok) {
+        try {
+            // 2. Verify Connection (API Call)
+            await verifyConnection();
+            
+            // 3. If Successful, Update Status & Load Config
+            setStatus(checkGitHubStatus());
+            setMsg({ type: 'success', text: "连接成功！已验证仓库访问权限。" });
+            
             try {
-                await loadRemoteConfig(); // Try fetching global config
-                setMsg({ type: 'success', text: "连接成功！已从云端拉取最新配置。" });
-                onConnectionChange(); // Notify parent to refresh other tabs
-            } catch (e) {
-                setMsg({ type: 'error', text: "连接成功，但无法读取 config.json。如果是新仓库，请点击保存以初始化。" });
-                onConnectionChange(); 
+                await loadRemoteConfig(); 
+            } catch(e) {
+                // Config load might fail if file doesn't exist yet, that's okay for new repo
             }
-        } else {
-             setMsg({ type: 'error', text: "连接失败，请检查凭证。" });
+            onConnectionChange();
+
+        } catch (e: any) {
+            console.error("Manual Connect Failed", e);
+            let errText = "连接失败，请检查凭证。";
+            
+            // Robust Error Handling for Octokit
+            const statusCode = e.status || e.response?.status;
+            
+            if (statusCode === 404) errText = "连接失败 (404): 找不到仓库。请确认 Owner/Repo拼写正确，且 Token 拥有 Repo 权限。";
+            else if (statusCode === 401) errText = "连接失败 (401): Token 无效或已过期。";
+            else if (statusCode === 403) errText = "连接失败 (403): 访问被拒绝，可能触发了 API 速率限制。";
+            
+            setMsg({ type: 'error', text: errText });
+            
+            // Revert status to disconnected so UI doesn't show fake success
+            clearManualGitHubConfig(); 
+            setStatus(checkGitHubStatus());
+        } finally {
+            setLoading(false);
         }
-        setLoading(false);
     };
 
     const handleDisconnect = () => {
@@ -239,6 +268,11 @@ const CloudLimitManager: React.FC<CloudLimitManagerProps> = ({ onConnectionChang
                                 {loading ? <Loader2 className="animate-spin" size={18}/> : <Cloud size={18}/>}
                                 连接并同步数据 (Connect & Sync)
                             </button>
+                            {msg && msg.type === 'error' && (
+                                <div className="mt-2 p-3 bg-red-100 text-red-700 text-sm font-bold rounded-lg flex items-center gap-2 animate-fade-in">
+                                    <AlertTriangle size={16}/> {msg.text}
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>
