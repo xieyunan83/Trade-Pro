@@ -1,3 +1,4 @@
+
 import { AliyunConfig, EmailTemplate } from "../types";
 
 // Helper for HMAC-SHA1 signature using Web Crypto API
@@ -28,7 +29,8 @@ function getNonce(): string {
     return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
 }
 
-// Percent Encode (Specific to Aliyun specs)
+// Percent Encode (Specific to Aliyun specs: RFC 3986)
+// This is critical. JS encodeURIComponent is not enough.
 function percentEncode(str: string): string {
     return encodeURIComponent(str)
         .replace(/\!/g, '%21')
@@ -49,6 +51,16 @@ export const sendSingleMail = async (
         return { success: false, message: "Missing API Configuration" };
     }
 
+    // Determine correct RegionId and Endpoint
+    // Config.regionId should be like 'cn-hangzhou', 'ap-southeast-1'
+    // Default to cn-hangzhou if not set or weird
+    let regionId = config.regionId || "cn-hangzhou";
+    if (regionId.includes('.')) regionId = "cn-hangzhou"; // Legacy fix
+
+    let endpoint = "https://dm.aliyuncs.com/";
+    if (regionId === 'ap-southeast-1') endpoint = "https://dm.ap-southeast-1.aliyuncs.com/";
+    if (regionId === 'ap-southeast-2') endpoint = "https://dm.ap-southeast-2.aliyuncs.com/";
+
     const params: Record<string, string> = {
         // System Parameters
         "Format": "JSON",
@@ -58,7 +70,7 @@ export const sendSingleMail = async (
         "Timestamp": getTimestamp(),
         "SignatureVersion": "1.0",
         "SignatureNonce": getNonce(),
-        "RegionId": config.regionId || "dm.aliyuncs.com", // Usually mapped to endpoint
+        "RegionId": regionId,
         
         // Business Parameters
         "Action": "SingleSendMail",
@@ -80,6 +92,7 @@ export const sendSingleMail = async (
     const sortedKeys = Object.keys(params).sort();
     
     // 2. Canonicalized Query String
+    // We construct this manually to ensure it matches exactly what we will send
     const canonicalizedQueryString = sortedKeys.map(key => {
         return percentEncode(key) + "=" + percentEncode(params[key]);
     }).join("&");
@@ -90,28 +103,19 @@ export const sendSingleMail = async (
     // 4. Signature
     const signature = await signString(stringToSign, config.accessKeySecret);
     
-    // 5. Final Body
-    // Note: We send as x-www-form-urlencoded
-    const bodyParams = new URLSearchParams();
-    sortedKeys.forEach(key => bodyParams.append(key, params[key]));
-    bodyParams.append("Signature", signature);
+    // 5. Final Body Construction
+    // CRITICAL FIX: Do NOT use URLSearchParams. It encodes space as '+', but Aliyun signature expects '%20'.
+    // We must manually concat the string exactly as we signed it, plus the signature.
+    const bodyString = canonicalizedQueryString + "&Signature=" + percentEncode(signature);
 
     // 6. Send Request
-    // IMPORTANT: Browser will block this with CORS unless a plugin is used or Aliyun allows it (rare).
-    // The endpoint depends on Region. 'dm.aliyuncs.com' is Global/Hangzhou default.
-    // ap-southeast-1: dm.ap-southeast-1.aliyuncs.com
-    
-    let endpoint = "https://dm.aliyuncs.com/";
-    if (config.regionId === 'ap-southeast-1') endpoint = "https://dm.ap-southeast-1.aliyuncs.com/";
-    if (config.regionId === 'ap-southeast-2') endpoint = "https://dm.ap-southeast-2.aliyuncs.com/";
-
     try {
         const response = await fetch(endpoint, {
             method: "POST",
             headers: {
                 "Content-Type": "application/x-www-form-urlencoded"
             },
-            body: bodyParams
+            body: bodyString
         });
 
         const data = await response.json();
@@ -124,7 +128,7 @@ export const sendSingleMail = async (
     } catch (e: any) {
         // Likely CORS error if without plugin
         if (e.message === "Failed to fetch") {
-            return { success: false, message: "Network Error (CORS). Please install 'Allow CORS' browser extension." };
+            return { success: false, message: "Network Error (CORS). Please ensure 'Allow CORS' plugin is ON and refresh page." };
         }
         return { success: false, message: e.message };
     }
@@ -158,7 +162,7 @@ export const getAliyunConfig = (): AliyunConfig => {
         replyToAddress: true,
         addressType: 1,
         tagName: '',
-        regionId: 'dm.aliyuncs.com'
+        regionId: 'cn-hangzhou'
     };
 };
 

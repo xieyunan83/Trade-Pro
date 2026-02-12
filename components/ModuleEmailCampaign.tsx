@@ -371,7 +371,7 @@ export const ModuleEmailCampaign: React.FC<Props> = ({ crmClients, onAddClients 
                                     onChange={e => setConfig({...config, regionId: e.target.value})} 
                                     className="w-full p-3 border border-slate-300 rounded-xl bg-white text-slate-900 font-bold focus:ring-2 focus:ring-blue-500 outline-none"
                                 >
-                                    <option value="dm.aliyuncs.com">China East 1 (Hangzhou/Global)</option>
+                                    <option value="cn-hangzhou">China East 1 (Hangzhou/Global)</option>
                                     <option value="ap-southeast-1">Singapore (ap-southeast-1)</option>
                                     <option value="ap-southeast-2">Sydney (ap-southeast-2)</option>
                                 </select>
