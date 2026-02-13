@@ -68,6 +68,18 @@ export interface AutomationResult {
   mode?: 'detailed' | 'economy'; 
 }
 
+export interface DecisionMaker {
+  name: string;
+  title: string;
+  yearsActive?: string;
+  emailGuess?: string;
+  linkedin?: string;
+  type: 'CEO' | 'Buyer' | 'Other';
+  source: 'AI' | 'Hunter.io' | 'Findymail' | 'AnymailFinder' | 'Manual';
+  isVerified: boolean;
+  confidence?: number;
+}
+
 export interface Client {
   id: string;
   name: string;
@@ -84,6 +96,7 @@ export interface Client {
   lastContactReceived: string;
   nextFollowUpDate: string;
   activityLog: string;
+  contacts?: DecisionMaker[]; // Added contacts list
 }
 
 // ... existing interfaces ...
@@ -183,18 +196,6 @@ export interface AnalysisResult {
   };
   similarCompanies: SimilarCompany[];
   generatedEmails?: MailGroup; 
-}
-
-export interface DecisionMaker {
-  name: string;
-  title: string;
-  yearsActive?: string;
-  emailGuess?: string;
-  linkedin?: string;
-  type: 'CEO' | 'Buyer' | 'Other';
-  source: 'AI' | 'Hunter.io' | 'Findymail' | 'AnymailFinder';
-  isVerified: boolean;
-  confidence?: number;
 }
 
 export interface SimilarCompany {

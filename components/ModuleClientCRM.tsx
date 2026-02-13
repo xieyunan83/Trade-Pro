@@ -1,11 +1,13 @@
 
-import React, { useState, useEffect } from 'react';
-import { Client, HistoryItem } from '../types';
+import React, { useState, useEffect, useRef } from 'react';
+import { Client, HistoryItem, DecisionMaker } from '../types';
 import { exportClientsToExcel, exportBatchAnalysisToPPT } from '../services/exportService';
 import { 
     Users, Filter, Package, Plus, Search, Calendar, 
-    Clock, AlertCircle, Save, Edit3, Trash2, X, ShieldCheck, CheckSquare, Square, PlayCircle, Globe, ShoppingBag, Download, FileSpreadsheet
+    Clock, AlertCircle, Save, Edit3, Trash2, X, ShieldCheck, CheckSquare, Square, PlayCircle, Globe, ShoppingBag, Download, FileSpreadsheet, UserPlus, Upload, Mail
 } from 'lucide-react';
+
+declare const XLSX: any;
 
 interface Props {
     clients: Client[];
@@ -19,6 +21,11 @@ export const ModuleClientCRM: React.FC<Props> = ({ clients, setClients, onBatchA
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingClient, setEditingClient] = useState<Client | null>(null);
+    
+    // Contact Modal State
+    const [isContactModalOpen, setIsContactModalOpen] = useState(false);
+    const [currentClientForContacts, setCurrentClientForContacts] = useState<Client | null>(null);
+    const contactFileInputRef = useRef<HTMLInputElement>(null);
 
     // Filters
     const [filterName, setFilterName] = useState('');
@@ -59,6 +66,7 @@ export const ModuleClientCRM: React.FC<Props> = ({ clients, setClients, onBatchA
             lastContactReceived: formData.get('lastContactReceived') as string,
             nextFollowUpDate: formData.get('nextFollowUpDate') as string,
             activityLog: formData.get('activityLog') as string,
+            contacts: editingClient ? editingClient.contacts : [] // Preserve contacts
         };
 
         if (editingClient) {
@@ -78,6 +86,96 @@ export const ModuleClientCRM: React.FC<Props> = ({ clients, setClients, onBatchA
     const openNew = () => {
         setEditingClient(null);
         setIsModalOpen(true);
+    };
+
+    // --- CONTACT MANAGEMENT ---
+    const openContactManager = (client: Client) => {
+        setCurrentClientForContacts(client);
+        setIsContactModalOpen(true);
+    };
+
+    const handleSaveContact = (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!currentClientForContacts) return;
+        const formData = new FormData(e.target as HTMLFormElement);
+        const newContact: DecisionMaker = {
+            name: formData.get('name') as string,
+            title: formData.get('title') as string,
+            emailGuess: formData.get('email') as string,
+            type: formData.get('type') as any,
+            source: 'Manual',
+            isVerified: true, // Manual entry assumed verified
+            linkedin: formData.get('linkedin') as string
+        };
+
+        const updatedClient = {
+            ...currentClientForContacts,
+            contacts: [...(currentClientForContacts.contacts || []), newContact]
+        };
+
+        // Update local state and main clients list
+        setCurrentClientForContacts(updatedClient);
+        setClients(prev => prev.map(c => c.id === updatedClient.id ? updatedClient : c));
+        
+        // Reset form (simple way)
+        (e.target as HTMLFormElement).reset();
+    };
+
+    const handleDeleteContact = (index: number) => {
+        if (!currentClientForContacts) return;
+        const updatedContacts = [...(currentClientForContacts.contacts || [])];
+        updatedContacts.splice(index, 1);
+        
+        const updatedClient = { ...currentClientForContacts, contacts: updatedContacts };
+        setCurrentClientForContacts(updatedClient);
+        setClients(prev => prev.map(c => c.id === updatedClient.id ? updatedClient : c));
+    };
+
+    const handleDownloadContactTemplate = () => {
+        if (typeof XLSX === 'undefined') { alert("Export engine not loaded."); return; }
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.json_to_sheet([
+            { "Name": "John Doe", "Title": "Purchasing Manager", "Email": "john@example.com", "Type": "Buyer", "LinkedIn": "https://linkedin.com/in/john" }
+        ]);
+        XLSX.utils.book_append_sheet(wb, ws, "Contacts_Template");
+        XLSX.writeFile(wb, "Contact_Import_Template.xlsx");
+    };
+
+    const handleImportContacts = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (!e.target.files || e.target.files.length === 0 || !currentClientForContacts) return;
+        if (typeof XLSX === 'undefined') { alert("Import engine not loaded."); return; }
+        
+        const file = e.target.files[0];
+        const reader = new FileReader();
+        reader.onload = (evt) => {
+            const bstr = evt.target?.result;
+            const wb = XLSX.read(bstr, { type: 'binary' });
+            const wsname = wb.SheetNames[0];
+            const ws = wb.Sheets[wsname];
+            const data = XLSX.utils.sheet_to_json(ws);
+            
+            const newContacts: DecisionMaker[] = data.map((row: any) => ({
+                name: row["Name"] || "Unknown",
+                title: row["Title"] || "Employee",
+                emailGuess: row["Email"] || "",
+                type: (row["Type"] === 'CEO' || row["Type"] === 'Buyer') ? row["Type"] : 'Other',
+                source: 'Manual',
+                isVerified: true,
+                linkedin: row["LinkedIn"] || ""
+            }));
+
+            if (newContacts.length > 0) {
+                const updatedClient = {
+                    ...currentClientForContacts,
+                    contacts: [...(currentClientForContacts.contacts || []), ...newContacts]
+                };
+                setCurrentClientForContacts(updatedClient);
+                setClients(prev => prev.map(c => c.id === updatedClient.id ? updatedClient : c));
+                alert(`Imported ${newContacts.length} contacts!`);
+            }
+        };
+        reader.readAsBinaryString(file);
+        if (contactFileInputRef.current) contactFileInputRef.current.value = '';
     };
 
     // --- Selection Logic ---
@@ -260,7 +358,7 @@ export const ModuleClientCRM: React.FC<Props> = ({ clients, setClients, onBatchA
                                 <th className="px-4 py-4 font-bold min-w-[120px]">Country</th>
                                 <th className="px-4 py-4 font-bold min-w-[150px]">Suitable Product</th>
                                 <th className="px-4 py-4 font-bold">Status</th>
-                                <th className="px-4 py-4 font-bold">BG Check</th>
+                                <th className="px-4 py-4 font-bold">Contacts</th>
                                 <th className="px-4 py-4 font-bold">Key Dates</th>
                                 <th className="px-4 py-4 font-bold text-right">Actions</th>
                             </tr>
@@ -287,13 +385,7 @@ export const ModuleClientCRM: React.FC<Props> = ({ clients, setClients, onBatchA
                                         <option value="流失/搁置">流失/搁置</option>
                                     </select>
                                 </th>
-                                <th className="px-4 py-2">
-                                    <select value={filterAnalyzed} onChange={e=>setFilterAnalyzed(e.target.value)} className="w-full text-xs p-1 border rounded bg-white">
-                                        <option value="All">All</option>
-                                        <option value="Yes">Analyzed</option>
-                                        <option value="No">Pending</option>
-                                    </select>
-                                </th>
+                                <th className="px-4 py-2"></th>
                                 <th className="px-4 py-2"></th>
                                 <th className="px-4 py-2"></th>
                             </tr>
@@ -340,15 +432,16 @@ export const ModuleClientCRM: React.FC<Props> = ({ clients, setClients, onBatchA
                                             <StatusBadge status={client.status} />
                                         </td>
                                         <td className="px-4 py-4">
-                                            {client.hasAnalyzed ? (
-                                                <span className="flex items-center gap-1 text-[10px] font-bold text-green-700 bg-green-50 px-2 py-1 rounded-lg w-fit border border-green-100">
-                                                    <ShieldCheck size={12} /> YES
-                                                </span>
-                                            ) : (
-                                                <span className="flex items-center gap-1 text-[10px] font-bold text-slate-400 bg-slate-50 px-2 py-1 rounded-lg w-fit">
-                                                    NO
-                                                </span>
-                                            )}
+                                            <button 
+                                                onClick={() => openContactManager(client)}
+                                                className={`text-xs font-bold px-2 py-1 rounded flex items-center gap-1 transition-colors ${
+                                                    client.contacts && client.contacts.length > 0 
+                                                    ? 'bg-blue-50 text-blue-700 hover:bg-blue-100' 
+                                                    : 'bg-slate-50 text-slate-400 hover:bg-slate-100'
+                                                }`}
+                                            >
+                                                <Users size={12} /> {client.contacts?.length || 0} Contacts
+                                            </button>
                                         </td>
                                         <td className="px-4 py-4">
                                             <div className="flex flex-col gap-1 text-[10px]">
@@ -413,7 +506,7 @@ export const ModuleClientCRM: React.FC<Props> = ({ clients, setClients, onBatchA
                 </div>
             )}
 
-            {/* Modal */}
+            {/* Modal: Client Edit */}
             {isModalOpen && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
                     <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto animate-fade-in custom-scrollbar">
@@ -531,6 +624,91 @@ export const ModuleClientCRM: React.FC<Props> = ({ clients, setClients, onBatchA
                                 </button>
                             </div>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Modal: Contact Management */}
+            {isContactModalOpen && currentClientForContacts && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+                    <div className="bg-white rounded-3xl shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col animate-fade-in">
+                        <div className="px-8 py-6 border-b border-slate-100 flex items-center justify-between bg-slate-50 rounded-t-3xl">
+                            <div>
+                                <h3 className="text-xl font-black text-slate-800 flex items-center gap-2">
+                                    <Users size={20} className="text-blue-600"/> {currentClientForContacts.name} - Contacts
+                                </h3>
+                                <p className="text-xs text-slate-500 mt-1">Manage decision makers and buyers for this client.</p>
+                            </div>
+                            <button onClick={() => setIsContactModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X size={24} /></button>
+                        </div>
+
+                        <div className="flex-1 overflow-hidden flex flex-col md:flex-row">
+                            {/* Left: Add New / Import */}
+                            <div className="w-full md:w-1/3 bg-slate-50 p-6 border-r border-slate-100 overflow-y-auto custom-scrollbar">
+                                <h4 className="font-bold text-slate-700 mb-4 flex items-center gap-2 text-sm"><UserPlus size={16}/> Add New Contact</h4>
+                                <form onSubmit={handleSaveContact} className="space-y-3 mb-6">
+                                    <input name="name" required placeholder="Name (e.g. John Doe)" className="w-full input-base" />
+                                    <input name="title" required placeholder="Title (e.g. CEO)" className="w-full input-base" />
+                                    <input name="email" type="email" placeholder="Email" className="w-full input-base" />
+                                    <select name="type" className="w-full input-base">
+                                        <option value="Other">Other</option>
+                                        <option value="CEO">CEO / Founder</option>
+                                        <option value="Buyer">Buyer / Purchasing</option>
+                                    </select>
+                                    <input name="linkedin" placeholder="LinkedIn URL (Optional)" className="w-full input-base" />
+                                    <button type="submit" className="w-full bg-blue-600 text-white py-2 rounded-lg font-bold text-sm hover:bg-blue-700">Add Contact</button>
+                                </form>
+
+                                <div className="border-t border-slate-200 pt-6">
+                                    <h4 className="font-bold text-slate-700 mb-3 flex items-center gap-2 text-sm"><Upload size={16}/> Bulk Import</h4>
+                                    <button 
+                                        type="button"
+                                        onClick={() => contactFileInputRef.current?.click()} 
+                                        className="w-full bg-white border border-slate-300 text-slate-600 py-2 rounded-lg font-bold text-sm hover:bg-slate-100 mb-2"
+                                    >
+                                        Upload Excel File
+                                    </button>
+                                    <button 
+                                        type="button"
+                                        onClick={handleDownloadContactTemplate}
+                                        className="w-full text-blue-600 text-xs font-bold hover:underline text-center"
+                                    >
+                                        Download Template
+                                    </button>
+                                    <input type="file" ref={contactFileInputRef} className="hidden" accept=".xlsx,.xls,.csv" onChange={handleImportContacts} />
+                                </div>
+                            </div>
+
+                            {/* Right: Contact List */}
+                            <div className="w-full md:w-2/3 p-6 overflow-y-auto custom-scrollbar bg-white">
+                                <h4 className="font-bold text-slate-700 mb-4 text-sm">Existing Contacts ({currentClientForContacts.contacts?.length || 0})</h4>
+                                {(!currentClientForContacts.contacts || currentClientForContacts.contacts.length === 0) ? (
+                                    <div className="text-center py-10 text-slate-400 border-2 border-dashed border-slate-100 rounded-xl">
+                                        No contacts found. Add manually or import.
+                                    </div>
+                                ) : (
+                                    <div className="space-y-3">
+                                        {currentClientForContacts.contacts.map((c, idx) => (
+                                            <div key={idx} className="p-4 rounded-xl border border-slate-200 hover:border-blue-300 transition-colors flex justify-between items-start group">
+                                                <div>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="font-bold text-slate-800">{c.name}</span>
+                                                        <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase ${c.type === 'CEO' ? 'bg-purple-100 text-purple-700' : c.type === 'Buyer' ? 'bg-orange-100 text-orange-700' : 'bg-slate-100 text-slate-500'}`}>{c.type}</span>
+                                                    </div>
+                                                    <div className="text-xs text-slate-500 mt-1 font-medium">{c.title}</div>
+                                                    <div className="text-xs text-blue-600 mt-1 flex items-center gap-1">
+                                                        <Mail size={10} /> {c.emailGuess || 'No Email'}
+                                                    </div>
+                                                </div>
+                                                <button onClick={() => handleDeleteContact(idx)} className="text-slate-300 hover:text-red-500 p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-all">
+                                                    <Trash2 size={16} />
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
                     </div>
                 </div>
             )}

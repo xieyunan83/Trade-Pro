@@ -204,7 +204,29 @@ const App: React.FC = () => {
   const loadFromHistory = (item: HistoryItem) => { setAnalysisData(item.data); setDomainInput(item.domain); setActiveModule(ModuleType.BACKGROUND); setHistoryOpen(false); setErrorMsg(null); };
   const handleExportReport = () => { if (analysisData) exportToPPT(analysisData); };
   
-  const handleAddToCRM = () => { if (!analysisData) return; const newClient: Client = { id: Date.now().toString(), name: analysisData.companyInfo.name, website: analysisData.companyInfo.website, country: analysisData.companyInfo.headquarters.split(',').pop()?.trim() || 'Global', type: '进口商', status: '新建/潜在', productType: analysisData.businessScope.coreProducts[0] || 'N/A', priceRange: analysisData.businessScope.priceSensitivity || 'Medium', isSampleNeeded: false, hasAnalyzed: true, lastOrderDate: '', lastContactSent: '', lastContactReceived: '', nextFollowUpDate: new Date().toISOString().split('T')[0], activityLog: `Added from Deep Analysis. Rev: ${analysisData.financials.revenueEstimate}.` }; setCrmClients(prev => [newClient, ...prev]); alert("Added to CRM!"); };
+  const handleAddToCRM = () => { 
+      if (!analysisData) return; 
+      const newClient: Client = { 
+          id: Date.now().toString(), 
+          name: analysisData.companyInfo.name, 
+          website: analysisData.companyInfo.website, 
+          country: analysisData.companyInfo.headquarters.split(',').pop()?.trim() || 'Global', 
+          type: '进口商', 
+          status: '新建/潜在', 
+          productType: analysisData.businessScope.coreProducts[0] || 'N/A', 
+          priceRange: analysisData.businessScope.priceSensitivity || 'Medium', 
+          isSampleNeeded: false, 
+          hasAnalyzed: true, 
+          lastOrderDate: '', 
+          lastContactSent: '', 
+          lastContactReceived: '', 
+          nextFollowUpDate: new Date().toISOString().split('T')[0], 
+          activityLog: `Added from Deep Analysis. Rev: ${analysisData.financials.revenueEstimate}.`,
+          contacts: analysisData.decisionMakers || [] // Auto-populate contacts
+      }; 
+      setCrmClients(prev => [newClient, ...prev]); 
+      alert("Added to CRM with " + (newClient.contacts?.length || 0) + " contacts!"); 
+  };
   
   // RESTORED: Handle batch adding clients from Discovery
   const handleBatchAddToCRM = (results: ClientSearchResult[]) => { 
@@ -224,7 +246,8 @@ const App: React.FC = () => {
           lastContactSent: '', 
           lastContactReceived: '', 
           nextFollowUpDate: new Date().toISOString().split('T')[0], 
-          activityLog: `Batch Added from Discovery. Desc: ${r.description}` 
+          activityLog: `Batch Added from Discovery. Desc: ${r.description}`,
+          contacts: [] // Empty contacts for discovery
       }));
 
       setCrmClients(prev => {
@@ -240,7 +263,13 @@ const App: React.FC = () => {
   const updateCrmStatus = (analysis: AnalysisResult) => { 
       setCrmClients(prev => prev.map(c => {
           if (c.website?.toLowerCase() === analysis.companyInfo.website?.toLowerCase() || c.name === analysis.companyInfo.name) {
-              return { ...c, hasAnalyzed: true, activityLog: c.activityLog + ` [Analyzed ${new Date().toLocaleDateString()}]` };
+              return { 
+                  ...c, 
+                  hasAnalyzed: true, 
+                  activityLog: c.activityLog + ` [Analyzed ${new Date().toLocaleDateString()}]`,
+                  // Optionally merge contacts, here we just keep existing unless explicit sync requested
+                  contacts: (c.contacts && c.contacts.length > 0) ? c.contacts : (analysis.decisionMakers || [])
+              };
           }
           return c;
       }));
@@ -258,13 +287,6 @@ const App: React.FC = () => {
 
   const generateQueue = async (keyword: string, productContext: string, countries: string[], productImages: string[], clientType: string) => { 
       setBatchModalOpen(false); 
-      // Placeholder generation logic as real one is complex for client-side, 
-      // here we assume we are just adding pending tasks based on a search
-      // For this specific 'PromoGenerator' flow, we often need to search FIRST.
-      // But here we'll assume the user wants to search AND add.
-      // Since this is a complex flow, let's simplify: 
-      // We will perform a search for EACH country, find top 5 results, and add to queue.
-      
       setIsAutomating(true);
       const newTasks: AutomationResult[] = [];
       
