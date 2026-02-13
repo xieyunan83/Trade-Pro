@@ -283,6 +283,7 @@ export interface EmailTemplate {
     subject: string;
     senderName?: string; // New field for Sender Alias override
     body: string; // HTML content
+    attachments?: string[]; // List of file names (visual only for now)
     lastUpdated: number;
 }
 
