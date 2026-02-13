@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AliyunConfig, EmailTemplate, EmailTask, Client } from '../types';
 import { getAliyunConfig, saveAliyunConfig, loadEmailTemplates, saveEmailTemplate, deleteEmailTemplate, sendSingleMail } from '../services/aliyunService';
-import { Mail, Settings, Layout, Send, Save, Plus, Trash2, PlayCircle, AlertTriangle, CheckCircle2, Loader2, X, Users, RefreshCw, Bold, Italic, Underline, List, Link as LinkIcon, AlignLeft, AlignCenter, AlignRight, Image as ImageIcon, Upload, Download, FileSpreadsheet, ChevronDown, ChevronRight, User, Filter, Paperclip, Table, Type, GripVertical, Reply, Smile, MoreHorizontal } from 'lucide-react';
+import { Mail, Settings, Layout, Send, Save, Plus, Trash2, PlayCircle, AlertTriangle, CheckCircle2, Loader2, X, Users, RefreshCw, Bold, Italic, Underline, List, Link as LinkIcon, AlignLeft, AlignCenter, AlignRight, Image as ImageIcon, Upload, Download, FileSpreadsheet, ChevronDown, ChevronRight, User, Filter, Paperclip, Table, Type, GripVertical, Reply, Smile, MoreHorizontal, Baseline } from 'lucide-react';
 
 // Use global XLSX if available
 declare const XLSX: any;
@@ -97,6 +97,16 @@ const RichTextToolbar: React.FC<{ onCommand: (cmd: string, val?: string) => void
             <button type="button" onMouseDown={(e) => handleAction(e, 'italic')} className="p-1.5 hover:bg-slate-200 rounded text-slate-600 italic" title="Italic"><Italic size={16}/></button>
             <button type="button" onMouseDown={(e) => handleAction(e, 'underline')} className="p-1.5 hover:bg-slate-200 rounded text-slate-600 underline" title="Underline"><Underline size={16}/></button>
             
+            {/* Color Picker (NEW) */}
+            <div className="relative group p-1.5 hover:bg-slate-200 rounded cursor-pointer flex items-center justify-center" title="Text Color">
+                <Baseline size={16} className="text-slate-700"/>
+                <input 
+                    type="color" 
+                    onChange={(e) => onCommand('foreColor', e.target.value)}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                />
+            </div>
+
             <div className="w-px h-5 bg-slate-300 mx-1"></div>
 
             {/* Alignment */}
@@ -285,10 +295,11 @@ export const ModuleEmailCampaign: React.FC<Props> = ({ crmClients, onAddClients 
             setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: 'sending' } : t));
 
             // CRITICAL: Variable Replacement for both Subject and Body
+            // This ensures One-to-One personalization
             const subject = template.subject
                 .replace(/{Name}/g, task.recipientName)
                 .replace(/{Company}/g, task.companyName)
-                .replace(/{Title}/g, "Manager"); // Default fallback
+                .replace(/{Title}/g, "Manager"); 
             
             const body = template.body
                 .replace(/{Name}/g, task.recipientName)
@@ -339,7 +350,6 @@ export const ModuleEmailCampaign: React.FC<Props> = ({ crmClients, onAddClients 
             {activeTab === 'settings' && (
                 <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm max-w-2xl mx-auto">
                     <h3 className="text-xl font-bold text-slate-800 mb-6 flex items-center gap-2"><Settings size={20}/> Aliyun Configuration</h3>
-                    {/* (Existing configuration form layout preserved) */}
                     <div className="space-y-4">
                         <div className="bg-orange-50 border border-orange-100 p-4 rounded-xl text-xs text-orange-800 mb-4 flex gap-2"><AlertTriangle size={16} className="shrink-0"/><div><strong>Important:</strong> Ensure 'Allow CORS' extension is ON.</div></div>
                         <div className="grid grid-cols-2 gap-4">
