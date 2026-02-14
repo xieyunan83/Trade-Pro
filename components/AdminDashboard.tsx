@@ -435,7 +435,7 @@ const SystemSettings: React.FC = () => {
                 return {
                     ...c,
                     baseUrl: "https://integrate.api.nvidia.com/v1",
-                    modelId: "meta/llama-3.2-90b-vision-instruct"
+                    modelId: "meta/llama-3.3-70b-instruct" // Recommended for text tasks
                 };
             }
             return c;
@@ -482,17 +482,16 @@ const SystemSettings: React.FC = () => {
                 </div>
             </div>
             
-            {/* Warning Banner for CORS */}
-            <div className="bg-amber-50 border border-amber-200 p-4 rounded-xl mb-6 text-sm text-amber-900 flex items-start gap-3">
-                <AlertTriangle size={20} className="shrink-0 mt-0.5 text-amber-600"/>
+            {/* Helpful Banner for Connectivity */}
+            <div className="bg-blue-50 border border-blue-200 p-4 rounded-xl mb-6 text-sm text-blue-900 flex items-start gap-3">
+                <Info size={20} className="shrink-0 mt-0.5 text-blue-600"/>
                 <div>
-                    <div className="font-bold mb-1">Important: CORS & Browser Restrictions</div>
+                    <div className="font-bold mb-1">Network Connection Help</div>
                     <p className="opacity-90 leading-relaxed">
-                        NVIDIA, OpenAI, and other AI APIs strictly block requests directly from web browsers (localhost/netlify/vercel) for security.
-                        If you see <span className="font-mono bg-amber-100 px-1 rounded">Failed to fetch</span>, it is a CORS error.
+                        If you encounter <strong>Network Error</strong> or <strong>Failed to fetch</strong>, the system will automatically attempt to use a proxy server to bypass CORS.
                     </p>
-                    <p className="mt-2 font-bold text-amber-700">
-                        Solution: Install the <a href="https://chromewebstore.google.com/detail/allow-cors-access-control/lhobafahddgcelffkeicbaginigeejlf" target="_blank" className="underline hover:text-amber-900">"Allow CORS" Chrome Extension</a> and turn it ON.
+                    <p className="mt-2 text-xs font-medium">
+                        <strong>For China Users:</strong> Please ensure you have a stable VPN connection if accessing international APIs (Google, NVIDIA, etc.) directly. The auto-proxy might also be blocked without VPN.
                     </p>
                 </div>
             </div>
@@ -561,7 +560,7 @@ const SystemSettings: React.FC = () => {
                                     <input 
                                         type="text" 
                                         className="w-full p-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-mono text-sm text-slate-900 bg-white shadow-sm"
-                                        placeholder="meta/llama-3.2-90b-vision-instruct"
+                                        placeholder="meta/llama-3.3-70b-instruct"
                                         value={config.modelId}
                                         onChange={(e) => updateConfig(config.id, 'modelId', e.target.value)}
                                     />

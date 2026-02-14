@@ -151,8 +151,9 @@ const callOpenAICompatible = async (config: ApiConfig, messages: any[], jsonMode
         // payload.response_format = { type: "json_object" }; 
     }
 
-    try {
-        const response = await fetch(baseUrl, {
+    // Helper to execute fetch
+    const doFetch = async (targetUrl: string) => {
+        return fetch(targetUrl, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -160,6 +161,24 @@ const callOpenAICompatible = async (config: ApiConfig, messages: any[], jsonMode
             },
             body: JSON.stringify(payload)
         });
+    };
+
+    try {
+        let response;
+        try {
+            // Attempt 1: Direct Connection
+            response = await doFetch(baseUrl);
+        } catch (e: any) {
+            // Check for CORS/Network error
+            if (e.message === 'Failed to fetch') {
+                console.warn("Direct fetch failed (CORS/Network), attempting via Proxy...");
+                // Attempt 2: CORS Proxy
+                // We use corsproxy.io as a zero-config fallback
+                response = await doFetch(`https://corsproxy.io/?${encodeURIComponent(baseUrl)}`);
+            } else {
+                throw e; // Rethrow other errors
+            }
+        }
 
         if (!response.ok) {
             const errText = await response.text();
@@ -175,7 +194,7 @@ const callOpenAICompatible = async (config: ApiConfig, messages: any[], jsonMode
     } catch (e: any) {
         console.error("OpenAI Adapter Failed:", e);
         if (e.message === 'Failed to fetch') {
-            throw new Error("Network Error (CORS). Browser blocked the request. Please install 'Allow CORS' extension or use a Proxy.");
+            throw new Error("Network Error. Please check your Internet/VPN connection. (Direct & Proxy both failed)");
         }
         throw e;
     }
