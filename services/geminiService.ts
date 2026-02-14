@@ -1,12 +1,9 @@
 
-
 import { GoogleGenAI, Type, Part } from "@google/genai";
 import { AnalysisResult, ClientSearchResult, DecisionMaker, ChatMessage, KnowledgeFile, KeywordExtractionResult, MailGroup, EmailTemplateRequest, ApiConfig, TaskType } from "../types";
 import { getAllFilesFromDB } from "./db";
 
 // API Keys Configuration
-// SECURITY UPDATE: Keys are now read from process.env to prevent leaking on GitHub.
-// Please set these in your .env file locally, or in your Vercel/Netlify dashboard.
 const HUNTER_API_KEY = process.env.HUNTER_API_KEY || ''; 
 const FINDYMAIL_API_KEY = process.env.FINDYMAIL_API_KEY || ''; 
 const ANYMAIL_FINDER_API_KEY = process.env.ANYMAIL_FINDER_API_KEY || '';
@@ -126,25 +123,32 @@ export const getGeminiConfig = (): ApiConfig[] => {
     return [];
 };
 
-// --- OpenAI Adapter for Relay Services (hiapi, etc) ---
+// --- OpenAI Adapter for Relay Services (hiapi, nvidia, deepseek etc) ---
 const callOpenAICompatible = async (config: ApiConfig, messages: any[], jsonMode: boolean = false): Promise<string> => {
-    // Construct URL: remove trailing slash, ensure /chat/completions
-    let baseUrl = config.baseUrl || "https://api.openai.com/v1";
+    // Construct URL robustly
+    let baseUrl = config.baseUrl.trim();
     if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
+    
+    // Auto-append chat/completions if not present (Standard OpenAI format)
+    // IMPORTANT: NVIDIA and many relays expect this path.
     if (!baseUrl.endsWith('/chat/completions')) baseUrl += '/chat/completions';
 
     // Model Mapping fallback
-    let model = config.modelId || 'gemini-1.5-pro';
+    let model = config.modelId?.trim() || 'gemini-1.5-pro';
     
     const payload: any = {
         model: model,
         messages: messages,
         temperature: 0.7,
-        stream: false
+        stream: false,
+        max_tokens: 4096 // Some providers require this
     };
 
     if (jsonMode) {
-        payload.response_format = { type: "json_object" };
+        // Note: Not all providers support response_format. 
+        // NVIDIA Llama 3 does via specific prompting or struct output, but for now we keep it simple.
+        // We inject a system prompt for JSON instead of relying on the flag if it's uncertain.
+        // payload.response_format = { type: "json_object" }; 
     }
 
     try {
@@ -152,20 +156,27 @@ const callOpenAICompatible = async (config: ApiConfig, messages: any[], jsonMode
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${config.apiKey}`
+                'Authorization': `Bearer ${config.apiKey.trim()}`
             },
             body: JSON.stringify(payload)
         });
 
         if (!response.ok) {
             const errText = await response.text();
-            throw new Error(`Relay API Error (${response.status}): ${errText}`);
+            let safeErr = errText;
+            try { safeErr = JSON.parse(errText).error?.message || errText; } catch(e){}
+            throw new Error(`API Error (${response.status}): ${safeErr}`);
         }
 
         const data = await response.json();
-        return data.choices?.[0]?.message?.content || "";
+        const content = data.choices?.[0]?.message?.content;
+        if (!content) throw new Error("Empty response from API");
+        return content;
     } catch (e: any) {
         console.error("OpenAI Adapter Failed:", e);
+        if (e.message === 'Failed to fetch') {
+            throw new Error("Network Error (CORS). Browser blocked the request. Please install 'Allow CORS' extension or use a Proxy.");
+        }
         throw e;
     }
 };
@@ -265,9 +276,16 @@ const generateContentUnified = async (
 
 export const testApiKey = async (apiKey: string, baseUrl?: string, modelId?: string): Promise<{ success: boolean; message: string }> => {
     try {
-        const config = { id: 'test', apiKey, baseUrl: baseUrl || '', modelId, taskAssignment: 'default' as TaskType };
+        // Ensure we test with a valid model and url
+        const config = { 
+            id: 'test', 
+            apiKey: apiKey.trim(), 
+            baseUrl: baseUrl?.trim() || '', 
+            modelId: modelId?.trim(), 
+            taskAssignment: 'default' as TaskType 
+        };
         await callOpenAICompatible(config, [{ role: 'user', content: 'Ping' }]);
-        return { success: true, message: "Relay Connection Successful! ✅" };
+        return { success: true, message: "Connection Successful! ✅" };
     } catch (e: any) {
         return { success: false, message: `Failed: ${e.message}` };
     }

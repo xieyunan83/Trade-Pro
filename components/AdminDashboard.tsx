@@ -429,6 +429,20 @@ const SystemSettings: React.FC = () => {
         saveConfigsToStateAndCloud([...configs, newConfig]);
     };
 
+    const applyNvidiaPreset = (id: string) => {
+        const updated = configs.map(c => {
+            if (c.id === id) {
+                return {
+                    ...c,
+                    baseUrl: "https://integrate.api.nvidia.com/v1",
+                    modelId: "meta/llama-3.2-90b-vision-instruct"
+                };
+            }
+            return c;
+        });
+        saveConfigsToStateAndCloud(updated);
+    };
+
     const removeConfig = (id: string) => {
         if (configs.length > 1 && confirm("确认删除此 API 配置？")) {
             saveConfigsToStateAndCloud(configs.filter(c => c.id !== id));
@@ -468,6 +482,21 @@ const SystemSettings: React.FC = () => {
                 </div>
             </div>
             
+            {/* Warning Banner for CORS */}
+            <div className="bg-amber-50 border border-amber-200 p-4 rounded-xl mb-6 text-sm text-amber-900 flex items-start gap-3">
+                <AlertTriangle size={20} className="shrink-0 mt-0.5 text-amber-600"/>
+                <div>
+                    <div className="font-bold mb-1">Important: CORS & Browser Restrictions</div>
+                    <p className="opacity-90 leading-relaxed">
+                        NVIDIA, OpenAI, and other AI APIs strictly block requests directly from web browsers (localhost/netlify/vercel) for security.
+                        If you see <span className="font-mono bg-amber-100 px-1 rounded">Failed to fetch</span>, it is a CORS error.
+                    </p>
+                    <p className="mt-2 font-bold text-amber-700">
+                        Solution: Install the <a href="https://chromewebstore.google.com/detail/allow-cors-access-control/lhobafahddgcelffkeicbaginigeejlf" target="_blank" className="underline hover:text-amber-900">"Allow CORS" Chrome Extension</a> and turn it ON.
+                    </p>
+                </div>
+            </div>
+            
             {isLoading && <div className="p-8 text-center text-slate-500"><Loader2 className="animate-spin inline mr-2"/> Loading Cloud Configs...</div>}
 
             <div className="flex flex-col gap-4">
@@ -483,7 +512,10 @@ const SystemSettings: React.FC = () => {
                                 </span>
                             )}
                         </div>
-                        <div className="absolute top-4 right-4">
+                        <div className="absolute top-4 right-4 flex gap-2">
+                            <button onClick={() => applyNvidiaPreset(config.id)} className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded font-bold border border-green-200 hover:bg-green-200 transition-colors">
+                                Apply NVIDIA Preset
+                            </button>
                             <button onClick={() => removeConfig(config.id)} className="text-slate-400 hover:text-red-500 p-1"><Trash2 size={18}/></button>
                         </div>
 
@@ -508,7 +540,7 @@ const SystemSettings: React.FC = () => {
                                 <input 
                                     type="text" 
                                     className="w-full p-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-mono text-sm text-slate-900 bg-white shadow-sm"
-                                    placeholder="https://hiapi.online/v1"
+                                    placeholder="https://integrate.api.nvidia.com/v1"
                                     value={config.baseUrl}
                                     onChange={(e) => updateConfig(config.id, 'baseUrl', e.target.value)}
                                 />
@@ -518,7 +550,7 @@ const SystemSettings: React.FC = () => {
                                 <input 
                                     type="password" 
                                     className="w-full p-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-mono text-sm text-slate-900 bg-white shadow-sm"
-                                    placeholder="sk-..."
+                                    placeholder="nvapi-..."
                                     value={config.apiKey}
                                     onChange={(e) => updateConfig(config.id, 'apiKey', e.target.value)}
                                 />
@@ -529,7 +561,7 @@ const SystemSettings: React.FC = () => {
                                     <input 
                                         type="text" 
                                         className="w-full p-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-mono text-sm text-slate-900 bg-white shadow-sm"
-                                        placeholder="gemini-1.5-pro"
+                                        placeholder="meta/llama-3.2-90b-vision-instruct"
                                         value={config.modelId}
                                         onChange={(e) => updateConfig(config.id, 'modelId', e.target.value)}
                                     />
