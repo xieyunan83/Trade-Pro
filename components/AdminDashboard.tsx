@@ -596,10 +596,10 @@ const SystemSettings: React.FC = () => {
     );
 };
 
-// ... Rest of UserManagement and KnowledgeManagement (No changes) ...
+// ... UserManagement and KnowledgeManagement ...
+// Re-inserting unchanged code to maintain file structure integrity
+
 const UserManagement: React.FC = () => {
-    // (Existing UserManagement code - kept same structure)
-    // ...
     const [users, setUsers] = useState<User[]>([]);
     const [isAdding, setIsAdding] = useState(false);
     const [isSyncing, setIsSyncing] = useState(false);
@@ -714,8 +714,6 @@ const UserManagement: React.FC = () => {
 };
 
 const KnowledgeManagement: React.FC = () => {
-    // (Existing KnowledgeManagement code - kept same structure)
-    // ...
     const [files, setFiles] = useState<KnowledgeFile[]>([]);
     const [isSyncing, setIsSyncing] = useState(false);
     const [isUploading, setIsUploading] = useState(false);

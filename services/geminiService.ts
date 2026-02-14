@@ -15,8 +15,8 @@ const NATIVE_MODEL = 'gemini-3-pro-preview';
 const PROXY_LADDER = [
     '', // 1. Direct Connection (Best for Localhost/VPN)
     'https://corsproxy.io/?', // 2. Most stable public proxy
-    'https://thingproxy.freeboard.io/fetch/', // 3. Backup
-    'https://api.codetabs.com/v1/proxy?quest=' // 4. Last resort (often slow)
+    'https://api.allorigins.win/raw?url=', // 3. Backup
+    'https://thingproxy.freeboard.io/fetch/', // 4. Backup
 ];
 
 const SYSTEM_INSTRUCTION = `
@@ -132,14 +132,17 @@ export const getGeminiConfig = (): ApiConfig[] => {
     return [];
 };
 
-// --- OpenAI Adapter for Relay Services (hiapi, nvidia, deepseek etc) ---
+// --- OpenAI Adapter for Relay Services (hiapi, nvidia, deepseek, openrouter etc) ---
 const callOpenAICompatible = async (config: ApiConfig, messages: any[], jsonMode: boolean = false): Promise<string> => {
     // Construct URL robustly
     let baseUrl = config.baseUrl.trim();
     if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
     
     // Auto-append chat/completions if not present (Standard OpenAI format)
-    if (!baseUrl.endsWith('/chat/completions')) baseUrl += '/chat/completions';
+    // EXCEPTION: Some proxies might not need this, but most do.
+    if (!baseUrl.endsWith('/chat/completions') && !baseUrl.includes('generateContent')) {
+        baseUrl += '/chat/completions';
+    }
 
     // Model Mapping fallback
     let model = config.modelId?.trim() || 'gemini-1.5-pro';
@@ -152,16 +155,29 @@ const callOpenAICompatible = async (config: ApiConfig, messages: any[], jsonMode
         max_tokens: 4096 
     };
 
+    if (jsonMode) {
+        payload.response_format = { type: "json_object" };
+    }
+
     // Helper to execute fetch
     const doFetch = async (proxyPrefix: string, targetUrl: string) => {
         const finalUrl = proxyPrefix ? `${proxyPrefix}${encodeURIComponent(targetUrl)}` : targetUrl;
         
+        const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${config.apiKey.trim()}`
+        };
+
+        // --- CRITICAL FIX FOR OPENROUTER ---
+        // OpenRouter requires these headers to identify the app and prevent blocks
+        if (targetUrl.includes('openrouter')) {
+            headers['HTTP-Referer'] = window.location.href; // Site URL
+            headers['X-Title'] = 'Trade Scout Pro'; // App Name
+        }
+
         return fetch(finalUrl, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${config.apiKey.trim()}`
-            },
+            headers: headers,
             body: JSON.stringify(payload)
         });
     };
@@ -172,62 +188,76 @@ const callOpenAICompatible = async (config: ApiConfig, messages: any[], jsonMode
     // Custom Proxy from LocalStorage
     const customProxy = typeof localStorage !== 'undefined' ? localStorage.getItem('trade_scout_custom_proxy') : '';
     
-    // If the URL is "integrate.api.nvidia.com", we strongly suspect it needs a proxy if in browser.
-    // We prioritize the custom proxy, then the proxy ladder.
-    let attempts = customProxy ? [customProxy, ...PROXY_LADDER] : PROXY_LADDER;
-    
-    // Optimization: If user is using a known relay (hiapi, deepseek, openrouter), prioritize DIRECT connection
-    // because proxies often break signature/auth headers for these services.
-    if (baseUrl.includes('hiapi') || baseUrl.includes('deepseek') || baseUrl.includes('openrouter') || baseUrl.includes('127.0.0.1')) {
-        attempts = ['', ...attempts.filter(p => p !== '')]; // Move direct to front
+    // Logic: 
+    // 1. If OpenRouter/HiAPI/SiliconFlow, try DIRECT first (they support CORS usually).
+    // 2. If blocked, try Proxy.
+    let attempts = PROXY_LADDER;
+    if (customProxy) attempts = [customProxy, ...attempts];
+
+    // Priority adjustment: Relay services often fail with public proxies due to header stripping.
+    // So we ensure '' (Direct) is first for them.
+    if (baseUrl.includes('openrouter') || baseUrl.includes('siliconflow') || baseUrl.includes('hiapi')) {
+        attempts = ['', ...attempts.filter(p => p !== '')]; 
     }
 
     for (const proxy of attempts) {
         try {
-            if (proxy) console.log(`[Adapter] Trying via Proxy: ${proxy}...`);
-            else console.log(`[Adapter] Trying Direct Connection...`);
+            // console.log(`[Adapter] Connecting via: ${proxy ? proxy : 'Direct'} to ${baseUrl}`);
 
             const response = await doFetch(proxy, baseUrl);
 
             if (!response.ok) {
                 const errText = await response.text();
                 
-                // If 403/404/500 on a PROXY, it means the proxy failed, not necessarily the API. Try next.
-                if ((response.status === 403 || response.status === 404 || response.status >= 500) && proxy) {
-                    throw new Error(`Proxy error (${response.status})`);
-                }
-                
-                // If 401 Unauthorized, the KEY is wrong. Do not retry other proxies.
+                // If 401, key is wrong. STOP.
                 if (response.status === 401) {
                     throw new Error(`API Key Rejected (401). Please check your Key.`);
                 }
+                
+                // If 402, Quota exceeded. STOP.
+                if (response.status === 402) {
+                    throw new Error(`Insufficient Quota (402). Check your balance.`);
+                }
 
+                // If 403/404/5xx, it might be network/proxy issue. Continue to next proxy.
+                if (response.status >= 500 || response.status === 403) {
+                    console.warn(`Attempt failed with status ${response.status}. Trying next proxy...`);
+                    lastError = new Error(`HTTP ${response.status}: ${errText}`);
+                    continue; 
+                }
+
+                // Other errors
                 let safeErr = errText;
                 try { safeErr = JSON.parse(errText).error?.message || errText; } catch(e){}
                 throw new Error(`API Error (${response.status}): ${safeErr}`);
             }
 
             const data = await response.json();
-            const content = data.choices?.[0]?.message?.content;
-            if (!content) throw new Error("Empty response from API");
+            
+            // Handle different response structures
+            const content = data.choices?.[0]?.message?.content || data.candidates?.[0]?.content?.parts?.[0]?.text;
+            
+            if (!content) {
+                console.error("Empty Response Structure:", data);
+                throw new Error("Received empty response from API (Structure mismatch)");
+            }
             return content; // Success!
 
         } catch (e: any) {
-            console.warn(`Attempt failed (${proxy || 'Direct'}):`, e.message);
             lastError = e;
-            // Fatal errors that shouldn't trigger retry
-            if (e.message.includes('401') || e.message.includes('Key Rejected')) {
+            // Fatal errors that shouldn't trigger retry loop
+            if (e.message.includes('401') || e.message.includes('402') || e.message.includes('Key Rejected')) {
                 throw e;
             }
         }
     }
 
     // Comprehensive Error Message
-    let errorMsg = `[v3] Connection Failed. `;
-    if (baseUrl.includes('nvidia')) {
-        errorMsg += `NVIDIA Direct is blocked by browsers/CORS. Please use a Relay Service (like HiAPI/OpenRouter) or a Global VPN.`;
+    let errorMsg = `[Connection Failed] `;
+    if (baseUrl.includes('openrouter')) {
+        errorMsg += `OpenRouter connection failed. Ensure your API Key is valid and you have credits. If in China, try using a global VPN mode.`;
     } else {
-        errorMsg += `Last Error: ${lastError?.message}. Check your URL and Network.`;
+        errorMsg += `Last Error: ${lastError?.message || 'Network Error'}. Check URL/Network.`;
     }
     throw new Error(errorMsg);
 };
@@ -291,8 +321,6 @@ const generateContentUnified = async (
 
     for (const config of sortedConfigs) {
         try {
-            console.log(`Trying Strategy 2: Admin Key ID ${config.id} (${config.baseUrl})...`);
-            
             // OpenAI Adapter Mode for Relay
             const messages: any[] = [];
             if (systemInfo) messages.push({ role: 'system', content: systemInfo });
@@ -335,7 +363,7 @@ export const testApiKey = async (apiKey: string, baseUrl?: string, modelId?: str
             modelId: modelId?.trim(), 
             taskAssignment: 'default' as TaskType 
         };
-        await callOpenAICompatible(config, [{ role: 'user', content: 'Ping' }]);
+        await callOpenAICompatible(config, [{ role: 'user', content: 'Ping. Just say pong.' }]);
         return { success: true, message: "Connection Successful! ✅" };
     } catch (e: any) {
         return { success: false, message: `Failed: ${e.message}` };
