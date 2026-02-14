@@ -23,31 +23,31 @@ interface Props {
     currentUser: User;
 }
 
-// --- UPDATED PRESETS (Fixed for current API availability) ---
+// --- UPDATED PRESETS ---
 const PROVIDER_PRESETS = [
     {
-        name: "SiliconFlow (DeepSeek V3) - ⚡️ 已有Key推荐",
+        name: "SiliconFlow (DeepSeek V3) - ⚡️ 性价比之王",
         baseUrl: "https://api.siliconflow.cn/v1",
         modelId: "deepseek-ai/DeepSeek-V3",
-        note: "您已有此平台Key。DeepSeek V3 英语能力超越 Llama 3，外贸首选。"
+        note: "余额查询：cloud.siliconflow.cn -> 计费管理。速度快，中文好。"
     },
     {
-        name: "Gemini Pro (Google) - 🌍 搜索最强",
-        baseUrl: "https://hiapi.online/v1",
-        modelId: "gemini-1.5-pro",
-        note: "需 HiAPI Key。支持谷歌联网，数据最新。"
+        name: "OpenRouter (Gemini Pro 1.5) - 🇺🇸 谷歌聚合",
+        baseUrl: "https://openrouter.ai/api/v1",
+        modelId: "google/gemini-pro-1.5",
+        note: "需 OpenRouter Key。通过 OR 调用谷歌模型，无需梯子，网络稳定。"
     },
     {
-        name: "OpenRouter (Llama 3.1) - 🇺🇸 美国原版",
+        name: "OpenRouter (Llama 3.1) - 🇺🇸 Meta原版",
         baseUrl: "https://openrouter.ai/api/v1",
         modelId: "meta-llama/llama-3.1-70b-instruct",
-        note: "需去 openrouter.ai 获取 Key。如果您必须用 Llama 请选此项。"
+        note: "需 OpenRouter Key。美国原版 Llama，适合纯英文环境。"
     },
     {
-        name: "SiliconFlow (Qwen 2.5) - 🇨🇳 通义千问",
-        baseUrl: "https://api.siliconflow.cn/v1",
-        modelId: "Qwen/Qwen2.5-72B-Instruct",
-        note: "备用选项。阿里巴巴的开源模型，也很强。"
+        name: "Gemini Pro (HiAPI Relay) - 🌍 谷歌中转",
+        baseUrl: "https://hiapi.online/v1",
+        modelId: "gemini-1.5-pro",
+        note: "需 HiAPI Key。专门做谷歌中转的服务商。"
     }
 ];
 
@@ -479,7 +479,8 @@ const SystemSettings: React.FC = () => {
                         <strong>💡 解决方案:</strong> 
                         <ul className="list-disc pl-4 mt-1">
                             <li><strong>我有 SiliconFlow Key:</strong> 请选择第一项预设 "SiliconFlow (DeepSeek V3)"，这是目前性价比最高的选择。</li>
-                            <li><strong>我必须用 Llama 3:</strong> 请去 OpenRouter.ai 申请 Key，然后选择第三项预设。</li>
+                            <li><strong>我必须用 Llama 3:</strong> 请去 OpenRouter.ai 申请 Key，然后选择 "OpenRouter" 预设。</li>
+                            <li><strong>我想用谷歌 (Gemini):</strong> 请选择 "OpenRouter (Gemini)" 预设，填入 OpenRouter Key 即可。</li>
                         </ul>
                     </div>
                     
@@ -595,10 +596,10 @@ const SystemSettings: React.FC = () => {
     );
 };
 
-// ... UserManagement and KnowledgeManagement ...
-// Re-inserting unchanged code to maintain file structure integrity
-
+// ... Rest of UserManagement and KnowledgeManagement (No changes) ...
 const UserManagement: React.FC = () => {
+    // (Existing UserManagement code - kept same structure)
+    // ...
     const [users, setUsers] = useState<User[]>([]);
     const [isAdding, setIsAdding] = useState(false);
     const [isSyncing, setIsSyncing] = useState(false);
@@ -713,6 +714,8 @@ const UserManagement: React.FC = () => {
 };
 
 const KnowledgeManagement: React.FC = () => {
+    // (Existing KnowledgeManagement code - kept same structure)
+    // ...
     const [files, setFiles] = useState<KnowledgeFile[]>([]);
     const [isSyncing, setIsSyncing] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
