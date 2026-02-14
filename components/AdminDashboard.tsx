@@ -494,20 +494,24 @@ const SystemSettings: React.FC = () => {
                 <div>
                     <div className="font-bold mb-1">Network & Proxy Settings</div>
                     <p className="opacity-90 leading-relaxed mb-2">
-                        The system now attempts to auto-connect via multiple proxy channels if direct connection fails.
+                        If using <strong>NVIDIA / Google / OpenAI</strong> directly in China, automatic proxies may fail.
                     </p>
-                    <div className="flex items-center gap-2">
+                    <div className="bg-white p-2 rounded border border-blue-200 mb-2 text-xs">
+                        <strong>Solution:</strong> Use a Relay Service like <span className="font-mono bg-slate-100 px-1">https://hiapi.online/v1</span> (already configured in #1) for ALL models. 
+                        Simply update Config #2 to use HiAPI base URL with the Llama 3 model ID.
+                    </div>
+                    
+                    <div className="flex items-center gap-2 mt-3 pt-3 border-t border-blue-100">
                         <Network size={16}/>
                         <input 
                             type="text" 
                             className="bg-white border border-blue-300 rounded px-2 py-1 text-xs w-64"
-                            placeholder="Custom Proxy Prefix (e.g. https://corsproxy.io/?)"
+                            placeholder="Custom Proxy (e.g. https://corsproxy.io/?)"
                             value={customProxy}
                             onChange={(e) => setCustomProxy(e.target.value)}
                         />
                         <button onClick={handleCustomProxySave} className="text-xs bg-blue-600 text-white px-3 py-1 rounded font-bold hover:bg-blue-700">Save Proxy</button>
                     </div>
-                    <p className="text-[10px] text-blue-500 mt-1">Leave empty to use built-in fallbacks. Format must end with query param if needed (e.g. ?url=).</p>
                 </div>
             </div>
             

@@ -10,11 +10,13 @@ const ANYMAIL_FINDER_API_KEY = process.env.ANYMAIL_FINDER_API_KEY || '';
 
 const NATIVE_MODEL = 'gemini-3-pro-preview';
 
-// CORS Proxy Fallbacks
+// CORS Proxy Fallbacks (Expanded for China/Firewall bypass)
+// NOTE: Public proxies are unreliable. The best solution is always a paid Relay (HiAPI, OpenRouter, etc.)
 const PROXY_LADDER = [
-    '', // 1. Direct Connection (Default)
-    'https://corsproxy.io/?', // 2. Robust Public Proxy
-    'https://api.codetabs.com/v1/proxy?quest=' // 3. Backup Proxy
+    '', // 1. Direct Connection (Best for Localhost/VPN)
+    'https://corsproxy.io/?', // 2. Most stable public proxy
+    'https://thingproxy.freeboard.io/fetch/', // 3. Backup
+    'https://api.codetabs.com/v1/proxy?quest=' // 4. Last resort (often slow)
 ];
 
 const SYSTEM_INSTRUCTION = `
@@ -167,22 +169,39 @@ const callOpenAICompatible = async (config: ApiConfig, messages: any[], jsonMode
     // Multi-Level Proxy Attempt Strategy
     let lastError: any = null;
     
-    // If user defined a custom proxy in localStorage, prioritize it
+    // Custom Proxy from LocalStorage
     const customProxy = typeof localStorage !== 'undefined' ? localStorage.getItem('trade_scout_custom_proxy') : '';
-    const attempts = customProxy ? [customProxy, ...PROXY_LADDER] : PROXY_LADDER;
+    
+    // If the URL is "integrate.api.nvidia.com", we strongly suspect it needs a proxy if in browser.
+    // We prioritize the custom proxy, then the proxy ladder.
+    let attempts = customProxy ? [customProxy, ...PROXY_LADDER] : PROXY_LADDER;
+    
+    // Optimization: If user is using a known relay (hiapi, deepseek, openrouter), prioritize DIRECT connection
+    // because proxies often break signature/auth headers for these services.
+    if (baseUrl.includes('hiapi') || baseUrl.includes('deepseek') || baseUrl.includes('openrouter') || baseUrl.includes('127.0.0.1')) {
+        attempts = ['', ...attempts.filter(p => p !== '')]; // Move direct to front
+    }
 
     for (const proxy of attempts) {
         try {
-            console.log(`Trying API connection via: ${proxy ? proxy : 'Direct'} ...`);
+            if (proxy) console.log(`[Adapter] Trying via Proxy: ${proxy}...`);
+            else console.log(`[Adapter] Trying Direct Connection...`);
+
             const response = await doFetch(proxy, baseUrl);
 
             if (!response.ok) {
                 const errText = await response.text();
-                // Special handling: if CORS proxy fails with 403/404, try next
-                if ((response.status === 403 || response.status === 404 || response.status === 500) && proxy) {
-                    throw new Error(`Proxy ${proxy} rejected: ${response.status}`);
+                
+                // If 403/404/500 on a PROXY, it means the proxy failed, not necessarily the API. Try next.
+                if ((response.status === 403 || response.status === 404 || response.status >= 500) && proxy) {
+                    throw new Error(`Proxy error (${response.status})`);
                 }
                 
+                // If 401 Unauthorized, the KEY is wrong. Do not retry other proxies.
+                if (response.status === 401) {
+                    throw new Error(`API Key Rejected (401). Please check your Key.`);
+                }
+
                 let safeErr = errText;
                 try { safeErr = JSON.parse(errText).error?.message || errText; } catch(e){}
                 throw new Error(`API Error (${response.status}): ${safeErr}`);
@@ -196,16 +215,21 @@ const callOpenAICompatible = async (config: ApiConfig, messages: any[], jsonMode
         } catch (e: any) {
             console.warn(`Attempt failed (${proxy || 'Direct'}):`, e.message);
             lastError = e;
-            // If it's an Auth error (401), don't retry proxies, the Key is just wrong.
-            if (e.message.includes('401') || e.message.includes('Unauthorized')) {
-                throw new Error("API Key Invalid (401). Please check your key.");
+            // Fatal errors that shouldn't trigger retry
+            if (e.message.includes('401') || e.message.includes('Key Rejected')) {
+                throw e;
             }
-            // Continue to next proxy...
         }
     }
 
-    // If we get here, all attempts failed
-    throw new Error(`[v2] 连接失败 (All Strategies Failed). Last Error: ${lastError?.message || 'Network Error'}. Please check VPN or Key.`);
+    // Comprehensive Error Message
+    let errorMsg = `[v3] Connection Failed. `;
+    if (baseUrl.includes('nvidia')) {
+        errorMsg += `NVIDIA Direct is blocked by browsers/CORS. Please use a Relay Service (like HiAPI/OpenRouter) or a Global VPN.`;
+    } else {
+        errorMsg += `Last Error: ${lastError?.message}. Check your URL and Network.`;
+    }
+    throw new Error(errorMsg);
 };
 
 // --- Unified Generator with Strict Priority & Failover ---
