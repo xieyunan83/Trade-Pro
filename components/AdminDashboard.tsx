@@ -32,10 +32,10 @@ const PROVIDER_PRESETS = [
         note: "余额查询：cloud.siliconflow.cn -> 计费管理。速度快，中文好。"
     },
     {
-        name: "OpenRouter (Gemini Pro 1.5) - 🇺🇸 谷歌聚合",
+        name: "OpenRouter (Gemini Flash 1.5) - 🇺🇸 谷歌首选",
         baseUrl: "https://openrouter.ai/api/v1",
-        modelId: "google/gemini-pro-1.5",
-        note: "需 OpenRouter Key。通过 OR 调用谷歌模型，无需梯子，网络稳定。"
+        modelId: "google/gemini-flash-1.5",
+        note: "改用 Flash 模型，浏览器兼容性更好，速度更快，且支持长文本。"
     },
     {
         name: "OpenRouter (Llama 3.1) - 🇺🇸 Meta原版",
@@ -369,7 +369,7 @@ const SystemSettings: React.FC = () => {
             if (loaded.length > 0) {
                 setConfigs(loaded);
             } else {
-                setConfigs([{ id: Date.now().toString(), apiKey: '', baseUrl: '', modelId: 'gemini-1.5-pro', taskAssignment: 'default' }]);
+                setConfigs([{ id: Date.now().toString(), apiKey: '', baseUrl: '', modelId: 'gemini-1.5-pro', taskAssignment: 'default', priority: 1 }]);
             }
             setIsLoading(false);
         };
@@ -385,7 +385,7 @@ const SystemSettings: React.FC = () => {
         }
     };
 
-    const updateConfig = (id: string, field: keyof ApiConfig, value: string) => {
+    const updateConfig = (id: string, field: keyof ApiConfig, value: string | number) => {
         const updated = configs.map(c => c.id === id ? { ...c, [field]: value } : c);
         setConfigs(updated);
     };
@@ -406,7 +406,7 @@ const SystemSettings: React.FC = () => {
 
     const addConfig = () => {
         const newConfig: ApiConfig = { 
-            id: Date.now().toString(), apiKey: '', baseUrl: '', modelId: 'gemini-1.5-pro', taskAssignment: 'default'
+            id: Date.now().toString(), apiKey: '', baseUrl: '', modelId: 'gemini-1.5-pro', taskAssignment: 'default', priority: 2
         };
         saveConfigsToStateAndCloud([...configs, newConfig]);
     };
@@ -471,16 +471,17 @@ const SystemSettings: React.FC = () => {
             <div className="bg-blue-50 border border-blue-200 p-4 rounded-xl mb-6 text-sm text-blue-900 flex items-start gap-3">
                 <Info size={20} className="shrink-0 mt-0.5 text-blue-600"/>
                 <div>
-                    <div className="font-bold mb-1">📢 模型调整通知 (Platform Update)</div>
+                    <div className="font-bold mb-1">📢 模型调整与故障转移 (Priority Failover)</div>
                     <p className="opacity-90 leading-relaxed mb-2">
-                        <strong>硅基流动 (SiliconFlow)</strong> 已下架 Llama 模型。如果您使用 SiliconFlow Key，请务必选择 <strong>DeepSeek V3</strong> (DeepSeek V3 在外贸场景下逻辑表现优于 Llama 3)。
+                        您可以为不同的 Key 设置<strong>优先级 (Priority)</strong>。数字越小，优先级越高（例如 1 优先于 2）。
+                        如果高优先级的 Key 耗尽额度或网络不通，系统将<strong>自动</strong>切换到下一个 Key。
                     </p>
                     <div className="bg-white p-2 rounded border border-blue-200 mb-2 text-xs">
-                        <strong>💡 解决方案:</strong> 
+                        <strong>💡 推荐配置:</strong> 
                         <ul className="list-disc pl-4 mt-1">
-                            <li><strong>我有 SiliconFlow Key:</strong> 请选择第一项预设 "SiliconFlow (DeepSeek V3)"，这是目前性价比最高的选择。</li>
-                            <li><strong>我必须用 Llama 3:</strong> 请去 OpenRouter.ai 申请 Key，然后选择 "OpenRouter" 预设。</li>
-                            <li><strong>我想用谷歌 (Gemini):</strong> 请选择 "OpenRouter (Gemini)" 预设，填入 OpenRouter Key 即可。</li>
+                            <li><strong>Priority 1:</strong> 免费 Key (OpenRouter/Google) - 设为首选。</li>
+                            <li><strong>Priority 2:</strong> 付费 Key (DeepSeek/SiliconFlow) - 作为备用。</li>
+                            <li><strong>OpenRouter 用户:</strong> 请务必使用下拉菜单中的 <strong>"OpenRouter (Gemini Flash 1.5)"</strong> 预设以避免 CORS 错误。</li>
                         </ul>
                     </div>
                     
@@ -495,11 +496,11 @@ const SystemSettings: React.FC = () => {
             {isLoading && <div className="p-8 text-center text-slate-500"><Loader2 className="animate-spin inline mr-2"/> Loading Cloud Configs...</div>}
 
             <div className="flex flex-col gap-4">
-                {configs.map((config, index) => (
+                {configs.sort((a,b) => (a.priority||99) - (b.priority||99)).map((config, index) => (
                     <div key={config.id} className="bg-slate-50 p-6 rounded-xl border border-slate-200 shadow-sm relative group transition-all hover:border-blue-300">
                         <div className="absolute top-4 left-4 flex gap-2">
                             <span className="bg-slate-200 text-slate-700 px-2 py-1 rounded text-xs font-bold border border-slate-300">
-                                配置 #{index + 1}
+                                优先级: {config.priority || 'Last'}
                             </span>
                             {config.taskAssignment !== 'default' && (
                                 <span className="bg-purple-100 text-purple-800 px-2 py-1 rounded text-xs font-bold border border-purple-200 flex items-center gap-1">
@@ -522,7 +523,17 @@ const SystemSettings: React.FC = () => {
                             <button onClick={() => removeConfig(config.id)} className="text-slate-400 hover:text-red-500 p-1"><Trash2 size={18}/></button>
                         </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mt-8">
+                        <div className="grid grid-cols-1 md:grid-cols-5 gap-6 mt-8">
+                            <div className="md:col-span-1">
+                                <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">优先级 (Priority)</label>
+                                <input 
+                                    type="number" 
+                                    className="w-full p-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm bg-white text-slate-900 font-bold shadow-sm"
+                                    placeholder="1"
+                                    value={config.priority}
+                                    onChange={(e) => updateConfig(config.id, 'priority', parseInt(e.target.value))}
+                                />
+                            </div>
                             <div className="md:col-span-1">
                                 <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">任务分配 (Task)</label>
                                 <select 
@@ -542,7 +553,7 @@ const SystemSettings: React.FC = () => {
                                 <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">代理地址 (Base URL)</label>
                                 <input 
                                     type="text" 
-                                    className="w-full p-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-mono text-sm text-slate-900 bg-white shadow-sm"
+                                    className="w-full p-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-mono text-xs text-slate-900 bg-white shadow-sm"
                                     placeholder="https://..."
                                     value={config.baseUrl}
                                     onChange={(e) => updateConfig(config.id, 'baseUrl', e.target.value)}
@@ -552,7 +563,7 @@ const SystemSettings: React.FC = () => {
                                 <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">API 密钥 (Key)</label>
                                 <input 
                                     type="password" 
-                                    className="w-full p-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-mono text-sm text-slate-900 bg-white shadow-sm"
+                                    className="w-full p-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-mono text-xs text-slate-900 bg-white shadow-sm"
                                     placeholder="sk-..."
                                     value={config.apiKey}
                                     onChange={(e) => updateConfig(config.id, 'apiKey', e.target.value)}
@@ -563,7 +574,7 @@ const SystemSettings: React.FC = () => {
                                 <div className="flex gap-2">
                                     <input 
                                         type="text" 
-                                        className="w-full p-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-mono text-sm text-slate-900 bg-white shadow-sm"
+                                        className="w-full p-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-mono text-xs text-slate-900 bg-white shadow-sm"
                                         placeholder="model-id"
                                         value={config.modelId}
                                         onChange={(e) => updateConfig(config.id, 'modelId', e.target.value)}
@@ -597,9 +608,8 @@ const SystemSettings: React.FC = () => {
 };
 
 // ... UserManagement and KnowledgeManagement ...
-// Re-inserting unchanged code to maintain file structure integrity
-
 const UserManagement: React.FC = () => {
+    // ... existing UserManagement code (no changes) ...
     const [users, setUsers] = useState<User[]>([]);
     const [isAdding, setIsAdding] = useState(false);
     const [isSyncing, setIsSyncing] = useState(false);
@@ -714,6 +724,7 @@ const UserManagement: React.FC = () => {
 };
 
 const KnowledgeManagement: React.FC = () => {
+    // ... existing KnowledgeManagement code (no changes) ...
     const [files, setFiles] = useState<KnowledgeFile[]>([]);
     const [isSyncing, setIsSyncing] = useState(false);
     const [isUploading, setIsUploading] = useState(false);

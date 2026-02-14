@@ -123,6 +123,7 @@ export const getGeminiConfig = (): ApiConfig[] => {
         if (stored) {
             try {
                 const parsed = JSON.parse(stored);
+                // Ensure valid configs
                 return parsed.filter((c: ApiConfig) => c.apiKey && c.apiKey.trim() !== '');
             } catch (e) {
                 console.error("Failed to parse stored API configs", e);
@@ -202,8 +203,6 @@ const callOpenAICompatible = async (config: ApiConfig, messages: any[], jsonMode
 
     for (const proxy of attempts) {
         try {
-            // console.log(`[Adapter] Connecting via: ${proxy ? proxy : 'Direct'} to ${baseUrl}`);
-
             const response = await doFetch(proxy, baseUrl);
 
             if (!response.ok) {
@@ -215,8 +214,8 @@ const callOpenAICompatible = async (config: ApiConfig, messages: any[], jsonMode
                 }
                 
                 // If 402, Quota exceeded. STOP.
-                if (response.status === 402) {
-                    throw new Error(`Insufficient Quota (402). Check your balance.`);
+                if (response.status === 402 || response.status === 429) {
+                    throw new Error(`Rate Limit or Quota Exceeded (${response.status}).`);
                 }
 
                 // If 403/404/5xx, it might be network/proxy issue. Continue to next proxy.
@@ -246,7 +245,7 @@ const callOpenAICompatible = async (config: ApiConfig, messages: any[], jsonMode
         } catch (e: any) {
             lastError = e;
             // Fatal errors that shouldn't trigger retry loop
-            if (e.message.includes('401') || e.message.includes('402') || e.message.includes('Key Rejected')) {
+            if (e.message.includes('401') || e.message.includes('402') || e.message.includes('Key Rejected') || e.message.includes('Rate Limit')) {
                 throw e;
             }
         }
@@ -262,7 +261,7 @@ const callOpenAICompatible = async (config: ApiConfig, messages: any[], jsonMode
     throw new Error(errorMsg);
 };
 
-// --- Unified Generator with Strict Priority & Failover ---
+// --- Unified Generator with Failover Strategy ---
 const generateContentUnified = async (
     task: TaskType, 
     prompt: string, 
@@ -271,84 +270,108 @@ const generateContentUnified = async (
     images: string[] = [] // base64 strings
 ): Promise<string> => {
     
-    // --- STRATEGY 1: NATIVE GOOGLE KEY (FREE QUOTA) ---
-    // User requested gemini-3-pro-preview for free tier first.
-    if (process.env.API_KEY) {
-        try {
-            console.log(`Trying Strategy 1: Native Google API with ${NATIVE_MODEL}...`);
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-            const parts: Part[] = [{ text: prompt }];
-            images.forEach(img => {
-                parts.push({ inlineData: { mimeType: 'image/jpeg', data: img } });
-            });
-
-            const reqConfig: any = {
-                systemInstruction: systemInfo,
-            };
-            
-            if (jsonMode) {
-                reqConfig.responseMimeType = "application/json";
-            } else {
-                reqConfig.tools = [{ googleSearch: {} }]; 
-            }
-
-            const response = await ai.models.generateContent({
-                model: NATIVE_MODEL,
-                contents: [{ role: 'user', parts }],
-                config: reqConfig
-            });
-            
-            if (response.text) return response.text;
-        } catch (e: any) {
-            console.warn("Strategy 1 (Native) Failed. Falling back to Admin Keys...", e);
-            // Proceed to Strategy 2
-        }
-    }
-
-    // --- STRATEGY 2: ADMIN CONFIGURED KEYS (RELAY/CUSTOM) ---
-    const adminConfigs = getGeminiConfig();
+    // 1. Gather all available configurations
+    const allConfigs = getGeminiConfig();
     
-    if (adminConfigs.length === 0) {
-        throw new Error("Strategy 1 failed (or no key) and no Admin Keys configured.");
+    // 2. Add Native Process Env Key as a "Candidate" if it exists
+    // We treat it as a special config with ID 'native'
+    const nativeConfig: ApiConfig | null = process.env.API_KEY ? {
+        id: 'native_env_key',
+        apiKey: process.env.API_KEY,
+        baseUrl: 'native', // Special flag
+        priority: 0, // Highest priority by default for backward compatibility
+        taskAssignment: 'default',
+        modelId: NATIVE_MODEL
+    } : null;
+
+    let candidates = [...allConfigs];
+    if (nativeConfig) candidates.push(nativeConfig);
+
+    // 3. Filter by Task
+    // Logic: 
+    // - Include configs specifically assigned to this task.
+    // - Include 'default' configs as fallback.
+    const relevantCandidates = candidates.filter(c => 
+        c.taskAssignment === task || !c.taskAssignment || c.taskAssignment === 'default'
+    );
+
+    if (relevantCandidates.length === 0) {
+        throw new Error("No API Keys configured for this task. Please add keys in Admin Dashboard.");
     }
 
-    // Sort: Specific Task Assignment first, then Default
-    const sortedConfigs = adminConfigs.sort((a, b) => {
-        if (a.taskAssignment === task) return -1;
-        if (b.taskAssignment === task) return 1;
-        return 0;
+    // 4. Sort by Priority (Low number = High Priority)
+    // 0 is highest, then 1, 2, ...
+    // If priority is missing, treat as lowest (Infinity)
+    relevantCandidates.sort((a, b) => {
+        const pA = (a.priority !== undefined && a.priority !== null) ? a.priority : 999;
+        const pB = (b.priority !== undefined && b.priority !== null) ? b.priority : 999;
+        return pA - pB;
     });
 
-    for (const config of sortedConfigs) {
-        try {
-            // OpenAI Adapter Mode for Relay
-            const messages: any[] = [];
-            if (systemInfo) messages.push({ role: 'system', content: systemInfo });
-            
-            let userContent: any = prompt;
-            
-            // Handle images for OpenAI Vision format
-            if (images.length > 0) {
-                userContent = [{ type: "text", text: prompt }];
-                images.forEach(img => {
-                    userContent.push({
-                        type: "image_url",
-                        image_url: { url: `data:image/jpeg;base64,${img}` }
-                    });
-                });
-            }
-            
-            messages.push({ role: 'user', content: userContent });
-            const result = await callOpenAICompatible(config, messages, jsonMode);
-            if (result) return result;
+    console.log(`[Failover] Found ${relevantCandidates.length} keys for task '${task}'. Starting execution chain...`);
 
-        } catch (e) {
-            console.error(`Config ${config.id} failed, trying next...`, e);
-            continue; 
+    // 5. Execute Chain
+    let lastError: any = null;
+
+    for (const config of relevantCandidates) {
+        console.log(`[Failover] Trying Config [Priority ${config.priority ?? 'Default'}]: ${config.id} (${config.baseUrl === 'native' ? 'Google Native' : config.modelId})`);
+        
+        try {
+            if (config.baseUrl === 'native') {
+                // --- STRATEGY: NATIVE GOOGLE API ---
+                const ai = new GoogleGenAI({ apiKey: config.apiKey });
+                const parts: Part[] = [{ text: prompt }];
+                images.forEach(img => {
+                    parts.push({ inlineData: { mimeType: 'image/jpeg', data: img } });
+                });
+
+                const reqConfig: any = { systemInstruction: systemInfo };
+                if (jsonMode) {
+                    reqConfig.responseMimeType = "application/json";
+                } else {
+                    reqConfig.tools = [{ googleSearch: {} }]; 
+                }
+
+                const response = await ai.models.generateContent({
+                    model: config.modelId || NATIVE_MODEL,
+                    contents: [{ role: 'user', parts }],
+                    config: reqConfig
+                });
+                
+                if (response.text) return response.text;
+
+            } else {
+                // --- STRATEGY: OPENAI COMPATIBLE (RELAY) ---
+                const messages: any[] = [];
+                if (systemInfo) messages.push({ role: 'system', content: systemInfo });
+                
+                let userContent: any = prompt;
+                
+                // Handle images for OpenAI Vision format
+                if (images.length > 0) {
+                    userContent = [{ type: "text", text: prompt }];
+                    images.forEach(img => {
+                        userContent.push({
+                            type: "image_url",
+                            image_url: { url: `data:image/jpeg;base64,${img}` }
+                        });
+                    });
+                }
+                
+                messages.push({ role: 'user', content: userContent });
+                const result = await callOpenAICompatible(config, messages, jsonMode);
+                if (result) return result;
+            }
+
+        } catch (e: any) {
+            console.warn(`[Failover] Config ${config.id} failed. Reason: ${e.message}`);
+            lastError = e;
+            // Continue to next config in the loop
         }
     }
 
-    throw new Error("All API strategies failed. Please check your Quota or Admin Configuration.");
+    // If we get here, all candidates failed
+    throw new Error(`All API strategies failed. Last Error: ${lastError?.message || 'Unknown'}`);
 };
 
 // --- Public Methods ---

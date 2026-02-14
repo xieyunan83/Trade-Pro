@@ -262,6 +262,7 @@ export interface ApiConfig {
     baseUrl: string;
     modelId?: string;
     taskAssignment?: TaskType;
+    priority?: number; // 1 = Highest, 2 = Backup, etc.
 }
 
 // --- NEW TYPES FOR EMAIL MODULE ---
