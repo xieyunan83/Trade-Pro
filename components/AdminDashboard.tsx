@@ -16,7 +16,7 @@ import {
     fetchDocumentsFromRepo,
     verifyConnection 
 } from '../services/githubService';
-import { Users, Database, Plus, Trash2, Shield, UploadCloud, FileText, Loader2, LogOut, Key, Save, CheckCircle2, AlertTriangle, Info, Play, Workflow, Cloud, Download, Upload, ExternalLink, HelpCircle, Link2, RefreshCw, ArrowDownCircle, Github, FolderOpen } from 'lucide-react';
+import { Users, Database, Plus, Trash2, Shield, UploadCloud, FileText, Loader2, LogOut, Key, Save, CheckCircle2, AlertTriangle, Info, Play, Workflow, Cloud, Download, Upload, ExternalLink, HelpCircle, Link2, RefreshCw, ArrowDownCircle, Github, FolderOpen, Network } from 'lucide-react';
 
 interface Props {
     onLogout: () => void;
@@ -349,6 +349,7 @@ const SystemSettings: React.FC = () => {
     const [isLoading, setIsLoading] = useState(false);
     const [status, setStatus] = useState<{ id: string, type: 'success'|'error', msg: string } | null>(null);
     const [ghStatus] = useState(checkGitHubStatus());
+    const [customProxy, setCustomProxy] = useState(localStorage.getItem('trade_scout_custom_proxy') || '');
 
     useEffect(() => {
         const load = async () => {
@@ -401,6 +402,11 @@ const SystemSettings: React.FC = () => {
     const updateConfig = (id: string, field: keyof ApiConfig, value: string) => {
         const updated = configs.map(c => c.id === id ? { ...c, [field]: value } : c);
         setConfigs(updated); // Optimistic update
+    };
+
+    const handleCustomProxySave = () => {
+        localStorage.setItem('trade_scout_custom_proxy', customProxy);
+        alert("Custom Proxy Saved. It will be prioritized.");
     };
 
     // Manual Trigger to ensure save
@@ -486,13 +492,22 @@ const SystemSettings: React.FC = () => {
             <div className="bg-blue-50 border border-blue-200 p-4 rounded-xl mb-6 text-sm text-blue-900 flex items-start gap-3">
                 <Info size={20} className="shrink-0 mt-0.5 text-blue-600"/>
                 <div>
-                    <div className="font-bold mb-1">Network Connection Help</div>
-                    <p className="opacity-90 leading-relaxed">
-                        If you encounter <strong>Network Error</strong> or <strong>Failed to fetch</strong>, the system will automatically attempt to use a proxy server to bypass CORS.
+                    <div className="font-bold mb-1">Network & Proxy Settings</div>
+                    <p className="opacity-90 leading-relaxed mb-2">
+                        The system now attempts to auto-connect via multiple proxy channels if direct connection fails.
                     </p>
-                    <p className="mt-2 text-xs font-medium">
-                        <strong>For China Users:</strong> Please ensure you have a stable VPN connection if accessing international APIs (Google, NVIDIA, etc.) directly. The auto-proxy might also be blocked without VPN.
-                    </p>
+                    <div className="flex items-center gap-2">
+                        <Network size={16}/>
+                        <input 
+                            type="text" 
+                            className="bg-white border border-blue-300 rounded px-2 py-1 text-xs w-64"
+                            placeholder="Custom Proxy Prefix (e.g. https://corsproxy.io/?)"
+                            value={customProxy}
+                            onChange={(e) => setCustomProxy(e.target.value)}
+                        />
+                        <button onClick={handleCustomProxySave} className="text-xs bg-blue-600 text-white px-3 py-1 rounded font-bold hover:bg-blue-700">Save Proxy</button>
+                    </div>
+                    <p className="text-[10px] text-blue-500 mt-1">Leave empty to use built-in fallbacks. Format must end with query param if needed (e.g. ?url=).</p>
                 </div>
             </div>
             

@@ -10,6 +10,13 @@ const ANYMAIL_FINDER_API_KEY = process.env.ANYMAIL_FINDER_API_KEY || '';
 
 const NATIVE_MODEL = 'gemini-3-pro-preview';
 
+// CORS Proxy Fallbacks
+const PROXY_LADDER = [
+    '', // 1. Direct Connection (Default)
+    'https://corsproxy.io/?', // 2. Robust Public Proxy
+    'https://api.codetabs.com/v1/proxy?quest=' // 3. Backup Proxy
+];
+
 const SYSTEM_INSTRUCTION = `
 You are "楠哥的小助理" (Nan Ge's Assistant), an elite Foreign Trade Intelligence Agent.
 Your goal is to provide deep, actionable insights for Chinese export suppliers.
@@ -130,7 +137,6 @@ const callOpenAICompatible = async (config: ApiConfig, messages: any[], jsonMode
     if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
     
     // Auto-append chat/completions if not present (Standard OpenAI format)
-    // IMPORTANT: NVIDIA and many relays expect this path.
     if (!baseUrl.endsWith('/chat/completions')) baseUrl += '/chat/completions';
 
     // Model Mapping fallback
@@ -141,19 +147,14 @@ const callOpenAICompatible = async (config: ApiConfig, messages: any[], jsonMode
         messages: messages,
         temperature: 0.7,
         stream: false,
-        max_tokens: 4096 // Some providers require this
+        max_tokens: 4096 
     };
 
-    if (jsonMode) {
-        // Note: Not all providers support response_format. 
-        // NVIDIA Llama 3 does via specific prompting or struct output, but for now we keep it simple.
-        // We inject a system prompt for JSON instead of relying on the flag if it's uncertain.
-        // payload.response_format = { type: "json_object" }; 
-    }
-
     // Helper to execute fetch
-    const doFetch = async (targetUrl: string) => {
-        return fetch(targetUrl, {
+    const doFetch = async (proxyPrefix: string, targetUrl: string) => {
+        const finalUrl = proxyPrefix ? `${proxyPrefix}${encodeURIComponent(targetUrl)}` : targetUrl;
+        
+        return fetch(finalUrl, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -163,41 +164,48 @@ const callOpenAICompatible = async (config: ApiConfig, messages: any[], jsonMode
         });
     };
 
-    try {
-        let response;
+    // Multi-Level Proxy Attempt Strategy
+    let lastError: any = null;
+    
+    // If user defined a custom proxy in localStorage, prioritize it
+    const customProxy = typeof localStorage !== 'undefined' ? localStorage.getItem('trade_scout_custom_proxy') : '';
+    const attempts = customProxy ? [customProxy, ...PROXY_LADDER] : PROXY_LADDER;
+
+    for (const proxy of attempts) {
         try {
-            // Attempt 1: Direct Connection
-            response = await doFetch(baseUrl);
-        } catch (e: any) {
-            // Check for CORS/Network error
-            if (e.message === 'Failed to fetch') {
-                console.warn("Direct fetch failed (CORS/Network), attempting via Proxy...");
-                // Attempt 2: CORS Proxy
-                // We use corsproxy.io as a zero-config fallback
-                response = await doFetch(`https://corsproxy.io/?${encodeURIComponent(baseUrl)}`);
-            } else {
-                throw e; // Rethrow other errors
+            console.log(`Trying API connection via: ${proxy ? proxy : 'Direct'} ...`);
+            const response = await doFetch(proxy, baseUrl);
+
+            if (!response.ok) {
+                const errText = await response.text();
+                // Special handling: if CORS proxy fails with 403/404, try next
+                if ((response.status === 403 || response.status === 404 || response.status === 500) && proxy) {
+                    throw new Error(`Proxy ${proxy} rejected: ${response.status}`);
+                }
+                
+                let safeErr = errText;
+                try { safeErr = JSON.parse(errText).error?.message || errText; } catch(e){}
+                throw new Error(`API Error (${response.status}): ${safeErr}`);
             }
-        }
 
-        if (!response.ok) {
-            const errText = await response.text();
-            let safeErr = errText;
-            try { safeErr = JSON.parse(errText).error?.message || errText; } catch(e){}
-            throw new Error(`API Error (${response.status}): ${safeErr}`);
-        }
+            const data = await response.json();
+            const content = data.choices?.[0]?.message?.content;
+            if (!content) throw new Error("Empty response from API");
+            return content; // Success!
 
-        const data = await response.json();
-        const content = data.choices?.[0]?.message?.content;
-        if (!content) throw new Error("Empty response from API");
-        return content;
-    } catch (e: any) {
-        console.error("OpenAI Adapter Failed:", e);
-        if (e.message === 'Failed to fetch') {
-            throw new Error("Network Error. Please check your Internet/VPN connection. (Direct & Proxy both failed)");
+        } catch (e: any) {
+            console.warn(`Attempt failed (${proxy || 'Direct'}):`, e.message);
+            lastError = e;
+            // If it's an Auth error (401), don't retry proxies, the Key is just wrong.
+            if (e.message.includes('401') || e.message.includes('Unauthorized')) {
+                throw new Error("API Key Invalid (401). Please check your key.");
+            }
+            // Continue to next proxy...
         }
-        throw e;
     }
+
+    // If we get here, all attempts failed
+    throw new Error(`[v2] 连接失败 (All Strategies Failed). Last Error: ${lastError?.message || 'Network Error'}. Please check VPN or Key.`);
 };
 
 // --- Unified Generator with Strict Priority & Failover ---
