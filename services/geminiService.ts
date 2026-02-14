@@ -255,6 +255,8 @@ const callOpenAICompatible = async (config: ApiConfig, messages: any[], jsonMode
     let errorMsg = `[Connection Failed] `;
     if (baseUrl.includes('openrouter')) {
         errorMsg += `OpenRouter connection failed. Ensure your API Key is valid and you have credits. If in China, try using a global VPN mode.`;
+    } else if (baseUrl.includes('googleapis.com')) {
+        errorMsg += `It seems you are using a raw Google URL. Please use the 'Google Official (Native)' preset instead.`;
     } else {
         errorMsg += `Last Error: ${lastError?.message || 'Network Error'}. Check URL/Network.`;
     }
@@ -378,7 +380,19 @@ const generateContentUnified = async (
 
 export const testApiKey = async (apiKey: string, baseUrl?: string, modelId?: string): Promise<{ success: boolean; message: string }> => {
     try {
-        // Ensure we test with a valid model and url
+        // Special case for Official Native Key testing
+        if (baseUrl === 'native') {
+            const ai = new GoogleGenAI({ apiKey });
+            // Use 'gemini-1.5-flash' for a quick ping test if modelId not provided or generic
+            const testModel = modelId?.includes('gemini') ? modelId : 'gemini-1.5-flash';
+            await ai.models.generateContent({
+                model: testModel,
+                contents: 'Ping',
+            });
+            return { success: true, message: "Google Native Connection Successful! ✅" };
+        }
+
+        // Standard OpenAI Compatible Test
         const config = { 
             id: 'test', 
             apiKey: apiKey.trim(), 
@@ -389,7 +403,11 @@ export const testApiKey = async (apiKey: string, baseUrl?: string, modelId?: str
         await callOpenAICompatible(config, [{ role: 'user', content: 'Ping. Just say pong.' }]);
         return { success: true, message: "Connection Successful! ✅" };
     } catch (e: any) {
-        return { success: false, message: `Failed: ${e.message}` };
+        let msg = e.message;
+        if (msg.includes('404') && baseUrl?.includes('googleapis')) {
+            msg = "Incorrect Base URL. Please use the 'Google Official' preset for native keys.";
+        }
+        return { success: false, message: `Failed: ${msg}` };
     }
 };
 

@@ -26,6 +26,12 @@ interface Props {
 // --- UPDATED PRESETS ---
 const PROVIDER_PRESETS = [
     {
+        name: "Google Official (Native SDK) - 🌟 官方直连",
+        baseUrl: "native",
+        modelId: "gemini-1.5-pro",
+        note: "适用于 'AIza...' 开头的官方 Key。需开启全局 VPN (美国/日本节点，非香港)。"
+    },
+    {
         name: "SiliconFlow (DeepSeek V3) - ⚡️ 性价比之王",
         baseUrl: "https://api.siliconflow.cn/v1",
         modelId: "deepseek-ai/DeepSeek-V3",
@@ -36,12 +42,6 @@ const PROVIDER_PRESETS = [
         baseUrl: "https://openrouter.ai/api/v1",
         modelId: "google/gemini-flash-1.5",
         note: "改用 Flash 模型，浏览器兼容性更好，速度更快，且支持长文本。"
-    },
-    {
-        name: "OpenRouter (Llama 3.1) - 🇺🇸 Meta原版",
-        baseUrl: "https://openrouter.ai/api/v1",
-        modelId: "meta-llama/llama-3.1-70b-instruct",
-        note: "需 OpenRouter Key。美国原版 Llama，适合纯英文环境。"
     },
     {
         name: "Gemini Pro (HiAPI Relay) - 🌍 谷歌中转",
@@ -118,6 +118,7 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, currentUser }) => {
     );
 };
 
+// ... CloudLimitManager (No changes needed, keep existing) ...
 interface CloudLimitManagerProps {
     onConnectionChange: () => void;
 }
@@ -369,7 +370,7 @@ const SystemSettings: React.FC = () => {
             if (loaded.length > 0) {
                 setConfigs(loaded);
             } else {
-                setConfigs([{ id: Date.now().toString(), apiKey: '', baseUrl: '', modelId: 'gemini-1.5-pro', taskAssignment: 'default', priority: 1 }]);
+                setConfigs([{ id: Date.now().toString(), apiKey: '', baseUrl: 'native', modelId: 'gemini-1.5-pro', taskAssignment: 'default', priority: 1 }]);
             }
             setIsLoading(false);
         };
@@ -406,7 +407,7 @@ const SystemSettings: React.FC = () => {
 
     const addConfig = () => {
         const newConfig: ApiConfig = { 
-            id: Date.now().toString(), apiKey: '', baseUrl: '', modelId: 'gemini-1.5-pro', taskAssignment: 'default', priority: 2
+            id: Date.now().toString(), apiKey: '', baseUrl: 'native', modelId: 'gemini-1.5-pro', taskAssignment: 'default', priority: 2
         };
         saveConfigsToStateAndCloud([...configs, newConfig]);
     };
@@ -473,15 +474,14 @@ const SystemSettings: React.FC = () => {
                 <div>
                     <div className="font-bold mb-1">📢 模型调整与故障转移 (Priority Failover)</div>
                     <p className="opacity-90 leading-relaxed mb-2">
-                        您可以为不同的 Key 设置<strong>优先级 (Priority)</strong>。数字越小，优先级越高（例如 1 优先于 2）。
-                        如果高优先级的 Key 耗尽额度或网络不通，系统将<strong>自动</strong>切换到下一个 Key。
+                        <strong>官方 Key 用户请注意:</strong> 您的 <code>AIza...</code> 开头密钥属于 Google 原生密钥。
                     </p>
                     <div className="bg-white p-2 rounded border border-blue-200 mb-2 text-xs">
-                        <strong>💡 推荐配置:</strong> 
+                        <strong>💡 解决方案:</strong> 
                         <ul className="list-disc pl-4 mt-1">
-                            <li><strong>Priority 1:</strong> 免费 Key (OpenRouter/Google) - 设为首选。</li>
-                            <li><strong>Priority 2:</strong> 付费 Key (DeepSeek/SiliconFlow) - 作为备用。</li>
-                            <li><strong>OpenRouter 用户:</strong> 请务必使用下拉菜单中的 <strong>"OpenRouter (Gemini Flash 1.5)"</strong> 预设以避免 CORS 错误。</li>
+                            <li>请务必使用下拉菜单中的 <strong>"Google Official (Native SDK)"</strong> 预设。</li>
+                            <li>这将把代理地址自动设为 <code>native</code>，系统会自动切换到 Google 官方 SDK 模式。</li>
+                            <li><strong>网络警告:</strong> 原生模式必须开启全局代理 (Global VPN)，且节点不能选香港/中国内地。</li>
                         </ul>
                     </div>
                     
@@ -553,11 +553,12 @@ const SystemSettings: React.FC = () => {
                                 <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">代理地址 (Base URL)</label>
                                 <input 
                                     type="text" 
-                                    className="w-full p-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-mono text-xs text-slate-900 bg-white shadow-sm"
-                                    placeholder="https://..."
+                                    className={`w-full p-3 border rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-mono text-xs shadow-sm ${config.baseUrl === 'native' ? 'bg-purple-50 text-purple-700 border-purple-200' : 'bg-white text-slate-900 border-slate-300'}`}
+                                    placeholder="https://... OR native"
                                     value={config.baseUrl}
                                     onChange={(e) => updateConfig(config.id, 'baseUrl', e.target.value)}
                                 />
+                                {config.baseUrl === 'native' && <div className="text-[10px] text-purple-600 font-bold mt-1 text-right">✓ Official SDK Mode Active</div>}
                             </div>
                             <div className="md:col-span-1">
                                 <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">API 密钥 (Key)</label>
@@ -607,7 +608,7 @@ const SystemSettings: React.FC = () => {
     );
 };
 
-// ... UserManagement and KnowledgeManagement ...
+// ... UserManagement and KnowledgeManagement (No changes) ...
 const UserManagement: React.FC = () => {
     // ... existing UserManagement code (no changes) ...
     const [users, setUsers] = useState<User[]>([]);
