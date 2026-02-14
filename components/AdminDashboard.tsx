@@ -23,31 +23,31 @@ interface Props {
     currentUser: User;
 }
 
-// --- UPDATED PRESETS FOR FOREIGN TRADE ---
+// --- UPDATED PRESETS (Fixed for current API availability) ---
 const PROVIDER_PRESETS = [
     {
-        name: "Gemini Pro (Google) - 🌍 外贸搜索首选",
-        baseUrl: "https://hiapi.online/v1", // Stable relay
-        modelId: "gemini-1.5-pro",
-        note: "需 HiAPI Key。支持谷歌联网搜索，数据最准。"
-    },
-    {
-        name: "Llama 3.1 (US Model / CN Speed) - ⚡️ 推荐",
-        baseUrl: "https://api.siliconflow.cn/v1",
-        modelId: "meta-llama/Meta-Llama-3.1-70B-Instruct",
-        note: "需硅基流动 Key。美国 Llama 模型，国内直连不卡顿。"
-    },
-    {
-        name: "DeepSeek V3 (China) - 🇨🇳 国产之光",
+        name: "SiliconFlow (DeepSeek V3) - ⚡️ 已有Key推荐",
         baseUrl: "https://api.siliconflow.cn/v1",
         modelId: "deepseek-ai/DeepSeek-V3",
-        note: "需硅基流动 Key。中文理解能力极强，写邮件地道。"
+        note: "您已有此平台Key。DeepSeek V3 英语能力超越 Llama 3，外贸首选。"
     },
     {
-        name: "NVIDIA NIM (Official) - ❌ 容易断连",
-        baseUrl: "https://integrate.api.nvidia.com/v1",
-        modelId: "meta/llama-3.1-70b-instruct",
-        note: "需 NVIDIA Key。国内网络极难连通，不推荐。"
+        name: "Gemini Pro (Google) - 🌍 搜索最强",
+        baseUrl: "https://hiapi.online/v1",
+        modelId: "gemini-1.5-pro",
+        note: "需 HiAPI Key。支持谷歌联网，数据最新。"
+    },
+    {
+        name: "OpenRouter (Llama 3.1) - 🇺🇸 美国原版",
+        baseUrl: "https://openrouter.ai/api/v1",
+        modelId: "meta-llama/llama-3.1-70b-instruct",
+        note: "需去 openrouter.ai 获取 Key。如果您必须用 Llama 请选此项。"
+    },
+    {
+        name: "SiliconFlow (Qwen 2.5) - 🇨🇳 通义千问",
+        baseUrl: "https://api.siliconflow.cn/v1",
+        modelId: "Qwen/Qwen2.5-72B-Instruct",
+        note: "备用选项。阿里巴巴的开源模型，也很强。"
     }
 ];
 
@@ -471,12 +471,16 @@ const SystemSettings: React.FC = () => {
             <div className="bg-blue-50 border border-blue-200 p-4 rounded-xl mb-6 text-sm text-blue-900 flex items-start gap-3">
                 <Info size={20} className="shrink-0 mt-0.5 text-blue-600"/>
                 <div>
-                    <div className="font-bold mb-1">外贸专用网络设置 (Network for Global Trade)</div>
+                    <div className="font-bold mb-1">📢 模型调整通知 (Platform Update)</div>
                     <p className="opacity-90 leading-relaxed mb-2">
-                        <strong>NVIDIA / Google / OpenAI</strong> 官方接口在国内通常无法直连。请务必使用“预设”中的中转服务。
+                        <strong>硅基流动 (SiliconFlow)</strong> 已下架 Llama 模型。如果您使用 SiliconFlow Key，请务必选择 <strong>DeepSeek V3</strong> (DeepSeek V3 在外贸场景下逻辑表现优于 Llama 3)。
                     </p>
                     <div className="bg-white p-2 rounded border border-blue-200 mb-2 text-xs">
-                        <strong>💡 推荐方案:</strong> 使用 <strong>Gemini (HiAPI 中转)</strong> 进行客户搜索，因为它能实时联网 Google 获取最新海外数据。
+                        <strong>💡 解决方案:</strong> 
+                        <ul className="list-disc pl-4 mt-1">
+                            <li><strong>我有 SiliconFlow Key:</strong> 请选择第一项预设 "SiliconFlow (DeepSeek V3)"，这是目前性价比最高的选择。</li>
+                            <li><strong>我必须用 Llama 3:</strong> 请去 OpenRouter.ai 申请 Key，然后选择第三项预设。</li>
+                        </ul>
                     </div>
                     
                     <div className="flex items-center gap-2 mt-3 pt-3 border-t border-blue-100">
