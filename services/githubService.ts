@@ -35,7 +35,7 @@ const getCredentials = () => {
 const PATH_CONFIG = "data/config.json";
 const PATH_KB_BACKUP = "data/kb.json"; // Legacy backup path
 const PATH_USERS = "data/users.json";
-const PATH_API_KEYS = "data/api_keys.json";
+// const PATH_API_KEYS = "data/api_keys.json"; // REMOVED FOR SECURITY
 const PATH_CRM = "data/crm.json";
 const PATH_HISTORY_PREFIX = "data/history/";
 
@@ -351,13 +351,19 @@ export const saveUsersToCloud = async (users: User[]) => {
     await saveFileContent(PATH_USERS, users, "Update Users List", sha);
 };
 
+// --- DISABLED API KEY SYNC FOR SECURITY ---
 export const fetchApiConfigsFromCloud = async (): Promise<ApiConfig[]> => {
-    const res = await getFileContent(PATH_API_KEYS);
-    return res ? res.content as ApiConfig[] : [];
+    // SECURITY: Do not fetch from cloud anymore.
+    // const res = await getFileContent(PATH_API_KEYS);
+    // return res ? res.content as ApiConfig[] : [];
+    return [];
 };
 export const saveApiConfigsToCloud = async (configs: ApiConfig[]) => {
-    const sha = await getFileSha(PATH_API_KEYS);
-    await saveFileContent(PATH_API_KEYS, configs, "Update API Configurations", sha);
+    // SECURITY: Do NOT upload API keys to GitHub.
+    // const sha = await getFileSha(PATH_API_KEYS);
+    // await saveFileContent(PATH_API_KEYS, configs, "Update API Configurations", sha);
+    console.warn("API Key sync to Cloud has been disabled for security.");
+    return Promise.resolve();
 };
 
 export const fetchCRMFromCloud = async (): Promise<Client[]> => {

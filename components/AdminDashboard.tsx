@@ -11,43 +11,41 @@ import {
     clearManualGitHubConfig, 
     fetchUsersFromCloud, 
     saveUsersToCloud, 
-    fetchApiConfigsFromCloud, 
-    saveApiConfigsToCloud, 
     fetchDocumentsFromRepo,
     verifyConnection 
 } from '../services/githubService';
-import { Users, Database, Plus, Trash2, Shield, UploadCloud, FileText, Loader2, LogOut, Key, Save, CheckCircle2, AlertTriangle, Info, Play, Workflow, Cloud, Download, Upload, ExternalLink, HelpCircle, Link2, RefreshCw, ArrowDownCircle, Github, FolderOpen, Network, ChevronDown } from 'lucide-react';
+import { Users, Database, Plus, Trash2, Shield, UploadCloud, FileText, Loader2, LogOut, Key, Save, CheckCircle2, AlertTriangle, Info, Play, Workflow, Cloud, Download, Upload, ExternalLink, HelpCircle, Link2, RefreshCw, ArrowDownCircle, Github, FolderOpen, Network, ChevronDown, Lock, HardDrive } from 'lucide-react';
 
 interface Props {
     onLogout: () => void;
     currentUser: User;
 }
 
-// --- UPDATED PRESETS ---
+// --- FREE & CHEAP PROVIDERS ---
 const PROVIDER_PRESETS = [
     {
-        name: "Google Official (Native SDK) - 🌟 官方直连",
+        name: "Google Official (Native SDK) - 🌟 免费/稳定",
         baseUrl: "native",
         modelId: "gemini-1.5-pro",
-        note: "适用于 'AIza...' 开头的官方 Key。需开启全局 VPN (美国/日本节点，非香港)。"
+        note: "推荐！Google AI Studio 申请免费 Key。需开启全局 VPN (非香港节点)。"
     },
     {
-        name: "SiliconFlow (DeepSeek V3) - ⚡️ 性价比之王",
+        name: "SiliconFlow (DeepSeek V3) - ⚡️ 注册送额度",
         baseUrl: "https://api.siliconflow.cn/v1",
         modelId: "deepseek-ai/DeepSeek-V3",
-        note: "余额查询：cloud.siliconflow.cn -> 计费管理。速度快，中文好。"
+        note: "国内直连，无需魔法。注册即送 14 元额度（约 1000 次调用）。"
     },
     {
-        name: "OpenRouter (Gemini Flash 1.5) - 🇺🇸 谷歌首选",
+        name: "Groq (Llama3) - 🚀 极速/限量免费",
+        baseUrl: "https://api.groq.com/openai/v1",
+        modelId: "llama3-70b-8192",
+        note: "速度极快，目前有较好的免费层级。适合处理文本任务。"
+    },
+    {
+        name: "OpenRouter (Gemini Flash) - 🇺🇸 需付费",
         baseUrl: "https://openrouter.ai/api/v1",
         modelId: "google/gemini-flash-1.5",
-        note: "改用 Flash 模型，浏览器兼容性更好，速度更快，且支持长文本。"
-    },
-    {
-        name: "Gemini Pro (HiAPI Relay) - 🌍 谷歌中转",
-        baseUrl: "https://hiapi.online/v1",
-        modelId: "gemini-1.5-pro",
-        note: "需 HiAPI Key。专门做谷歌中转的服务商。"
+        note: "聚合平台。如果您上传了 Key 到 GitHub，OpenRouter 会自动封号。"
     }
 ];
 
@@ -118,7 +116,7 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, currentUser }) => {
     );
 };
 
-// ... CloudLimitManager (No changes needed, keep existing) ...
+// ... CloudLimitManager (No changes needed) ...
 interface CloudLimitManagerProps {
     onConnectionChange: () => void;
 }
@@ -163,7 +161,7 @@ const CloudLimitManager: React.FC<CloudLimitManagerProps> = ({ onConnectionChang
             setConfig(toSave);
             setMsg({ type: 'success', text: '配置已保存到云端！其他浏览器连接后将自动应用此配置。' });
         } catch (e: any) {
-            setMsg({ type: 'error', text: `保存失败: ${e.message}。请检查 Token 权限或仓库是否存在。` });
+            setMsg({ type: 'error', text: `保存失败: ${e.message}。如果您的 GitHub Token 也曾泄露，它可能已被吊销，请重新生成。` });
         } finally {
             setLoading(false);
         }
@@ -198,7 +196,7 @@ const CloudLimitManager: React.FC<CloudLimitManagerProps> = ({ onConnectionChang
             let errText = "连接失败，请检查凭证。";
             const statusCode = e.status || e.response?.status;
             if (statusCode === 404) errText = "连接失败 (404): 找不到仓库。请确认 Owner/Repo拼写正确，且 Token 拥有 Repo 权限。";
-            else if (statusCode === 401) errText = "连接失败 (401): Token 无效或已过期。";
+            else if (statusCode === 401) errText = "连接失败 (401): Token 无效或已过期。如果 Token 曾暴露在 GitHub，它会被自动吊销，请重新生成。";
             else if (statusCode === 403) errText = "连接失败 (403): 访问被拒绝，可能触发了 API 速率限制。";
             
             setMsg({ type: 'error', text: errText });
@@ -346,26 +344,13 @@ const CloudLimitManager: React.FC<CloudLimitManagerProps> = ({ onConnectionChang
 const SystemSettings: React.FC = () => {
     const [configs, setConfigs] = useState<ApiConfig[]>([]);
     const [isTesting, setIsTesting] = useState<string | null>(null);
-    const [isSyncing, setIsSyncing] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [status, setStatus] = useState<{ id: string, type: 'success'|'error', msg: string } | null>(null);
-    const [ghStatus] = useState(checkGitHubStatus());
     const [customProxy, setCustomProxy] = useState(localStorage.getItem('trade_scout_custom_proxy') || '');
 
     useEffect(() => {
         const load = async () => {
             setIsLoading(true);
-            if (ghStatus.ok) {
-                try {
-                    const cloudConfigs = await fetchApiConfigsFromCloud();
-                    if (cloudConfigs.length > 0) {
-                        setConfigs(cloudConfigs);
-                        localStorage.setItem('trade_scout_api_configs', JSON.stringify(cloudConfigs));
-                        setIsLoading(false);
-                        return;
-                    }
-                } catch(e) { console.error("Cloud config fetch error", e); }
-            }
             const loaded = getGeminiConfig();
             if (loaded.length > 0) {
                 setConfigs(loaded);
@@ -375,20 +360,18 @@ const SystemSettings: React.FC = () => {
             setIsLoading(false);
         };
         load();
-    }, [ghStatus.ok]); 
+    }, []); 
 
-    const saveConfigsToStateAndCloud = async (newConfigs: ApiConfig[]) => {
+    const saveConfigsToState = async (newConfigs: ApiConfig[]) => {
         setConfigs(newConfigs);
         localStorage.setItem('trade_scout_api_configs', JSON.stringify(newConfigs));
-        if (ghStatus.ok) {
-            setIsSyncing(true);
-            try { await saveApiConfigsToCloud(newConfigs); } catch (e) {} finally { setIsSyncing(false); }
-        }
+        // NOTE: Cloud save removed for security to prevent GitHub key leaks
     };
 
     const updateConfig = (id: string, field: keyof ApiConfig, value: string | number) => {
         const updated = configs.map(c => c.id === id ? { ...c, [field]: value } : c);
         setConfigs(updated);
+        localStorage.setItem('trade_scout_api_configs', JSON.stringify(updated));
     };
 
     const handleCustomProxySave = () => {
@@ -396,20 +379,11 @@ const SystemSettings: React.FC = () => {
         alert("Custom Proxy Saved. It will be prioritized.");
     };
 
-    const forceSync = async () => {
-        setIsSyncing(true);
-        try {
-            await saveApiConfigsToCloud(configs);
-            localStorage.setItem('trade_scout_api_configs', JSON.stringify(configs));
-            alert("API 配置已成功同步到云端！");
-        } catch(e:any) { alert("同步失败: " + e.message); } finally { setIsSyncing(false); }
-    };
-
     const addConfig = () => {
         const newConfig: ApiConfig = { 
             id: Date.now().toString(), apiKey: '', baseUrl: 'native', modelId: 'gemini-1.5-pro', taskAssignment: 'default', priority: 2
         };
-        saveConfigsToStateAndCloud([...configs, newConfig]);
+        saveConfigsToState([...configs, newConfig]);
     };
 
     // New: Generic Preset Application
@@ -427,12 +401,12 @@ const SystemSettings: React.FC = () => {
             }
             return c;
         });
-        saveConfigsToStateAndCloud(updated);
+        saveConfigsToState(updated);
     };
 
     const removeConfig = (id: string) => {
         if (configs.length > 1 && confirm("确认删除此 API 配置？")) {
-            saveConfigsToStateAndCloud(configs.filter(c => c.id !== id));
+            saveConfigsToState(configs.filter(c => c.id !== id));
         } else if (configs.length === 1) {
             alert("必须保留至少一个配置。");
         }
@@ -455,13 +429,9 @@ const SystemSettings: React.FC = () => {
                     <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
                         <Key className="text-blue-600" /> API 密钥配置池
                     </h3>
-                    {ghStatus.ok && <p className="text-xs text-green-600 font-bold mt-1">✓ Cloud Sync Enabled (Auto-Saving)</p>}
+                    <p className="text-xs text-slate-500 mt-1">本地安全存储 (LocalStorage Only) - 密钥不会上传到云端</p>
                 </div>
                 <div className="flex gap-2">
-                    <button onClick={forceSync} disabled={isSyncing || !ghStatus.ok} className="bg-purple-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-purple-700 transition-colors disabled:opacity-50 shadow-md">
-                        {isSyncing ? <Loader2 className="animate-spin" size={16}/> : <UploadCloud size={16}/>}
-                        强制同步 (Force Sync)
-                    </button>
                     <button onClick={addConfig} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-blue-700 transition-colors shadow-md">
                         <Plus size={16} /> 添加新密钥
                     </button>
@@ -472,17 +442,19 @@ const SystemSettings: React.FC = () => {
             <div className="bg-blue-50 border border-blue-200 p-4 rounded-xl mb-6 text-sm text-blue-900 flex items-start gap-3">
                 <Info size={20} className="shrink-0 mt-0.5 text-blue-600"/>
                 <div>
-                    <div className="font-bold mb-1">📢 模型调整与故障转移 (Priority Failover)</div>
+                    <div className="font-bold mb-1">📢 免费/稳定 API 来源推荐 (Recommended Free Sources)</div>
                     <p className="opacity-90 leading-relaxed mb-2">
-                        <strong>官方 Key 用户请注意:</strong> 您的 <code>AIza...</code> 开头密钥属于 Google 原生密钥。
+                        请从下方“预设”菜单选择模型。为了防止封号，<strong>系统已禁止将 Key 上传到 GitHub</strong>。所有 Key 仅保存在当前浏览器中。
                     </p>
-                    <div className="bg-white p-2 rounded border border-blue-200 mb-2 text-xs">
-                        <strong>💡 解决方案:</strong> 
-                        <ul className="list-disc pl-4 mt-1">
-                            <li>请务必使用下拉菜单中的 <strong>"Google Official (Native SDK)"</strong> 预设。</li>
-                            <li>这将把代理地址自动设为 <code>native</code>，系统会自动切换到 Google 官方 SDK 模式。</li>
-                            <li><strong>网络警告:</strong> 原生模式必须开启全局代理 (Global VPN)，且节点不能选香港/中国内地。</li>
-                        </ul>
+                    <div className="bg-white p-2 rounded border border-blue-200 mb-2 text-xs grid grid-cols-1 md:grid-cols-2 gap-2">
+                        <div className="p-2 bg-slate-50 rounded">
+                            <strong>1. Google AI Studio (Native)</strong>
+                            <div className="text-slate-500">免费，支持搜索，需美/日 IP。</div>
+                        </div>
+                        <div className="p-2 bg-slate-50 rounded">
+                            <strong>2. SiliconFlow (DeepSeek)</strong>
+                            <div className="text-slate-500">国内直连，注册送额度，速度快。</div>
+                        </div>
                     </div>
                     
                     <div className="flex items-center gap-2 mt-3 pt-3 border-t border-blue-100">
@@ -493,7 +465,7 @@ const SystemSettings: React.FC = () => {
                 </div>
             </div>
             
-            {isLoading && <div className="p-8 text-center text-slate-500"><Loader2 className="animate-spin inline mr-2"/> Loading Cloud Configs...</div>}
+            {isLoading && <div className="p-8 text-center text-slate-500"><Loader2 className="animate-spin inline mr-2"/> Loading Local Configs...</div>}
 
             <div className="flex flex-col gap-4">
                 {configs.sort((a,b) => (a.priority||99) - (b.priority||99)).map((config, index) => (
@@ -507,6 +479,9 @@ const SystemSettings: React.FC = () => {
                                     <Workflow size={10} /> {config.taskAssignment?.toUpperCase()}
                                 </span>
                             )}
+                            <span className="bg-green-100 text-green-700 px-2 py-1 rounded text-xs font-bold border border-green-200 flex items-center gap-1 shadow-sm">
+                                <HardDrive size={10} /> Saved to Local Browser
+                            </span>
                         </div>
                         <div className="absolute top-4 right-4 flex gap-2">
                             {/* NEW PRESET DROPDOWN */}
@@ -598,11 +573,6 @@ const SystemSettings: React.FC = () => {
                         )}
                     </div>
                 ))}
-            </div>
-            <div className="mt-6 flex justify-end">
-                 <button onClick={forceSync} disabled={!ghStatus.ok || isSyncing} className="text-slate-400 hover:text-blue-600 text-xs font-bold underline">
-                     Tips: Remember to Save/Sync if Auto-Save fails
-                 </button>
             </div>
         </div>
     );
