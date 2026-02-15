@@ -14,45 +14,45 @@ import {
     fetchDocumentsFromRepo,
     verifyConnection 
 } from '../services/githubService';
-import { Users, Database, Plus, Trash2, Shield, UploadCloud, FileText, Loader2, LogOut, Key, Save, CheckCircle2, AlertTriangle, Info, Play, Workflow, Cloud, Download, Upload, ExternalLink, HelpCircle, Link2, RefreshCw, ArrowDownCircle, Github, FolderOpen, Network, ChevronDown, Lock, HardDrive } from 'lucide-react';
+import { Users, Database, Plus, Trash2, Shield, UploadCloud, FileText, Loader2, LogOut, Key, Save, CheckCircle2, AlertTriangle, Info, Play, Workflow, Cloud, Download, Upload, ExternalLink, HelpCircle, Link2, RefreshCw, ArrowDownCircle, Github, FolderOpen, Network, ChevronDown, Lock, HardDrive, Zap } from 'lucide-react';
 
 interface Props {
     onLogout: () => void;
     currentUser: User;
 }
 
-// --- FREE & CHEAP PROVIDERS ---
+// --- UPDATED FREE & STABLE PROVIDERS PRESETS ---
 const PROVIDER_PRESETS = [
     {
-        name: "Google Official (Native SDK) - 🌟 免费/稳定",
+        name: "Google Official (Native SDK) - 🌟 免费首选",
         baseUrl: "native",
         modelId: "gemini-1.5-pro",
-        note: "推荐！Google AI Studio 申请免费 Key。需开启全局 VPN (非香港节点)。"
+        note: "去 aistudio.google.com 申请。完全免费。需开启 VPN (非香港)。"
     },
     {
-        name: "SiliconFlow (DeepSeek V3) - ⚡️ 注册送额度",
+        name: "SiliconFlow (DeepSeek V3) - ⚡️ 国内直连/送额度",
         baseUrl: "https://api.siliconflow.cn/v1",
         modelId: "deepseek-ai/DeepSeek-V3",
-        note: "国内直连，无需魔法。注册即送 14 元额度（约 1000 次调用）。"
+        note: "国内最快。注册送14元额度 (cloud.siliconflow.cn)。无需魔法。"
     },
     {
-        name: "Groq (Llama3) - 🚀 极速/限量免费",
+        name: "Groq (Llama3 70B) - 🚀 极速/限量免费",
         baseUrl: "https://api.groq.com/openai/v1",
         modelId: "llama3-70b-8192",
-        note: "速度极快，目前有较好的免费层级。适合处理文本任务。"
+        note: "速度极快，适合处理大量文本。console.groq.com 申请。"
     },
     {
-        name: "OpenRouter (Gemini Flash) - 🇺🇸 需付费",
+        name: "OpenRouter (Gemini Flash) - 🇺🇸 需付费/不稳定",
         baseUrl: "https://openrouter.ai/api/v1",
         modelId: "google/gemini-flash-1.5",
-        note: "聚合平台。如果您上传了 Key 到 GitHub，OpenRouter 会自动封号。"
+        note: "聚合平台。免费模型容易报 429 错误，建议绑定信用卡使用。"
     }
 ];
 
 export const AdminDashboard: React.FC<Props> = ({ onLogout, currentUser }) => {
     // Default to 'settings' tab for easier config access
     const [activeTab, setActiveTab] = useState<'users' | 'kb' | 'settings' | 'limits'>(
-        checkGitHubStatus().ok ? 'settings' : 'limits'
+        checkGitHubStatus().ok ? 'settings' : 'settings' // Default to settings to fix keys first
     );
     const [refreshKey, setRefreshKey] = useState(0); 
 
@@ -89,11 +89,11 @@ export const AdminDashboard: React.FC<Props> = ({ onLogout, currentUser }) => {
             <div className="flex-1 p-6 max-w-6xl mx-auto w-full">
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden min-h-[600px]">
                     <div className="flex border-b border-slate-200 bg-slate-50 overflow-x-auto">
-                        <button onClick={() => setActiveTab('limits')} className={`px-6 py-4 font-bold text-sm flex items-center gap-2 transition-colors whitespace-nowrap ${activeTab === 'limits' ? 'bg-white text-blue-600 border-t-2 border-t-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>
-                            <Cloud size={18} /> ① 云端连接 (Connection)
-                        </button>
                         <button onClick={() => setActiveTab('settings')} className={`px-6 py-4 font-bold text-sm flex items-center gap-2 transition-colors whitespace-nowrap ${activeTab === 'settings' ? 'bg-white text-blue-600 border-t-2 border-t-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>
-                            <Key size={18} /> ② API 密钥配置
+                            <Key size={18} /> ① API 密钥配置 (API Keys)
+                        </button>
+                        <button onClick={() => setActiveTab('limits')} className={`px-6 py-4 font-bold text-sm flex items-center gap-2 transition-colors whitespace-nowrap ${activeTab === 'limits' ? 'bg-white text-blue-600 border-t-2 border-t-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>
+                            <Cloud size={18} /> ② 云端连接 (Cloud DB)
                         </button>
                         <button onClick={() => setActiveTab('users')} className={`px-6 py-4 font-bold text-sm flex items-center gap-2 transition-colors whitespace-nowrap ${activeTab === 'users' ? 'bg-white text-blue-600 border-t-2 border-t-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>
                             <Users size={18} /> ③ 用户管理
@@ -440,26 +440,28 @@ const SystemSettings: React.FC = () => {
             
             {/* Helpful Banner for Connectivity */}
             <div className="bg-blue-50 border border-blue-200 p-4 rounded-xl mb-6 text-sm text-blue-900 flex items-start gap-3">
-                <Info size={20} className="shrink-0 mt-0.5 text-blue-600"/>
-                <div>
-                    <div className="font-bold mb-1">📢 免费/稳定 API 来源推荐 (Recommended Free Sources)</div>
-                    <p className="opacity-90 leading-relaxed mb-2">
-                        请从下方“预设”菜单选择模型。为了防止封号，<strong>系统已禁止将 Key 上传到 GitHub</strong>。所有 Key 仅保存在当前浏览器中。
-                    </p>
-                    <div className="bg-white p-2 rounded border border-blue-200 mb-2 text-xs grid grid-cols-1 md:grid-cols-2 gap-2">
-                        <div className="p-2 bg-slate-50 rounded">
-                            <strong>1. Google AI Studio (Native)</strong>
-                            <div className="text-slate-500">免费，支持搜索，需美/日 IP。</div>
-                        </div>
-                        <div className="p-2 bg-slate-50 rounded">
-                            <strong>2. SiliconFlow (DeepSeek)</strong>
-                            <div className="text-slate-500">国内直连，注册送额度，速度快。</div>
-                        </div>
+                <Zap size={20} className="shrink-0 mt-0.5 text-blue-600"/>
+                <div className="flex-1">
+                    <div className="font-bold mb-2">📢 免费/稳定 API 来源推荐 (Recommended Free Sources)</div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-2">
+                        <a href="https://aistudiocdn.com/app/apikey" target="_blank" className="p-3 bg-white rounded border border-blue-200 hover:border-blue-400 block transition-colors group">
+                            <strong className="text-blue-700 flex items-center gap-1 group-hover:underline">1. Google AI Studio <ExternalLink size={12}/></strong>
+                            <div className="text-xs text-slate-500 mt-1">Native 模式，免费且强大。需非香港 VPN。</div>
+                        </a>
+                        <a href="https://cloud.siliconflow.cn/" target="_blank" className="p-3 bg-white rounded border border-blue-200 hover:border-blue-400 block transition-colors group">
+                            <strong className="text-blue-700 flex items-center gap-1 group-hover:underline">2. SiliconFlow (硅基) <ExternalLink size={12}/></strong>
+                            <div className="text-xs text-slate-500 mt-1">国内直连，DeepSeek V3，送14元额度。</div>
+                        </a>
+                        <a href="https://console.groq.com/keys" target="_blank" className="p-3 bg-white rounded border border-blue-200 hover:border-blue-400 block transition-colors group">
+                            <strong className="text-blue-700 flex items-center gap-1 group-hover:underline">3. Groq <ExternalLink size={12}/></strong>
+                            <div className="text-xs text-slate-500 mt-1">Llama 3 极速版，有免费层级。</div>
+                        </a>
                     </div>
+                    <p className="text-[10px] text-slate-400">* OpenRouter 免费版容易报 429 错误 (Too Many Requests)，建议优先使用上述 3 个源。</p>
                     
                     <div className="flex items-center gap-2 mt-3 pt-3 border-t border-blue-100">
                         <Network size={16}/>
-                        <input type="text" className="bg-white border border-blue-300 rounded px-2 py-1 text-xs w-64" placeholder="Custom Proxy Prefix" value={customProxy} onChange={(e) => setCustomProxy(e.target.value)} />
+                        <input type="text" className="bg-white border border-blue-300 rounded px-2 py-1 text-xs w-64" placeholder="Custom Proxy Prefix (Optional)" value={customProxy} onChange={(e) => setCustomProxy(e.target.value)} />
                         <button onClick={handleCustomProxySave} className="text-xs bg-blue-600 text-white px-3 py-1 rounded font-bold hover:bg-blue-700">Save Proxy</button>
                     </div>
                 </div>
