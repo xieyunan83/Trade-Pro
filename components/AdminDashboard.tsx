@@ -24,6 +24,12 @@ interface Props {
 // --- UPDATED FREE & STABLE PROVIDERS PRESETS ---
 const PROVIDER_PRESETS = [
     {
+        name: "HiAPI (Stable Relay) - 💎 稳定推荐",
+        baseUrl: "https://hiapi.online/v1",
+        modelId: "gemini-1.5-pro",
+        note: "稳定中转服务，支持高并发，不易封号，适合生产环境。"
+    },
+    {
         name: "Google Official (Native SDK) - 🌟 免费首选",
         baseUrl: "native",
         modelId: "gemini-1.5-pro",
@@ -42,7 +48,7 @@ const PROVIDER_PRESETS = [
         note: "速度极快，适合处理大量文本。console.groq.com 申请。"
     },
     {
-        name: "OpenRouter (Gemini Flash) - 🇺🇸 需付费/不稳定",
+        name: "OpenRouter (Gemini Flash) - 🇺🇸 备用",
         baseUrl: "https://openrouter.ai/api/v1",
         modelId: "google/gemini-flash-1.5",
         note: "聚合平台。免费模型容易报 429 错误，建议绑定信用卡使用。"
@@ -443,21 +449,25 @@ const SystemSettings: React.FC = () => {
                 <Zap size={20} className="shrink-0 mt-0.5 text-blue-600"/>
                 <div className="flex-1">
                     <div className="font-bold mb-2">📢 免费/稳定 API 来源推荐 (Recommended Free Sources)</div>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-2">
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-2">
+                        <a href="https://hiapi.online/" target="_blank" className="p-3 bg-white rounded border border-blue-200 hover:border-blue-400 block transition-colors group">
+                            <strong className="text-blue-700 flex items-center gap-1 group-hover:underline">1. HiAPI <ExternalLink size={12}/></strong>
+                            <div className="text-xs text-slate-500 mt-1">稳定中转，适合生产环境。</div>
+                        </a>
                         <a href="https://aistudiocdn.com/app/apikey" target="_blank" className="p-3 bg-white rounded border border-blue-200 hover:border-blue-400 block transition-colors group">
-                            <strong className="text-blue-700 flex items-center gap-1 group-hover:underline">1. Google AI Studio <ExternalLink size={12}/></strong>
-                            <div className="text-xs text-slate-500 mt-1">Native 模式，免费且强大。需非香港 VPN。</div>
+                            <strong className="text-blue-700 flex items-center gap-1 group-hover:underline">2. Google AI Studio <ExternalLink size={12}/></strong>
+                            <div className="text-xs text-slate-500 mt-1">Native 模式，免费且强大。</div>
                         </a>
                         <a href="https://cloud.siliconflow.cn/" target="_blank" className="p-3 bg-white rounded border border-blue-200 hover:border-blue-400 block transition-colors group">
-                            <strong className="text-blue-700 flex items-center gap-1 group-hover:underline">2. SiliconFlow (硅基) <ExternalLink size={12}/></strong>
-                            <div className="text-xs text-slate-500 mt-1">国内直连，DeepSeek V3，送14元额度。</div>
+                            <strong className="text-blue-700 flex items-center gap-1 group-hover:underline">3. SiliconFlow <ExternalLink size={12}/></strong>
+                            <div className="text-xs text-slate-500 mt-1">国内直连，送14元额度。</div>
                         </a>
                         <a href="https://console.groq.com/keys" target="_blank" className="p-3 bg-white rounded border border-blue-200 hover:border-blue-400 block transition-colors group">
-                            <strong className="text-blue-700 flex items-center gap-1 group-hover:underline">3. Groq <ExternalLink size={12}/></strong>
-                            <div className="text-xs text-slate-500 mt-1">Llama 3 极速版，有免费层级。</div>
+                            <strong className="text-blue-700 flex items-center gap-1 group-hover:underline">4. Groq <ExternalLink size={12}/></strong>
+                            <div className="text-xs text-slate-500 mt-1">Llama 3 极速版。</div>
                         </a>
                     </div>
-                    <p className="text-[10px] text-slate-400">* OpenRouter 免费版容易报 429 错误 (Too Many Requests)，建议优先使用上述 3 个源。</p>
+                    <p className="text-[10px] text-slate-400">* OpenRouter 免费版容易报 429 错误，建议优先使用 HiAPI 或 Google Native。</p>
                     
                     <div className="flex items-center gap-2 mt-3 pt-3 border-t border-blue-100">
                         <Network size={16}/>
