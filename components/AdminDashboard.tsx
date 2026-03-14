@@ -15,7 +15,7 @@ import {
   saveUsersToCloud,
   fetchDocumentsFromRepo
 } from '../services/githubService';
-import { getAllFilesFromDB, saveFileToDB } from '../services/db';
+import { getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/db';
 
 interface AdminDashboardProps {
   onLogout: () => void;
@@ -26,6 +26,7 @@ interface AdminDashboardProps {
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, currentUser, users, setUsers }) => {
   const [activeTab, setActiveTab] = useState<number>(1);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [localConfig, setLocalConfig] = useState<GlobalConfig>({
     lastUpdated: Date.now(),
     dailyLimits: { search: 50, analysis: 20 },
@@ -187,6 +188,37 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
       createdAt: Date.now()
     };
     setUsers([...users, newUser]);
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const content = event.target?.result as string;
+      const newFile: KnowledgeFile = {
+        id: Math.random().toString(36).substr(2, 9),
+        name: file.name,
+        size: file.size,
+        data: content,
+        type: file.name.split('.').pop() || 'txt'
+      };
+
+      await saveFileToDB(newFile);
+      const allFiles = await getAllFilesFromDB();
+      setKbFiles(allFiles);
+      alert('文件上传成功！');
+    };
+    reader.readAsText(file);
+  };
+
+  const handleDeleteFile = async (id: string) => {
+    if (confirm('确定要删除这个文件吗？')) {
+      await deleteFileFromDB(id);
+      const allFiles = await getAllFilesFromDB();
+      setKbFiles(allFiles);
+    }
   };
 
   return (
@@ -536,7 +568,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     <div className="text-lg font-black text-slate-800">
                       Active Files: <span className="text-blue-600">{kbFiles.length}</span>
                     </div>
-                    <button className="text-blue-600 font-black text-sm flex items-center gap-1 hover:underline">
+                    <input 
+                      type="file" 
+                      ref={fileInputRef} 
+                      onChange={handleFileUpload} 
+                      className="hidden" 
+                      accept=".txt,.md,.json,.csv"
+                    />
+                    <button 
+                      onClick={() => fileInputRef.current?.click()}
+                      className="text-blue-600 font-black text-sm flex items-center gap-1 hover:underline"
+                    >
                       <Plus size={16} /> Upload Local
                     </button>
                   </div>
@@ -551,7 +593,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                           <div className="text-xs font-black text-slate-800 truncate">{file.name}</div>
                           <div className="text-[10px] text-slate-400 font-bold mt-1">{(file.size / 1024).toFixed(1)} KB</div>
                         </div>
-                        <button className="text-slate-200 hover:text-red-500 transition-all opacity-0 group-hover:opacity-100">
+                        <button 
+                          onClick={() => handleDeleteFile(file.id)}
+                          className="text-slate-200 hover:text-red-500 transition-all opacity-0 group-hover:opacity-100"
+                        >
                           <Trash2 size={16} />
                         </button>
                       </div>
