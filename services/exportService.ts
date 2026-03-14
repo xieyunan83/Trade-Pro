@@ -336,7 +336,10 @@ const createEmailSlide = (pptx: any, title: string, content: string) => {
  */
 const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
     const addFooter = (slide: any) => {
-        slide.addText(`楠哥的小助理 深度报告 | ${sanitize(data.companyInfo.name)}`, { x: 0.5, y: 5.3, w: 9, h: 0.3, fontSize: 8, color: "94A3B8", align: "center", valign: "middle" });
+        slide.addText(`楠哥的小助理 深度报告 | ${sanitize(data.companyInfo.name)} | 机密资料`, { 
+            x: 0.5, y: 5.3, w: 9, h: 0.3, 
+            fontSize: 8, color: "94A3B8", align: "center", valign: "middle" 
+        });
     };
 
     const headerStyle = { x: 0.5, y: 0.2, h: 0.4, fontSize: 18, bold: true, color: "FFFFFF", valign: "middle" as const };
@@ -345,116 +348,153 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
     // --- SLIDE 1: COVER ---
     let slide = pptx.addSlide();
     slide.background = { color: COLORS.DARK_BG };
-    slide.addText("楠哥的小助理", { x: 0.5, y: 0.5, h: 0.5, fontSize: 10, bold: true, color: COLORS.ACCENT_BLUE, letterSpacing: 2, align: 'center', valign: 'middle' });
-    slide.addText(sanitize(data.companyInfo.name), { x: 0.5, y: 1.8, w: 9, h: 1.2, fontSize: 32, bold: true, color: "FFFFFF", align: 'center', valign: 'middle' });
-    slide.addText("全球贸易情报深度分析报告", { x: 0.5, y: 3.0, w: 9, h: 0.5, fontSize: 20, color: "94A3B8", align: 'center', valign: 'middle' });
-    slide.addShape(pptx.ShapeType.line, { x: 3.0, y: 3.6, w: 4, h: 0, line: { color: COLORS.ACCENT_BLUE, width: 3 } });
-    slide.addText(`官网: ${sanitize(data.companyInfo.website)}`, { x: 0.5, y: 4.0, w: 9, h: 0.3, fontSize: 11, color: "CBD5E1", align: 'center', valign: 'middle' });
-    slide.addText(`总部: ${sanitize(data.companyInfo.headquarters)}`, { x: 0.5, y: 4.3, w: 9, h: 0.3, fontSize: 11, color: "CBD5E1", align: 'center', valign: 'middle' });
+    
+    // Decorative elements
+    slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.1, h: 5.6, fill: COLORS.ACCENT_BLUE });
+    slide.addShape(pptx.ShapeType.triangle, { x: 8.5, y: 0, w: 1.5, h: 1.5, fill: COLORS.ACCENT_BLUE, flipV: true });
+    
+    slide.addText("楠哥的小助理 · TRADE SCOUT PRO", { 
+        x: 0.5, y: 0.5, h: 0.5, 
+        fontSize: 12, bold: true, color: COLORS.ACCENT_BLUE, 
+        letterSpacing: 2, align: 'left', valign: 'middle' 
+    });
+    
+    slide.addText(sanitize(data.companyInfo.name), { 
+        x: 0.5, y: 1.5, w: 9, h: 1.2, 
+        fontSize: 36, bold: true, color: "FFFFFF", 
+        align: 'left', valign: 'middle' 
+    });
+    
+    slide.addText("全球贸易情报深度分析报告", { 
+        x: 0.5, y: 2.6, w: 9, h: 0.5, 
+        fontSize: 22, color: "CBD5E1", 
+        align: 'left', valign: 'middle' 
+    });
+    
+    slide.addShape(pptx.ShapeType.line, { 
+        x: 0.5, y: 3.3, w: 3, h: 0, 
+        line: { color: COLORS.ACCENT_BLUE, width: 4 } 
+    });
+    
+    const coverInfo = [
+        `官网: ${sanitize(data.companyInfo.website)}`,
+        `总部: ${sanitize(data.companyInfo.headquarters)}`,
+        `日期: ${new Date().toLocaleDateString()}`
+    ].join("  |  ");
+    
+    slide.addText(coverInfo, { 
+        x: 0.5, y: 4.5, w: 9, h: 0.4, 
+        fontSize: 12, color: "94A3B8", 
+        align: 'left', valign: 'middle' 
+    });
 
     // --- SLIDE 2: COMPANY PROFILE (企业概况) ---
     slide = pptx.addSlide();
     addFooter(slide);
     slide.addShape(pptx.ShapeType.rect, headerRect);
-    slide.addText("企业概况 (Company Profile)", headerStyle);
+    slide.addText("01 企业概况 (Company Profile)", headerStyle);
 
-    // Left Column: Basic Info
-    slide.addText("基本信息", { x: 0.5, y: 1.0, fontSize: 12, bold: true, color: COLORS.ACCENT_BLUE });
+    // Left Column: Basic Info Card
+    slide.addShape(pptx.ShapeType.rect, { x: 0.5, y: 1.0, w: 4.0, h: 4.0, fill: "FFFFFF", line: { color: "E2E8F0" }, r: 0.1 });
+    slide.addText("基本信息", { x: 0.7, y: 1.2, fontSize: 14, bold: true, color: COLORS.ACCENT_BLUE });
+    
     const infoTable = [
-        [{ text: "成立时间", options: { bold: true, fill: "F1F5F9", valign: "middle" } }, { text: sanitize(data.companyInfo.foundedYear), options: { valign: "middle" } }],
-        [{ text: "企业性质", options: { bold: true, fill: "F1F5F9", valign: "middle" } }, { text: sanitize(data.companyInfo.nature), options: { valign: "middle" } }],
-        [{ text: "人员规模", options: { bold: true, fill: "F1F5F9", valign: "middle" } }, { text: sanitize(data.companyInfo.scale), options: { valign: "middle" } }],
-        [{ text: "总部地点", options: { bold: true, fill: "F1F5F9", valign: "middle" } }, { text: sanitize(data.companyInfo.headquarters), options: { valign: "middle" } }],
+        [{ text: "成立时间", options: { bold: true, fill: "F8FAFC", color: COLORS.TEXT_MUTED } }, { text: sanitize(data.companyInfo.foundedYear) }],
+        [{ text: "企业性质", options: { bold: true, fill: "F8FAFC", color: COLORS.TEXT_MUTED } }, { text: sanitize(data.companyInfo.nature) }],
+        [{ text: "人员规模", options: { bold: true, fill: "F8FAFC", color: COLORS.TEXT_MUTED } }, { text: sanitize(data.companyInfo.scale) }],
+        [{ text: "总部地点", options: { bold: true, fill: "F8FAFC", color: COLORS.TEXT_MUTED } }, { text: sanitize(data.companyInfo.headquarters) }],
     ];
-    slide.addTable(infoTable, { x: 0.5, y: 1.3, w: 4.0, fontSize: 10, rowH: 0.5, border: { pt: 1, color: "E2E8F0" }, align: 'left', valign: 'middle' });
+    slide.addTable(infoTable, { 
+        x: 0.7, y: 1.6, w: 3.6, 
+        fontSize: 10, rowH: 0.6, 
+        border: { pt: 0.5, color: "F1F5F9" }, 
+        valign: 'middle' 
+    });
 
-    // Right Column: Description
-    slide.addText("企业简介", { x: 4.8, y: 1.0, fontSize: 12, bold: true, color: COLORS.ACCENT_BLUE });
-    slide.addShape(pptx.ShapeType.rect, { x: 4.8, y: 1.3, w: 4.7, h: 3.5, fill: "F8FAFC", line: { color: "E2E8F0" } });
+    // Right Column: Description Card
+    slide.addShape(pptx.ShapeType.rect, { x: 4.8, y: 1.0, w: 4.7, h: 4.0, fill: "FFFFFF", line: { color: "E2E8F0" }, r: 0.1 });
+    slide.addText("企业简介", { x: 5.0, y: 1.2, fontSize: 14, bold: true, color: COLORS.ACCENT_BLUE });
     slide.addText(sanitize(data.companyInfo.description), { 
-        x: 4.9, y: 1.4, w: 4.5, h: 3.3, 
-        fontSize: 10, color: COLORS.TEXT_MAIN, valign: 'middle', align: 'left', wrap: true 
+        x: 5.0, y: 1.6, w: 4.3, h: 3.2, 
+        fontSize: 10, color: COLORS.TEXT_MAIN, 
+        valign: 'top', align: 'left', wrap: true, lineSpacing: 1.5
     });
 
     // --- SLIDE 3: FINANCIALS & TRAFFIC (财务与流量) ---
     slide = pptx.addSlide();
     addFooter(slide);
     slide.addShape(pptx.ShapeType.rect, headerRect);
-    slide.addText("财务与流量分析 (Financials & Traffic)", headerStyle);
+    slide.addText("02 财务与流量分析 (Financials & Traffic)", headerStyle);
 
-    // Financials
-    slide.addText("财务概况", { x: 0.5, y: 1.0, fontSize: 12, bold: true, color: COLORS.ACCENT_BLUE });
+    // Financials Card
+    slide.addShape(pptx.ShapeType.rect, { x: 0.5, y: 1.0, w: 4.0, h: 2.0, fill: "FFFFFF", line: { color: "E2E8F0" }, r: 0.1 });
+    slide.addText("财务概况", { x: 0.7, y: 1.2, fontSize: 13, bold: true, color: COLORS.ACCENT_BLUE });
     const finTable = [
-        [{ text: "预估年营收", options: { bold: true, fill: "F1F5F9", valign: "middle" } }, { text: sanitize(data.financials.revenueEstimate), options: { valign: "middle" } }],
-        [{ text: "常见付款方式", options: { bold: true, fill: "F1F5F9", valign: "middle" } }, { text: sanitize(data.financials.paymentTerms), options: { valign: "middle" } }],
-        [{ text: "信用/知识产权", options: { bold: true, fill: "F1F5F9", valign: "middle" } }, { text: sanitize(data.financials.ipInfo), options: { valign: "middle" } }],
+        [{ text: "预估年营收", options: { bold: true, fill: "F8FAFC" } }, { text: sanitize(data.financials.revenueEstimate) }],
+        [{ text: "结算方式", options: { bold: true, fill: "F8FAFC" } }, { text: sanitize(data.financials.paymentTerms) }],
+        [{ text: "知识产权", options: { bold: true, fill: "F8FAFC" } }, { text: sanitize(data.financials.ipInfo) }],
     ];
-    slide.addTable(finTable, { x: 0.5, y: 1.3, w: 4.0, fontSize: 10, rowH: 0.5, border: { pt: 1, color: "E2E8F0" }, valign: 'middle' });
+    slide.addTable(finTable, { x: 0.7, y: 1.5, w: 3.6, fontSize: 9, rowH: 0.4, border: { pt: 0.5, color: "F1F5F9" }, valign: 'middle' });
 
-    // Traffic Table
-    slide.addText("流量来源与关键词", { x: 4.8, y: 1.0, fontSize: 12, bold: true, color: COLORS.ACCENT_BLUE });
+    // Socials Card
+    slide.addShape(pptx.ShapeType.rect, { x: 0.5, y: 3.2, w: 4.0, h: 1.8, fill: "FFFFFF", line: { color: "E2E8F0" }, r: 0.1 });
+    slide.addText("社交媒体", { x: 0.7, y: 3.4, fontSize: 13, bold: true, color: COLORS.ACCENT_BLUE });
+    const socialText = [
+        data.socials.linkedin ? `LinkedIn: ${data.socials.linkedin}` : "",
+        data.socials.facebook ? `Facebook: ${data.socials.facebook}` : "",
+        data.socials.instagram ? `Instagram: ${data.socials.instagram}` : "",
+        data.socials.similarWebTraffic ? `SimilarWeb: ${data.socials.similarWebTraffic}` : ""
+    ].filter(Boolean).join("\n");
+    slide.addText(socialText || "未发现公开社交账号", { x: 0.7, y: 3.7, w: 3.6, fontSize: 9, color: COLORS.TEXT_MAIN });
+
+    // Traffic Table Card
+    slide.addShape(pptx.ShapeType.rect, { x: 4.8, y: 1.0, w: 4.7, h: 4.0, fill: "FFFFFF", line: { color: "E2E8F0" }, r: 0.1 });
+    slide.addText("流量来源与关键词", { x: 5.0, y: 1.2, fontSize: 13, bold: true, color: COLORS.ACCENT_BLUE });
     if (data.trafficAnalysis && data.trafficAnalysis.length > 0) {
         const trafficHeaders = [
-            { text: "分类", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF", w: 1.0, valign: "middle" } },
-            { text: "流量类型", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF", w: 1.2, valign: "middle" } },
-            { text: "核心关键词", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF", w: 1.5, valign: "middle" } },
-            { text: "量级", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF", w: 0.8, valign: "middle" } }
+            { text: "分类", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF", valign: "middle" } },
+            { text: "类型", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF", valign: "middle" } },
+            { text: "核心关键词", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF", valign: "middle" } }
         ];
-        const trafficRows = data.trafficAnalysis.slice(0, 5).map(t => [
+        const trafficRows = data.trafficAnalysis.slice(0, 7).map(t => [
             { text: sanitize(t.category), options: { valign: "middle" } },
             { text: sanitize(t.trafficType), options: { valign: "middle" } },
-            { text: sanitize(t.topKeywords), options: { valign: "middle" } },
-            { text: sanitize(t.volumeEst), options: { valign: "middle" } }
+            { text: sanitize(t.topKeywords), options: { valign: "middle" } }
         ]);
-        slide.addTable([trafficHeaders, ...trafficRows], { x: 4.8, y: 1.3, w: 4.7, fontSize: 8, rowH: 0.4, border: { pt: 1, color: "E2E8F0" }, valign: 'middle' });
+        slide.addTable([trafficHeaders, ...trafficRows], { 
+            x: 5.0, y: 1.5, w: 4.3, 
+            fontSize: 8, rowH: 0.45, 
+            border: { pt: 0.5, color: "F1F5F9" }, 
+            valign: 'middle' 
+        });
     } else {
-        slide.addText("暂无流量数据", { x: 4.8, y: 1.5, fontSize: 10, color: COLORS.TEXT_MUTED });
+        slide.addText("暂无流量数据", { x: 5.0, y: 2.0, w: 4.3, align: 'center', fontSize: 10, color: COLORS.TEXT_MUTED });
     }
 
-    // --- SLIDE 3.5: FINANCIAL TRENDS & FORECAST (NEW) ---
+    // --- SLIDE 3.5: FINANCIAL TRENDS (财务趋势) ---
     if (data.financialTrends && data.financialTrends.length > 0) {
         slide = pptx.addSlide();
         addFooter(slide);
         slide.addShape(pptx.ShapeType.rect, headerRect);
-        slide.addText("财务趋势与预测 (Financial Trends & Forecast)", headerStyle);
+        slide.addText("03 财务趋势与预测 (Financial Trends)", headerStyle);
 
         const labels = data.financialTrends.map(t => t.year);
-        const revenueData = data.financialTrends.map(t => {
-            const val = t.revenue || 0;
-            return val > 1000000 ? val / 1000000 : val;
-        });
-        const procureData = data.financialTrends.map(t => {
-            const val = t.procurement || 0;
-            return val > 1000000 ? val / 1000000 : val;
-        });
+        const revenueData = data.financialTrends.map(t => (t.revenue || 0) / 1000000);
+        const procureData = data.financialTrends.map(t => (t.procurement || 0) / 1000000);
 
-        const chartData = [
-            {
-                name: "Total Revenue (Sales) - USD Millions",
-                labels: labels,
-                values: revenueData
-            },
-            {
-                name: "Est. Procurement - USD Millions",
-                labels: labels,
-                values: procureData
-            }
-        ];
-
-        slide.addChart(pptx.ChartType.bar, chartData, {
+        slide.addChart(pptx.ChartType.bar, [
+            { name: "营收 (百万美元)", labels, values: revenueData },
+            { name: "采购 (百万美元)", labels, values: procureData }
+        ], {
             x: 0.5, y: 1.2, w: 9.0, h: 3.5,
-            barDir: 'col',
-            barGrouping: 'clustered',
-            showLegend: true,
-            legendPos: 'b',
-            showTitle: false,
+            barDir: 'col', barGrouping: 'clustered',
+            showLegend: true, legendPos: 'b',
             chartColors: [COLORS.ACCENT_BLUE, COLORS.ACCENT_PURPLE],
             showValue: true
         });
 
-        slide.addText("分析说明: 图表单位为百万美元 (USD Millions)。展示了该企业过去5年的财务估算及未来2年的AI预测趋势。", { 
-            x: 0.5, y: 4.8, w: 9, h: 0.5, 
-            fontSize: 10, color: COLORS.TEXT_MUTED, align: 'center', italic: true 
+        slide.addText("注: 以上财务数据基于企业规模及行业平均水平的 AI 估算，仅供参考。", { 
+            x: 0.5, y: 4.8, w: 9, fontSize: 9, color: COLORS.TEXT_MUTED, align: 'center', italic: true 
         });
     }
 
@@ -462,162 +502,192 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
     slide = pptx.addSlide();
     addFooter(slide);
     slide.addShape(pptx.ShapeType.rect, headerRect);
-    slide.addText("商业模式与供应链 (Business Model)", headerStyle);
+    slide.addText("04 商业模式与供应链 (Business Model)", headerStyle);
 
-    const boxStyle = { fill: "FFFFFF", line: { color: "E2E8F0" } };
-    const titleStyle = { fontSize: 10, bold: true, color: COLORS.ACCENT_BLUE };
+    const boxStyle = { fill: "FFFFFF", line: { color: "E2E8F0" }, r: 0.1 };
+    const titleStyle = { fontSize: 12, bold: true, color: COLORS.ACCENT_BLUE };
     const contentStyle = { fontSize: 9, color: COLORS.TEXT_MAIN, valign: "middle" as const };
 
     slide.addShape(pptx.ShapeType.rect, { x: 0.5, y: 1.2, w: 4.4, h: 1.8, ...boxStyle });
-    slide.addText("业务范围 (Scope)", { x: 0.6, y: 1.3, ...titleStyle });
-    slide.addText(`核心产品: ${data.businessScope.coreProducts.join(', ')}\n\n定位: ${data.businessScope.brandPositioning}\n\n价格敏感度: ${data.businessScope.priceSensitivity}`, 
-        { x: 0.6, y: 1.5, w: 4.2, h: 1.4, ...contentStyle, wrap: true });
+    slide.addText("业务范围 (Scope)", { x: 0.7, y: 1.4, ...titleStyle });
+    slide.addText(`核心产品: ${data.businessScope.coreProducts.join(', ')}\n\n品牌定位: ${data.businessScope.brandPositioning}\n\n价格敏感度: ${data.businessScope.priceSensitivity}`, 
+        { x: 0.7, y: 1.7, w: 4.0, h: 1.2, ...contentStyle, wrap: true });
 
     slide.addShape(pptx.ShapeType.rect, { x: 5.1, y: 1.2, w: 4.4, h: 1.8, ...boxStyle });
-    slide.addText("供应链角色 (Supply Chain)", { x: 5.2, y: 1.3, ...titleStyle });
-    slide.addText(`角色: ${data.supplyChain.role}\n\n服务模式: ${data.supplyChain.serviceType}\n\n目标客户: ${data.targetAudience.join(', ')}`,
-        { x: 5.2, y: 1.5, w: 4.2, h: 1.4, ...contentStyle, wrap: true });
+    slide.addText("供应链角色 (Supply Chain)", { x: 5.3, y: 1.4, ...titleStyle });
+    slide.addText(`角色: ${data.supplyChain.role}\n\n服务模式: ${data.supplyChain.serviceType}\n\n目标群体: ${data.targetAudience.join(', ')}`,
+        { x: 5.3, y: 1.7, w: 4.0, h: 1.2, ...contentStyle, wrap: true });
 
-    slide.addShape(pptx.ShapeType.rect, { x: 0.5, y: 3.2, w: 9.0, h: 1.5, ...boxStyle });
-    slide.addText("销售渠道与采购 (Channels & Procurement)", { x: 0.6, y: 3.3, ...titleStyle });
-    slide.addText(`销售渠道: ${data.businessModel.channels.join(', ')}\n\n电商平台: ${data.businessModel.ecommercePresence.join(', ')}\n\n采购习惯: ${data.businessModel.procurementInfo}`,
-        { x: 0.6, y: 3.5, w: 8.8, h: 1.1, ...contentStyle, wrap: true });
+    slide.addShape(pptx.ShapeType.rect, { x: 0.5, y: 3.2, w: 9.0, h: 1.8, ...boxStyle });
+    slide.addText("销售渠道与采购习惯 (Channels & Procurement)", { x: 0.7, y: 3.4, ...titleStyle });
+    slide.addText(`销售渠道: ${data.businessModel.channels.join(', ')}\n\n电商布局: ${data.businessModel.ecommercePresence.join(', ')}\n\n采购习惯: ${data.businessModel.procurementInfo}`,
+        { x: 0.7, y: 3.7, w: 8.6, h: 1.2, ...contentStyle, wrap: true });
 
+    // --- SLIDE 5: PRODUCT DEPTH ANALYSIS (背调重点 - NEW) ---
+    if (data.productSummary) {
+        slide = pptx.addSlide();
+        addFooter(slide);
+        slide.addShape(pptx.ShapeType.rect, headerRect);
+        slide.addText("05 产品深度分析 (Product Depth Analysis)", headerStyle);
 
-    // --- SLIDE 5: SWOT ANALYSIS ---
+        const summaryBox = (title: string, content: string, x: number, y: number, w: number, h: number, icon: string) => {
+            slide.addShape(pptx.ShapeType.rect, { x, y, w, h, fill: "FFFFFF", line: { color: COLORS.ACCENT_BLUE, width: 1 }, r: 0.1 });
+            slide.addText(`${icon} ${title}`, { x: x + 0.15, y: y + 0.15, fontSize: 12, bold: true, color: COLORS.ACCENT_BLUE });
+            slide.addText(sanitize(content), { 
+                x: x + 0.15, y: y + 0.5, w: w - 0.3, h: h - 0.6, 
+                fontSize: 9, color: COLORS.TEXT_MAIN, valign: 'top', wrap: true, lineSpacing: 1.2
+            });
+        };
+
+        summaryBox("市场喜好 (Market Preference)", data.productSummary.marketPreference, 0.5, 1.0, 4.4, 1.3, "📊");
+        summaryBox("功能分析 (Feature Analysis)", data.productSummary.featureAnalysis, 5.1, 1.0, 4.4, 1.3, "⚙️");
+        summaryBox("推荐产品 (Recommended)", data.productSummary.recommendedProducts, 0.5, 2.4, 4.4, 1.3, "💡");
+        summaryBox("包装风格 (Packaging)", data.productSummary.packagingAnalysis, 5.1, 2.4, 4.4, 1.3, "📦");
+        summaryBox("颜色偏好 (Color Preference)", data.productSummary.colorPreference, 0.5, 3.8, 9.0, 1.2, "🎨");
+    }
+
+    // --- SLIDE 6: SWOT ANALYSIS ---
     slide = pptx.addSlide();
     addFooter(slide);
     slide.addShape(pptx.ShapeType.rect, headerRect);
-    slide.addText("SWOT 态势分析", headerStyle);
+    slide.addText("06 SWOT 态势分析", headerStyle);
 
-    const drawQuad = (title: string, items: string[], x: number, y: number, color: string) => {
-        slide.addShape(pptx.ShapeType.rect, { x, y, w: 4.4, h: 2.0, fill: "FFFFFF", line: { color: color, width: 2 } });
-        slide.addText(title, { x: x+0.1, y: y+0.1, fontSize: 11, bold: true, color: color });
+    const drawQuad = (title: string, items: string[], x: number, y: number, color: string, bgColor: string) => {
+        slide.addShape(pptx.ShapeType.rect, { x, y, w: 4.4, h: 2.0, fill: bgColor, line: { color: color, width: 2 }, r: 0.1 });
+        slide.addText(title, { x: x+0.15, y: y+0.15, fontSize: 12, bold: true, color: color });
         const bulletText = items && items.length ? items.map(p => `• ${sanitize(p)}`).join('\n') : "• 暂无数据";
-        slide.addText(bulletText, { x: x+0.1, y: y+0.4, w: 4.2, h: 1.5, fontSize: 9, color: COLORS.TEXT_MAIN, valign: 'middle', wrap: true });
+        slide.addText(bulletText, { 
+            x: x+0.15, y: y+0.5, w: 4.1, h: 1.4, 
+            fontSize: 9, color: COLORS.TEXT_MAIN, valign: 'top', wrap: true 
+        });
     };
 
-    drawQuad("STRENGTHS (优势)", data.swot?.strengths, 0.5, 1.1, "10B981");
-    drawQuad("WEAKNESSES (劣势)", data.swot?.weaknesses, 5.1, 1.1, "EF4444");
-    drawQuad("OPPORTUNITIES (机会)", data.swot?.opportunities, 0.5, 3.3, "3B82F6");
-    drawQuad("THREATS (威胁)", data.swot?.threats, 5.1, 3.3, "F59E0B");
+    drawQuad("STRENGTHS (优势)", data.swot?.strengths, 0.5, 1.1, COLORS.SUCCESS, "F0FDF4");
+    drawQuad("WEAKNESSES (劣势)", data.swot?.weaknesses, 5.1, 1.1, COLORS.ERROR, "FEF2F2");
+    drawQuad("OPPORTUNITIES (机会)", data.swot?.opportunities, 0.5, 3.3, COLORS.ACCENT_BLUE, "EFF6FF");
+    drawQuad("THREATS (威胁)", data.swot?.threats, 5.1, 3.3, COLORS.WARNING, "FFFBEB");
 
-
-    // --- SLIDE 6: DECISION MAKERS ---
+    // --- SLIDE 7: DECISION MAKERS ---
     slide = pptx.addSlide();
     addFooter(slide);
     slide.addShape(pptx.ShapeType.rect, headerRect);
-    slide.addText("关键决策人 (Key Decision Makers)", headerStyle);
+    slide.addText("07 关键决策人 (Key Decision Makers)", headerStyle);
 
     if (data.decisionMakers && data.decisionMakers.length > 0) {
         const headers = [
-            { text: "姓名", options: { bold: true, fill: "E2E8F0", w: 2.0, valign: "middle" } },
-            { text: "职位", options: { bold: true, fill: "E2E8F0", w: 2.5, valign: "middle" } },
-            { text: "预估邮箱", options: { bold: true, fill: "E2E8F0", w: 3.5, valign: "middle" } },
-            { text: "类型", options: { bold: true, fill: "E2E8F0", w: 1.0, valign: "middle" } }
+            { text: "姓名", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF", w: 2.0 } },
+            { text: "职位", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF", w: 2.5 } },
+            { text: "预估邮箱", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF", w: 3.5 } },
+            { text: "类型", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF", w: 1.0 } }
         ];
         
         const rows = data.decisionMakers.slice(0, 10).map(dm => [
-            { text: sanitize(dm.name), options: { valign: "middle" } },
-            { text: sanitize(dm.title), options: { valign: "middle" } },
-            { text: sanitize(dm.emailGuess || "-"), options: { valign: "middle" } },
-            { text: sanitize(dm.type), options: { valign: "middle" } }
+            { text: sanitize(dm.name) },
+            { text: sanitize(dm.title) },
+            { text: sanitize(dm.emailGuess || "-") },
+            { text: sanitize(dm.type) }
         ]);
 
-        slide.addTable([headers, ...rows], { x: 0.5, y: 1.2, w: 9.0, fontSize: 9, rowH: 0.35, border: { pt: 1, color: "CBD5E1" }, valign: "middle" });
+        slide.addTable([headers, ...rows], { 
+            x: 0.5, y: 1.2, w: 9.0, 
+            fontSize: 9, rowH: 0.38, 
+            border: { pt: 0.5, color: "E2E8F0" }, 
+            valign: "middle" 
+        });
     } else {
         slide.addText("未在公开渠道发现关键联系人信息。", { x: 0.5, y: 2.5, w: 9, align: 'center', fontSize: 14, color: COLORS.TEXT_MUTED });
     }
 
-    // --- SLIDE 6.5: WEBSITE PRODUCT CATALOG ---
-    if (data.websiteCategories && data.websiteCategories.length > 0) {
-        slide = pptx.addSlide();
-        addFooter(slide);
-        slide.addShape(pptx.ShapeType.rect, headerRect);
-        slide.addText("官网产品目录 (Website Product Catalog)", headerStyle);
-
-        const catHeaders = [
-            { text: "产品类别 (Category)", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF", w: 3.0, valign: "middle", align: 'center' } },
-            { text: "包含产品 (Key Items)", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF", w: 6.0, valign: "middle", align: 'center' } }
-        ];
-
-        const catRows = data.websiteCategories.slice(0, 10).map(cat => [
-            { text: sanitize(cat.categoryName), options: { valign: "middle", align: 'center' } },
-            { text: sanitize(cat.items.join(', ')), options: { valign: "middle", align: 'center' } }
-        ]);
-
-        slide.addTable([catHeaders, ...catRows], { 
-            x: 0.5, y: 1.2, w: 9.0, 
-            fontSize: 9, rowH: 0.4, 
-            border: { pt: 1, color: "CBD5E1" }, 
-            valign: 'middle',
-            align: 'center' 
-        });
-    }
-
-    // --- SLIDE 7: PRODUCTS ---
+    // --- SLIDE 8: PRODUCTS & STRATEGY ---
     slide = pptx.addSlide();
     addFooter(slide);
     slide.addShape(pptx.ShapeType.rect, headerRect);
-    slide.addText("产品与市场策略 (Products & Strategy)", headerStyle);
-
-    slide.addShape(pptx.ShapeType.rect, { x: 0.5, y: 1.0, w: 9, h: 0.8, fill: "F0F9FF", line: { color: "BAE6FD" } });
-    slide.addText(`市场趋势: ${sanitize(data.marketTrends)}`, { x: 0.6, y: 1.1, w: 8.8, h: 0.6, fontSize: 9, color: "0C4A6E", wrap: true, valign: "middle" });
+    slide.addText("08 产品详情与切入策略 (Products & Strategy)", headerStyle);
 
     if (data.products && data.products.length > 0) {
         data.products.slice(0, 3).forEach((prod, i) => {
             const x = 0.5 + i * 3.1;
-            const y = 2.0;
+            const y = 1.1;
             
-            slide.addShape(pptx.ShapeType.rect, { x, y, w: 2.9, h: 3.0, fill: "FFFFFF", line: { color: "E2E8F0" } });
+            slide.addShape(pptx.ShapeType.rect, { x, y, w: 2.9, h: 4.0, fill: "FFFFFF", line: { color: "E2E8F0" }, r: 0.1 });
             
-            slide.addText(sanitize(prod.name), { x: x+0.1, y: y+0.1, w: 2.7, h: 0.5, fontSize: 10, bold: true, valign: 'top' });
-            slide.addText(`零售价: ${sanitize(prod.retailPrice)}`, { x: x+0.1, y: y+0.6, fontSize: 9, color: COLORS.TEXT_MUTED });
-            slide.addText(`预估FOB: ¥${sanitize(prod.estimatedFOBPriceCNY)}`, { x: x+0.1, y: y+0.9, fontSize: 9, color: "D97706", bold: true });
+            slide.addText(sanitize(prod.name), { x: x+0.1, y: y+0.1, w: 2.7, h: 0.5, fontSize: 10, bold: true, color: COLORS.ACCENT_BLUE, valign: 'top' });
+            slide.addText(`零售价: ${sanitize(prod.retailPrice)}`, { x: x+0.1, y: y+0.6, fontSize: 8, color: COLORS.TEXT_MUTED });
+            slide.addText(`预估FOB: ¥${sanitize(prod.estimatedFOBPriceCNY)}`, { x: x+0.1, y: y+0.85, fontSize: 9, color: COLORS.WARNING, bold: true });
             
-            slide.addText("切入点:", { x: x+0.1, y: y+1.3, fontSize: 9, bold: true });
-            slide.addText(sanitize(prod.pitchPoint || "暂无"), { x: x+0.1, y: y+1.5, w: 2.7, h: 0.6, fontSize: 8, color: COLORS.TEXT_MAIN, wrap: true, valign: 'top' });
+            slide.addShape(pptx.ShapeType.line, { x: x+0.1, y: y+1.1, w: 2.7, h: 0, line: { color: "F1F5F9" } });
             
-            slide.addText("定价策略:", { x: x+0.1, y: y+2.1, fontSize: 9, bold: true });
-            slide.addText(sanitize(prod.pricingStrategy || "暂无"), { x: x+0.1, y: y+2.3, w: 2.7, h: 0.6, fontSize: 8, color: COLORS.TEXT_MAIN, wrap: true, valign: 'top' });
+            slide.addText("产品特征:", { x: x+0.1, y: y+1.2, fontSize: 8, bold: true });
+            slide.addText(`功能: ${sanitize(prod.features || "暂无")}\n颜色: ${sanitize(prod.colors || "暂无")}\n包装: ${sanitize(prod.packaging || "暂无")}`, 
+                { x: x+0.1, y: y+1.4, w: 2.7, h: 0.8, fontSize: 8, color: COLORS.TEXT_MAIN, wrap: true, valign: 'top' });
+            
+            slide.addText("开发切入点:", { x: x+0.1, y: y+2.3, fontSize: 8, bold: true });
+            slide.addText(sanitize(prod.pitchPoint || "暂无"), { x: x+0.1, y: y+2.5, w: 2.7, h: 0.6, fontSize: 8, color: COLORS.TEXT_MAIN, wrap: true, valign: 'top' });
+            
+            slide.addText("定价建议:", { x: x+0.1, y: y+3.2, fontSize: 8, bold: true });
+            slide.addText(sanitize(prod.pricingStrategy || "暂无"), { x: x+0.1, y: y+3.4, w: 2.7, h: 0.5, fontSize: 8, color: COLORS.TEXT_MAIN, wrap: true, valign: 'top' });
         });
     }
 
-    // --- SLIDE 8: ACTION PLAN ---
+    // --- SLIDE 9: ACTION PLAN ---
     slide = pptx.addSlide();
     addFooter(slide);
     slide.addShape(pptx.ShapeType.rect, headerRect);
-    slide.addText("建议行动计划 (Action Plan)", headerStyle);
+    slide.addText("09 建议行动计划 (Action Plan)", headerStyle);
 
     if (data.strategy && data.strategy.actionPlan && data.strategy.actionPlan.length > 0) {
         data.strategy.actionPlan.forEach((step, idx) => {
-            const y = 1.2 + idx * 0.6;
+            const y = 1.2 + idx * 0.7;
             if (y > 5.0) return;
             
             slide.addShape(pptx.ShapeType.rect, { x: 0.5, y: y, w: 0.4, h: 0.4, fill: COLORS.ACCENT_PURPLE, r: 0.1 });
             slide.addText(String(idx + 1), { x: 0.5, y: y, w: 0.4, h: 0.4, align: 'center', color: "FFFFFF", bold: true, fontSize: 10, valign: "middle" });
             
-            slide.addShape(pptx.ShapeType.rect, { x: 1.1, y: y, w: 8.4, h: 0.4, fill: "F1F5F9" });
-            slide.addText(sanitize(step), { x: 1.2, y: y, w: 8.2, h: 0.4, fontSize: 10, valign: 'middle' });
+            slide.addShape(pptx.ShapeType.rect, { x: 1.1, y: y, w: 8.4, h: 0.5, fill: "F8FAFC", line: { color: "F1F5F9" }, r: 0.05 });
+            slide.addText(sanitize(step), { x: 1.2, y: y, w: 8.2, h: 0.5, fontSize: 10, color: COLORS.TEXT_MAIN, valign: 'middle' });
         });
     } else {
         slide.addText("暂无具体行动计划。", { x: 0.5, y: 2.5, w: 9, align: 'center', color: COLORS.TEXT_MUTED });
     }
     
+    // Competitors at bottom
     if (data.similarCompanies && data.similarCompanies.length > 0) {
-        const yStart = 3.5;
+        const yStart = 4.0;
         slide.addText("潜在竞品/同行 (Competitors)", { x: 0.5, y: yStart, fontSize: 12, bold: true, color: COLORS.ACCENT_BLUE });
         
         const headers = [
-            { text: "公司名", options: { bold: true, fill: "E2E8F0", w: 2.0, valign: "middle" } },
-            { text: "国家", options: { bold: true, fill: "E2E8F0", w: 1.5, valign: "middle" } },
-            { text: "主营产品", options: { bold: true, fill: "E2E8F0", w: 5.5, valign: "middle" } }
+            { text: "公司名", options: { bold: true, fill: "F1F5F9", w: 3.0 } },
+            { text: "国家", options: { bold: true, fill: "F1F5F9", w: 1.5 } },
+            { text: "主营产品", options: { bold: true, fill: "F1F5F9", w: 4.5 } }
         ];
-        const rows = data.similarCompanies.slice(0, 3).map(c => [
-            { text: sanitize(c.name), options: { valign: "middle" } },
-            { text: sanitize(c.country), options: { valign: "middle" } },
-            { text: sanitize(c.mainProducts), options: { valign: "middle" } }
+        const rows = data.similarCompanies.slice(0, 2).map(c => [
+            { text: sanitize(c.name) },
+            { text: sanitize(c.country) },
+            { text: sanitize(c.mainProducts) }
         ]);
-        slide.addTable([headers, ...rows], { x: 0.5, y: yStart + 0.4, w: 9.0, fontSize: 9, rowH: 0.4, border: { pt: 1, color: "CBD5E1" }, valign: "middle" });
+        slide.addTable([headers, ...rows], { 
+            x: 0.5, y: yStart + 0.4, w: 9.0, 
+            fontSize: 9, rowH: 0.35, 
+            border: { pt: 0.5, color: "E2E8F0" }, 
+            valign: "middle" 
+        });
     }
+
+    // --- SLIDE 10: END ---
+    slide = pptx.addSlide();
+    slide.background = { color: COLORS.DARK_BG };
+    slide.addText("THANKS", { 
+        x: 0.5, y: 1.8, w: 9, h: 1.0, 
+        fontSize: 60, bold: true, color: COLORS.ACCENT_BLUE, 
+        align: 'center', valign: 'middle' 
+    });
+    slide.addText("楠哥的小助理 · 助力您的全球贸易", { 
+        x: 0.5, y: 2.8, w: 9, h: 0.5, 
+        fontSize: 18, color: "FFFFFF", 
+        align: 'center', valign: 'middle' 
+    });
+    slide.addShape(pptx.ShapeType.line, { 
+        x: 3.5, y: 3.5, w: 3, h: 0, 
+        line: { color: COLORS.ACCENT_BLUE, width: 2 } 
+    });
 };
