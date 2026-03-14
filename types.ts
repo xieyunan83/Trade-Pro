@@ -77,7 +77,8 @@ export interface DecisionMaker {
   emailGuess?: string;
   linkedin?: string;
   type: 'CEO' | 'Buyer' | 'Other';
-  source: 'AI' | 'Hunter.io' | 'Findymail' | 'AnymailFinder' | 'Manual' | 'AI (Pattern Guess)';
+  source: 'AI' | 'Hunter.io' | 'Findymail' | 'AnymailFinder' | 'Manual';
+  isPatternGuess?: boolean;
   isVerified: boolean;
   confidence?: number;
 }

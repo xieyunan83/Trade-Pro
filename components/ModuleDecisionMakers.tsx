@@ -77,7 +77,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({ data
               </div>
               
               <div className="mt-4 flex items-center justify-between">
-                <div className="text-[10px] font-black text-slate-300 uppercase tracking-tighter">来源: {dm.source}</div>
+                <div className="text-[10px] font-black text-slate-300 uppercase tracking-tighter">来源: {dm.isPatternGuess ? 'AI (Pattern Guess)' : dm.source}</div>
                 {dm.confidence && (
                   <div className="flex items-center gap-1">
                     <div className="w-16 h-1.5 bg-slate-200 rounded-full overflow-hidden">
