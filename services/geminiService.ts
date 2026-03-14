@@ -46,7 +46,7 @@ const extractJson = (text: string, isArray: boolean = false): any => {
       const jsonCandidate = text.substring(firstOpen, lastClose + 1);
       return JSON.parse(jsonCandidate);
     }
-    let clean = text.replace(/```json/g, "").replace(/```/g, "").trim();
+    const clean = text.replace(/```json/g, "").replace(/```/g, "").trim();
     return JSON.parse(clean);
   } catch (e) {
     console.error("JSON Extraction Error:", e);
@@ -146,7 +146,7 @@ const callOpenAICompatible = async (config: ApiConfig, messages: any[], jsonMode
     }
 
     // Model Mapping fallback
-    let model = config.modelId?.trim() || 'gemini-1.5-pro';
+    const model = config.modelId?.trim() || 'gemini-1.5-pro';
     
     const payload: any = {
         model: model,
@@ -227,7 +227,7 @@ const callOpenAICompatible = async (config: ApiConfig, messages: any[], jsonMode
 
                 // Other errors
                 let safeErr = errText;
-                try { safeErr = JSON.parse(errText).error?.message || errText; } catch(e){}
+                try { safeErr = JSON.parse(errText).error?.message || errText; } catch(e) { /* ignore parse error */ }
                 throw new Error(`API Error (${response.status}): ${safeErr}`);
             }
 
@@ -286,7 +286,7 @@ const generateContentUnified = async (
         modelId: NATIVE_MODEL
     } : null;
 
-    let candidates = [...allConfigs];
+    const candidates = [...allConfigs];
     if (nativeConfig) candidates.push(nativeConfig);
 
     // 3. Filter by Task
@@ -487,8 +487,14 @@ export const analyzeCompany = async (domainOrName: string, mode: 'detailed' | 'e
   3. Find 5-10 specific decision makers (Name + Title).
   4. Find 3-5 competitors.
   5. Identify website product categories.
-  6. **CRITICAL**: Search for "SimilarWeb stats", "site traffic", "organic keywords". ESTIMATE if not found. Populate "trafficAnalysis".
-  7. **FINANCIAL TRENDS (MANDATORY)**: You MUST provide an ESTIMATE for "revenue" and "procurement" for the last 5 years (2020-2024).
+  6. **PRODUCT ANALYSIS (CRITICAL)**: Analyze the company's products in detail:
+     - Features/Functions (功能)
+     - Colors (颜色)
+     - Packaging (包装)
+     - Market Preference (分析客户和终端市场的喜好)
+     - Recommendation (给出最适合的产品推荐建议)
+  7. **CRITICAL**: Search for "SimilarWeb stats", "site traffic", "organic keywords". ESTIMATE if not found. Populate "trafficAnalysis".
+  8. **FINANCIAL TRENDS (MANDATORY)**: You MUST provide an ESTIMATE for "revenue" and "procurement" for the last 5 years (2020-2024).
      - If exact financial reports are not public, you MUST ESTIMATE based on: Employee Count * Industry Revenue Per Capita (approx $150k-$300k/employee for trading).
      - Procurement is typically 30-50% of Revenue.
      - **DO NOT RETURN 0**. Give me your best AI estimate based on company size.
@@ -515,8 +521,15 @@ export const analyzeCompany = async (domainOrName: string, mode: 'detailed' | 'e
     "supplyChain": { "role": "...", "serviceType": "..." },
     "targetAudience": [],
     "financials": { "revenueEstimate": "...", "paymentTerms": "...", "ipInfo": "..." },
+    "productSummary": {
+        "marketPreference": "终端市场喜好分析...",
+        "recommendedProducts": "最适合的产品推荐...",
+        "packagingAnalysis": "包装风格分析...",
+        "colorPreference": "颜色偏好分析...",
+        "featureAnalysis": "产品功能特点分析..."
+    },
     "socials": { "linkedin": "", "facebook": "" },
-    "products": [{ "name": "...", "retailPrice": "...", "retailPriceCNY": 0, "estimatedFOBPriceCNY": 0, "imageUrl": "", "competitorLink": "...", "pricingStrategy": "...", "pitchPoint": "...", "techSpecs": "..." }],
+    "products": [{ "name": "...", "retailPrice": "...", "retailPriceCNY": 0, "estimatedFOBPriceCNY": 0, "imageUrl": "", "competitorLink": "...", "pricingStrategy": "...", "pitchPoint": "...", "techSpecs": "...", "features": "...", "colors": "...", "packaging": "..." }],
     "marketTrends": "...",
     "decisionMakers": [{ "name": "...", "title": "...", "emailGuess": "...", "linkedin": "...", "type": "...", "source": "AI", "isVerified": false }],
     "strategy": { "buyingOfficeLocation": "...", "actionPlan": [] },
@@ -574,8 +587,20 @@ export const analyzeCompany = async (domainOrName: string, mode: 'detailed' | 'e
       paymentTerms: aiResult.financials?.paymentTerms || "N/A",
       ipInfo: aiResult.financials?.ipInfo || "N/A"
     },
+    productSummary: {
+        marketPreference: aiResult.productSummary?.marketPreference || "N/A",
+        recommendedProducts: aiResult.productSummary?.recommendedProducts || "N/A",
+        packagingAnalysis: aiResult.productSummary?.packagingAnalysis || "N/A",
+        colorPreference: aiResult.productSummary?.colorPreference || "N/A",
+        featureAnalysis: aiResult.productSummary?.featureAnalysis || "N/A"
+    },
     socials: aiResult.socials || {},
-    products: Array.isArray(aiResult.products) ? aiResult.products : [],
+    products: (Array.isArray(aiResult.products) ? aiResult.products : []).map((p: any) => ({
+        ...p,
+        features: p.features || "N/A",
+        colors: p.colors || "N/A",
+        packaging: p.packaging || "N/A"
+    })),
     marketTrends: aiResult.marketTrends || "N/A",
     decisionMakers: (aiResult.decisionMakers || []).map((dm: any) => ({ ...dm, source: 'AI', isVerified: false })),
     strategy: {
@@ -654,7 +679,7 @@ export const streamStrategyChat = async function* (
     // Fallback logic for streaming is complex due to mixed SDKs. 
     // For now, we prioritize Native if ENV is present, else use Relay without streaming or with partial support.
     
-    let useNative = !!process.env.API_KEY;
+    const useNative = !!process.env.API_KEY;
     
     let systemInstruction = `You are 楠哥的小助理 (Nan Ge's Assistant), a Senior Trade Strategist. Speak primarily in Chinese (简体中文) unless asked otherwise.`;
     if (companyData) systemInstruction += ` Context: Analyzing ${companyData.companyInfo.name}.`;

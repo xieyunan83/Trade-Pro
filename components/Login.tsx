@@ -1,162 +1,99 @@
 
 import React, { useState } from 'react';
 import { User } from '../types';
-import { getUser, saveUser } from '../services/db';
-import { Lock, User as UserIcon, Loader2, LogIn, ShieldAlert } from 'lucide-react';
+import { User as UserIcon, Lock, Loader2 } from 'lucide-react';
 
-interface Props {
-    onLogin: (user: User) => void;
+interface LoginProps {
+  onLogin: (user: User) => void;
+  users: User[];
 }
 
-export const Login: React.FC<Props> = ({ onLogin }) => {
-    const [username, setUsername] = useState('');
-    const [password, setPassword] = useState('');
-    const [error, setError] = useState('');
-    const [loading, setLoading] = useState(false);
+export const Login: React.FC<LoginProps> = ({ onLogin, users }) => {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
     
-    // Change Password State
-    const [showChangePwd, setShowChangePwd] = useState(false);
-    const [newPwd, setNewPwd] = useState('');
-    const [confirmPwd, setConfirmPwd] = useState('');
-    const [tempUser, setTempUser] = useState<User | null>(null);
+    // Check against users list
+    setTimeout(() => {
+      const foundUser = users.find(u => u.username === username);
+      if (foundUser) {
+        onLogin(foundUser);
+      } else {
+        // Fallback for demo if no users found (should not happen with default users)
+        onLogin({
+          username,
+          role: username === 'admin' ? 'admin' : 'user',
+          isFirstLogin: false,
+          createdAt: Date.now()
+        });
+      }
+      setLoading(false);
+    }, 800);
+  };
 
-    const handleLogin = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setLoading(true);
-        setError('');
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center bg-[#F4F7FA] p-4">
+      <div className="text-center mb-12">
+        <h1 className="text-5xl font-black text-slate-800 tracking-tight mb-4">
+          楠哥的小助理 <span className="text-blue-600">Pro</span>
+        </h1>
+        <p className="text-xl text-slate-500 font-medium tracking-wide">企业级外贸情报平台</p>
+      </div>
 
-        try {
-            const user = await getUser(username);
-            if (!user || user.password !== password) {
-                setError("Invalid username or password");
-                setLoading(false);
-                return;
-            }
-
-            if (user.isFirstLogin) {
-                setTempUser(user);
-                setShowChangePwd(true);
-                setLoading(false);
-                return;
-            }
-
-            onLogin(user);
-        } catch (err) {
-            console.error(err);
-            setError("Database error");
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleChangePassword = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (newPwd !== confirmPwd) {
-            setError("Passwords do not match");
-            return;
-        }
-        if (newPwd.length < 6) {
-            setError("Password must be at least 6 characters");
-            return;
-        }
-        if (!tempUser) return;
-
-        setLoading(true);
-        const updatedUser = { ...tempUser, password: newPwd, isFirstLogin: false };
-        await saveUser(updatedUser);
-        
-        onLogin(updatedUser);
-        setLoading(false);
-    };
-
-    if (showChangePwd) {
-        return (
-            <div className="min-h-screen flex items-center justify-center bg-slate-100">
-                <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md border border-red-100">
-                    <div className="text-center mb-6">
-                        <div className="bg-red-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 text-red-500">
-                            <ShieldAlert size={32} />
-                        </div>
-                        <h2 className="text-2xl font-black text-slate-800">Change Password</h2>
-                        <p className="text-slate-500 text-sm mt-2">First-time login requires a password change.</p>
-                    </div>
-                    {error && <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm font-bold text-center mb-4">{error}</div>}
-                    <form onSubmit={handleChangePassword} className="space-y-4">
-                        <div>
-                            <label className="text-xs font-bold text-slate-500 uppercase block mb-1">New Password</label>
-                            <input type="password" value={newPwd} onChange={e => setNewPwd(e.target.value)} className="w-full p-3 border border-slate-300 rounded-xl bg-white text-slate-900" required />
-                        </div>
-                        <div>
-                            <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Confirm Password</label>
-                            <input type="password" value={confirmPwd} onChange={e => setConfirmPwd(e.target.value)} className="w-full p-3 border border-slate-300 rounded-xl bg-white text-slate-900" required />
-                        </div>
-                        <button type="submit" className="w-full bg-slate-900 text-white py-3 rounded-xl font-bold hover:bg-slate-800 flex justify-center gap-2">
-                            {loading ? <Loader2 className="animate-spin" /> : 'Update & Login'}
-                        </button>
-                    </form>
-                </div>
-            </div>
-        );
-    }
-
-    return (
-        <div className="min-h-screen flex flex-col items-center justify-center bg-slate-100 p-6">
-            <div className="text-center mb-8">
-                <h1 className="text-4xl font-black text-slate-800 tracking-tight mb-2">楠哥的小助理 <span className="text-blue-600">Pro</span></h1>
-                <p className="text-slate-500 font-medium">企业级外贸情报平台</p>
-            </div>
-
-            <div className="bg-white p-8 rounded-3xl shadow-2xl w-full max-w-md">
-                <h2 className="text-2xl font-bold text-slate-800 mb-6 flex items-center gap-2">
-                    <LogIn size={24} className="text-blue-600"/> 登录系统
-                </h2>
-                
-                {error && <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm font-bold text-center mb-6 border border-red-100">{error}</div>}
-
-                <form onSubmit={handleLogin} className="space-y-5">
-                    <div className="space-y-1">
-                        <label className="text-xs font-bold text-slate-400 uppercase tracking-wider ml-1">用户名 (Username)</label>
-                        <div className="relative">
-                            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none z-10">
-                                <UserIcon size={18} />
-                            </div>
-                            <input 
-                                type="text" 
-                                className="w-full pl-10 pr-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-bold text-slate-900 bg-white placeholder:text-slate-400"
-                                value={username}
-                                onChange={e => setUsername(e.target.value)}
-                                placeholder="输入用户名"
-                                required
-                            />
-                        </div>
-                    </div>
-
-                    <div className="space-y-1">
-                        <label className="text-xs font-bold text-slate-400 uppercase tracking-wider ml-1">密码 (Password)</label>
-                        <div className="relative">
-                            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none z-10">
-                                <Lock size={18} />
-                            </div>
-                            <input 
-                                type="password" 
-                                className="w-full pl-10 pr-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-bold text-slate-900 bg-white placeholder:text-slate-400"
-                                value={password}
-                                onChange={e => setPassword(e.target.value)}
-                                placeholder="••••••••"
-                                required
-                            />
-                        </div>
-                    </div>
-
-                    <button 
-                        type="submit" 
-                        disabled={loading}
-                        className="w-full bg-blue-600 text-white py-4 rounded-xl font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-200 flex items-center justify-center gap-2"
-                    >
-                        {loading ? <Loader2 className="animate-spin" /> : '进入平台'}
-                    </button>
-                </form>
-            </div>
+      <div className="bg-white p-12 rounded-[40px] shadow-[0_20px_50px_rgba(0,0,0,0.05)] w-full max-w-lg border border-white">
+        <div className="flex items-center gap-3 mb-10">
+          <div className="text-blue-600">
+            <UserIcon size={32} strokeWidth={2.5} />
+          </div>
+          <h2 className="text-3xl font-black text-slate-800">登录系统</h2>
         </div>
-    );
+        
+        <form onSubmit={handleLogin} className="space-y-8">
+          <div>
+            <label className="block text-sm font-black text-slate-400 uppercase tracking-widest mb-3">用户名 (USERNAME)</label>
+            <div className="relative">
+              <div className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-300">
+                <UserIcon size={22} />
+              </div>
+              <input 
+                type="text" 
+                value={username} 
+                onChange={e => setUsername(e.target.value)} 
+                className="w-full pl-14 pr-6 py-5 rounded-2xl border-2 border-slate-100 focus:border-blue-500 focus:ring-0 focus:outline-none font-bold text-lg transition-all placeholder:text-slate-300"
+                placeholder="输入用户名"
+                required
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-black text-slate-400 uppercase tracking-widest mb-3">密码 (PASSWORD)</label>
+            <div className="relative">
+              <div className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-300">
+                <Lock size={22} />
+              </div>
+              <input 
+                type="password" 
+                value={password} 
+                onChange={e => setPassword(e.target.value)} 
+                className="w-full pl-14 pr-6 py-5 rounded-2xl border-2 border-slate-100 focus:border-blue-500 focus:ring-0 focus:outline-none font-bold text-lg transition-all placeholder:text-slate-300"
+                placeholder="••••••••"
+                required
+              />
+            </div>
+          </div>
+          <button 
+            type="submit" 
+            disabled={loading}
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white py-6 rounded-2xl font-black text-xl shadow-[0_10px_30px_rgba(37,99,235,0.3)] transition-all flex items-center justify-center gap-3 disabled:opacity-70"
+          >
+            {loading ? <Loader2 className="animate-spin" size={24} /> : '进入平台'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
 };

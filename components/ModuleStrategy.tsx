@@ -101,7 +101,7 @@ export const ModuleStrategy: React.FC<Props> = ({ data }) => {
             if (isWord) {
                 try {
                     const arrayBuffer = await file.arrayBuffer();
-                    // @ts-ignore
+                    // @ts-expect-error - Mammoth is loaded via script tag
                     const result = await window.mammoth.extractRawText({ arrayBuffer });
                     const text = result.value;
                     processed.push({
@@ -192,7 +192,7 @@ export const ModuleStrategy: React.FC<Props> = ({ data }) => {
           }
       } catch (e: any) {
           console.error(e);
-          let errorText = e.message || "Unknown error";
+          const errorText = e.message || "Unknown error";
           setMessages(prev => [...prev, { 
               id: Date.now().toString(), 
               role: 'model', 

@@ -1,64 +1,51 @@
 
-import { DailyUsage, GlobalConfig } from "../types";
+import { GlobalConfig, DailyUsage, TaskType } from '../types';
 
-const STORAGE_KEY_USAGE = "trade_scout_daily_usage";
-const STORAGE_KEY_CONFIG = "trade_scout_remote_config";
-
-// Default limits if offline
-const DEFAULT_LIMITS = {
-    search: 5,
-    analysis: 2
-};
-
-export const getLocalUsage = (): DailyUsage => {
-    const today = new Date().toISOString().split('T')[0];
-    const stored = localStorage.getItem(STORAGE_KEY_USAGE);
-    
-    if (stored) {
-        const usage: DailyUsage = JSON.parse(stored);
-        if (usage.date === today) return usage;
-    }
-    
-    // Reset for new day
-    return { date: today, searchCount: 0, analysisCount: 0 };
-};
-
-const saveUsage = (usage: DailyUsage) => {
-    localStorage.setItem(STORAGE_KEY_USAGE, JSON.stringify(usage));
-};
-
-export const getLimits = (): GlobalConfig['dailyLimits'] => {
-    const storedConfig = localStorage.getItem(STORAGE_KEY_CONFIG);
-    if (storedConfig) {
-        try {
-            const config: GlobalConfig = JSON.parse(storedConfig);
-            return config.dailyLimits;
-        } catch(e) {}
-    }
-    return DEFAULT_LIMITS;
-};
-
-export const checkLimit = (type: 'search' | 'analysis'): { allowed: boolean, remaining: number, max: number } => {
-    const usage = getLocalUsage();
-    const limits = getLimits();
-    
-    const count = type === 'search' ? usage.searchCount : usage.analysisCount;
-    const max = type === 'search' ? limits.search : limits.analysis;
-    
-    return {
-        allowed: count < max,
-        remaining: max - count,
-        max: max
-    };
-};
-
-export const incrementUsage = (type: 'search' | 'analysis') => {
-    const usage = getLocalUsage();
-    if (type === 'search') usage.searchCount++;
-    else usage.analysisCount++;
-    saveUsage(usage);
+let currentConfig: GlobalConfig = {
+  lastUpdated: Date.now(),
+  dailyLimits: {
+    search: 50,
+    analysis: 20
+  },
+  systemNotice: ''
 };
 
 export const updateLocalConfig = (config: GlobalConfig) => {
-    localStorage.setItem(STORAGE_KEY_CONFIG, JSON.stringify(config));
+  currentConfig = config;
+};
+
+export const checkLimit = (type: TaskType | 'analysis' | 'search') => {
+  const usage = getDailyUsage();
+  const limit = type === 'search' ? currentConfig.dailyLimits.search : currentConfig.dailyLimits.analysis;
+  const current = type === 'search' ? usage.searchCount : usage.analysisCount;
+  
+  return {
+    allowed: current < limit,
+    current,
+    max: limit
+  };
+};
+
+export const incrementUsage = (type: TaskType | 'analysis' | 'search') => {
+  const usage = getDailyUsage();
+  if (type === 'search') {
+    usage.searchCount++;
+  } else {
+    usage.analysisCount++;
+  }
+  saveDailyUsage(usage);
+};
+
+const getDailyUsage = (): DailyUsage => {
+  const today = new Date().toISOString().split('T')[0];
+  const saved = localStorage.getItem('trade_scout_usage');
+  if (saved) {
+    const parsed = JSON.parse(saved) as DailyUsage;
+    if (parsed.date === today) return parsed;
+  }
+  return { date: today, searchCount: 0, analysisCount: 0 };
+};
+
+const saveDailyUsage = (usage: DailyUsage) => {
+  localStorage.setItem('trade_scout_usage', JSON.stringify(usage));
 };

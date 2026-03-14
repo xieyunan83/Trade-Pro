@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { analyzeCompany, getGeminiConfig, searchPotentialClients, generateMailGroupStrategy } from './services/geminiService';
 import { exportToPPT } from './services/exportService';
 import { saveHistory, getHistory, getAllFilesFromDB, saveAutomationTask, getAutomationQueue, deleteAutomationTask, saveFileToDB } from './services/db';
-import { fetchGlobalConfig, fetchDocumentsFromRepo, backupUserHistory, fetchCRMFromCloud, saveCRMToCloud, fetchUserHistoryFromCloud, checkGitHubStatus, fetchApiConfigsFromCloud, setManualGitHubConfig } from './services/githubService';
+import { fetchGlobalConfig, fetchDocumentsFromRepo, backupUserHistory, fetchCRMFromCloud, saveCRMToCloud, fetchUserHistoryFromCloud, checkGitHubStatus, fetchApiConfigsFromCloud, setManualGitHubConfig, fetchUsersFromCloud, saveUsersToCloud } from './services/githubService';
 import { checkLimit, incrementUsage, updateLocalConfig } from './services/limitService';
 import { ModuleType, AnalysisResult, DiscoveryState, Client, User, HistoryItem, AutomationResult, ClientSearchResult } from './types';
 import { ModuleBackground } from './components/ModuleBackground';
@@ -33,6 +33,7 @@ declare global {
 
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [users, setUsers] = useState<User[]>([]);
   const [hasKey, setHasKey] = useState<boolean | null>(null);
   
   const [domainInput, setDomainInput] = useState('');
@@ -94,6 +95,19 @@ const App: React.FC = () => {
             const q = await getAutomationQueue(); setAutomationResults(q);
             const files = await getAllFilesFromDB(); setKbCount(files.length);
             
+            // Load Users from LocalStorage
+            const savedUsers = localStorage.getItem('trade_scout_users');
+            if (savedUsers) {
+                setUsers(JSON.parse(savedUsers));
+            } else {
+                const defaultUsers: User[] = [
+                    { username: 'admin', role: 'admin', isFirstLogin: false, createdAt: Date.now() },
+                    { username: 'user', role: 'user', isFirstLogin: false, createdAt: Date.now() }
+                ];
+                setUsers(defaultUsers);
+                localStorage.setItem('trade_scout_users', JSON.stringify(defaultUsers));
+            }
+
             // Check GitHub Status
             const ghStatus = checkGitHubStatus();
             setIsGitHubConnected(ghStatus.ok);
@@ -107,7 +121,9 @@ const App: React.FC = () => {
                         updateLocalConfig(globalConfig);
                         if(globalConfig.systemNotice) setSystemNotice(globalConfig.systemNotice);
                     }
-                } catch(e) {} 
+                } catch(e) {
+                    console.warn("Failed to load global config", e);
+                } 
                 
                 // AUTO-SYNC KB (Mixed Mode)
                 setIsKBSyncing(true);
@@ -130,6 +146,13 @@ const App: React.FC = () => {
                 if(cloudCRM.length > 0) {
                     setCrmClients(cloudCRM);
                     localStorage.setItem('tradeScoutClients', JSON.stringify(cloudCRM));
+                }
+
+                // Users
+                const cloudUsers = await fetchUsersFromCloud();
+                if (cloudUsers.length > 0) {
+                    setUsers(cloudUsers);
+                    localStorage.setItem('trade_scout_users', JSON.stringify(cloudUsers));
                 }
 
                 // History
@@ -156,12 +179,32 @@ const App: React.FC = () => {
     if (currentUser) loadData();
     
     const savedClients = localStorage.getItem('tradeScoutClients');
-    if (savedClients && crmClients.length === 0) { try { setCrmClients(JSON.parse(savedClients)); } catch(e) {} }
-  }, [currentUser]); 
+    if (savedClients && crmClients.length === 0) { 
+        try { 
+            setCrmClients(JSON.parse(savedClients)); 
+        } catch(e) {
+            console.warn("Failed to parse saved clients", e);
+        } 
+    }
+  }, [currentUser, crmClients.length]); 
 
   useEffect(() => {
-      if (crmClients.length > 0) localStorage.setItem('tradeScoutClients', JSON.stringify(crmClients));
-  }, [crmClients]);
+      if (crmClients.length > 0) {
+          localStorage.setItem('tradeScoutClients', JSON.stringify(crmClients));
+          if (isGitHubConnected && currentUser) {
+              saveCRMToCloud(crmClients).catch(e => console.error("Auto CRM sync failed", e));
+          }
+      }
+  }, [crmClients, isGitHubConnected, currentUser]);
+
+  useEffect(() => {
+      if (users.length > 0) {
+          localStorage.setItem('trade_scout_users', JSON.stringify(users));
+          if (isGitHubConnected && currentUser?.role === 'admin') {
+              saveUsersToCloud(users).catch(e => console.error("Auto user sync failed", e));
+          }
+      }
+  }, [users, isGitHubConnected, currentUser]);
 
   const handleManualConnect = async () => {
       if (!manualToken || !manualOwner || !manualRepo) {
@@ -443,8 +486,18 @@ const App: React.FC = () => {
   const handleAddClients = (newClients: Client[]) => { setCrmClients(prev => [...prev, ...newClients]); alert(`已成功导入 ${newClients.length} 个客户资料！`); };
 
   if (hasKey === null) return <div className="h-screen flex items-center justify-center bg-slate-50"><Loader2 className="animate-spin text-blue-600" size={40} /></div>;
-  if (!currentUser) return <Login onLogin={setCurrentUser} />;
-  if (currentUser.role === 'admin') return <AdminDashboard onLogout={handleLogout} currentUser={currentUser} />;
+  if (!currentUser) return <Login onLogin={setCurrentUser} users={users} />;
+  
+  if (currentUser.role === 'admin') {
+    return (
+      <AdminDashboard 
+        onLogout={handleLogout} 
+        currentUser={currentUser} 
+        users={users}
+        setUsers={setUsers}
+      />
+    );
+  }
 
   if (hasKey === false) {
       return (
@@ -465,7 +518,7 @@ const App: React.FC = () => {
         <div className="p-6 border-b flex items-center gap-3">
             <div className="bg-blue-600 p-2 rounded-lg text-white shadow-md shadow-blue-100"><Zap size={20} /></div>
             <div>
-                <h1 className="text-lg font-black text-slate-800 tracking-tight leading-tight">楠哥的小助理<br/><span className="text-blue-600">AI 外贸系统</span></h1>
+                <h1 className="text-lg font-black text-slate-800 tracking-tight leading-tight">楠哥的小助理 <span className="text-blue-600">Pro</span></h1>
                 <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-1 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500"></span>{currentUser.username}</div>
             </div>
         </div>

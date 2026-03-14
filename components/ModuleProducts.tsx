@@ -1,114 +1,104 @@
 
 import React from 'react';
 import { AnalysisResult } from '../types';
-import { ShoppingBag, TrendingUp, ImageOff, Search, ExternalLink, Lightbulb, MessageCircle } from 'lucide-react';
+import { PackageSearch, DollarSign, Tag, Info, ShoppingCart, BarChart3, PieChart } from 'lucide-react';
 
-interface Props {
+interface ModuleProductsProps {
   data: AnalysisResult;
 }
 
-export const ModuleProducts: React.FC<Props> = ({ data }) => {
+export const ModuleProducts: React.FC<ModuleProductsProps> = ({ data }) => {
   return (
-    <div className="max-w-6xl mx-auto space-y-8">
-      {/* Market Trends Overview */}
-      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-6 rounded-2xl border border-blue-100 flex items-start gap-4">
-        <div className="bg-white p-2 rounded-xl shadow-sm text-blue-600">
-            <TrendingUp size={24} />
-        </div>
-        <div>
-            <h3 className="font-bold text-slate-800 text-lg mb-2">市场趋势与推荐 (Market Trends)</h3>
-            <p className="text-slate-700 text-sm leading-relaxed">{data.marketTrends}</p>
-        </div>
-      </div>
-
-      {/* Product List */}
-      <div className="space-y-6">
-          <h3 className="font-black text-2xl text-slate-800 flex items-center gap-2">
-              <ShoppingBag className="text-purple-600" />
-              产品深度分析 (Product Deep Dive)
+    <div className="space-y-8 animate-fade-in">
+      {data.productSummary && (
+        <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
+          <h3 className="text-2xl font-black text-slate-800 mb-6 flex items-center gap-2">
+            <PieChart className="text-blue-600" /> 市场喜好与产品策略 (Product Strategy)
           </h3>
-          
-          <div className="grid grid-cols-1 gap-6">
-              {data.products.map((product, idx) => (
-                  <div key={idx} className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden hover:shadow-md transition-shadow">
-                      <div className="grid grid-cols-1 md:grid-cols-12">
-                          {/* Image Section - 3 Cols */}
-                          <div className="md:col-span-3 bg-slate-50 border-r border-slate-100 p-6 flex flex-col items-center justify-center relative min-h-[200px]">
-                                {product.imageUrl ? (
-                                    <img src={product.imageUrl} alt={product.name} className="w-full h-auto object-contain max-h-[180px] rounded-lg shadow-sm bg-white" onError={(e) => (e.currentTarget.style.display = 'none')} />
-                                ) : (
-                                    <div className="flex flex-col items-center justify-center text-slate-300">
-                                        <ImageOff size={32} className="mb-2" />
-                                        <span className="text-xs">No Image</span>
-                                    </div>
-                                )}
-                                <div className="mt-4 w-full">
-                                    {product.competitorLink ? (
-                                        <a href={product.competitorLink} target="_blank" rel="noreferrer" className="flex items-center justify-center gap-2 w-full text-xs font-bold text-blue-600 bg-blue-50 py-2 rounded-lg hover:bg-blue-100 transition-colors">
-                                            <ExternalLink size={12} /> Product Page
-                                        </a>
-                                    ) : (
-                                        <a href={`https://www.google.com/search?q=${encodeURIComponent(product.name)}`} target="_blank" rel="noreferrer" className="flex items-center justify-center gap-2 w-full text-xs font-bold text-slate-500 bg-slate-100 py-2 rounded-lg hover:bg-slate-200 transition-colors">
-                                            <Search size={12} /> Search
-                                        </a>
-                                    )}
-                                </div>
-                          </div>
-
-                          {/* Details Section - 9 Cols */}
-                          <div className="md:col-span-9 p-6">
-                              <div className="flex justify-between items-start mb-4">
-                                  <h4 className="text-xl font-bold text-slate-900">{product.name}</h4>
-                                  <span className="bg-yellow-50 text-yellow-800 text-xs font-bold px-3 py-1 rounded-full border border-yellow-200">
-                                      Margin: {product.marginSpace || 'High'}
-                                  </span>
-                              </div>
-
-                              <div className="grid grid-cols-3 gap-6 mb-6">
-                                  <div>
-                                      <span className="text-xs font-bold text-slate-400 uppercase block mb-1">Retail Price</span>
-                                      <span className="text-lg font-mono font-bold text-slate-800">{product.retailPrice}</span>
-                                  </div>
-                                  <div>
-                                      <span className="text-xs font-bold text-slate-400 uppercase block mb-1">Est. FOB (CNY)</span>
-                                      <span className="text-lg font-mono font-bold text-green-600">¥{product.estimatedFOBPriceCNY || '-'}</span>
-                                  </div>
-                                  <div>
-                                      <span className="text-xs font-bold text-slate-400 uppercase block mb-1">Target Retail (CNY)</span>
-                                      <span className="text-lg font-mono font-bold text-slate-500">¥{product.retailPriceCNY || '-'}</span>
-                                  </div>
-                              </div>
-
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-slate-50 p-4 rounded-xl border border-slate-100">
-                                  <div>
-                                      <div className="flex items-center gap-2 text-xs font-bold text-indigo-600 uppercase mb-2">
-                                          <Lightbulb size={14} /> Pricing Strategy
-                                      </div>
-                                      <p className="text-sm text-slate-700 leading-relaxed">
-                                          {product.pricingStrategy || "No specific strategy generated."}
-                                      </p>
-                                  </div>
-                                  <div>
-                                      <div className="flex items-center gap-2 text-xs font-bold text-emerald-600 uppercase mb-2">
-                                          <MessageCircle size={14} /> Pitch Point
-                                      </div>
-                                      <p className="text-sm text-slate-700 leading-relaxed">
-                                          {product.pitchPoint || "No pitch point generated."}
-                                      </p>
-                                  </div>
-                              </div>
-
-                              {product.techSpecs && (
-                                  <div className="mt-4 pt-4 border-t border-slate-100">
-                                      <span className="text-xs font-bold text-slate-400 uppercase">Tech Specs: </span>
-                                      <span className="text-xs text-slate-600">{product.techSpecs}</span>
-                                  </div>
-                              )}
-                          </div>
-                      </div>
-                  </div>
-              ))}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <div className="space-y-6">
+              <div className="bg-blue-50 p-6 rounded-2xl border border-blue-100">
+                <div className="text-[10px] font-black text-blue-700 uppercase tracking-widest mb-2 flex items-center gap-1"><ShoppingCart size={12}/> 终端市场喜好 (Market Preference)</div>
+                <p className="text-sm font-bold text-blue-900 leading-relaxed">{data.productSummary.marketPreference}</p>
+              </div>
+              <div className="bg-purple-50 p-6 rounded-2xl border border-purple-100">
+                <div className="text-[10px] font-black text-purple-700 uppercase tracking-widest mb-2 flex items-center gap-1"><Tag size={12}/> 推荐开发产品 (Recommended Products)</div>
+                <p className="text-sm font-bold text-purple-900 leading-relaxed">{data.productSummary.recommendedProducts}</p>
+              </div>
+            </div>
+            <div className="space-y-4">
+              <div className="flex items-start gap-4 p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                <div className="bg-white p-3 rounded-xl text-blue-600 shadow-sm"><PackageSearch size={20}/></div>
+                <div>
+                  <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">包装偏好分析</div>
+                  <div className="text-sm font-bold text-slate-800 mt-1">{data.productSummary.packagingAnalysis}</div>
+                </div>
+              </div>
+              <div className="flex items-start gap-4 p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                <div className="bg-white p-3 rounded-xl text-pink-600 shadow-sm"><Tag size={20}/></div>
+                <div>
+                  <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">颜色偏好分析</div>
+                  <div className="text-sm font-bold text-slate-800 mt-1">{data.productSummary.colorPreference}</div>
+                </div>
+              </div>
+              <div className="flex items-start gap-4 p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                <div className="bg-white p-3 rounded-xl text-green-600 shadow-sm"><BarChart3 size={20}/></div>
+                <div>
+                  <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">功能点/卖点分析</div>
+                  <div className="text-sm font-bold text-slate-800 mt-1">{data.productSummary.featureAnalysis}</div>
+                </div>
+              </div>
+            </div>
           </div>
+        </div>
+      )}
+
+      <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
+        <h3 className="text-2xl font-black text-slate-800 mb-6 flex items-center gap-2">
+          <PackageSearch className="text-blue-600" /> 核心产品线分析 (Core Product Lines)
+        </h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {data.products.map((p, i) => (
+            <div key={i} className="bg-slate-50 p-6 rounded-3xl border border-slate-100 hover:border-blue-200 transition-all group">
+              <div className="flex justify-between items-start mb-4">
+                <h4 className="text-lg font-black text-slate-800 group-hover:text-blue-600 transition-colors">{p.name}</h4>
+                <div className="bg-blue-600 text-white px-3 py-1 rounded-full text-[10px] font-black shadow-md">{p.retailPrice}</div>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                <div className="bg-white p-3 rounded-xl border border-slate-100">
+                  <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">建议 FOB 价</div>
+                  <div className="text-sm font-black text-slate-800">¥{p.estimatedFOBPriceCNY}</div>
+                </div>
+                <div className="bg-white p-3 rounded-xl border border-slate-100">
+                  <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">利润空间</div>
+                  <div className={`text-sm font-black ${p.marginSpace === 'High' ? 'text-green-600' : p.marginSpace === 'Medium' ? 'text-blue-600' : 'text-yellow-600'}`}>{p.marginSpace}</div>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                {p.features && (
+                  <div className="flex items-start gap-2">
+                    <Info size={14} className="text-blue-500 mt-0.5 flex-shrink-0" />
+                    <div className="text-xs font-bold text-slate-600"><span className="text-slate-400 uppercase tracking-tighter mr-1">功能:</span> {p.features}</div>
+                  </div>
+                )}
+                {p.colors && (
+                  <div className="flex items-start gap-2">
+                    <Tag size={14} className="text-pink-500 mt-0.5 flex-shrink-0" />
+                    <div className="text-xs font-bold text-slate-600"><span className="text-slate-400 uppercase tracking-tighter mr-1">颜色:</span> {p.colors}</div>
+                  </div>
+                )}
+                {p.packaging && (
+                  <div className="flex items-start gap-2">
+                    <PackageSearch size={14} className="text-purple-500 mt-0.5 flex-shrink-0" />
+                    <div className="text-xs font-bold text-slate-600"><span className="text-slate-400 uppercase tracking-tighter mr-1">包装:</span> {p.packaging}</div>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

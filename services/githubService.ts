@@ -1,389 +1,208 @@
 
-import { Octokit } from "@octokit/rest";
-import { GlobalConfig, KnowledgeFile, HistoryItem, User, Client, ApiConfig } from "../types";
+import { Octokit } from '@octokit/rest';
+import { GlobalConfig, Client, HistoryItem, KnowledgeFile, ApiConfig, User } from '../types';
 
-// Keys for LocalStorage Fallback
-const LS_TOKEN = "GH_TOKEN";
-const LS_OWNER = "GH_OWNER";
-const LS_REPO = "GH_REPO";
-const LS_PATH = "GH_PATH"; // New: Folder path for KB
-const LS_REPO_STATUS = "GH_REPO_STATUS"; // New: Track invalid state persistence
+let octokit: Octokit | null = null;
+let repoConfig = { owner: '', repo: '' };
 
-// Helper to get credentials
-const getCredentials = () => {
-    const envToken = process.env.VITE_GITHUB_TOKEN;
-    const envOwner = process.env.VITE_GITHUB_OWNER;
-    const envRepo = process.env.VITE_GITHUB_REPO;
-
-    if (envToken && envToken.trim() !== '') {
-        return { token: envToken, owner: envOwner, repo: envRepo, path: '', source: 'ENV' };
-    }
-
-    const lsToken = localStorage.getItem(LS_TOKEN);
-    const lsOwner = localStorage.getItem(LS_OWNER);
-    const lsRepo = localStorage.getItem(LS_REPO);
-    const lsPath = localStorage.getItem(LS_PATH) || '';
-
-    if (lsOwner && lsRepo) {
-        return { token: lsToken || '', owner: lsOwner, repo: lsRepo, path: lsPath, source: 'LOCAL' };
-    }
-
-    return { token: '', owner: '', repo: '', path: '', source: 'NONE' };
+export const setManualGitHubConfig = (token: string, owner: string, repo: string) => {
+  octokit = new Octokit({ auth: token });
+  repoConfig = { owner, repo };
+  localStorage.setItem('trade_scout_gh_token', token);
+  localStorage.setItem('trade_scout_gh_owner', owner);
+  localStorage.setItem('trade_scout_gh_repo', repo);
 };
-
-// Paths for System Backup (Separate from KB Folder)
-const PATH_CONFIG = "data/config.json";
-const PATH_KB_BACKUP = "data/kb.json"; // Legacy backup path
-const PATH_USERS = "data/users.json";
-// const PATH_API_KEYS = "data/api_keys.json"; // REMOVED FOR SECURITY
-const PATH_CRM = "data/crm.json";
-const PATH_HISTORY_PREFIX = "data/history/";
-
-const getOctokit = () => {
-    const { token } = getCredentials();
-    return new Octokit({ auth: token || undefined });
-};
-
-// --- CACHED TREE FETCH ---
-// Prevents multiple 404s and rate limiting by fetching file list once.
-// Updated to cache 'null' (failure) as well to prevent spamming 404s.
-let _treeCache: { timestamp: number, data: any | null } | null = null;
-let _treeRequest: Promise<any> | null = null; // Deduplicate in-flight requests
-let _isRepoInvalid = false; // Circuit breaker for 404/403 (Memory)
-const TREE_CACHE_TTL = 10000; // 10 seconds
-
-const getRepoTree = async () => {
-    const { owner, repo } = getCredentials();
-    if (!owner || !repo) return null;
-
-    // 1. Memory Circuit Breaker
-    if (_isRepoInvalid) return null;
-
-    // 2. Persistent Circuit Breaker (LocalStorage)
-    // Prevents 404s even after page reload if config hasn't changed
-    const storedStatus = localStorage.getItem(LS_REPO_STATUS);
-    if (storedStatus) {
-        try {
-            const { owner: badOwner, repo: badRepo } = JSON.parse(storedStatus);
-            if (badOwner === owner && badRepo === repo) {
-                _isRepoInvalid = true; // Sync memory state
-                return null;
-            }
-        } catch(e) { localStorage.removeItem(LS_REPO_STATUS); }
-    }
-
-    const octokit = getOctokit();
-
-    const now = Date.now();
-    if (_treeCache && (now - _treeCache.timestamp < TREE_CACHE_TTL)) {
-        return _treeCache.data;
-    }
-
-    // Return existing promise if request is already in flight to prevent parallel 404s
-    if (_treeRequest) {
-        return _treeRequest;
-    }
-
-    _treeRequest = (async () => {
-        try {
-            const { data: repoData } = await octokit.rest.repos.get({ owner, repo });
-            const defaultBranch = repoData.default_branch;
-
-            const { data: treeData } = await octokit.rest.git.getTree({
-                owner,
-                repo,
-                tree_sha: defaultBranch,
-                recursive: 'true',
-            });
-            
-            _treeCache = { timestamp: Date.now(), data: treeData };
-            // If success, ensure we clear any invalid status
-            if(localStorage.getItem(LS_REPO_STATUS)) localStorage.removeItem(LS_REPO_STATUS);
-            
-            return treeData;
-        } catch (e: any) {
-            // Robust error status detection (e.status OR e.response.status)
-            const status = e.status || e.response?.status;
-            
-            console.warn(`[GitHub] Repo access failed (${owner}/${repo}). Status: ${status}`, e);
-            
-            // Set circuit breaker for permanent errors (404 Not Found, 403 Forbidden, 401 Unauthorized)
-            if (status === 404 || status === 403 || status === 401) {
-                _isRepoInvalid = true;
-                localStorage.setItem(LS_REPO_STATUS, JSON.stringify({
-                    owner, repo, status: 'INVALID', timestamp: Date.now()
-                }));
-            }
-
-            _treeCache = { timestamp: Date.now(), data: null };
-            return null; 
-        } finally {
-            _treeRequest = null;
-        }
-    })();
-
-    return _treeRequest;
-};
-
-const getFileSha = async (path: string): Promise<string | undefined> => {
-    const treeData = await getRepoTree();
-    if (!treeData || !treeData.tree) return undefined;
-    
-    // @ts-ignore
-    const fileNode = treeData.tree.find((node: any) => node.path === path);
-    return fileNode?.sha;
-};
-
-// --- HELPER: Read File Content ---
-const getFileContent = async (path: string): Promise<{ sha: string, content: any } | null> => {
-    const { owner, repo } = getCredentials();
-    const octokit = getOctokit();
-    
-    if (!owner || !repo) return null;
-
-    // STEP 1: Check existence in Tree first (No 404s!)
-    const sha = await getFileSha(path);
-    if (!sha) return null; 
-
-    // STEP 2: Fetch Blob using SHA (Efficient & Reliable)
-    try {
-        const { data } = await octokit.rest.git.getBlob({
-            owner,
-            repo,
-            file_sha: sha
-        });
-        
-        const cleanBase64 = data.content.replace(/\s/g, '');
-        const decoded = new TextDecoder().decode(Uint8Array.from(atob(cleanBase64), c => c.charCodeAt(0)));
-        return { sha, content: JSON.parse(decoded) };
-    } catch (e: any) {
-        console.error(`[GitHub] Blob Read Error [${path}]`, e);
-    }
-    return null;
-};
-
-// --- HELPER: Save File Content ---
-const saveFileContent = async (path: string, content: any, message: string, sha?: string) => {
-    const { token, owner, repo } = getCredentials();
-    const octokit = getOctokit();
-
-    if (!token) throw new Error("GitHub Token required for writing.");
-    if (!owner || !repo) throw new Error("Repository info missing.");
-    
-    const contentString = JSON.stringify(content, null, 2);
-    const contentEncoded = btoa(new TextEncoder().encode(contentString).reduce((data, byte) => data + String.fromCharCode(byte), ''));
-
-    // @ts-ignore
-    await octokit.rest.repos.createOrUpdateFileContents({
-        owner: owner!,
-        repo: repo!,
-        path: path,
-        message: message,
-        content: contentEncoded,
-        sha: sha 
-    });
-};
-
-// --- PUBLIC METHODS ---
 
 export const checkGitHubStatus = () => {
-    const { token, owner, repo, path, source } = getCredentials();
-    if (!owner) return { ok: false, msg: "Missing Owner", source };
-    if (!repo) return { ok: false, msg: "Missing Repo", source };
-
-    // Check Persistent Invalid State
-    const storedStatus = localStorage.getItem(LS_REPO_STATUS);
-    if (storedStatus) {
-        try {
-            const { owner: badOwner, repo: badRepo } = JSON.parse(storedStatus);
-            if (badOwner === owner && badRepo === repo) {
-                return { ok: false, msg: "Repo Inaccessible (Check Creds)", source };
-            }
-        } catch(e) {}
-    }
-
-    return { ok: true, msg: "Connected", source, path };
+  const token = localStorage.getItem('trade_scout_gh_token');
+  const owner = localStorage.getItem('trade_scout_gh_owner');
+  const repo = localStorage.getItem('trade_scout_gh_repo');
+  
+  if (token && owner && repo) {
+    if (!octokit) octokit = new Octokit({ auth: token });
+    repoConfig = { owner, repo };
+    return { ok: true };
+  }
+  return { ok: false };
 };
 
-// Explicit Connection Verification
-export const verifyConnection = async (): Promise<void> => {
-    const { owner, repo } = getCredentials();
-    const octokit = getOctokit();
-    try {
-        await octokit.rest.repos.get({ owner, repo });
-        // If successful, clear any previous error flags
-        localStorage.removeItem(LS_REPO_STATUS);
-        _isRepoInvalid = false;
-    } catch (e: any) {
-        console.error("Connection Verification Failed", e);
-        throw e;
-    }
-};
-
-export const setManualGitHubConfig = (token: string, owner: string, repo: string, path: string = '') => {
-    if(token) localStorage.setItem(LS_TOKEN, token);
-    else localStorage.removeItem(LS_TOKEN);
-    
-    localStorage.setItem(LS_OWNER, owner);
-    localStorage.setItem(LS_REPO, repo);
-    localStorage.setItem(LS_PATH, path);
-    
-    // Clear cache to force refresh on new config
-    _treeCache = null; 
-    _treeRequest = null;
-    _isRepoInvalid = false; 
-    localStorage.removeItem(LS_REPO_STATUS); // Clear persistent error
-};
-
-export const clearManualGitHubConfig = () => {
-    localStorage.removeItem(LS_TOKEN);
-    localStorage.removeItem(LS_OWNER);
-    localStorage.removeItem(LS_REPO);
-    localStorage.removeItem(LS_PATH);
-    localStorage.removeItem(LS_REPO_STATUS);
-    _treeCache = null;
-    _treeRequest = null;
-    _isRepoInvalid = false;
-};
-
-// --- FETCH DOCUMENTS FROM REPO FOLDER ---
-export const fetchDocumentsFromRepo = async (): Promise<KnowledgeFile[]> => {
-    const { owner, repo, path } = getCredentials();
-    const octokit = getOctokit();
-
-    if (!owner || !repo) throw new Error("Repository not configured");
-
-    try {
-        // Use Tree instead of getContent to avoid folder 404s
-        const treeData = await getRepoTree();
-        if (!treeData || !treeData.tree) return [];
-
-        const targetFolder = path ? path.replace(/\/$/, '') : '';
-
-        // Filter files that are in the target folder (or root if empty)
-        // @ts-ignore
-        const filesToFetch = treeData.tree.filter((node: any) => {
-            if (node.type !== 'blob') return false;
-            
-            // Check Path
-            if (targetFolder) {
-                if (!node.path.startsWith(targetFolder + '/')) return false;
-            } else {
-                // If looking for root, exclude items in subfolders (optional, but cleaner)
-                if (node.path.includes('/')) return false; 
-            }
-
-            // Check Extension
-            const supportedExtensions = ['.pdf', '.jpg', '.jpeg', '.png', '.txt', '.md', '.json', '.docx'];
-            return supportedExtensions.some(ext => node.path.toLowerCase().endsWith(ext));
-        });
-
-        console.log(`[GitHub KB] Found ${filesToFetch.length} files via Tree`);
-
-        // Fetch content (Parallel)
-        const knowledgeFiles: KnowledgeFile[] = await Promise.all(filesToFetch.map(async (file: any) => {
-            try {
-                // @ts-ignore
-                const { data: blob } = await octokit.rest.git.getBlob({
-                    owner,
-                    repo,
-                    file_sha: file.sha
-                });
-
-                const cleanBase64 = blob.content.replace(/\s/g, '');
-                
-                let mimeType = 'text/plain';
-                const lowerName = file.path.toLowerCase();
-                if (lowerName.endsWith('.pdf')) mimeType = 'application/pdf';
-                else if (lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg')) mimeType = 'image/jpeg';
-                else if (lowerName.endsWith('.png')) mimeType = 'image/png';
-                else if (lowerName.endsWith('.json')) mimeType = 'application/json';
-
-                // Extract filename from path
-                const fileName = file.path.split('/').pop();
-
-                return {
-                    id: file.sha, 
-                    name: fileName,
-                    type: mimeType,
-                    data: cleanBase64,
-                    size: blob.size
-                };
-            } catch (err) {
-                return null;
-            }
-        }));
-
-        return knowledgeFiles.filter((f): f is KnowledgeFile => f !== null);
-
-    } catch (e: any) {
-        console.error("[GitHub KB] Fetch Error", e);
-        return [];
-    }
-};
-
-// --- EXISTING CONFIG/BACKUP METHODS ---
+const toBase64 = (str: string) => btoa(unescape(encodeURIComponent(str)));
+const fromBase64 = (str: string) => decodeURIComponent(escape(atob(str)));
 
 export const fetchGlobalConfig = async (): Promise<GlobalConfig | null> => {
-    const res = await getFileContent(PATH_CONFIG);
-    return res ? res.content as GlobalConfig : null;
-};
-export const saveGlobalConfig = async (config: GlobalConfig) => {
-    const sha = await getFileSha(PATH_CONFIG);
-    await saveFileContent(PATH_CONFIG, config, "Update Admin Config", sha);
-};
-
-export const fetchSharedKnowledgeBase = async (): Promise<KnowledgeFile[]> => {
-    const res = await getFileContent(PATH_KB_BACKUP);
-    return res ? res.content as KnowledgeFile[] : [];
-};
-export const saveSharedKnowledgeBase = async (files: KnowledgeFile[]) => {
-    const sha = await getFileSha(PATH_KB_BACKUP);
-    await saveFileContent(PATH_KB_BACKUP, files, "Update Knowledge Base Backup", sha);
+  if (!octokit) return null;
+  try {
+    const { data } = await octokit.repos.getContent({
+      ...repoConfig,
+      path: 'config.json',
+    });
+    if ('content' in data) {
+      return JSON.parse(fromBase64(data.content.replace(/\n/g, '')));
+    }
+  } catch (e) {
+    console.warn("Failed to fetch global config", e);
+  }
+  return null;
 };
 
-export const fetchUsersFromCloud = async (): Promise<User[]> => {
-    const res = await getFileContent(PATH_USERS);
-    return res ? res.content as User[] : [];
-};
-export const saveUsersToCloud = async (users: User[]) => {
-    const sha = await getFileSha(PATH_USERS);
-    await saveFileContent(PATH_USERS, users, "Update Users List", sha);
+export const fetchDocumentsFromRepo = async (): Promise<KnowledgeFile[]> => {
+  if (!octokit) return [];
+  try {
+    const { data } = await octokit.repos.getContent({
+      ...repoConfig,
+      path: 'knowledge',
+    });
+    if (Array.isArray(data)) {
+      const files: KnowledgeFile[] = [];
+      for (const item of data) {
+        if (item.type === 'file') {
+          try {
+            const { data: fileData } = await octokit.repos.getContent({
+              ...repoConfig,
+              path: item.path,
+            });
+            if ('content' in fileData) {
+              files.push({
+                id: item.sha,
+                name: item.name,
+                type: item.name.split('.').pop() || 'txt',
+                data: fromBase64(fileData.content.replace(/\n/g, '')),
+                size: item.size
+              });
+            }
+          } catch (err) {
+            console.error(`Failed to fetch file ${item.path}`, err);
+          }
+        }
+      }
+      return files;
+    }
+  } catch (e) {
+    console.warn("Failed to fetch documents", e);
+  }
+  return [];
 };
 
-// --- DISABLED API KEY SYNC FOR SECURITY ---
-export const fetchApiConfigsFromCloud = async (): Promise<ApiConfig[]> => {
-    // SECURITY: Do not fetch from cloud anymore.
-    // const res = await getFileContent(PATH_API_KEYS);
-    // return res ? res.content as ApiConfig[] : [];
-    return [];
-};
-export const saveApiConfigsToCloud = async (configs: ApiConfig[]) => {
-    // SECURITY: Do NOT upload API keys to GitHub.
-    // const sha = await getFileSha(PATH_API_KEYS);
-    // await saveFileContent(PATH_API_KEYS, configs, "Update API Configurations", sha);
-    console.warn("API Key sync to Cloud has been disabled for security.");
-    return Promise.resolve();
-};
+export const backupUserHistory = async (username: string, history: HistoryItem[]) => {
+  if (!octokit) return;
+  const content = toBase64(JSON.stringify(history));
+  try {
+    let sha;
+    try {
+      const { data } = await octokit.repos.getContent({ ...repoConfig, path: `history/${username}.json` });
+      if ('sha' in data) sha = data.sha;
+    } catch (e) {
+      // File might not exist yet
+    }
 
-export const fetchCRMFromCloud = async (): Promise<Client[]> => {
-    const res = await getFileContent(PATH_CRM);
-    return res ? res.content as Client[] : [];
-};
-export const saveCRMToCloud = async (clients: Client[]) => {
-    const sha = await getFileSha(PATH_CRM);
-    await saveFileContent(PATH_CRM, clients, "Update CRM Clients", sha);
+    await octokit.repos.createOrUpdateFileContents({
+      ...repoConfig,
+      path: `history/${username}.json`,
+      message: `Backup history for ${username}`,
+      content,
+      sha
+    });
+  } catch (e) {
+    console.error("Failed to backup history", e);
+  }
 };
 
 export const fetchUserHistoryFromCloud = async (username: string): Promise<HistoryItem[]> => {
-    const path = `${PATH_HISTORY_PREFIX}${username}_history.json`;
-    const res = await getFileContent(path);
-    return res ? res.content as HistoryItem[] : [];
-};
-export const saveUserHistoryToCloud = async (username: string, history: HistoryItem[]) => {
-    const path = `${PATH_HISTORY_PREFIX}${username}_history.json`;
-    const sha = await getFileSha(path);
-    await saveFileContent(path, history, `Update history for ${username}`, sha);
+  if (!octokit) return [];
+  try {
+    const { data } = await octokit.repos.getContent({ ...repoConfig, path: `history/${username}.json` });
+    if ('content' in data) {
+      return JSON.parse(fromBase64(data.content.replace(/\n/g, '')));
+    }
+  } catch (e) {
+    console.warn("No cloud history found for user", username);
+  }
+  return [];
 };
 
-export const backupUserHistory = saveUserHistoryToCloud;
+export const saveCRMToCloud = async (clients: Client[]) => {
+  if (!octokit) return;
+  const content = toBase64(JSON.stringify(clients));
+  try {
+    let sha;
+    try {
+      const { data } = await octokit.repos.getContent({ ...repoConfig, path: 'crm.json' });
+      if ('sha' in data) sha = data.sha;
+    } catch (e) {
+      // File might not exist
+    }
+
+    await octokit.repos.createOrUpdateFileContents({
+      ...repoConfig,
+      path: 'crm.json',
+      message: 'Sync CRM data',
+      content,
+      sha
+    });
+  } catch (e) {
+    console.error("Failed to save CRM to cloud", e);
+  }
+};
+
+export const fetchCRMFromCloud = async (): Promise<Client[]> => {
+  if (!octokit) return [];
+  try {
+    const { data } = await octokit.repos.getContent({ ...repoConfig, path: 'crm.json' });
+    if ('content' in data) {
+      return JSON.parse(fromBase64(data.content.replace(/\n/g, '')));
+    }
+  } catch (e) {
+    console.warn("No cloud CRM found");
+  }
+  return [];
+};
+
+export const fetchApiConfigsFromCloud = async (): Promise<ApiConfig[]> => {
+  if (!octokit) return [];
+  try {
+    const { data } = await octokit.repos.getContent({ ...repoConfig, path: 'api_configs.json' });
+    if ('content' in data) {
+      return JSON.parse(fromBase64(data.content.replace(/\n/g, '')));
+    }
+  } catch (e) {
+    console.warn("No cloud API configs found");
+  }
+  return [];
+};
+
+export const saveUsersToCloud = async (users: User[]) => {
+  if (!octokit) return;
+  const content = toBase64(JSON.stringify(users));
+  try {
+    let sha;
+    try {
+      const { data } = await octokit.repos.getContent({ ...repoConfig, path: 'users.json' });
+      if ('sha' in data) sha = data.sha;
+    } catch (e) {
+      // File might not exist
+    }
+
+    await octokit.repos.createOrUpdateFileContents({
+      ...repoConfig,
+      path: 'users.json',
+      message: 'Sync Users data',
+      content,
+      sha
+    });
+  } catch (e) {
+    console.error("Failed to save users to cloud", e);
+  }
+};
+
+export const fetchUsersFromCloud = async (): Promise<User[]> => {
+  if (!octokit) return [];
+  try {
+    const { data } = await octokit.repos.getContent({ ...repoConfig, path: 'users.json' });
+    if ('content' in data) {
+      return JSON.parse(fromBase64(data.content.replace(/\n/g, '')));
+    }
+  } catch (e) {
+    console.warn("No cloud users found");
+  }
+  return [];
+};

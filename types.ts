@@ -131,6 +131,9 @@ export interface ProductAnalysis {
   pricingStrategy?: string;
   pitchPoint?: string;
   techSpecs?: string;
+  features?: string;
+  colors?: string;
+  packaging?: string;
   imageUrl?: string;
   competitorLink?: string;
 }
@@ -179,6 +182,13 @@ export interface AnalysisResult {
     revenueEstimate: string;
     paymentTerms: string;
     ipInfo: string;
+  };
+  productSummary?: {
+    marketPreference: string;
+    recommendedProducts: string;
+    packagingAnalysis: string;
+    colorPreference: string;
+    featureAnalysis: string;
   };
   socials: {
     linkedin?: string;

@@ -34,7 +34,7 @@ const COLORS = {
 const sanitize = (str: any) => {
     if (str === null || str === undefined) return "暂无数据";
     if (typeof str !== 'string') return String(str);
-    return str.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "");
+    return str.replace(/[^\x20-\x7E\u4E00-\u9FA5]/g, "");
 };
 
 /**
@@ -205,7 +205,7 @@ export const exportBatchAnalysisToPPT = async (analyses: AnalysisResult[]) => {
         strategyPptx.author = '楠哥的小助理';
         strategyPptx.title = `Master Outreach Strategy`;
 
-        let slide = strategyPptx.addSlide();
+        const slide = strategyPptx.addSlide();
         slide.background = { color: COLORS.DARK_BG };
         slide.addText("MASTER OUTREACH STRATEGY", { x: 0.5, y: 1.5, fontSize: 36, bold: true, color: "FFFFFF", align: 'center' });
         slide.addText("批量客户开发策略汇总", { x: 0.5, y: 2.2, fontSize: 24, color: "CBD5E1", align: 'center' });
@@ -213,7 +213,9 @@ export const exportBatchAnalysisToPPT = async (analyses: AnalysisResult[]) => {
         // Try to generate a consolidated strategy if we have KB files
         try {
            let kbFiles = [];
-           try { kbFiles = await getAllFilesFromDB(); } catch(e) {}
+           try { kbFiles = await getAllFilesFromDB(); } catch(e) {
+               console.warn("Failed to get files from DB", e);
+           }
            
            if (kbFiles.length > 0) {
                const mailGroup = await generateConsolidatedEmailStrategy(analyses, kbFiles, "Consolidated CRM Batch");
@@ -295,7 +297,7 @@ const addAutomationSlides = (pptx: any, result: AutomationResult) => {
 
 const addEmailStrategySlidesFromGroup = (pptx: any, mailGroup: any) => {
     if (mailGroup) {
-        let slide = pptx.addSlide();
+        const slide = pptx.addSlide();
         slide.background = { color: "FFFFFF" };
         slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 10, h: 1.0, fill: COLORS.DARK_BG });
         slide.addText("开发信策略分析 (Outreach Strategy)", { x: 0.5, y: 0.3, fontSize: 20, bold: true, color: "FFFFFF", valign: 'middle' });
@@ -314,7 +316,7 @@ const addEmailStrategySlidesFromGroup = (pptx: any, mailGroup: any) => {
 };
 
 const createEmailSlide = (pptx: any, title: string, content: string) => {
-    let slide = pptx.addSlide();
+    const slide = pptx.addSlide();
     slide.background = { color: "FFFFFF" };
     
     slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 10, h: 0.8, fill: COLORS.ACCENT_BLUE });
