@@ -30,11 +30,12 @@ const COLORS = {
 
 /**
  * Helper: Sanitize text for PPT
+ * Simplified to prevent "garbled" text while removing problematic null bytes
  */
 const sanitize = (str: any) => {
     if (str === null || str === undefined) return "暂无数据";
     if (typeof str !== 'string') return String(str);
-    return str.replace(/[^\x20-\x7E\u4E00-\u9FA5]/g, "");
+    return str.replace(/\0/g, "").trim();
 };
 
 /**
@@ -306,7 +307,8 @@ const addEmailStrategySlidesFromGroup = (pptx: any, mailGroup: any) => {
         slide.addShape(pptx.ShapeType.rect, { x: 0.5, y: 1.6, w: 9, h: 3.5, fill: "F8FAFC", line: { color: "E2E8F0" } });
         slide.addText(sanitize(mailGroup.analysis), { 
             x: 0.6, y: 1.7, w: 8.8, h: 3.3, 
-            fontSize: 10, color: COLORS.TEXT_MAIN, valign: 'top' 
+            fontSize: 10, color: COLORS.TEXT_MAIN, valign: 'top',
+            lineSpacing: 18 // Increased line spacing (points)
         });
 
         createEmailSlide(pptx, "Email 1: The Hook (破冰)", mailGroup.email1);
@@ -326,8 +328,9 @@ const createEmailSlide = (pptx: any, title: string, content: string) => {
     
     slide.addText(sanitize(content), { 
         x: 0.7, y: 1.2, w: 8.6, h: 3.8, 
-        fontSize: 10, color: "1E293B", 
-        fontFace: "Courier New", valign: 'top' 
+        fontSize: 11, color: "1E293B", 
+        fontFace: "Arial", valign: 'top',
+        lineSpacing: 20 // Ensure lines don't overlap
     });
 };
 
@@ -417,7 +420,7 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
     slide.addText(sanitize(data.companyInfo.description), { 
         x: 5.0, y: 1.6, w: 4.3, h: 3.2, 
         fontSize: 10, color: COLORS.TEXT_MAIN, 
-        valign: 'top', align: 'left', wrap: true, lineSpacing: 1.5
+        valign: 'top', align: 'left', wrap: true, lineSpacing: 16
     });
 
     // --- SLIDE 3: FINANCIALS & TRAFFIC (财务与流量) ---
@@ -546,11 +549,31 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
         summaryBox("颜色偏好 (Color Preference)", data.productSummary.colorPreference, 0.5, 3.8, 9.0, 1.2, "🎨");
     }
 
+    // --- SLIDE 5.5: ACTION PLAN (Separated to avoid overlap) ---
+    if (data.strategy && data.strategy.actionPlan && data.strategy.actionPlan.length > 0) {
+        slide = pptx.addSlide();
+        addFooter(slide);
+        slide.background = { color: "FFFFFF" };
+        slide.addShape(pptx.ShapeType.rect, headerRect);
+        slide.addText("06 建议行动计划 (Action Plan)", headerStyle);
+
+        data.strategy.actionPlan.forEach((step, idx) => {
+            const y = 1.2 + idx * 0.7;
+            if (y > 5.0) return;
+            
+            slide.addShape(pptx.ShapeType.rect, { x: 0.5, y: y, w: 0.4, h: 0.4, fill: COLORS.ACCENT_PURPLE, r: 0.1 });
+            slide.addText(String(idx + 1), { x: 0.5, y: y, w: 0.4, h: 0.4, align: 'center', color: "FFFFFF", bold: true, fontSize: 10, valign: "middle" });
+            
+            slide.addShape(pptx.ShapeType.rect, { x: 1.1, y: y, w: 8.4, h: 0.5, fill: "F8FAFC", line: { color: "F1F5F9" }, r: 0.05 });
+            slide.addText(sanitize(step), { x: 1.2, y: y, w: 8.2, h: 0.5, fontSize: 10, color: COLORS.TEXT_MAIN, valign: 'middle' });
+        });
+    }
+
     // --- SLIDE 6: SWOT ANALYSIS ---
     slide = pptx.addSlide();
     addFooter(slide);
     slide.addShape(pptx.ShapeType.rect, headerRect);
-    slide.addText("06 SWOT 态势分析", headerStyle);
+    slide.addText("07 SWOT 态势分析", headerStyle);
 
     const drawQuad = (title: string, items: string[], x: number, y: number, color: string, bgColor: string) => {
         slide.addShape(pptx.ShapeType.rect, { x, y, w: 4.4, h: 2.0, fill: bgColor, line: { color: color, width: 2 }, r: 0.1 });
@@ -571,7 +594,7 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
     slide = pptx.addSlide();
     addFooter(slide);
     slide.addShape(pptx.ShapeType.rect, headerRect);
-    slide.addText("07 关键决策人 (Key Decision Makers)", headerStyle);
+    slide.addText("08 关键决策人 (Key Decision Makers)", headerStyle);
 
     if (data.decisionMakers && data.decisionMakers.length > 0) {
         const headers = [
@@ -602,7 +625,7 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
     slide = pptx.addSlide();
     addFooter(slide);
     slide.addShape(pptx.ShapeType.rect, headerRect);
-    slide.addText("08 产品详情与切入策略 (Products & Strategy)", headerStyle);
+    slide.addText("09 产品详情与切入策略 (Products & Strategy)", headerStyle);
 
     if (data.products && data.products.length > 0) {
         data.products.slice(0, 3).forEach((prod, i) => {
@@ -629,51 +652,32 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
         });
     }
 
-    // --- SLIDE 9: ACTION PLAN ---
-    slide = pptx.addSlide();
-    addFooter(slide);
-    slide.addShape(pptx.ShapeType.rect, headerRect);
-    slide.addText("09 建议行动计划 (Action Plan)", headerStyle);
-
-    if (data.strategy && data.strategy.actionPlan && data.strategy.actionPlan.length > 0) {
-        data.strategy.actionPlan.forEach((step, idx) => {
-            const y = 1.2 + idx * 0.7;
-            if (y > 5.0) return;
-            
-            slide.addShape(pptx.ShapeType.rect, { x: 0.5, y: y, w: 0.4, h: 0.4, fill: COLORS.ACCENT_PURPLE, r: 0.1 });
-            slide.addText(String(idx + 1), { x: 0.5, y: y, w: 0.4, h: 0.4, align: 'center', color: "FFFFFF", bold: true, fontSize: 10, valign: "middle" });
-            
-            slide.addShape(pptx.ShapeType.rect, { x: 1.1, y: y, w: 8.4, h: 0.5, fill: "F8FAFC", line: { color: "F1F5F9" }, r: 0.05 });
-            slide.addText(sanitize(step), { x: 1.2, y: y, w: 8.2, h: 0.5, fontSize: 10, color: COLORS.TEXT_MAIN, valign: 'middle' });
-        });
-    } else {
-        slide.addText("暂无具体行动计划。", { x: 0.5, y: 2.5, w: 9, align: 'center', color: COLORS.TEXT_MUTED });
-    }
-    
-    // Competitors at bottom
+    // --- SLIDE 10: COMPETITORS (Separated to avoid overlap) ---
     if (data.similarCompanies && data.similarCompanies.length > 0) {
-        const yStart = 4.0;
-        slide.addText("潜在竞品/同行 (Competitors)", { x: 0.5, y: yStart, fontSize: 12, bold: true, color: COLORS.ACCENT_BLUE });
+        slide = pptx.addSlide();
+        addFooter(slide);
+        slide.addShape(pptx.ShapeType.rect, headerRect);
+        slide.addText("10 潜在竞品/同行 (Competitors)", headerStyle);
         
         const headers = [
-            { text: "公司名", options: { bold: true, fill: "F1F5F9", w: 3.0 } },
-            { text: "国家", options: { bold: true, fill: "F1F5F9", w: 1.5 } },
-            { text: "主营产品", options: { bold: true, fill: "F1F5F9", w: 4.5 } }
+            { text: "公司名", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF", w: 3.0 } },
+            { text: "国家", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF", w: 1.5 } },
+            { text: "主营产品", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF", w: 4.5 } }
         ];
-        const rows = data.similarCompanies.slice(0, 2).map(c => [
+        const rows = data.similarCompanies.slice(0, 8).map(c => [
             { text: sanitize(c.name) },
             { text: sanitize(c.country) },
             { text: sanitize(c.mainProducts) }
         ]);
         slide.addTable([headers, ...rows], { 
-            x: 0.5, y: yStart + 0.4, w: 9.0, 
-            fontSize: 9, rowH: 0.35, 
+            x: 0.5, y: 1.2, w: 9.0, 
+            fontSize: 10, rowH: 0.45, 
             border: { pt: 0.5, color: "E2E8F0" }, 
             valign: "middle" 
         });
     }
 
-    // --- SLIDE 10: END ---
+    // --- SLIDE 11: END ---
     slide = pptx.addSlide();
     slide.background = { color: COLORS.DARK_BG };
     slide.addText("THANKS", { 
