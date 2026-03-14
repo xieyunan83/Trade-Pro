@@ -26,7 +26,6 @@ interface AdminDashboardProps {
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, currentUser, users, setUsers }) => {
   const [activeTab, setActiveTab] = useState<number>(1);
-  const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [localConfig, setLocalConfig] = useState<GlobalConfig>({
     lastUpdated: Date.now(),
     dailyLimits: { search: 50, analysis: 20 },
@@ -191,24 +190,37 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    console.log("File upload triggered");
     const file = e.target.files?.[0];
     if (!file) return;
 
+    console.log("Selected file:", file.name);
     const reader = new FileReader();
     reader.onload = async (event) => {
-      const content = event.target?.result as string;
-      const newFile: KnowledgeFile = {
-        id: Math.random().toString(36).substr(2, 9),
-        name: file.name,
-        size: file.size,
-        data: content,
-        type: file.name.split('.').pop() || 'txt'
-      };
+      try {
+        const content = event.target?.result as string;
+        const newFile: KnowledgeFile = {
+          id: Math.random().toString(36).substr(2, 9),
+          name: file.name,
+          size: file.size,
+          data: content,
+          type: file.name.split('.').pop() || 'txt'
+        };
 
-      await saveFileToDB(newFile);
-      const allFiles = await getAllFilesFromDB();
-      setKbFiles(allFiles);
-      alert('文件上传成功！');
+        await saveFileToDB(newFile);
+        const allFiles = await getAllFilesFromDB();
+        setKbFiles(allFiles);
+        alert('文件上传成功！');
+        // Reset input
+        e.target.value = '';
+      } catch (err) {
+        console.error("Upload process error:", err);
+        alert('文件处理失败');
+      }
+    };
+    reader.onerror = (err) => {
+      console.error("FileReader error:", err);
+      alert('文件读取失败');
     };
     reader.readAsText(file);
   };
@@ -568,19 +580,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     <div className="text-lg font-black text-slate-800">
                       Active Files: <span className="text-blue-600">{kbFiles.length}</span>
                     </div>
-                    <input 
-                      type="file" 
-                      ref={fileInputRef} 
-                      onChange={handleFileUpload} 
-                      className="hidden" 
-                      accept=".txt,.md,.json,.csv"
-                    />
-                    <button 
-                      onClick={() => fileInputRef.current?.click()}
-                      className="text-blue-600 font-black text-sm flex items-center gap-1 hover:underline"
-                    >
+                    <label className="text-blue-600 font-black text-sm flex items-center gap-1 hover:underline cursor-pointer">
                       <Plus size={16} /> Upload Local
-                    </button>
+                      <input 
+                        type="file" 
+                        onChange={handleFileUpload} 
+                        className="hidden" 
+                        accept=".txt,.md,.json,.csv"
+                      />
+                    </label>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

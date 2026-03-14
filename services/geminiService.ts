@@ -760,7 +760,7 @@ export const streamStrategyChat = async function* (
     let systemInstruction = `You are 楠哥的小助理 (Nan Ge's Assistant), a Senior Trade Strategist. Speak primarily in Chinese (简体中文) unless asked otherwise.`;
     if (companyData) systemInstruction += ` Context: Analyzing ${companyData.companyInfo.name}.`;
     if (knowledgeBase.length > 0) {
-        const kbText = knowledgeBase.map(f => `[KB: ${f.name}]\n${atob(f.data).substring(0, 500)}...`).join("\n\n");
+        const kbText = knowledgeBase.map(f => `[KB: ${f.name}]\n${f.data.substring(0, 500)}...`).join("\n\n");
         systemInstruction += `\n\nSystem Knowledge Base:\n${kbText}`;
     }
 
