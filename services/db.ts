@@ -2,7 +2,7 @@
 import { HistoryItem, AutomationResult, KnowledgeFile } from '../types';
 
 const DB_NAME = 'TradeScoutDB';
-const DB_VERSION = 1;
+const DB_VERSION = 5;
 
 export const initDB = (): Promise<IDBDatabase> => {
   return new Promise((resolve, reject) => {

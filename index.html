@@ -6,6 +6,28 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>楠哥的小助理 - AI 智能客户开发</title>
     
+    <script>
+        // Fix for "Uncaught TypeError: Cannot set property fetch of #<Window> which has only a getter"
+        // This must run BEFORE any other scripts that might try to polyfill fetch
+        (function() {
+            try {
+                var descriptor = Object.getOwnPropertyDescriptor(window, 'fetch');
+                if (descriptor && !descriptor.writable && !descriptor.set && descriptor.configurable) {
+                    var originalFetch = window.fetch;
+                    Object.defineProperty(window, 'fetch', {
+                        value: originalFetch,
+                        writable: true,
+                        configurable: true,
+                        enumerable: true
+                    });
+                }
+            } catch (e) {
+                // If we can't redefine it, we at least tried. 
+                // Some environments make fetch non-configurable.
+            }
+        })();
+    </script>
+
     <!-- Social Sharing Meta Tags -->
     <meta name="description" content="基于 Gemini 3 Pro 的智能外贸客户背调与开发工具。一键提取决策人、分析供应链、生成开发信。">
     <meta property="og:title" content="楠哥的小助理">
@@ -22,26 +44,6 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
     <!-- Word Document Parser -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
-    <script>
-        // Fix for "Uncaught TypeError: Cannot set property fetch of #<Window> which has only a getter"
-        // This happens when some libraries (like formdata-polyfill) try to overwrite window.fetch
-        (function() {
-            try {
-                var descriptor = Object.getOwnPropertyDescriptor(window, 'fetch');
-                if (descriptor && !descriptor.writable && !descriptor.set && descriptor.configurable) {
-                    var originalFetch = window.fetch;
-                    Object.defineProperty(window, 'fetch', {
-                        value: originalFetch,
-                        writable: true,
-                        configurable: true,
-                        enumerable: true
-                    });
-                }
-            } catch (e) {
-                console.error('Fetch patch failed', e);
-            }
-        })();
-    </script>
     <style>
         body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
         .animate-fade-in { animation: fadeIn 0.4s ease-out; }
