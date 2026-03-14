@@ -38,11 +38,26 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({ data
               <div className="space-y-3 mt-6">
                 {dm.emailGuess && (
                   <div className="flex items-center justify-between p-3 bg-white rounded-xl border border-slate-100">
-                    <div className="flex items-center gap-2">
-                      <Mail size={14} className="text-slate-400" />
-                      <span className="text-xs font-bold text-slate-600">{dm.emailGuess}</span>
+                    <div className="flex items-center gap-2 overflow-hidden">
+                      <Mail size={14} className="text-slate-400 shrink-0" />
+                      <span className="text-xs font-bold text-slate-600 truncate">{dm.emailGuess}</span>
                     </div>
-                    <button className="text-[10px] font-black text-blue-600 hover:underline">复制</button>
+                    <button 
+                      onClick={(e) => {
+                        navigator.clipboard.writeText(dm.emailGuess || '');
+                        const btn = e.currentTarget as HTMLButtonElement;
+                        const originalText = btn.innerText;
+                        btn.innerText = '已复制';
+                        btn.classList.add('text-green-600');
+                        setTimeout(() => {
+                          btn.innerText = originalText;
+                          btn.classList.remove('text-green-600');
+                        }, 2000);
+                      }}
+                      className="text-[10px] font-black text-blue-600 hover:underline shrink-0 ml-2"
+                    >
+                      复制
+                    </button>
                   </div>
                 )}
                 {dm.linkedin && (

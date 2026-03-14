@@ -57,26 +57,58 @@ const extractJson = (text: string, isArray: boolean = false): any => {
 const cleanDomain = (domain: string) => domain.replace(/^(?:https?:\/\/)?(?:www\.)?/i, "").split('/')[0];
 
 // --- External APIs ---
-const fetchHunterEmails = async (domain: string): Promise<DecisionMaker[]> => {
-    if (!domain || !HUNTER_API_KEY) return [];
+const fetchHunterEmails = async (domain: string): Promise<{ people: DecisionMaker[], pattern: string | null }> => {
+    if (!domain || !HUNTER_API_KEY) return { people: [], pattern: null };
     try {
         const url = `https://api.hunter.io/v2/domain-search?domain=${cleanDomain(domain)}&api_key=${HUNTER_API_KEY}&limit=20`;
         const response = await fetch(url);
         const data = await response.json();
+        const pattern = data.data?.pattern || null;
         if (data.data && data.data.emails) {
-            return data.data.emails.map((e: any) => ({
+            const people = data.data.emails.map((e: any) => ({
                 name: `${e.first_name || ''} ${e.last_name || ''}`.trim() || 'Professional',
+                firstName: e.first_name,
+                lastName: e.last_name,
                 title: e.position || 'Employee',
                 emailGuess: e.value,
                 linkedin: e.linkedin,
                 type: (e.position?.toLowerCase().match(/ceo|founder|owner|president/) ? 'CEO' : e.position?.toLowerCase().match(/buyer|procurement|purchasing|sourcing|manager/) ? 'Buyer' : 'Other'),
                 source: 'Hunter.io',
-                isVerified: e.confidence > 80,
-                confidence: e.confidence
+                isVerified: e.confidence > 85, // More strict
+                confidence: e.confidence / 100
             }));
+            return { people, pattern };
         }
     } catch (error) { console.error("Hunter API Error", error); }
-    return [];
+    return { people: [], pattern: null };
+};
+
+const findEmailWithHunter = async (firstName: string, lastName: string, domain: string): Promise<{ email: string, confidence: number } | null> => {
+    if (!HUNTER_API_KEY || !domain || !firstName) return null;
+    try {
+        const url = `https://api.hunter.io/v2/email-finder?domain=${cleanDomain(domain)}&first_name=${encodeURIComponent(firstName)}&last_name=${encodeURIComponent(lastName || '')}&api_key=${HUNTER_API_KEY}`;
+        const response = await fetch(url);
+        const data = await response.json();
+        if (data.data && data.data.email) {
+            return { email: data.data.email, confidence: data.data.score / 100 };
+        }
+    } catch (e) { console.error("Hunter Email Finder Error", e); }
+    return null;
+};
+
+const findEmailWithFindymail = async (name: string, domain: string): Promise<{ email: string, isVerified: boolean } | null> => {
+    if (!FINDYMAIL_API_KEY || !domain || !name) return null;
+    try {
+        const url = `https://app.findymail.com/api/search/name?domain=${cleanDomain(domain)}&name=${encodeURIComponent(name)}`;
+        const response = await fetch(url, {
+            headers: { 'Authorization': `Bearer ${FINDYMAIL_API_KEY}` }
+        });
+        const data = await response.json();
+        if (data.email) {
+            return { email: data.email, isVerified: data.status === 'valid' };
+        }
+    } catch (e) { console.error("Findymail Search Error", e); }
+    return null;
 };
 
 const fetchFindymail = async (domain: string): Promise<DecisionMaker[]> => {
@@ -485,6 +517,10 @@ export const analyzeCompany = async (domainOrName: string, mode: 'detailed' | 'e
   1. Identify company nature, scale, and headquarters.
   2. Analyze product pricing, positioning, and supply chain role.
   3. Find 5-10 specific decision makers (Name + Title).
+     - **CRITICAL**: Prioritize finding REAL LinkedIn profiles.
+     - For Name, provide "firstName", "lastName", and "name" (Full Name).
+     - ONLY provide "emailGuess" if you find it explicitly on the web or are 90% sure of the pattern.
+     - Look for "Contact Us", "About Us", or "Team" pages to find real names.
   4. Find 3-5 competitors.
   5. Identify website product categories.
   6. **PRODUCT ANALYSIS (CRITICAL)**: Analyze the company's products in detail:
@@ -531,7 +567,7 @@ export const analyzeCompany = async (domainOrName: string, mode: 'detailed' | 'e
     "socials": { "linkedin": "", "facebook": "" },
     "products": [{ "name": "...", "retailPrice": "...", "retailPriceCNY": 0, "estimatedFOBPriceCNY": 0, "imageUrl": "", "competitorLink": "...", "pricingStrategy": "...", "pitchPoint": "...", "techSpecs": "...", "features": "...", "colors": "...", "packaging": "..." }],
     "marketTrends": "...",
-    "decisionMakers": [{ "name": "...", "title": "...", "emailGuess": "...", "linkedin": "...", "type": "...", "source": "AI", "isVerified": false }],
+    "decisionMakers": [{ "firstName": "...", "lastName": "...", "name": "...", "title": "...", "emailGuess": "...", "linkedin": "...", "type": "...", "source": "AI", "isVerified": false }],
     "strategy": { "buyingOfficeLocation": "...", "actionPlan": [] },
     "similarCompanies": [{ "name": "...", "website": "...", "country": "...", "mainProducts": "..." }]
   }
@@ -614,13 +650,53 @@ export const analyzeCompany = async (domainOrName: string, mode: 'detailed' | 'e
   const targetDomain = result.companyInfo.website !== 'N/A' ? result.companyInfo.website : domainOrName;
   if (targetDomain && targetDomain.includes('.')) {
       try {
-          const [hunter, findy, anymail] = await Promise.all([
+          const [hunterData, findy, anymail] = await Promise.all([
               fetchHunterEmails(targetDomain),
               fetchFindymail(targetDomain),
               fetchAnymailFinder(targetDomain)
           ]);
+          
+          const hunter = hunterData.people;
+          const pattern = hunterData.pattern;
           const allExtra = [...hunter, ...findy, ...anymail];
+          
+          // Merge logic
           const existingNames = new Set(result.decisionMakers.map(dm => dm.name.toLowerCase()));
+          
+          // For AI found people, try to find/verify their emails using specific finder APIs
+          for (const dm of result.decisionMakers) {
+              if (dm.source === 'AI' && dm.firstName && targetDomain) {
+                  // Try Hunter Email Finder for this specific person
+                  const hunterEmail = await findEmailWithHunter(dm.firstName, dm.lastName || '', targetDomain);
+                  if (hunterEmail && hunterEmail.confidence > 70) {
+                      dm.emailGuess = hunterEmail.email;
+                      dm.isVerified = hunterEmail.confidence > 90;
+                      dm.confidence = hunterEmail.confidence;
+                      dm.source = 'Hunter.io';
+                  } else if (dm.name) {
+                      // Try Findymail
+                      const findyEmail = await findEmailWithFindymail(dm.name, targetDomain);
+                      if (findyEmail) {
+                          dm.emailGuess = findyEmail.email;
+                          dm.isVerified = findyEmail.isVerified;
+                          dm.source = 'Findymail';
+                      }
+                  }
+                  
+                  // If still no email but we have a pattern from Hunter
+                  if (!dm.emailGuess && pattern && dm.firstName) {
+                      const guessed = pattern
+                          .replace('{first}', dm.firstName.toLowerCase())
+                          .replace('{last}', (dm.lastName || '').toLowerCase())
+                          .replace('{f}', dm.firstName[0].toLowerCase())
+                          .replace('{l}', (dm.lastName || '')[0]?.toLowerCase() || '');
+                      
+                      dm.emailGuess = `${guessed}@${cleanDomain(targetDomain)}`;
+                      dm.source = 'AI (Pattern Guess)';
+                  }
+              }
+          }
+
           const newPeople = allExtra.filter(p => p.name && !existingNames.has(p.name.toLowerCase()));
           result.decisionMakers = [...result.decisionMakers, ...newPeople];
       } catch (e) { console.error("External API enrichment failed", e); }

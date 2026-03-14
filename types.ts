@@ -70,6 +70,8 @@ export interface AutomationResult {
 
 export interface DecisionMaker {
   name: string;
+  firstName?: string;
+  lastName?: string;
   title: string;
   yearsActive?: string;
   emailGuess?: string;
