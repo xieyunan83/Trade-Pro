@@ -206,3 +206,30 @@ export const fetchUsersFromCloud = async (): Promise<User[]> => {
   }
   return [];
 };
+
+export const saveKnowledgeBaseToCloud = async (files: KnowledgeFile[]) => {
+  if (!octokit) return;
+  
+  for (const file of files) {
+    const content = btoa(unescape(encodeURIComponent(file.data)));
+    try {
+      let sha;
+      try {
+        const { data } = await octokit.repos.getContent({ ...repoConfig, path: `knowledge/${file.name}` });
+        if ('sha' in data) sha = data.sha;
+      } catch (e) {
+        // New file
+      }
+
+      await octokit.repos.createOrUpdateFileContents({
+        ...repoConfig,
+        path: `knowledge/${file.name}`,
+        message: `Sync KB file: ${file.name}`,
+        content,
+        sha
+      });
+    } catch (e) {
+      console.error(`Failed to sync file ${file.name} to cloud`, e);
+    }
+  }
+};

@@ -13,7 +13,8 @@ import {
   fetchGlobalConfig,
   fetchUsersFromCloud,
   saveUsersToCloud,
-  fetchDocumentsFromRepo
+  fetchDocumentsFromRepo,
+  saveKnowledgeBaseToCloud
 } from '../services/githubService';
 import { getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/db';
 
@@ -230,6 +231,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
       await deleteFileFromDB(id);
       const allFiles = await getAllFilesFromDB();
       setKbFiles(allFiles);
+    }
+  };
+
+  const handleSyncKBToCloud = async () => {
+    if (!isCloudConnected) {
+      alert('请先连接 GitHub (Please connect GitHub first)');
+      return;
+    }
+    setIsSyncing(true);
+    try {
+      await saveKnowledgeBaseToCloud(kbFiles);
+      alert('知识库已同步到 GitHub 仓库！');
+    } catch (e) {
+      console.error(e);
+      alert('同步失败');
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -580,15 +598,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     <div className="text-lg font-black text-slate-800">
                       Active Files: <span className="text-blue-600">{kbFiles.length}</span>
                     </div>
-                    <label className="text-blue-600 font-black text-sm flex items-center gap-1 hover:underline cursor-pointer">
-                      <Plus size={16} /> Upload Local
+                    <div className="flex items-center gap-4">
+                      <button 
+                        onClick={handleSyncKBToCloud}
+                        disabled={isSyncing || kbFiles.length === 0}
+                        className="text-purple-600 font-black text-sm flex items-center gap-1 hover:underline disabled:opacity-30"
+                      >
+                        <Cloud size={16} /> Push to GitHub
+                      </button>
+                      <label 
+                        htmlFor="kb-upload-input"
+                        className="text-blue-600 font-black text-sm flex items-center gap-1 hover:underline cursor-pointer"
+                      >
+                        <Plus size={16} /> Upload Local
+                      </label>
                       <input 
+                        id="kb-upload-input"
                         type="file" 
                         onChange={handleFileUpload} 
-                        className="hidden" 
+                        className="sr-only" 
                         accept=".txt,.md,.json,.csv"
                       />
-                    </label>
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
