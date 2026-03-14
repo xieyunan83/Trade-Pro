@@ -692,8 +692,7 @@ export const analyzeCompany = async (domainOrName: string, mode: 'detailed' | 'e
                           .replace('{l}', (dm.lastName || '')[0]?.toLowerCase() || '');
                       
                       dm.emailGuess = `${guessed}@${cleanDomain(targetDomain)}`;
-                      dm.source = 'AI';
-                      dm.isPatternGuess = true;
+                      dm.source = 'AI (Pattern Guess)';
                   }
               }
           }
