@@ -81,7 +81,11 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
     accessKeyId: config?.accessKeyId || '',
     accessKeySecret: config?.accessKeySecret || '',
     accountName: config?.accountName || '',
-    fromAlias: config?.fromAlias || ''
+    fromAlias: config?.fromAlias || '',
+    replyToAddress: config?.replyToAddress || false,
+    addressType: config?.addressType || 1,
+    tagName: config?.tagName || '',
+    regionId: config?.regionId || 'cn-hangzhou'
   });
 
   const onSaveConfig = (newConfig: AliyunConfig) => {
@@ -361,6 +365,26 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
                 placeholder="Kevin from TradeScout"
                 className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold"
               />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Region ID</label>
+                <input 
+                  type="text" 
+                  value={configInput.regionId}
+                  onChange={e => setConfigInput({...configInput, regionId: e.target.value})}
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Tag Name</label>
+                <input 
+                  type="text" 
+                  value={configInput.tagName}
+                  onChange={e => setConfigInput({...configInput, tagName: e.target.value})}
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold"
+                />
+              </div>
             </div>
             <button onClick={() => onSaveConfig(configInput)} className="w-full bg-slate-900 text-white py-4 rounded-xl font-black shadow-lg hover:bg-blue-600 transition-all">
               保存配置 (Save Configuration)
