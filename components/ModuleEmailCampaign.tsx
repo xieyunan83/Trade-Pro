@@ -244,7 +244,7 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
 
       {activeTab === 'templates' && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div onClick={() => setIsCreatingTemplate(true)} className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm flex flex-col items-center justify-center border-dashed cursor-pointer hover:bg-slate-50 transition-all min-h-[200px]">
+          <div onClick={() => { setNewTemplate({ id: '', name: '', subject: '', body: '', lastUpdated: Date.now() }); setIsCreatingTemplate(true); }} className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm flex flex-col items-center justify-center border-dashed cursor-pointer hover:bg-slate-50 transition-all min-h-[200px]">
             <div className="bg-blue-50 p-4 rounded-2xl text-blue-600 mb-4">
               <Plus size={32} />
             </div>
@@ -280,23 +280,23 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
                       <h3 className="text-2xl font-black text-slate-800">创建邮件模板</h3>
                       <button onClick={() => setIsCreatingTemplate(false)}><X size={24} className="text-slate-400"/></button>
                   </div>
-                  <div className="space-y-4">
-                      <input type="text" placeholder="模板名称" value={newTemplate.name} onChange={e => setNewTemplate({...newTemplate, name: e.target.value})} className="w-full p-3 border rounded-xl font-bold" />
+                  <div className="space-y-6">
+                      <input type="text" placeholder="模板名称" value={newTemplate.name || ''} onChange={e => setNewTemplate({...newTemplate, name: e.target.value})} className="w-full p-3 border rounded-xl font-bold" />
                       
                       <div className="space-y-2">
-                        <div className="flex justify-between items-center">
-                            <input type="text" placeholder="邮件主题" value={newTemplate.subject} onChange={e => setNewTemplate({...newTemplate, subject: e.target.value})} className="w-full p-3 border rounded-xl font-bold" />
-                            <div className="flex gap-2 ml-2">
-                                {macros.map(m => <button key={m} onClick={() => insertMacroToSubject(m)} className="bg-slate-100 px-3 py-1 rounded-lg text-xs font-bold hover:bg-slate-200">{m}</button>)}
-                            </div>
+                        <label className="text-xs font-black text-slate-400 uppercase tracking-widest">邮件主题</label>
+                        <div className="flex gap-2">
+                            <input type="text" placeholder="邮件主题" value={newTemplate.subject || ''} onChange={e => setNewTemplate({...newTemplate, subject: e.target.value})} className="flex-1 p-3 border rounded-xl font-bold" />
+                            {macros.map(m => <button key={m} onClick={() => insertMacroToSubject(m)} className="bg-slate-100 px-3 py-1 rounded-lg text-xs font-bold hover:bg-slate-200">{m}</button>)}
                         </div>
                       </div>
 
                       <div className="space-y-2">
+                        <label className="text-xs font-black text-slate-400 uppercase tracking-widest">邮件正文</label>
                         <div className="flex gap-2 mb-2">
                             {macros.map(m => <button key={m} onClick={() => insertMacroToBody(m)} className="bg-slate-100 px-3 py-1 rounded-lg text-xs font-bold hover:bg-slate-200">{m}</button>)}
                         </div>
-                        <ReactQuill ref={quillRef} theme="snow" modules={modules} value={newTemplate.body} onChange={body => setNewTemplate({...newTemplate, body})} className="h-64 mb-12" />
+                        <ReactQuill ref={quillRef} theme="snow" modules={modules} value={newTemplate.body || ''} onChange={body => setNewTemplate({...newTemplate, body})} className="h-64 mb-12" />
                       </div>
                       
                       <button onClick={onSaveTemplate} className="w-full bg-blue-600 text-white py-4 rounded-xl font-black shadow-lg hover:bg-blue-700">保存模板</button>
