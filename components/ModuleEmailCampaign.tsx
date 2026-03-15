@@ -285,16 +285,16 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
                       
                       <div className="space-y-2">
                         <label className="text-xs font-black text-slate-400 uppercase tracking-widest">邮件主题</label>
-                        <div className="flex gap-2">
+                            <div className="flex gap-2">
                             <input type="text" placeholder="邮件主题" value={newTemplate.subject || ''} onChange={e => setNewTemplate({...newTemplate, subject: e.target.value})} className="flex-1 p-3 border rounded-xl font-bold" />
-                            {macros.map(m => <button key={m} onClick={() => insertMacroToSubject(m)} className="bg-slate-100 px-3 py-1 rounded-lg text-xs font-bold hover:bg-slate-200">{m}</button>)}
+                            {macros.map(m => <button type="button" key={m} onClick={() => insertMacroToSubject(m)} className="bg-slate-100 px-3 py-1 rounded-lg text-xs font-bold hover:bg-slate-200">{m}</button>)}
                         </div>
                       </div>
 
                       <div className="space-y-2">
                         <label className="text-xs font-black text-slate-400 uppercase tracking-widest">邮件正文</label>
                         <div className="flex gap-2 mb-2">
-                            {macros.map(m => <button key={m} onClick={() => insertMacroToBody(m)} className="bg-slate-100 px-3 py-1 rounded-lg text-xs font-bold hover:bg-slate-200">{m}</button>)}
+                            {macros.map(m => <button type="button" key={m} onClick={() => insertMacroToBody(m)} className="bg-slate-100 px-3 py-1 rounded-lg text-xs font-bold hover:bg-slate-200">{m}</button>)}
                         </div>
                         <ReactQuill ref={quillRef} theme="snow" modules={modules} value={newTemplate.body || ''} onChange={body => setNewTemplate({...newTemplate, body})} className="h-64 mb-12" />
                       </div>
