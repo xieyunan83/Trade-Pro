@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import ReactQuill from 'react-quill';
 import 'react-quill/dist/quill.snow.css';
 import { Client, EmailTask, EmailTemplate, AliyunConfig } from '../types';
@@ -22,6 +22,48 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
   const [isCreatingTemplate, setIsCreatingTemplate] = useState(false);
   const [newTemplate, setNewTemplate] = useState<EmailTemplate>({ id: '', name: '', subject: '', body: '', lastUpdated: Date.now() });
+  const quillRef = useRef<ReactQuill>(null);
+
+  const macros = ['{{company_name}}', '{{contact_name}}'];
+
+  const insertMacroToSubject = (macro: string) => {
+      setNewTemplate(prev => ({ ...prev, subject: prev.subject + macro }));
+  };
+
+  const insertMacroToBody = (macro: string) => {
+      const quill = quillRef.current?.getEditor();
+      if (quill) {
+          const range = quill.getSelection(true);
+          quill.insertText(range.index, macro);
+      }
+  };
+
+  const insertImageToBody = () => {
+      const url = prompt('请输入图片链接:');
+      if (url) {
+          const quill = quillRef.current?.getEditor();
+          if (quill) {
+              const range = quill.getSelection(true);
+              quill.insertEmbed(range.index, 'image', url);
+          }
+      }
+  };
+
+  const modules = {
+    toolbar: {
+        container: [
+            [{ 'header': [1, 2, false] }],
+            ['bold', 'italic', 'underline', 'strike', 'blockquote'],
+            [{ 'color': [] }, { 'background': [] }],
+            [{ 'list': 'ordered'}, { 'list': 'bullet' }, { 'indent': '-1'}, { 'indent': '+1' }],
+            ['link', 'image'],
+            ['clean']
+        ],
+        handlers: {
+            image: insertImageToBody
+        }
+    }
+  };
   
   const addClientsToTasks = (clients: Client[]) => {
     const newTasks: EmailTask[] = clients.map(client => ({
@@ -240,8 +282,23 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
                   </div>
                   <div className="space-y-4">
                       <input type="text" placeholder="模板名称" value={newTemplate.name} onChange={e => setNewTemplate({...newTemplate, name: e.target.value})} className="w-full p-3 border rounded-xl font-bold" />
-                      <input type="text" placeholder="邮件主题 (支持宏: {{company_name}}, {{contact_name}})" value={newTemplate.subject} onChange={e => setNewTemplate({...newTemplate, subject: e.target.value})} className="w-full p-3 border rounded-xl font-bold" />
-                      <ReactQuill theme="snow" value={newTemplate.body} onChange={body => setNewTemplate({...newTemplate, body})} className="h-64 mb-12" />
+                      
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                            <input type="text" placeholder="邮件主题" value={newTemplate.subject} onChange={e => setNewTemplate({...newTemplate, subject: e.target.value})} className="w-full p-3 border rounded-xl font-bold" />
+                            <div className="flex gap-2 ml-2">
+                                {macros.map(m => <button key={m} onClick={() => insertMacroToSubject(m)} className="bg-slate-100 px-3 py-1 rounded-lg text-xs font-bold hover:bg-slate-200">{m}</button>)}
+                            </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex gap-2 mb-2">
+                            {macros.map(m => <button key={m} onClick={() => insertMacroToBody(m)} className="bg-slate-100 px-3 py-1 rounded-lg text-xs font-bold hover:bg-slate-200">{m}</button>)}
+                        </div>
+                        <ReactQuill ref={quillRef} theme="snow" modules={modules} value={newTemplate.body} onChange={body => setNewTemplate({...newTemplate, body})} className="h-64 mb-12" />
+                      </div>
+                      
                       <button onClick={onSaveTemplate} className="w-full bg-blue-600 text-white py-4 rounded-xl font-black shadow-lg hover:bg-blue-700">保存模板</button>
                   </div>
               </div>
