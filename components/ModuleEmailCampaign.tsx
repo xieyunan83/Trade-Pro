@@ -21,14 +21,14 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
   const [isCreatingTemplate, setIsCreatingTemplate] = useState(false);
-  const [newTemplate, setNewTemplate] = useState<EmailTemplate>({ id: '', name: '', subject: '', body: '' });
+  const [newTemplate, setNewTemplate] = useState<EmailTemplate>({ id: '', name: '', subject: '', body: '', lastUpdated: Date.now() });
   
   const addClientsToTasks = (clients: Client[]) => {
     const newTasks: EmailTask[] = clients.map(client => ({
       id: Date.now().toString() + client.id,
-      recipientName: client.contactName || '',
-      recipientEmail: client.contactEmail || '',
-      companyName: client.companyName || '',
+      recipientName: client.contacts && client.contacts.length > 0 ? client.contacts[0].name : '',
+      recipientEmail: client.contacts && client.contacts.length > 0 ? client.contacts[0].emailGuess || '' : '',
+      companyName: client.name || '',
       status: 'pending',
       sentAt: null
     }));
@@ -39,13 +39,14 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
   const onSaveTemplate = () => {
       setTemplates([...templates, { ...newTemplate, id: Date.now().toString(), lastUpdated: Date.now() }]);
       setIsCreatingTemplate(false);
-      setNewTemplate({ id: '', name: '', subject: '', body: '' });
+      setNewTemplate({ id: '', name: '', subject: '', body: '', lastUpdated: Date.now() });
   };
   const onDeleteTemplate = (id: string) => setTemplates(templates.filter(t => t.id !== id));
   const processTemplate = (template: EmailTemplate, client: Client) => {
+    const contact = client.contacts && client.contacts.length > 0 ? client.contacts[0] : { name: '', emailGuess: '' };
     const replacements: { [key: string]: string } = {
-      '{{company_name}}': client.companyName || '',
-      '{{contact_name}}': client.contactName || '',
+      '{{company_name}}': client.name || '',
+      '{{contact_name}}': contact.name || '',
     };
     
     let subject = template.subject;
@@ -67,7 +68,8 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
     
     selectedClients.forEach(client => {
       const { subject, body } = processTemplate(template, client);
-      console.log(`Sending email to ${client.contactEmail}: ${subject}`);
+      const contact = client.contacts && client.contacts.length > 0 ? client.contacts[0] : { emailGuess: '' };
+      console.log(`Sending email to ${contact.emailGuess}: ${subject}`);
       // Integrate AliCloud sending logic here
     });
     
