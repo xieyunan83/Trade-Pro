@@ -147,7 +147,6 @@ export const saveCRMToCloud = async (clients: Client[]) => {
   } catch (e: any) {
     if (e.status === 404) {
       console.error("Repository not found. Please check your GitHub configuration.");
-      alert("Repository not found. Please check your GitHub configuration.");
     } else {
       console.error("Failed to save CRM to cloud. RepoConfig:", repoConfig, "Error:", e);
     }
@@ -207,7 +206,6 @@ export const saveUsersToCloud = async (users: User[]) => {
   } catch (e: any) {
     if (e.status === 404) {
       console.error("Repository not found. Please check your GitHub configuration.");
-      alert("Repository not found. Please check your GitHub configuration.");
     } else {
       console.error("Failed to save users to cloud. RepoConfig:", repoConfig, "Error:", e);
     }
@@ -236,7 +234,6 @@ export const saveKnowledgeBaseToCloud = async (files: KnowledgeFile[]) => {
   } catch (e: any) {
     if (e.status === 404) {
       console.error("Repository not found. Please check your GitHub configuration.");
-      alert("Repository not found. Please check your GitHub configuration.");
       return;
     }
   }
