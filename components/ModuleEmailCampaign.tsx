@@ -38,7 +38,7 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
       }
   };
 
-  const insertImageToBody = () => {
+  const insertImageToBody = React.useCallback(() => {
       const url = prompt('请输入图片链接:');
       if (url) {
           const quill = quillRef.current?.getEditor();
@@ -47,9 +47,9 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
               quill.insertEmbed(range.index, 'image', url);
           }
       }
-  };
+  }, []);
 
-  const modules = {
+  const modules = React.useMemo(() => ({
     toolbar: {
         container: [
             [{ 'header': [1, 2, false] }],
@@ -63,7 +63,7 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
             image: insertImageToBody
         }
     }
-  };
+  }), [insertImageToBody]);
   
   const addClientsToTasks = (clients: Client[]) => {
     const newTasks: EmailTask[] = clients.map(client => ({
@@ -77,7 +77,18 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
     setTasks([...tasks, ...newTasks]);
   };
 
-  const onSaveConfig = (config: AliyunConfig) => setConfig(config);
+  const [configInput, setConfigInput] = useState<AliyunConfig>({
+    accessKeyId: config?.accessKeyId || '',
+    accessKeySecret: config?.accessKeySecret || '',
+    accountName: config?.accountName || '',
+    fromAlias: config?.fromAlias || ''
+  });
+
+  const onSaveConfig = (newConfig: AliyunConfig) => {
+    setConfig(newConfig);
+    alert('配置已保存');
+  };
+  
   const onSaveTemplate = () => {
       setTemplates([...templates, { ...newTemplate, id: Date.now().toString(), lastUpdated: Date.now() }]);
       setIsCreatingTemplate(false);
@@ -316,7 +327,8 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
                 <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">AccessKey ID</label>
                 <input 
                   type="text" 
-                  defaultValue={config?.accessKeyId}
+                  value={configInput.accessKeyId}
+                  onChange={e => setConfigInput({...configInput, accessKeyId: e.target.value})}
                   className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold"
                 />
               </div>
@@ -324,7 +336,8 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
                 <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">AccessKey Secret</label>
                 <input 
                   type="password" 
-                  defaultValue={config?.accessKeySecret}
+                  value={configInput.accessKeySecret}
+                  onChange={e => setConfigInput({...configInput, accessKeySecret: e.target.value})}
                   className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold"
                 />
               </div>
@@ -333,7 +346,8 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
               <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">发信地址 (Account Name)</label>
               <input 
                 type="text" 
-                defaultValue={config?.accountName}
+                value={configInput.accountName}
+                onChange={e => setConfigInput({...configInput, accountName: e.target.value})}
                 placeholder="offer@service.example.com"
                 className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold"
               />
@@ -342,12 +356,13 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
               <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">发信人别名 (Sender Alias)</label>
               <input 
                 type="text" 
-                defaultValue={config?.fromAlias}
+                value={configInput.fromAlias}
+                onChange={e => setConfigInput({...configInput, fromAlias: e.target.value})}
                 placeholder="Kevin from TradeScout"
                 className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold"
               />
             </div>
-            <button className="w-full bg-slate-900 text-white py-4 rounded-xl font-black shadow-lg hover:bg-blue-600 transition-all">
+            <button onClick={() => onSaveConfig(configInput)} className="w-full bg-slate-900 text-white py-4 rounded-xl font-black shadow-lg hover:bg-blue-600 transition-all">
               保存配置 (Save Configuration)
             </button>
           </div>
