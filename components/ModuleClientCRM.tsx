@@ -13,13 +13,13 @@ interface ModuleClientCRMProps {
 export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({ clients, setClients, onBatchAnalyze, history }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [filterBackgroundCheck, setFilterBackgroundCheck] = useState<boolean>(false);
 
   const onDeleteClient = (id: string) => {
     setClients(prev => prev.filter(c => c.id !== id));
   };
 
   const onAnalyze = (domain: string) => {
-    // This should be handled by App.tsx usually, but we can trigger it if needed
     console.log("Analyzing", domain);
   };
 
@@ -27,7 +27,8 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({ clients, setCl
     const matchesSearch = c.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
                           (c.website || '').toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = filterStatus === 'all' || c.status === filterStatus;
-    return matchesSearch && matchesStatus;
+    const matchesBackgroundCheck = !filterBackgroundCheck || c.hasBackgroundCheck;
+    return matchesSearch && matchesStatus && matchesBackgroundCheck;
   });
 
   const getStatusColor = (status: string) => {
@@ -70,6 +71,15 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({ clients, setCl
               <option value="流失/搁置">流失/搁置</option>
             </select>
           </div>
+          <label className="flex items-center gap-2 font-bold text-sm text-slate-700">
+            <input 
+              type="checkbox" 
+              checked={filterBackgroundCheck}
+              onChange={e => setFilterBackgroundCheck(e.target.checked)}
+              className="w-5 h-5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+            />
+            仅显示已做过背调
+          </label>
         </div>
         <button className="bg-slate-900 text-white px-6 py-3 rounded-xl font-black shadow-lg hover:bg-blue-600 transition-all flex items-center gap-2 w-full md:w-auto justify-center">
           <Plus size={20} /> 新增客户

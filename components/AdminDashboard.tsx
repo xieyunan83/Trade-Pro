@@ -193,22 +193,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
 
-    const isText = file.type.startsWith('text/') || 
-                   ['application/json', 'application/javascript', 'text/csv'].includes(file.type) ||
-                   file.name.endsWith('.md') || file.name.endsWith('.txt');
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const isText = file.type.startsWith('text/') || 
+                       ['application/json', 'application/javascript', 'text/csv'].includes(file.type) ||
+                       file.name.endsWith('.md') || file.name.endsWith('.txt');
 
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      try {
-        let content = event.target?.result as string;
-        
-        // If it's binary, we want the base64 part only if it's dataURL
-        if (!isText && content.includes('base64,')) {
-          content = content.split('base64,')[1];
-        }
+        const content = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = (event) => {
+            let res = event.target?.result as string;
+            if (!isText && res.includes('base64,')) {
+              res = res.split('base64,')[1];
+            }
+            resolve(res);
+          };
+          reader.onerror = reject;
+          if (isText) {
+            reader.readAsText(file);
+          } else {
+            reader.readAsDataURL(file);
+          }
+        });
 
         const newFile: KnowledgeFile = {
           id: Math.random().toString(36).substr(2, 9),
@@ -220,20 +230,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
         };
 
         await saveFileToDB(newFile);
-        const allFiles = await getAllFilesFromDB();
-        setKbFiles(allFiles);
-        alert('文件上传成功！');
-        e.target.value = '';
-      } catch (err) {
-        console.error("Upload process error:", err);
-        alert('文件处理失败');
       }
-    };
-
-    if (isText) {
-      reader.readAsText(file);
-    } else {
-      reader.readAsDataURL(file);
+      const allFiles = await getAllFilesFromDB();
+      setKbFiles(allFiles);
+      alert('所有文件上传成功！');
+      e.target.value = '';
+    } catch (err) {
+      console.error("Upload process error:", err);
+      alert('文件处理失败');
     }
   };
 
@@ -647,6 +651,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                       <input 
                         id="kb-upload-input"
                         type="file" 
+                        multiple
                         onChange={handleFileUpload} 
                         className="sr-only" 
                         accept=".txt,.md,.json,.csv,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.mp3,.wav,.mp4,.mov"

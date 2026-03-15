@@ -93,6 +93,7 @@ export interface Client {
   priceRange: string;
   isSampleNeeded: boolean;
   hasAnalyzed?: boolean; 
+  hasBackgroundCheck?: boolean; // Added field
   lastOrderDate: string;
   lastContactSent: string;
   lastContactReceived: string;
