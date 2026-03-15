@@ -89,7 +89,8 @@ export interface Client {
   country: string;
   type: '进口商' | '零售商' | '批发商' | '分销商';
   status: '新建/潜在' | '已寄样' | '谈判中' | '已成交' | '流失/搁置';
-  productType: string; 
+  productType: string;
+  industry: string; // Added industry field
   priceRange: string;
   isSampleNeeded: boolean;
   hasAnalyzed?: boolean; 

@@ -124,12 +124,17 @@ export const saveCRMToCloud = async (clients: Client[]) => {
   if (!octokit) return;
   const content = toBase64(JSON.stringify(clients));
   try {
+    // Check if repo exists
+    await octokit.repos.get({ ...repoConfig });
+
     let sha;
     try {
       const { data } = await octokit.repos.getContent({ ...repoConfig, path: 'crm.json' });
       if ('sha' in data) sha = data.sha;
-    } catch (e) {
-      // File might not exist
+    } catch (e: any) {
+      if (e.status !== 404) {
+        console.error("Error checking for crm.json:", e);
+      }
     }
 
     await octokit.repos.createOrUpdateFileContents({
@@ -139,8 +144,13 @@ export const saveCRMToCloud = async (clients: Client[]) => {
       content,
       sha
     });
-  } catch (e) {
-    console.error("Failed to save CRM to cloud", e);
+  } catch (e: any) {
+    if (e.status === 404) {
+      console.error("Repository not found. Please check your GitHub configuration.");
+      alert("Repository not found. Please check your GitHub configuration.");
+    } else {
+      console.error("Failed to save CRM to cloud. RepoConfig:", repoConfig, "Error:", e);
+    }
   }
 };
 
@@ -174,12 +184,17 @@ export const saveUsersToCloud = async (users: User[]) => {
   if (!octokit) return;
   const content = toBase64(JSON.stringify(users));
   try {
+    // Check if repo exists
+    await octokit.repos.get({ ...repoConfig });
+
     let sha;
     try {
       const { data } = await octokit.repos.getContent({ ...repoConfig, path: 'users.json' });
       if ('sha' in data) sha = data.sha;
-    } catch (e) {
-      // File might not exist
+    } catch (e: any) {
+      if (e.status !== 404) {
+        console.error("Error checking for users.json:", e);
+      }
     }
 
     await octokit.repos.createOrUpdateFileContents({
@@ -189,8 +204,13 @@ export const saveUsersToCloud = async (users: User[]) => {
       content,
       sha
     });
-  } catch (e) {
-    console.error("Failed to save users to cloud", e);
+  } catch (e: any) {
+    if (e.status === 404) {
+      console.error("Repository not found. Please check your GitHub configuration.");
+      alert("Repository not found. Please check your GitHub configuration.");
+    } else {
+      console.error("Failed to save users to cloud. RepoConfig:", repoConfig, "Error:", e);
+    }
   }
 };
 
@@ -210,6 +230,17 @@ export const fetchUsersFromCloud = async (): Promise<User[]> => {
 export const saveKnowledgeBaseToCloud = async (files: KnowledgeFile[]) => {
   if (!octokit) return;
   
+  try {
+    // Check if repo exists
+    await octokit.repos.get({ ...repoConfig });
+  } catch (e: any) {
+    if (e.status === 404) {
+      console.error("Repository not found. Please check your GitHub configuration.");
+      alert("Repository not found. Please check your GitHub configuration.");
+      return;
+    }
+  }
+  
   for (const file of files) {
     const content = btoa(unescape(encodeURIComponent(file.data)));
     try {
@@ -217,8 +248,10 @@ export const saveKnowledgeBaseToCloud = async (files: KnowledgeFile[]) => {
       try {
         const { data } = await octokit.repos.getContent({ ...repoConfig, path: `knowledge/${file.name}` });
         if ('sha' in data) sha = data.sha;
-      } catch (e) {
-        // New file
+      } catch (e: any) {
+        if (e.status !== 404) {
+          console.error(`Error checking for ${file.name}:`, e);
+        }
       }
 
       await octokit.repos.createOrUpdateFileContents({

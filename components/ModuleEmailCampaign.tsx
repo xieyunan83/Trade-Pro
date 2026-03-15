@@ -1,7 +1,9 @@
 
 import React, { useState } from 'react';
+import ReactQuill from 'react-quill';
+import 'react-quill/dist/quill.snow.css';
 import { Client, EmailTask, EmailTemplate, AliyunConfig } from '../types';
-import { Mail, Send, Plus, Trash2, Edit2, CheckCircle2, AlertTriangle, Loader2, Settings, FileText, Layout, Users, Clock } from 'lucide-react';
+import { Mail, Send, Plus, Trash2, Edit2, CheckCircle2, AlertTriangle, Loader2, Settings, FileText, Layout, Users, Clock, X } from 'lucide-react';
 
 interface ModuleEmailCampaignProps {
   crmClients: Client[];
@@ -18,12 +20,58 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
   const [activeTab, setActiveTab] = useState<'tasks' | 'templates' | 'config'>('tasks');
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
+  const [isCreatingTemplate, setIsCreatingTemplate] = useState(false);
+  const [newTemplate, setNewTemplate] = useState<EmailTemplate>({ id: '', name: '', subject: '', body: '' });
+  
+  const addClientsToTasks = (clients: Client[]) => {
+    const newTasks: EmailTask[] = clients.map(client => ({
+      id: Date.now().toString() + client.id,
+      recipientName: client.contactName || '',
+      recipientEmail: client.contactEmail || '',
+      companyName: client.companyName || '',
+      status: 'pending',
+      sentAt: null
+    }));
+    setTasks([...tasks, ...newTasks]);
+  };
 
   const onSaveConfig = (config: AliyunConfig) => setConfig(config);
-  const onSaveTemplate = (template: EmailTemplate) => setTemplates([...templates, template]);
+  const onSaveTemplate = () => {
+      setTemplates([...templates, { ...newTemplate, id: Date.now().toString(), lastUpdated: Date.now() }]);
+      setIsCreatingTemplate(false);
+      setNewTemplate({ id: '', name: '', subject: '', body: '' });
+  };
   const onDeleteTemplate = (id: string) => setTemplates(templates.filter(t => t.id !== id));
+  const processTemplate = (template: EmailTemplate, client: Client) => {
+    const replacements: { [key: string]: string } = {
+      '{{company_name}}': client.companyName || '',
+      '{{contact_name}}': client.contactName || '',
+    };
+    
+    let subject = template.subject;
+    let body = template.body;
+    
+    Object.keys(replacements).forEach(key => {
+      subject = subject.replace(new RegExp(key, 'g'), replacements[key]);
+      body = body.replace(new RegExp(key, 'g'), replacements[key]);
+    });
+    
+    return { subject, body };
+  };
+
   const onSendBatch = (taskIds: string[], templateId: string) => {
-    alert(`Sending batch to ${taskIds.length} recipients using template ${templateId}`);
+    const template = templates.find(t => t.id === templateId);
+    if (!template) return;
+    
+    const selectedClients = crmClients.filter(c => taskIds.includes(c.id));
+    
+    selectedClients.forEach(client => {
+      const { subject, body } = processTemplate(template, client);
+      console.log(`Sending email to ${client.contactEmail}: ${subject}`);
+      // Integrate AliCloud sending logic here
+    });
+    
+    alert(`Sending batch to ${selectedClients.length} recipients using template ${template.name}`);
   };
 
   const toggleTask = (id: string) => {
@@ -152,7 +200,7 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
 
       {activeTab === 'templates' && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm flex flex-col items-center justify-center border-dashed cursor-pointer hover:bg-slate-50 transition-all min-h-[200px]">
+          <div onClick={() => setIsCreatingTemplate(true)} className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm flex flex-col items-center justify-center border-dashed cursor-pointer hover:bg-slate-50 transition-all min-h-[200px]">
             <div className="bg-blue-50 p-4 rounded-2xl text-blue-600 mb-4">
               <Plus size={32} />
             </div>
@@ -179,6 +227,23 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
             </div>
           ))}
         </div>
+      )}
+
+      {isCreatingTemplate && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+              <div className="bg-white rounded-3xl shadow-2xl w-full max-w-4xl animate-fade-in p-8">
+                  <div className="flex justify-between items-center mb-6">
+                      <h3 className="text-2xl font-black text-slate-800">创建邮件模板</h3>
+                      <button onClick={() => setIsCreatingTemplate(false)}><X size={24} className="text-slate-400"/></button>
+                  </div>
+                  <div className="space-y-4">
+                      <input type="text" placeholder="模板名称" value={newTemplate.name} onChange={e => setNewTemplate({...newTemplate, name: e.target.value})} className="w-full p-3 border rounded-xl font-bold" />
+                      <input type="text" placeholder="邮件主题 (支持宏: {{company_name}}, {{contact_name}})" value={newTemplate.subject} onChange={e => setNewTemplate({...newTemplate, subject: e.target.value})} className="w-full p-3 border rounded-xl font-bold" />
+                      <ReactQuill theme="snow" value={newTemplate.body} onChange={body => setNewTemplate({...newTemplate, body})} className="h-64 mb-12" />
+                      <button onClick={onSaveTemplate} className="w-full bg-blue-600 text-white py-4 rounded-xl font-black shadow-lg hover:bg-blue-700">保存模板</button>
+                  </div>
+              </div>
+          </div>
       )}
 
       {activeTab === 'config' && (
