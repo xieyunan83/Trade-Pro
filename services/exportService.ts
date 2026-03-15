@@ -328,9 +328,9 @@ const createEmailSlide = (pptx: any, title: string, content: string) => {
     
     slide.addText(sanitize(content), { 
         x: 0.7, y: 1.2, w: 8.6, h: 3.8, 
-        fontSize: 11, color: "1E293B", 
+        fontSize: 9, color: "1E293B", 
         fontFace: "Arial", valign: 'top',
-        lineSpacing: 20 // Ensure lines don't overlap
+        lineSpacing: 18 // Reduced line spacing to fit more text
     });
 };
 
@@ -542,11 +542,11 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
             });
         };
 
-        summaryBox("市场喜好 (Market Preference)", data.productSummary.marketPreference, 0.5, 1.0, 4.4, 1.3, "📊");
-        summaryBox("功能分析 (Feature Analysis)", data.productSummary.featureAnalysis, 5.1, 1.0, 4.4, 1.3, "⚙️");
-        summaryBox("推荐产品 (Recommended)", data.productSummary.recommendedProducts, 0.5, 2.4, 4.4, 1.3, "💡");
-        summaryBox("包装风格 (Packaging)", data.productSummary.packagingAnalysis, 5.1, 2.4, 4.4, 1.3, "📦");
-        summaryBox("颜色偏好 (Color Preference)", data.productSummary.colorPreference, 0.5, 3.8, 9.0, 1.2, "🎨");
+        summaryBox("市场喜好 (Market Preference)", data.productSummary.marketPreference, 0.5, 1.0, 4.4, 1.6, "📊");
+        summaryBox("功能分析 (Feature Analysis)", data.productSummary.featureAnalysis, 5.1, 1.0, 4.4, 1.6, "⚙️");
+        summaryBox("推荐产品 (Recommended)", data.productSummary.recommendedProducts, 0.5, 2.7, 4.4, 1.6, "💡");
+        summaryBox("包装风格 (Packaging)", data.productSummary.packagingAnalysis, 5.1, 2.7, 4.4, 1.6, "📦");
+        summaryBox("颜色偏好 (Color Preference)", data.productSummary.colorPreference, 0.5, 4.4, 9.0, 0.8, "🎨");
     }
 
     // --- SLIDE 5.5: ACTION PLAN (Separated to avoid overlap) ---
@@ -607,7 +607,7 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
         const rows = data.decisionMakers.slice(0, 10).map(dm => [
             { text: sanitize(dm.name) },
             { text: sanitize(dm.title) },
-            { text: sanitize(dm.emailGuess || "-") },
+            { text: sanitize(dm.emailGuess || "待补充") },
             { text: sanitize(dm.type) }
         ]);
 
@@ -660,14 +660,16 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
         slide.addText("10 潜在竞品/同行 (Competitors)", headerStyle);
         
         const headers = [
-            { text: "公司名", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF", w: 3.0 } },
-            { text: "国家", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF", w: 1.5 } },
-            { text: "主营产品", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF", w: 4.5 } }
+            { text: "公司名", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF", w: 2.5 } },
+            { text: "国家", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF", w: 1.0 } },
+            { text: "主营产品", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF", w: 3.5 } },
+            { text: "网址", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF", w: 2.0 } }
         ];
         const rows = data.similarCompanies.slice(0, 8).map(c => [
             { text: sanitize(c.name) },
             { text: sanitize(c.country) },
-            { text: sanitize(c.mainProducts) }
+            { text: sanitize(c.mainProducts) },
+            { text: sanitize(c.website) }
         ]);
         slide.addTable([headers, ...rows], { 
             x: 0.5, y: 1.2, w: 9.0, 
@@ -678,20 +680,4 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
     }
 
     // --- SLIDE 11: END ---
-    slide = pptx.addSlide();
-    slide.background = { color: COLORS.DARK_BG };
-    slide.addText("THANKS", { 
-        x: 0.5, y: 1.8, w: 9, h: 1.0, 
-        fontSize: 60, bold: true, color: COLORS.ACCENT_BLUE, 
-        align: 'center', valign: 'middle' 
-    });
-    slide.addText("楠哥的小助理 · 助力您的全球贸易", { 
-        x: 0.5, y: 2.8, w: 9, h: 0.5, 
-        fontSize: 18, color: "FFFFFF", 
-        align: 'center', valign: 'middle' 
-    });
-    slide.addShape(pptx.ShapeType.line, { 
-        x: 3.5, y: 3.5, w: 3, h: 0, 
-        line: { color: COLORS.ACCENT_BLUE, width: 2 } 
-    });
 };

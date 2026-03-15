@@ -540,10 +540,10 @@ export const analyzeCompany = async (domainOrName: string, mode: 'detailed' | 'e
   1. Identify company nature, scale, and headquarters.
   2. Analyze product pricing, positioning, and supply chain role.
   3. Find 5-10 specific decision makers (Name + Title).
-     - **CRITICAL**: Prioritize finding REAL LinkedIn profiles.
+     - **CRITICAL**: Prioritize finding REAL LinkedIn profiles AND REAL professional email addresses.
      - For Name, provide "firstName", "lastName", and "name" (Full Name).
-     - ONLY provide "emailGuess" if you find it explicitly on the web or are 90% sure of the pattern.
-     - Look for "Contact Us", "About Us", or "Team" pages to find real names.
+     - You MUST attempt to construct a professional email for every decision maker found. If you cannot find a direct email, use standard professional email patterns (e.g., first.last@company.com, first@company.com) based on the company domain and label it as 'AI (Pattern Guess)'.
+     - Look for "Contact Us", "About Us", or "Team" pages to find real names and contact info.
   4. Find 3-5 competitors.
   5. Identify website product categories.
   6. **PRODUCT ANALYSIS (CRITICAL)**: Analyze the company's products in detail:
