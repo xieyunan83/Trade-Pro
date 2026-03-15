@@ -86,14 +86,16 @@ export const ModuleStrategy: React.FC<Props> = ({ data }) => {
             const isPdf = fileType === 'application/pdf';
             const isText = fileType === 'text/plain';
             const isWord = fileType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || fileName.endsWith('.docx');
+            const isAudio = fileType.startsWith('audio/') || fileName.endsWith('.mp3') || fileName.endsWith('.wav');
+            const isVideo = fileType.startsWith('video/') || fileName.endsWith('.mp4') || fileName.endsWith('.mov');
 
-            if (!isImage && !isPdf && !isText && !isWord) {
-                alert(`Unsupported file type: ${file.name}. Please upload PDF, Word, Image, or Text.`);
+            if (!isImage && !isPdf && !isText && !isWord && !isAudio && !isVideo) {
+                alert(`Unsupported file type: ${file.name}. Please upload PDF, Word, Image, Audio, Video or Text.`);
                 continue;
             }
 
-            if (file.size > 5 * 1024 * 1024) {
-                alert(`Chat Attachment ${file.name} is too large (Max 5MB).`);
+            if (file.size > 10 * 1024 * 1024) { // Increased to 10MB for media
+                alert(`Chat Attachment ${file.name} is too large (Max 10MB).`);
                 continue;
             }
 
@@ -107,7 +109,8 @@ export const ModuleStrategy: React.FC<Props> = ({ data }) => {
                     processed.push({
                         id: Date.now() + '-' + i + Math.random().toString(36).substr(2, 9),
                         name: file.name + " (Converted)",
-                        type: 'text/plain',
+                        type: 'txt',
+                        mimeType: 'text/plain',
                         data: btoa(unescape(encodeURIComponent(text))),
                         size: file.size
                     });
@@ -130,7 +133,8 @@ export const ModuleStrategy: React.FC<Props> = ({ data }) => {
             processed.push({
                 id: Date.now() + '-' + i + Math.random().toString(36).substr(2, 9),
                 name: file.name,
-                type: fileType,
+                type: file.name.split('.').pop() || 'txt',
+                mimeType: fileType,
                 data: base64,
                 size: file.size
             });

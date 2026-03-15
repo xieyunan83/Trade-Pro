@@ -4,7 +4,8 @@ import { GlobalConfig, ApiConfig, TaskType, User, KnowledgeFile } from '../types
 import { 
   Settings, Shield, Key, Bell, Save, Plus, Trash2, Globe, Server, 
   CheckCircle2, AlertTriangle, LogOut, Cloud, Users, Database, 
-  Link as LinkIcon, RefreshCw, X, FileText, Upload, Github, Play, Loader2
+  Link as LinkIcon, RefreshCw, X, FileText, Upload, Github, Play, Loader2,
+  Youtube, Music, Video, FileSpreadsheet, FilePieChart, FileCode
 } from 'lucide-react';
 import { 
   setManualGitHubConfig, 
@@ -42,6 +43,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const [ghRepo, setGhRepo] = useState(localStorage.getItem('trade_scout_gh_repo') || '');
   const [isCloudConnected, setIsCloudConnected] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [ytLink, setYtLink] = useState('');
 
   useEffect(() => {
     // Load local API configs
@@ -191,39 +193,69 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    console.log("File upload triggered");
     const file = e.target.files?.[0];
     if (!file) return;
 
-    console.log("Selected file:", file.name);
+    const isText = file.type.startsWith('text/') || 
+                   ['application/json', 'application/javascript', 'text/csv'].includes(file.type) ||
+                   file.name.endsWith('.md') || file.name.endsWith('.txt');
+
     const reader = new FileReader();
     reader.onload = async (event) => {
       try {
-        const content = event.target?.result as string;
+        let content = event.target?.result as string;
+        
+        // If it's binary, we want the base64 part only if it's dataURL
+        if (!isText && content.includes('base64,')) {
+          content = content.split('base64,')[1];
+        }
+
         const newFile: KnowledgeFile = {
           id: Math.random().toString(36).substr(2, 9),
           name: file.name,
           size: file.size,
           data: content,
-          type: file.name.split('.').pop() || 'txt'
+          type: file.name.split('.').pop()?.toLowerCase() || 'txt',
+          mimeType: file.type || 'application/octet-stream'
         };
 
         await saveFileToDB(newFile);
         const allFiles = await getAllFilesFromDB();
         setKbFiles(allFiles);
         alert('文件上传成功！');
-        // Reset input
         e.target.value = '';
       } catch (err) {
         console.error("Upload process error:", err);
         alert('文件处理失败');
       }
     };
-    reader.onerror = (err) => {
-      console.error("FileReader error:", err);
-      alert('文件读取失败');
+
+    if (isText) {
+      reader.readAsText(file);
+    } else {
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleAddYoutube = async () => {
+    if (!ytLink.trim()) return;
+    if (!ytLink.includes('youtube.com') && !ytLink.includes('youtu.be')) {
+      alert('请输入有效的 YouTube 链接');
+      return;
+    }
+    const newFile: KnowledgeFile = {
+      id: Math.random().toString(36).substr(2, 9),
+      name: `YouTube: ${ytLink.split('v=')[1]?.split('&')[0] || ytLink.split('/').pop()}`,
+      size: 0,
+      data: ytLink,
+      type: 'youtube',
+      mimeType: 'text/x-uri'
     };
-    reader.readAsText(file);
+    await saveFileToDB(newFile);
+    const allFiles = await getAllFilesFromDB();
+    setKbFiles(allFiles);
+    setYtLink('');
+    alert('YouTube 链接已添加');
   };
 
   const handleDeleteFile = async (id: string) => {
@@ -617,29 +649,78 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                         type="file" 
                         onChange={handleFileUpload} 
                         className="sr-only" 
-                        accept=".txt,.md,.json,.csv"
+                        accept=".txt,.md,.json,.csv,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.mp3,.wav,.mp4,.mov"
                       />
                     </div>
                   </div>
 
+                  {/* YouTube Link Input */}
+                  <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100 flex items-center gap-4">
+                    <div className="bg-red-100 text-red-600 p-3 rounded-xl">
+                      <Youtube size={20} />
+                    </div>
+                    <div className="flex-1">
+                      <input 
+                        type="text" 
+                        placeholder="粘贴 YouTube 视频链接 (Paste YouTube Link)..." 
+                        value={ytLink}
+                        onChange={e => setYtLink(e.target.value)}
+                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm font-bold focus:ring-2 focus:ring-red-500 outline-none"
+                      />
+                    </div>
+                    <button 
+                      onClick={handleAddYoutube}
+                      className="bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded-xl font-black text-xs transition-all"
+                    >
+                      添加链接
+                    </button>
+                  </div>
+
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    {kbFiles.length > 0 ? kbFiles.map((file, i) => (
-                      <div key={file.id || i} className="bg-white border border-slate-100 rounded-2xl p-4 flex items-center gap-4 hover:shadow-md transition-all group">
-                        <div className="bg-slate-900 text-white p-3 rounded-xl">
-                          <FileText size={20} />
+                    {kbFiles.length > 0 ? kbFiles.map((file, i) => {
+                      const getFileIcon = () => {
+                        const t = file.type.toLowerCase();
+                        if (['mp3', 'wav', 'm4a'].includes(t)) return <Music size={20} />;
+                        if (['mp4', 'mov', 'avi'].includes(t)) return <Video size={20} />;
+                        if (['pdf', 'doc', 'docx'].includes(t)) return <FileText size={20} />;
+                        if (['xls', 'xlsx', 'csv'].includes(t)) return <FileSpreadsheet size={20} />;
+                        if (['ppt', 'pptx'].includes(t)) return <FilePieChart size={20} />;
+                        if (['json', 'js', 'ts', 'html', 'css'].includes(t)) return <FileCode size={20} />;
+                        if (t === 'youtube') return <Youtube size={20} />;
+                        return <FileText size={20} />;
+                      };
+
+                      const getIconBg = () => {
+                        const t = file.type.toLowerCase();
+                        if (['mp3', 'wav', 'm4a'].includes(t)) return 'bg-purple-600';
+                        if (['mp4', 'mov', 'avi'].includes(t)) return 'bg-indigo-600';
+                        if (['pdf', 'doc', 'docx'].includes(t)) return 'bg-red-600';
+                        if (['xls', 'xlsx', 'csv'].includes(t)) return 'bg-green-600';
+                        if (['ppt', 'pptx'].includes(t)) return 'bg-orange-600';
+                        if (t === 'youtube') return 'bg-red-600';
+                        return 'bg-slate-900';
+                      };
+
+                      return (
+                        <div key={file.id || i} className="bg-white border border-slate-100 rounded-2xl p-4 flex items-center gap-4 hover:shadow-md transition-all group">
+                          <div className={`${getIconBg()} text-white p-3 rounded-xl`}>
+                            {getFileIcon()}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-xs font-black text-slate-800 truncate">{file.name}</div>
+                            <div className="text-[10px] text-slate-400 font-bold mt-1">
+                              {file.type === 'youtube' ? 'Video Link' : `${(file.size / 1024).toFixed(1)} KB`}
+                            </div>
+                          </div>
+                          <button 
+                            onClick={() => handleDeleteFile(file.id)}
+                            className="text-slate-200 hover:text-red-500 transition-all opacity-0 group-hover:opacity-100"
+                          >
+                            <Trash2 size={16} />
+                          </button>
                         </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="text-xs font-black text-slate-800 truncate">{file.name}</div>
-                          <div className="text-[10px] text-slate-400 font-bold mt-1">{(file.size / 1024).toFixed(1)} KB</div>
-                        </div>
-                        <button 
-                          onClick={() => handleDeleteFile(file.id)}
-                          className="text-slate-200 hover:text-red-500 transition-all opacity-0 group-hover:opacity-100"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-                    )) : (
+                      );
+                    }) : (
                       <div className="col-span-full py-10 text-center text-slate-400 font-bold">
                         暂无知识库文件 (No files found)
                       </div>

@@ -301,7 +301,8 @@ const generateContentUnified = async (
     prompt: string, 
     systemInfo?: string, 
     jsonMode: boolean = false, 
-    images: string[] = [] // base64 strings
+    images: string[] = [], // base64 strings
+    attachments: KnowledgeFile[] = []
 ): Promise<string> => {
     
     // 1. Gather all available configurations
@@ -355,8 +356,24 @@ const generateContentUnified = async (
                 // --- STRATEGY: NATIVE GOOGLE API ---
                 const ai = new GoogleGenAI({ apiKey: config.apiKey });
                 const parts: Part[] = [{ text: prompt }];
+                
+                // Add images
                 images.forEach(img => {
                     parts.push({ inlineData: { mimeType: 'image/jpeg', data: img } });
+                });
+
+                // Add attachments (Multimodal)
+                attachments.forEach(file => {
+                    if (file.type === 'youtube') {
+                        parts.push({ text: `[Reference YouTube Link: ${file.data}]` });
+                    } else if (file.mimeType && file.data) {
+                        parts.push({ 
+                            inlineData: { 
+                                mimeType: file.mimeType, 
+                                data: file.data 
+                            } 
+                        });
+                    }
                 });
 
                 const reqConfig: any = { systemInstruction: systemInfo };
@@ -381,14 +398,25 @@ const generateContentUnified = async (
                 
                 let userContent: any = prompt;
                 
-                // Handle images for OpenAI Vision format
-                if (images.length > 0) {
+                // Handle images and attachments for OpenAI Vision format (or text fallback)
+                if (images.length > 0 || attachments.length > 0) {
                     userContent = [{ type: "text", text: prompt }];
+                    
                     images.forEach(img => {
                         userContent.push({
                             type: "image_url",
                             image_url: { url: `data:image/jpeg;base64,${img}` }
                         });
+                    });
+
+                    attachments.forEach(file => {
+                        if (file.type === 'youtube') {
+                            userContent.push({ type: "text", text: `[Reference YouTube Link: ${file.data}]` });
+                        } else if (file.mimeType?.startsWith('text/')) {
+                            userContent.push({ type: "text", text: `[File Content: ${file.name}]\n${file.data}` });
+                        } else {
+                            userContent.push({ type: "text", text: `[Attachment: ${file.name} (Binary data omitted for non-native API)]` });
+                        }
                     });
                 }
                 
@@ -444,12 +472,10 @@ export const testApiKey = async (apiKey: string, baseUrl?: string, modelId?: str
 };
 
 export const generateMailGroupStrategy = async (client: AnalysisResult, productImages: string[], knowledgeBaseFiles: KnowledgeFile[]): Promise<MailGroup> => {
-    const kbText = knowledgeBaseFiles.map(f => `[KB: ${f.name}]`).join(", ");
     const prompt = `
     Role: Sales Expert (楠哥的小助理). Write 3 Cold Emails for ${client.companyInfo.name}.
     They sell: ${client.businessScope.coreProducts.join(', ')}.
     Their pain points/weaknesses (from SWOT): ${client.swot.weaknesses.join(', ')}.
-    My KB Refs: ${kbText}.
     
     Structure:
     1. Analysis: Briefly explain WHY you chose this angle (1 sentence, in Chinese).
@@ -459,7 +485,7 @@ export const generateMailGroupStrategy = async (client: AnalysisResult, productI
 
     Output JSON: { "analysis": "...", "email1": "...", "email2": "...", "email3": "..." }
     `;
-    const text = await generateContentUnified('email', prompt, undefined, true, productImages);
+    const text = await generateContentUnified('email', prompt, undefined, true, productImages, knowledgeBaseFiles);
     const res = extractJson(text);
     return {
         analysis: res.analysis || "Generated",
@@ -472,7 +498,6 @@ export const generateMailGroupStrategy = async (client: AnalysisResult, productI
 export const generateConsolidatedEmailStrategy = async (clients: AnalysisResult[], knowledgeBaseFiles: KnowledgeFile[], context: string = ''): Promise<MailGroup> => {
     if (clients.length === 0) return { analysis: 'No Data', email1: '', email2: '', email3: '' };
     
-    const kbText = knowledgeBaseFiles.map(f => `[KB: ${f.name}]`).join(", ");
     const clientSummary = clients.slice(0, 10).map(c => `- ${c.companyInfo.name} (${c.companyInfo.nature})`).join('\n');
     
     const prompt = `
@@ -481,14 +506,12 @@ export const generateConsolidatedEmailStrategy = async (clients: AnalysisResult[
     
     My Campaign Context/Goal: "${context}"
     
-    My KB Refs (Our Products/Catalog): ${kbText}
-    
     Client Examples in this batch:
     ${clientSummary}
     
     Requirement:
     Create a generalized but high-converting sequence that addresses common pain points in this industry/sector.
-    Integrate my Campaign Goal keywords and our product advantages found in KB.
+    Integrate my Campaign Goal keywords and our product advantages found in the attached Knowledge Base.
     
     Structure:
     1. Analysis: Strategy behind this mass-outreach template (In Chinese).
@@ -498,7 +521,7 @@ export const generateConsolidatedEmailStrategy = async (clients: AnalysisResult[
 
     Output JSON: { "analysis": "...", "email1": "...", "email2": "...", "email3": "..." }
     `;
-    const text = await generateContentUnified('email', prompt, undefined, true);
+    const text = await generateContentUnified('email', prompt, undefined, true, [], knowledgeBaseFiles);
     const res = extractJson(text);
     return {
         analysis: res.analysis || "Generated",
@@ -778,7 +801,13 @@ export const streamStrategyChat = async function* (
 
         const parts: Part[] = [{ text: newMessage }];
         for (const file of newAttachments) {
-             parts.push({ inlineData: { mimeType: file.type, data: file.data } });
+             if (file.type === 'youtube') {
+                 parts.push({ text: `[Reference YouTube Link: ${file.data}]` });
+             } else if (file.mimeType && file.data) {
+                 parts.push({ inlineData: { mimeType: file.mimeType, data: file.data } });
+             } else {
+                 parts.push({ inlineData: { mimeType: 'application/octet-stream', data: file.data } });
+             }
         }
 
         const result = await chat.sendMessageStream({ message: parts });

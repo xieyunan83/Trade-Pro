@@ -250,6 +250,7 @@ export interface KnowledgeFile {
   type: string;
   data: string;
   size: number;
+  mimeType?: string;
 }
 
 export interface ChatMessage {
