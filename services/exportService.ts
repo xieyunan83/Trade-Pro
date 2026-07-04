@@ -28,6 +28,17 @@ const COLORS = {
     ERROR: "EF4444"
 };
 
+/** PptxGenJS lineSpacing 单位为 pt，不是倍数；中文正文建议 fontSize * 1.5 左右 */
+const PPT_FONT = 'Microsoft YaHei';
+const bodyTextOpts = (fontSize = 9) => ({
+    fontSize,
+    color: COLORS.TEXT_MAIN,
+    fontFace: PPT_FONT,
+    valign: 'top' as const,
+    wrap: true,
+    lineSpacing: Math.round(fontSize * 1.55),
+});
+
 /**
  * Helper: Sanitize text for PPT
  * Simplified to prevent "garbled" text while removing problematic null bytes
@@ -35,7 +46,7 @@ const COLORS = {
 const sanitize = (str: any) => {
     if (str === null || str === undefined) return "暂无数据";
     if (typeof str !== 'string') return String(str);
-    return str.replace(/\0/g, "").trim();
+    return str.replace(/\0/g, "").replace(/\r\n/g, "\n").trim();
 };
 
 /**
@@ -307,8 +318,7 @@ const addEmailStrategySlidesFromGroup = (pptx: any, mailGroup: any) => {
         slide.addShape(pptx.ShapeType.rect, { x: 0.5, y: 1.6, w: 9, h: 3.5, fill: "F8FAFC", line: { color: "E2E8F0" } });
         slide.addText(sanitize(mailGroup.analysis), { 
             x: 0.6, y: 1.7, w: 8.8, h: 3.3, 
-            fontSize: 10, color: COLORS.TEXT_MAIN, valign: 'top',
-            lineSpacing: 18 // Increased line spacing (points)
+            ...bodyTextOpts(10),
         });
 
         createEmailSlide(pptx, "Email 1: The Hook (破冰)", mailGroup.email1);
@@ -328,9 +338,7 @@ const createEmailSlide = (pptx: any, title: string, content: string) => {
     
     slide.addText(sanitize(content), { 
         x: 0.7, y: 1.2, w: 8.6, h: 3.8, 
-        fontSize: 9, color: "1E293B", 
-        fontFace: "Arial", valign: 'top',
-        lineSpacing: 18 // Reduced line spacing to fit more text
+        ...bodyTextOpts(9),
     });
 };
 
@@ -419,8 +427,8 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
     slide.addText("企业简介", { x: 5.0, y: 1.2, fontSize: 14, bold: true, color: COLORS.ACCENT_BLUE });
     slide.addText(sanitize(data.companyInfo.description), { 
         x: 5.0, y: 1.6, w: 4.3, h: 3.2, 
-        fontSize: 10, color: COLORS.TEXT_MAIN, 
-        valign: 'top', align: 'left', wrap: true, lineSpacing: 16
+        ...bodyTextOpts(10),
+        align: 'left',
     });
 
     // --- SLIDE 3: FINANCIALS & TRAFFIC (财务与流量) ---
@@ -508,23 +516,23 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
     slide.addText("04 商业模式与供应链 (Business Model)", headerStyle);
 
     const boxStyle = { fill: "FFFFFF", line: { color: "E2E8F0" }, r: 0.1 };
-    const titleStyle = { fontSize: 12, bold: true, color: COLORS.ACCENT_BLUE };
-    const contentStyle = { fontSize: 9, color: COLORS.TEXT_MAIN, valign: "middle" as const };
+    const titleStyle = { fontSize: 12, bold: true, color: COLORS.ACCENT_BLUE, fontFace: PPT_FONT };
+    const contentStyle = { ...bodyTextOpts(9), valign: "top" as const };
 
     slide.addShape(pptx.ShapeType.rect, { x: 0.5, y: 1.2, w: 4.4, h: 1.8, ...boxStyle });
     slide.addText("业务范围 (Scope)", { x: 0.7, y: 1.4, ...titleStyle });
     slide.addText(`核心产品: ${data.businessScope.coreProducts.join(', ')}\n\n品牌定位: ${data.businessScope.brandPositioning}\n\n价格敏感度: ${data.businessScope.priceSensitivity}`, 
-        { x: 0.7, y: 1.7, w: 4.0, h: 1.2, ...contentStyle, wrap: true });
+        { x: 0.7, y: 1.7, w: 4.0, h: 1.2, ...contentStyle });
 
     slide.addShape(pptx.ShapeType.rect, { x: 5.1, y: 1.2, w: 4.4, h: 1.8, ...boxStyle });
     slide.addText("供应链角色 (Supply Chain)", { x: 5.3, y: 1.4, ...titleStyle });
     slide.addText(`角色: ${data.supplyChain.role}\n\n服务模式: ${data.supplyChain.serviceType}\n\n目标群体: ${data.targetAudience.join(', ')}`,
-        { x: 5.3, y: 1.7, w: 4.0, h: 1.2, ...contentStyle, wrap: true });
+        { x: 5.3, y: 1.7, w: 4.0, h: 1.2, ...contentStyle });
 
     slide.addShape(pptx.ShapeType.rect, { x: 0.5, y: 3.2, w: 9.0, h: 1.8, ...boxStyle });
     slide.addText("销售渠道与采购习惯 (Channels & Procurement)", { x: 0.7, y: 3.4, ...titleStyle });
     slide.addText(`销售渠道: ${data.businessModel.channels.join(', ')}\n\n电商布局: ${data.businessModel.ecommercePresence.join(', ')}\n\n采购习惯: ${data.businessModel.procurementInfo}`,
-        { x: 0.7, y: 3.7, w: 8.6, h: 1.2, ...contentStyle, wrap: true });
+        { x: 0.7, y: 3.7, w: 8.6, h: 1.2, ...contentStyle });
 
     // --- SLIDE 5: PRODUCT DEPTH ANALYSIS (背调重点 - NEW) ---
     if (data.productSummary) {
@@ -535,18 +543,18 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
 
         const summaryBox = (title: string, content: string, x: number, y: number, w: number, h: number, icon: string) => {
             slide.addShape(pptx.ShapeType.rect, { x, y, w, h, fill: "FFFFFF", line: { color: COLORS.ACCENT_BLUE, width: 1 }, r: 0.1 });
-            slide.addText(`${icon} ${title}`, { x: x + 0.15, y: y + 0.15, fontSize: 12, bold: true, color: COLORS.ACCENT_BLUE });
+            slide.addText(`${icon} ${title}`, { x: x + 0.15, y: y + 0.12, w: w - 0.3, fontSize: 11, bold: true, color: COLORS.ACCENT_BLUE, fontFace: PPT_FONT });
             slide.addText(sanitize(content), { 
-                x: x + 0.15, y: y + 0.5, w: w - 0.3, h: h - 0.6, 
-                fontSize: 9, color: COLORS.TEXT_MAIN, valign: 'top', wrap: true, lineSpacing: 1.2
+                x: x + 0.15, y: y + 0.48, w: w - 0.3, h: h - 0.58, 
+                ...bodyTextOpts(9),
             });
         };
 
-        summaryBox("市场喜好 (Market Preference)", data.productSummary.marketPreference, 0.5, 1.0, 4.4, 1.6, "📊");
-        summaryBox("功能分析 (Feature Analysis)", data.productSummary.featureAnalysis, 5.1, 1.0, 4.4, 1.6, "⚙️");
-        summaryBox("推荐产品 (Recommended)", data.productSummary.recommendedProducts, 0.5, 2.7, 4.4, 1.6, "💡");
-        summaryBox("包装风格 (Packaging)", data.productSummary.packagingAnalysis, 5.1, 2.7, 4.4, 1.6, "📦");
-        summaryBox("颜色偏好 (Color Preference)", data.productSummary.colorPreference, 0.5, 4.4, 9.0, 0.8, "🎨");
+        summaryBox("市场喜好 (Market Preference)", data.productSummary.marketPreference, 0.5, 1.0, 4.4, 1.75, "📊");
+        summaryBox("功能分析 (Feature Analysis)", data.productSummary.featureAnalysis, 5.1, 1.0, 4.4, 1.75, "⚙️");
+        summaryBox("推荐产品 (Recommended)", data.productSummary.recommendedProducts, 0.5, 2.85, 4.4, 1.75, "💡");
+        summaryBox("包装风格 (Packaging)", data.productSummary.packagingAnalysis, 5.1, 2.85, 4.4, 1.75, "📦");
+        summaryBox("颜色偏好 (Color Preference)", data.productSummary.colorPreference, 0.5, 4.7, 9.0, 0.75, "🎨");
     }
 
     // --- SLIDE 5.5: ACTION PLAN (Separated to avoid overlap) ---
@@ -581,7 +589,7 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
         const bulletText = items && items.length ? items.map(p => `• ${sanitize(p)}`).join('\n') : "• 暂无数据";
         slide.addText(bulletText, { 
             x: x+0.15, y: y+0.5, w: 4.1, h: 1.4, 
-            fontSize: 9, color: COLORS.TEXT_MAIN, valign: 'top', wrap: true 
+            ...bodyTextOpts(9),
         });
     };
 
@@ -642,13 +650,13 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
             
             slide.addText("产品特征:", { x: x+0.1, y: y+1.2, fontSize: 8, bold: true });
             slide.addText(`功能: ${sanitize(prod.features || "暂无")}\n颜色: ${sanitize(prod.colors || "暂无")}\n包装: ${sanitize(prod.packaging || "暂无")}`, 
-                { x: x+0.1, y: y+1.4, w: 2.7, h: 0.8, fontSize: 8, color: COLORS.TEXT_MAIN, wrap: true, valign: 'top' });
+                { x: x+0.1, y: y+1.4, w: 2.7, h: 0.8, ...bodyTextOpts(8) });
             
-            slide.addText("开发切入点:", { x: x+0.1, y: y+2.3, fontSize: 8, bold: true });
-            slide.addText(sanitize(prod.pitchPoint || "暂无"), { x: x+0.1, y: y+2.5, w: 2.7, h: 0.6, fontSize: 8, color: COLORS.TEXT_MAIN, wrap: true, valign: 'top' });
+            slide.addText("开发切入点:", { x: x+0.1, y: y+2.3, fontSize: 8, bold: true, fontFace: PPT_FONT });
+            slide.addText(sanitize(prod.pitchPoint || "暂无"), { x: x+0.1, y: y+2.5, w: 2.7, h: 0.6, ...bodyTextOpts(8) });
             
-            slide.addText("定价建议:", { x: x+0.1, y: y+3.2, fontSize: 8, bold: true });
-            slide.addText(sanitize(prod.pricingStrategy || "暂无"), { x: x+0.1, y: y+3.4, w: 2.7, h: 0.5, fontSize: 8, color: COLORS.TEXT_MAIN, wrap: true, valign: 'top' });
+            slide.addText("定价建议:", { x: x+0.1, y: y+3.2, fontSize: 8, bold: true, fontFace: PPT_FONT });
+            slide.addText(sanitize(prod.pricingStrategy || "暂无"), { x: x+0.1, y: y+3.4, w: 2.7, h: 0.5, ...bodyTextOpts(8) });
         });
     }
 

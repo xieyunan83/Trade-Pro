@@ -2,13 +2,41 @@
 import { GoogleGenAI, Type, Part } from "@google/genai";
 import { AnalysisResult, ClientSearchResult, DecisionMaker, ChatMessage, KnowledgeFile, KeywordExtractionResult, MailGroup, EmailTemplateRequest, ApiConfig, TaskType } from "../types";
 import { getAllFilesFromDB } from "./db";
+import { getApiConfig as getSupabaseApiConfig } from './supabase';
+import { env } from './env';
 
-// API Keys Configuration
-const HUNTER_API_KEY = process.env.HUNTER_API_KEY || ''; 
-const FINDYMAIL_API_KEY = process.env.FINDYMAIL_API_KEY || ''; 
-const ANYMAIL_FINDER_API_KEY = process.env.ANYMAIL_FINDER_API_KEY || '';
+const HUNTER_API_KEY = env.hunterApiKey;
+const FINDYMAIL_API_KEY = env.findymailApiKey;
+const ANYMAIL_FINDER_API_KEY = env.anymailFinderApiKey;
 
 const NATIVE_MODEL = 'gemini-3-pro-preview';
+
+const WEB_SEARCH_TASKS: TaskType[] = ['search', 'analysis'];
+
+const TASK_TIMEOUT_MS: Partial<Record<TaskType, number>> = {
+  search: 120_000,
+  analysis: 180_000,
+  email: 120_000,
+};
+
+const fetchWithTimeout = async (
+  input: RequestInfo | URL,
+  init?: RequestInit,
+  timeoutMs = 120_000
+): Promise<Response> => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (e: any) {
+    if (e?.name === 'AbortError') {
+      throw new Error(`请求超时（${Math.round(timeoutMs / 1000)} 秒）。请检查网络或稍后重试。`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+};
 
 // CORS Proxy Fallbacks (Expanded for China/Firewall bypass)
 // NOTE: Public proxies are unreliable. The best solution is always a paid Relay (HiAPI, OpenRouter, etc.)
@@ -22,7 +50,7 @@ const PROXY_LADDER = [
 const SYSTEM_INSTRUCTION = `
 You are "楠哥的小助理" (Nan Ge's Assistant), an elite Foreign Trade Intelligence Agent.
 Your goal is to provide deep, actionable insights for Chinese export suppliers.
-You must use the googleSearch tool to find REAL, CURRENT information.
+You MUST use 联网搜索 (web search) to find REAL, CURRENT information about companies, websites, and markets.
 DO NOT hallucinate. If data is unavailable, say "公开信息未找到".
 
 LANGUAGE REQUIREMENT:
@@ -30,6 +58,16 @@ All descriptive text MUST be in SIMPLIFIED CHINESE (简体中文).
 Do NOT use English for descriptions unless it is a proper noun (like a specific company name or product model).
 Structure the report professionally in Chinese.
 `;
+
+const QWEN_SYSTEM = '你是外贸客户开发专家「楠哥的小助理」，擅长背景调查、客户搜索和开发信撰写。请使用联网搜索获取真实最新信息。所有输出使用简体中文。';
+
+const qwenSearchPayload = (enableSearch: boolean): Record<string, unknown> | undefined =>
+  enableSearch
+    ? { enable_search: true, search_options: { forced_search: true } }
+    : undefined;
+
+const isDomesticQwenEndpoint = (url: string): boolean =>
+  url.startsWith('/qwen-api') || /aliyuncs\.com|dashscope\.aliyun/i.test(url);
 
 export interface TaskTypeAssignment {
     task: TaskType;
@@ -150,23 +188,57 @@ const fetchAnymailFinder = async (domain: string): Promise<DecisionMaker[]> => {
 // --- API Configuration ---
 
 export const getGeminiConfig = (): ApiConfig[] => {
+    const configs: ApiConfig[] = [];
+
     if (typeof localStorage !== 'undefined') {
         const stored = localStorage.getItem('trade_scout_api_configs');
         if (stored) {
             try {
                 const parsed = JSON.parse(stored);
-                // Ensure valid configs
-                return parsed.filter((c: ApiConfig) => c.apiKey && c.apiKey.trim() !== '');
+                configs.push(...parsed.filter((c: ApiConfig) => c.apiKey && c.apiKey.trim() !== ''));
             } catch (e) {
                 console.error("Failed to parse stored API configs", e);
             }
         }
     }
-    return [];
+
+    if (env.apiKey && !configs.some(c => c.apiKey === env.apiKey)) {
+        configs.push({
+            id: 'env_gemini',
+            apiKey: env.apiKey,
+            baseUrl: 'native',
+            modelId: NATIVE_MODEL,
+            priority: 0,
+            taskAssignment: 'default',
+        });
+    }
+
+    return configs;
+};
+
+export const hasApiKeyConfigured = (): boolean => {
+    if (env.qwenApiKey) return true;
+    if (typeof localStorage !== 'undefined' && localStorage.getItem('trade_scout_qwen_api_key')) return true;
+    if (getGeminiConfig().length > 0) return true;
+    if (env.apiKey) return true;
+    return false;
+};
+
+const getDefaultAIModel = (): 'qwen' | 'gemini' | 'auto' => {
+    if (typeof localStorage !== 'undefined') {
+        const saved = localStorage.getItem('trade_scout_default_ai_model') as 'qwen' | 'gemini' | 'auto' | null;
+        if (saved) return saved;
+    }
+    return env.defaultAIModel;
 };
 
 // --- OpenAI Adapter for Relay Services (hiapi, nvidia, deepseek, openrouter etc) ---
-const callOpenAICompatible = async (config: ApiConfig, messages: any[], jsonMode: boolean = false): Promise<string> => {
+const callOpenAICompatible = async (
+    config: ApiConfig,
+    messages: any[],
+    jsonMode: boolean = false,
+    options: { extraPayload?: Record<string, unknown>; timeoutMs?: number; maxTokens?: number } = {}
+): Promise<string> => {
     // Construct URL robustly
     let baseUrl = config.baseUrl.trim();
     if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
@@ -185,11 +257,14 @@ const callOpenAICompatible = async (config: ApiConfig, messages: any[], jsonMode
         messages: messages,
         temperature: 0.7,
         stream: false,
-        max_tokens: 4096 
+        max_tokens: options.maxTokens ?? 4096,
     };
 
-    if (jsonMode) {
+    if (jsonMode && !options.extraPayload?.enable_search) {
         payload.response_format = { type: "json_object" };
+    }
+    if (options.extraPayload) {
+        Object.assign(payload, options.extraPayload);
     }
 
     // Helper to execute fetch
@@ -208,11 +283,11 @@ const callOpenAICompatible = async (config: ApiConfig, messages: any[], jsonMode
             headers['X-Title'] = 'Trade Scout Pro'; // App Name
         }
 
-        return fetch(finalUrl, {
+        return fetchWithTimeout(finalUrl, {
             method: 'POST',
             headers: headers,
             body: JSON.stringify(payload)
-        });
+        }, options.timeoutMs ?? 120_000);
     };
 
     // Multi-Level Proxy Attempt Strategy
@@ -221,16 +296,14 @@ const callOpenAICompatible = async (config: ApiConfig, messages: any[], jsonMode
     // Custom Proxy from LocalStorage
     const customProxy = typeof localStorage !== 'undefined' ? localStorage.getItem('trade_scout_custom_proxy') : '';
     
-    // Logic: 
-    // 1. If OpenRouter/HiAPI/SiliconFlow, try DIRECT first (they support CORS usually).
-    // 2. If blocked, try Proxy.
-    let attempts = PROXY_LADDER;
-    if (customProxy) attempts = [customProxy, ...attempts];
-
-    // Priority adjustment: Relay services often fail with public proxies due to header stripping.
-    // So we ensure '' (Direct) is first for them.
-    if (baseUrl.includes('openrouter') || baseUrl.includes('siliconflow') || baseUrl.includes('hiapi')) {
-        attempts = ['', ...attempts.filter(p => p !== '')]; 
+    // 国内千问 / DashScope：直连，不走 CORS 代理（代理会导致 Failed to fetch）
+    let attempts: string[];
+    if (isDomesticQwenEndpoint(baseUrl)) {
+        attempts = [''];
+    } else if (baseUrl.includes('openrouter') || baseUrl.includes('siliconflow') || baseUrl.includes('hiapi')) {
+        attempts = ['', ...PROXY_LADDER.filter(p => p !== '')];
+    } else {
+        attempts = customProxy ? [customProxy, ...PROXY_LADDER] : PROXY_LADDER;
     }
 
     for (const proxy of attempts) {
@@ -295,145 +368,193 @@ const callOpenAICompatible = async (config: ApiConfig, messages: any[], jsonMode
     throw new Error(errorMsg);
 };
 
-// --- Unified Generator with Failover Strategy ---
+// --- 国内千问统一调用（联网搜索 + 多模态）---
+const buildQwenUserContent = (
+  prompt: string,
+  images: string[] = [],
+  attachments: KnowledgeFile[] = []
+): string | Array<{ type: string; text?: string; image_url?: { url: string } }> => {
+  if (images.length === 0 && attachments.length === 0) return prompt;
+
+  const parts: Array<{ type: string; text?: string; image_url?: { url: string } }> = [
+    { type: 'text', text: prompt },
+  ];
+
+  images.forEach(img => {
+    parts.push({
+      type: 'image_url',
+      image_url: { url: img.startsWith('data:') ? img : `data:image/jpeg;base64,${img}` },
+    });
+  });
+
+  attachments.forEach(file => {
+    if (file.type === 'youtube') {
+      parts.push({ type: 'text', text: `[Reference YouTube Link: ${file.data}]` });
+    } else if (file.mimeType?.startsWith('text/') || ['txt', 'md', 'csv', 'json'].includes(file.type)) {
+      parts.push({ type: 'text', text: `[File: ${file.name}]\n${file.data.substring(0, 8000)}` });
+    } else if (file.mimeType?.startsWith('image/') && file.data) {
+      parts.push({
+        type: 'image_url',
+        image_url: {
+          url: file.data.startsWith('data:') ? file.data : `data:${file.mimeType};base64,${file.data}`,
+        },
+      });
+    } else {
+      parts.push({ type: 'text', text: `[Attachment: ${file.name}]` });
+    }
+  });
+
+  return parts;
+};
+
+const tryGeminiFailover = async (
+  task: TaskType,
+  prompt: string,
+  systemInfo: string | undefined,
+  jsonMode: boolean,
+  images: string[],
+  attachments: KnowledgeFile[],
+  needsWebSearch: boolean
+): Promise<string | null> => {
+  const allConfigs = getGeminiConfig();
+  const nativeConfig: ApiConfig | null = env.apiKey ? {
+    id: 'native_env_key',
+    apiKey: env.apiKey,
+    baseUrl: 'native',
+    priority: 0,
+    taskAssignment: 'default',
+    modelId: NATIVE_MODEL,
+  } : null;
+
+  const candidates = [...allConfigs];
+  if (nativeConfig) candidates.push(nativeConfig);
+  const relevantCandidates = candidates.filter(
+    c => c.taskAssignment === task || !c.taskAssignment || c.taskAssignment === 'default'
+  );
+  if (relevantCandidates.length === 0) return null;
+
+  relevantCandidates.sort((a, b) => (a.priority ?? 999) - (b.priority ?? 999));
+  let lastError: any = null;
+
+  for (const config of relevantCandidates) {
+    try {
+      if (config.baseUrl === 'native') {
+        const ai = new GoogleGenAI({ apiKey: config.apiKey });
+        const parts: Part[] = [{ text: prompt }];
+        images.forEach(img => parts.push({ inlineData: { mimeType: 'image/jpeg', data: img } }));
+        attachments.forEach(file => {
+          if (file.type === 'youtube') parts.push({ text: `[YouTube: ${file.data}]` });
+          else if (file.mimeType && file.data) parts.push({ inlineData: { mimeType: file.mimeType, data: file.data } });
+        });
+        const reqConfig: any = { systemInstruction: systemInfo };
+        if (jsonMode) reqConfig.responseMimeType = 'application/json';
+        if (needsWebSearch) reqConfig.tools = [{ googleSearch: {} }];
+        const response = await ai.models.generateContent({
+          model: config.modelId || NATIVE_MODEL,
+          contents: [{ role: 'user', parts }],
+          config: reqConfig,
+        });
+        if (response.text) return response.text;
+      } else {
+        const messages: any[] = [];
+        if (systemInfo) messages.push({ role: 'system', content: systemInfo });
+        messages.push({ role: 'user', content: buildQwenUserContent(prompt, images, attachments) });
+        const result = await callOpenAICompatible(config, messages, jsonMode);
+        if (result) return result;
+      }
+    } catch (e: any) {
+      lastError = e;
+    }
+  }
+  if (lastError) console.warn('[AI] Gemini fallback failed:', lastError.message);
+  return null;
+};
+
+const callQwenChat = async (
+  messages: Array<{ role: string; content: unknown }>,
+  options: {
+    jsonMode?: boolean;
+    enableSearch?: boolean;
+    task?: TaskType;
+    override?: Partial<QwenRuntimeConfig>;
+  } = {}
+): Promise<string> => {
+  const config = await resolveQwenConfig(options.override);
+  const timeoutMs = (options.task && TASK_TIMEOUT_MS[options.task]) || 120_000;
+  const searchPayload = qwenSearchPayload(!!options.enableSearch);
+  const maxTokens = options.task === 'search' ? 8192 : options.task === 'analysis' ? 8192 : 4096;
+
+  if (isQwenOpenAICompatible(config.baseUrl) || config.baseUrl.startsWith('/qwen-api')) {
+    return callOpenAICompatible(
+      {
+        id: 'qwen',
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl,
+        modelId: config.modelId,
+        taskAssignment: 'default',
+      },
+      messages,
+      options.jsonMode ?? false,
+      { timeoutMs, extraPayload: searchPayload, maxTokens }
+    );
+  }
+
+  const combined = messages
+    .map(m => `${m.role}: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`)
+    .join('\n\n');
+  return callQwenNative(config, combined, options.jsonMode ?? false, !!options.enableSearch, timeoutMs);
+};
+
+// --- Unified Generator：国内千问优先，Gemini 仅作可选备用 ---
 const generateContentUnified = async (
     task: TaskType, 
     prompt: string, 
     systemInfo?: string, 
     jsonMode: boolean = false, 
-    images: string[] = [], // base64 strings
+    images: string[] = [],
     attachments: KnowledgeFile[] = []
 ): Promise<string> => {
-    
-    // 1. Gather all available configurations
-    const allConfigs = getGeminiConfig();
-    
-    // 2. Add Native Process Env Key as a "Candidate" if it exists
-    // We treat it as a special config with ID 'native'
-    const nativeConfig: ApiConfig | null = process.env.API_KEY ? {
-        id: 'native_env_key',
-        apiKey: process.env.API_KEY,
-        baseUrl: 'native', // Special flag
-        priority: 0, // Highest priority by default for backward compatibility
-        taskAssignment: 'default',
-        modelId: NATIVE_MODEL
-    } : null;
+    const needsWebSearch = WEB_SEARCH_TASKS.includes(task);
+    const systemText = needsWebSearch ? QWEN_SYSTEM : (systemInfo || QWEN_SYSTEM);
 
-    const candidates = [...allConfigs];
-    if (nativeConfig) candidates.push(nativeConfig);
+    console.log(`[AI] Task '${task}' → 千问${needsWebSearch ? ' (联网搜索)' : ''}`);
 
-    // 3. Filter by Task
-    // Logic: 
-    // - Include configs specifically assigned to this task.
-    // - Include 'default' configs as fallback.
-    const relevantCandidates = candidates.filter(c => 
-        c.taskAssignment === task || !c.taskAssignment || c.taskAssignment === 'default'
-    );
+    try {
+      let userContent = buildQwenUserContent(prompt, images, attachments);
+      if (jsonMode && needsWebSearch && typeof userContent === 'string') {
+        userContent += '\n\n【重要】请严格输出 JSON 格式，不要包含 markdown 代码块。';
+      }
+      const messages = [
+        { role: 'system', content: systemText },
+        { role: 'user', content: userContent },
+      ];
 
-    if (relevantCandidates.length === 0) {
-        throw new Error("No API Keys configured for this task. Please add keys in Admin Dashboard.");
+      return await callQwenChat(messages, {
+        jsonMode,
+        enableSearch: needsWebSearch,
+        task,
+      });
+    } catch (qwenErr: any) {
+      console.warn(`[AI] 千问调用失败 (${task}):`, qwenErr.message);
+
+      const defaultModel = getDefaultAIModel();
+      if (defaultModel === 'qwen') {
+        throw new Error(
+          `千问调用失败: ${qwenErr.message}。请确认 API Key / Base URL 正确，联网搜索建议使用 qwen-plus 或 qwen-max 模型。`
+        );
+      }
+
+      const geminiResult = await tryGeminiFailover(
+        task, prompt, systemInfo, jsonMode, images, attachments, needsWebSearch
+      );
+      if (geminiResult) return geminiResult;
+
+      throw new Error(
+        `千问调用失败: ${qwenErr.message}。请在管理后台配置千问 API，联网搜索需 qwen-plus / qwen-max。`
+      );
     }
 
-    // 4. Sort by Priority (Low number = High Priority)
-    // 0 is highest, then 1, 2, ...
-    // If priority is missing, treat as lowest (Infinity)
-    relevantCandidates.sort((a, b) => {
-        const pA = (a.priority !== undefined && a.priority !== null) ? a.priority : 999;
-        const pB = (b.priority !== undefined && b.priority !== null) ? b.priority : 999;
-        return pA - pB;
-    });
-
-    console.log(`[Failover] Found ${relevantCandidates.length} keys for task '${task}'. Starting execution chain...`);
-
-    // 5. Execute Chain
-    let lastError: any = null;
-
-    for (const config of relevantCandidates) {
-        console.log(`[Failover] Trying Config [Priority ${config.priority ?? 'Default'}]: ${config.id} (${config.baseUrl === 'native' ? 'Google Native' : config.modelId})`);
-        
-        try {
-            if (config.baseUrl === 'native') {
-                // --- STRATEGY: NATIVE GOOGLE API ---
-                const ai = new GoogleGenAI({ apiKey: config.apiKey });
-                const parts: Part[] = [{ text: prompt }];
-                
-                // Add images
-                images.forEach(img => {
-                    parts.push({ inlineData: { mimeType: 'image/jpeg', data: img } });
-                });
-
-                // Add attachments (Multimodal)
-                attachments.forEach(file => {
-                    if (file.type === 'youtube') {
-                        parts.push({ text: `[Reference YouTube Link: ${file.data}]` });
-                    } else if (file.mimeType && file.data) {
-                        parts.push({ 
-                            inlineData: { 
-                                mimeType: file.mimeType, 
-                                data: file.data 
-                            } 
-                        });
-                    }
-                });
-
-                const reqConfig: any = { systemInstruction: systemInfo };
-                if (jsonMode) {
-                    reqConfig.responseMimeType = "application/json";
-                } else {
-                    reqConfig.tools = [{ googleSearch: {} }]; 
-                }
-
-                const response = await ai.models.generateContent({
-                    model: config.modelId || NATIVE_MODEL,
-                    contents: [{ role: 'user', parts }],
-                    config: reqConfig
-                });
-                
-                if (response.text) return response.text;
-
-            } else {
-                // --- STRATEGY: OPENAI COMPATIBLE (RELAY) ---
-                const messages: any[] = [];
-                if (systemInfo) messages.push({ role: 'system', content: systemInfo });
-                
-                let userContent: any = prompt;
-                
-                // Handle images and attachments for OpenAI Vision format (or text fallback)
-                if (images.length > 0 || attachments.length > 0) {
-                    userContent = [{ type: "text", text: prompt }];
-                    
-                    images.forEach(img => {
-                        userContent.push({
-                            type: "image_url",
-                            image_url: { url: `data:image/jpeg;base64,${img}` }
-                        });
-                    });
-
-                    attachments.forEach(file => {
-                        if (file.type === 'youtube') {
-                            userContent.push({ type: "text", text: `[Reference YouTube Link: ${file.data}]` });
-                        } else if (file.mimeType?.startsWith('text/')) {
-                            userContent.push({ type: "text", text: `[File Content: ${file.name}]\n${file.data}` });
-                        } else {
-                            userContent.push({ type: "text", text: `[Attachment: ${file.name} (Binary data omitted for non-native API)]` });
-                        }
-                    });
-                }
-                
-                messages.push({ role: 'user', content: userContent });
-                const result = await callOpenAICompatible(config, messages, jsonMode);
-                if (result) return result;
-            }
-
-        } catch (e: any) {
-            console.warn(`[Failover] Config ${config.id} failed. Reason: ${e.message}`);
-            lastError = e;
-            // Continue to next config in the loop
-        }
-    }
-
-    // If we get here, all candidates failed
-    throw new Error(`All API strategies failed. Last Error: ${lastError?.message || 'Unknown'}`);
+    throw new Error('AI 调用未返回结果');
 };
 
 // --- Public Methods ---
@@ -741,29 +862,27 @@ export const analyzeCompany = async (domainOrName: string, mode: 'detailed' | 'e
 };
 
 // Add this function to export
-export const searchPotentialClients = async (productKeyword: string, country: string, industry: string = '', clientType: string = '', limit: number = 200): Promise<ClientSearchResult[]> => {
-  // Explicitly requested 200 items in prompt
+export const searchPotentialClients = async (productKeyword: string, country: string, industry: string = '', clientType: string = '', limit: number = 30): Promise<ClientSearchResult[]> => {
   const prompt = `
   Act as a high-performance B2B Database Crawler (楠哥的小助理). 
-  Task: List ${limit} (aim for 200) REAL potential B2B clients in ${country} for product "${productKeyword}". 
+  Use 联网搜索 to find REAL potential B2B clients in ${country} for product "${productKeyword}". 
   Industry: ${industry}. 
   Types to Include: ${clientType || 'Any B2B type (Importers, Distributors, Wholesalers, Brands)'}.
   
   Important:
-  - Return REAL companies with active websites.
-  - Focus on finding as many valid targets as possible (Max ${limit}).
+  - Return REAL companies with active websites (verify via search).
+  - Return up to ${limit} valid targets.
   - **Description MUST be in Simplified Chinese (简体中文).**
   
   Return a valid JSON Array ONLY. No text.
   Format: [{ "name": "Company Name", "website": "www.example.com", "description": "Short Description in Chinese", "country": "${country}" }]
   `;
-  try {
-    const text = await generateContentUnified('search', prompt, undefined, true);
-    return extractJson(text, true);
-  } catch (err) {
-    console.error("Search Failed:", err);
-    return [];
+  const text = await generateContentUnified('search', prompt, SYSTEM_INSTRUCTION, true);
+  const results = extractJson(text, true);
+  if (!Array.isArray(results) || results.length === 0) {
+    throw new Error('搜索未返回有效结果。请确认千问 API 已配置，并使用 qwen-plus 或 qwen-max 模型（支持联网搜索）。');
   }
+  return results;
 };
 
 export const streamStrategyChat = async function* (
@@ -773,63 +892,65 @@ export const streamStrategyChat = async function* (
     newAttachments: KnowledgeFile[],
     companyData?: AnalysisResult | null
 ) {
-    // Uses generic Chat assignment or default
-    const aiConfig = getGeminiConfig().find(c => c.taskAssignment === 'chat') || { id: 'default', apiKey: '', baseUrl: '', modelId: 'gemini-1.5-pro' }; 
-    // Fallback logic for streaming is complex due to mixed SDKs. 
-    // For now, we prioritize Native if ENV is present, else use Relay without streaming or with partial support.
-    
-    const useNative = !!process.env.API_KEY;
-    
-    let systemInstruction = `You are 楠哥的小助理 (Nan Ge's Assistant), a Senior Trade Strategist. Speak primarily in Chinese (简体中文) unless asked otherwise.`;
-    if (companyData) systemInstruction += ` Context: Analyzing ${companyData.companyInfo.name}.`;
+    const config = await resolveQwenConfig();
+    let baseUrl = config.baseUrl.replace(/\/$/, '');
+    if (!baseUrl.endsWith('/chat/completions')) baseUrl += '/chat/completions';
+
+    let systemInstruction = `${QWEN_SYSTEM} 你是高级外贸策略顾问。`;
+    if (companyData) systemInstruction += ` 当前分析对象: ${companyData.companyInfo.name}。`;
     if (knowledgeBase.length > 0) {
         const kbText = knowledgeBase.map(f => `[KB: ${f.name}]\n${f.data.substring(0, 500)}...`).join("\n\n");
-        systemInstruction += `\n\nSystem Knowledge Base:\n${kbText}`;
+        systemInstruction += `\n\n知识库:\n${kbText}`;
     }
 
-    if (useNative) {
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-        const chatHistory = history
-            .filter(m => m.id !== 'init')
-            .map(m => ({ role: m.role, parts: [{ text: m.text }] }));
+    const messages: any[] = [
+        { role: 'system', content: systemInstruction },
+        ...history.filter(m => m.id !== 'init').map(m => ({ role: m.role, content: m.text })),
+        { role: 'user', content: buildQwenUserContent(newMessage, [], newAttachments) },
+    ];
 
-        const chat = ai.chats.create({
-            model: NATIVE_MODEL,
-            config: { systemInstruction },
-            history: chatHistory
-        });
+    const response = await fetchWithTimeout(baseUrl, {
+        method: 'POST',
+        headers: {
+            Authorization: `Bearer ${config.apiKey}`,
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            model: config.modelId,
+            messages,
+            stream: true,
+            ...qwenSearchPayload(true),
+        }),
+    }, 120_000);
 
-        const parts: Part[] = [{ text: newMessage }];
-        for (const file of newAttachments) {
-             if (file.type === 'youtube') {
-                 parts.push({ text: `[Reference YouTube Link: ${file.data}]` });
-             } else if (file.mimeType && file.data) {
-                 parts.push({ inlineData: { mimeType: file.mimeType, data: file.data } });
-             } else {
-                 parts.push({ inlineData: { mimeType: 'application/octet-stream', data: file.data } });
-             }
+    if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`千问对话失败: ${response.status} ${errText}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('千问流式响应不可用');
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data:')) continue;
+            const data = trimmed.slice(5).trim();
+            if (data === '[DONE]') return;
+            try {
+                const parsed = JSON.parse(data);
+                const chunk = parsed.choices?.[0]?.delta?.content;
+                if (chunk) yield chunk;
+            } catch { /* skip malformed SSE */ }
         }
-
-        const result = await chat.sendMessageStream({ message: parts });
-        for await (const chunk of result) {
-            yield chunk.text;
-        }
-    } else {
-        // Fallback to Relay (Non-streaming for now as Adapter doesn't support stream yet in this implementation)
-        // Using generateContentUnified logic but adapted for chat context
-        const messages: any[] = [
-            { role: 'system', content: systemInstruction },
-            ...history.filter(m=>m.id!=='init').map(m => ({ role: m.role, content: m.text })),
-            { role: 'user', content: newMessage }
-        ];
-        
-        // This relies on getGeminiConfig finding a key
-        const configs = getGeminiConfig();
-        const config = configs.find(c => c.taskAssignment === 'chat') || configs[0];
-        if(!config) throw new Error("No Chat API Configured");
-
-        const text = await callOpenAICompatible(config, messages);
-        yield text;
     }
 };
 
@@ -843,3 +964,254 @@ export const generateColdEmail = async (companyName: string, request: EmailTempl
   const prompt = `Write a Cold Email for ${companyName}. Style: ${request.style}. Context: ${request.sourceContext}. Product: ${request.ourProducts}. Advantages: ${request.advantages}. Hook: ${request.personalHook}.`;
   return await generateContentUnified('email', prompt, SYSTEM_INSTRUCTION);
 };
+// ==================== Qwen 模型支持 ====================
+
+interface QwenRuntimeConfig {
+  apiKey: string;
+  baseUrl: string;
+  modelId: string;
+}
+
+const DEFAULT_QWEN_BASE = 'https://dashscope.aliyuncs.com';
+const DEFAULT_QWEN_MODEL = 'qwen-max';
+
+const normalizeQwenBaseUrl = (raw: string): string => {
+  let url = raw.trim().replace(/\/$/, '');
+  if (!url) return DEFAULT_QWEN_BASE;
+  // 开发环境 Vite 代理路径，保持原样
+  if (url.startsWith('/')) return url;
+  if (!url.startsWith('http')) url = `https://${url}`;
+  if (!url.includes('/compatible-mode') && !url.includes('/api/v1')) {
+    url = `${url}/compatible-mode/v1`;
+  }
+  return url;
+};
+
+const isQwenOpenAICompatible = (baseUrl: string): boolean =>
+  baseUrl.includes('/compatible-mode/v1');
+
+/** 开发环境走 Vite 代理，生产环境直连 */
+const effectiveQwenBaseUrl = (normalized: string): string => {
+  const isDev =
+    typeof window !== 'undefined' &&
+    (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+  if (isDev && isDomesticQwenEndpoint(normalized)) {
+    return '/qwen-api/compatible-mode/v1';
+  }
+  return normalized;
+};
+
+const resolveQwenConfig = async (override?: Partial<QwenRuntimeConfig>): Promise<QwenRuntimeConfig> => {
+  const readLocal = (key: string) =>
+    typeof localStorage !== 'undefined' ? localStorage.getItem(key) || undefined : undefined;
+
+  const localKey = readLocal('trade_scout_qwen_api_key');
+  const localBase = readLocal('trade_scout_qwen_base_url');
+  const localModel = readLocal('trade_scout_qwen_model_id');
+
+  let cloudConfig = await getSupabaseApiConfig('qwen');
+
+  // localStorage 优先（用户在本浏览器保存的最新配置）
+  const apiKey = override?.apiKey || localKey || cloudConfig?.apiKey || env.qwenApiKey || '';
+  const rawBase =
+    override?.baseUrl || localBase || cloudConfig?.baseUrl || env.qwenBaseUrl || DEFAULT_QWEN_BASE;
+  const baseUrl = effectiveQwenBaseUrl(normalizeQwenBaseUrl(rawBase));
+  const modelId =
+    override?.modelId || localModel || cloudConfig?.modelId || env.qwenModelId || DEFAULT_QWEN_MODEL;
+
+  if (!apiKey) {
+    throw new Error('未配置 Qwen API Key（请在管理后台、.env.local 或 Supabase 中配置）');
+  }
+
+  console.log('[Qwen Config]', { baseUrl, modelId, hasKey: !!apiKey });
+  return { apiKey, baseUrl, modelId };
+};
+
+const extractQwenText = (data: any): string | null => {
+  if (data?.output?.text) return data.output.text;
+  const choice = data?.output?.choices?.[0]?.message?.content;
+  if (choice) return choice;
+  return null;
+};
+
+const callQwenNative = async (
+  config: QwenRuntimeConfig,
+  prompt: string,
+  jsonMode: boolean,
+  enableSearch = false,
+  timeoutMs = 120_000
+): Promise<string> => {
+  let apiRoot = config.baseUrl.replace(/\/$/, '');
+  if (apiRoot.endsWith('/api/v1')) {
+    apiRoot = apiRoot.slice(0, -'/api/v1'.length);
+  }
+  const url = `${apiRoot}/api/v1/services/aigc/text-generation/generation`;
+
+  const response = await fetchWithTimeout(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: config.modelId,
+      input: {
+        messages: [
+          {
+            role: 'system',
+            content: '你是外贸客户开发专家，擅长背景调查和开发信撰写。所有输出使用简体中文。',
+          },
+          { role: 'user', content: prompt },
+        ],
+      },
+      parameters: {
+        result_format: jsonMode ? 'message' : 'text',
+        ...(enableSearch ? { enable_search: true, search_options: { forced_search: true } } : {}),
+      },
+    }),
+  }, timeoutMs);
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Qwen API 错误: ${response.status} ${errorText}`);
+  }
+
+  const data = await response.json();
+  const text = extractQwenText(data);
+  if (!text) throw new Error('Qwen 返回格式异常');
+  return text;
+};
+
+/**
+ * 调用 Qwen API（支持公共 DashScope 与 MaaS 工作空间专属端点）
+ */
+export const callQwen = async (
+  prompt: string,
+  options: {
+    jsonMode?: boolean;
+    override?: Partial<QwenRuntimeConfig>;
+    enableSearch?: boolean;
+    task?: TaskType;
+  } = {}
+): Promise<string> => {
+  try {
+    const override = options.override
+      ? {
+          ...options.override,
+          ...(options.override.baseUrl
+            ? { baseUrl: effectiveQwenBaseUrl(normalizeQwenBaseUrl(options.override.baseUrl)) }
+            : {}),
+        }
+      : undefined;
+
+    return await callQwenChat(
+      [
+        { role: 'system', content: QWEN_SYSTEM },
+        { role: 'user', content: prompt },
+      ],
+      {
+        jsonMode: options.jsonMode,
+        enableSearch: options.enableSearch,
+        task: options.task,
+        override,
+      }
+    );
+  } catch (error) {
+    console.error('Qwen 调用失败:', error);
+    throw error;
+  }
+};
+
+export const testQwenApiKey = async (
+  apiKey: string,
+  baseUrl?: string,
+  modelId?: string,
+  testSearch = false
+): Promise<{ success: boolean; message: string }> => {
+  try {
+    if (testSearch) {
+      const text = await callQwen('搜索并告诉我今天日期，用一句话回答。', {
+        override: {
+          apiKey: apiKey.trim(),
+          baseUrl: baseUrl?.trim(),
+          modelId: modelId?.trim(),
+        },
+        enableSearch: true,
+      });
+      return { success: true, message: `千问联网搜索成功 ✅ ${text.slice(0, 80)}` };
+    }
+    const text = await callQwen('Ping. Just reply with the word pong.', {
+      override: {
+        apiKey: apiKey.trim(),
+        baseUrl: baseUrl?.trim(),
+        modelId: modelId?.trim(),
+      },
+    });
+    return { success: true, message: `Qwen 连接成功 ✅ 回复: ${text.slice(0, 50)}` };
+  } catch (e: any) {
+    return { success: false, message: `Qwen 测试失败: ${e.message}` };
+  }
+};
+
+const callGeminiNative = async (
+  prompt: string,
+  config: ApiConfig,
+  options: { jsonMode?: boolean; enableSearch?: boolean } = {}
+): Promise<string> => {
+  const ai = new GoogleGenAI({ apiKey: config.apiKey });
+  const reqConfig: Record<string, unknown> = {};
+  if (options.jsonMode) {
+    reqConfig.responseMimeType = "application/json";
+  }
+  if (options.enableSearch) {
+    reqConfig.tools = [{ googleSearch: {} }];
+  }
+  const response = await ai.models.generateContent({
+    model: config.modelId || NATIVE_MODEL,
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    config: reqConfig
+  });
+  if (!response.text) throw new Error("Empty Gemini response");
+  return response.text;
+};
+
+/**
+ * 统一 AI 调用：默认使用国内千问
+ */
+export const callAI = async (
+    prompt: string,
+    options: {
+      model?: 'qwen' | 'gemini' | 'auto'
+      jsonMode?: boolean
+      enableSearch?: boolean
+    } = {}
+  ): Promise<string> => {
+    const model = options.model || getDefaultAIModel();
+    
+    if (model === 'gemini') {
+      const configs = getGeminiConfig();
+      if (configs.length === 0 && !env.apiKey) {
+        throw new Error('未配置 Gemini API Key');
+      }
+      const nativeConfig = configs.find(c => c.baseUrl === 'native') || configs[0];
+      return await callGeminiNative(prompt, nativeConfig, {
+        jsonMode: options.jsonMode,
+        enableSearch: options.enableSearch,
+      });
+    }
+
+    try {
+      return await callQwen(prompt, {
+        jsonMode: options.jsonMode,
+        enableSearch: options.enableSearch ?? false,
+      });
+    } catch (error) {
+      if (model === 'qwen') throw error;
+      console.warn('千问调用失败，尝试 Gemini 备用:', error);
+      const geminiResult = await tryGeminiFailover(
+        'default', prompt, SYSTEM_INSTRUCTION, options.jsonMode ?? false, [], [], !!options.enableSearch
+      );
+      if (geminiResult) return geminiResult;
+      throw error;
+    }
+  }

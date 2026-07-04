@@ -1,9 +1,10 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { analyzeCompany, getGeminiConfig, searchPotentialClients, generateMailGroupStrategy } from './services/geminiService';
+import { analyzeCompany, hasApiKeyConfigured, searchPotentialClients, generateMailGroupStrategy } from './services/geminiService';
 import { exportToPPT } from './services/exportService';
 import { saveHistory, getHistory, getAllFilesFromDB, saveAutomationTask, getAutomationQueue, deleteAutomationTask, saveFileToDB } from './services/db';
 import { fetchGlobalConfig, fetchDocumentsFromRepo, backupUserHistory, fetchCRMFromCloud, saveCRMToCloud, fetchUserHistoryFromCloud, checkGitHubStatus, fetchApiConfigsFromCloud, setManualGitHubConfig, fetchUsersFromCloud, saveUsersToCloud } from './services/githubService';
+import { isSupabaseConfigured, getKnowledgeFiles, getInvestigationHistory, saveInvestigationHistory, getLatestDiscoverySearch, saveDiscoverySearch, getCrmClients, syncCrmClients } from './services/supabase';
 import { checkLimit, incrementUsage, updateLocalConfig } from './services/limitService';
 import { ModuleType, AnalysisResult, DiscoveryState, Client, User, HistoryItem, AutomationResult, ClientSearchResult } from './types';
 import { ModuleBackground } from './components/ModuleBackground';
@@ -71,10 +72,23 @@ const App: React.FC = () => {
 
   const shouldStopRef = useRef(false);
 
+  const persistHistoryItem = async (item: HistoryItem) => {
+    await saveHistory(item);
+    if (isSupabaseConfigured()) {
+      saveInvestigationHistory(item).catch(e => console.error('Supabase history save failed', e));
+    }
+  };
+
+  const handleDiscoveryStateChange = (state: DiscoveryState) => {
+    setDiscoveryState(state);
+    if (state.hasSearched && isSupabaseConfigured()) {
+      saveDiscoverySearch(state).catch(e => console.error('Supabase discovery save failed', e));
+    }
+  };
+
   useEffect(() => {
     const checkKey = async () => {
-      const configs = getGeminiConfig();
-      if (configs.length > 0 && configs[0].apiKey) {
+      if (hasApiKeyConfigured()) {
           setHasKey(true);
           return;
       }
@@ -112,6 +126,57 @@ const App: React.FC = () => {
             const ghStatus = checkGitHubStatus();
             setIsGitHubConnected(ghStatus.ok);
 
+            // Supabase 知识库同步（不依赖 GitHub）
+            if (currentUser && isSupabaseConfigured()) {
+                setIsKBSyncing(true);
+                try {
+                    console.log("Auto-syncing Supabase Knowledge Base...");
+                    const cloudFiles = await getKnowledgeFiles();
+                    if (cloudFiles.length > 0) {
+                        for (const f of cloudFiles) { await saveFileToDB(f); }
+                        const allFiles = await getAllFilesFromDB();
+                        setKbCount(allFiles.length);
+                    }
+                } catch (e) {
+                    console.error("Supabase KB Sync failed", e);
+                } finally {
+                    setIsKBSyncing(false);
+                }
+
+                // 背调历史
+                try {
+                    const cloudHistory = await getInvestigationHistory();
+                    if (cloudHistory.length > 0) {
+                        const existingIds = new Set(h.map(i => i.id));
+                        const newItems = cloudHistory.filter(i => !existingIds.has(i.id));
+                        for (const item of newItems) { await saveHistory(item); }
+                        const merged = [...newItems, ...h].sort((a, b) => b.timestamp - a.timestamp);
+                        setHistory(merged);
+                    }
+                } catch (e) {
+                    console.error("Supabase history sync failed", e);
+                }
+
+                // 最新搜索记录
+                try {
+                    const latestSearch = await getLatestDiscoverySearch();
+                    if (latestSearch) setDiscoveryState(latestSearch);
+                } catch (e) {
+                    console.error("Supabase discovery sync failed", e);
+                }
+
+                // CRM
+                try {
+                    const cloudCrm = await getCrmClients();
+                    if (cloudCrm.length > 0) {
+                        setCrmClients(cloudCrm);
+                        localStorage.setItem('tradeScoutClients', JSON.stringify(cloudCrm));
+                    }
+                } catch (e) {
+                    console.error("Supabase CRM sync failed", e);
+                }
+            }
+
             // 2. Sync from GitHub if connected
             if (ghStatus.ok && currentUser) {
                 // Config
@@ -125,20 +190,22 @@ const App: React.FC = () => {
                     console.warn("Failed to load global config", e);
                 } 
                 
-                // AUTO-SYNC KB (Mixed Mode)
-                setIsKBSyncing(true);
-                try {
-                    console.log("Auto-syncing GitHub Knowledge Base...");
-                    const cloudFiles = await fetchDocumentsFromRepo();
-                    if (cloudFiles.length > 0) {
-                        for (const f of cloudFiles) { await saveFileToDB(f); }
-                        const allFiles = await getAllFilesFromDB();
-                        setKbCount(allFiles.length);
+                // GitHub KB 同步（仅 Supabase 未配置时）
+                if (!isSupabaseConfigured()) {
+                    setIsKBSyncing(true);
+                    try {
+                        console.log("Auto-syncing GitHub Knowledge Base...");
+                        const cloudFiles = await fetchDocumentsFromRepo();
+                        if (cloudFiles.length > 0) {
+                            for (const f of cloudFiles) { await saveFileToDB(f); }
+                            const allFiles = await getAllFilesFromDB();
+                            setKbCount(allFiles.length);
+                        }
+                    } catch (e) {
+                        console.error("Auto KB Sync failed", e);
+                    } finally {
+                        setIsKBSyncing(false);
                     }
-                } catch (e) {
-                    console.error("Auto KB Sync failed", e);
-                } finally {
-                    setIsKBSyncing(false);
                 }
 
                 // CRM
@@ -161,7 +228,7 @@ const App: React.FC = () => {
                     const existingIds = new Set(h.map(i => i.id));
                     const newItems = cloudHistory.filter(i => !existingIds.has(i.id));
                     if (newItems.length > 0) {
-                        for(const item of newItems) await saveHistory(item);
+                        for(const item of newItems) await persistHistoryItem(item);
                         setHistory(prev => [...newItems, ...prev]);
                     }
                 }
@@ -189,11 +256,12 @@ const App: React.FC = () => {
   }, [currentUser, crmClients.length]); 
 
   useEffect(() => {
-      if (crmClients.length > 0) {
-          localStorage.setItem('tradeScoutClients', JSON.stringify(crmClients));
-          if (isGitHubConnected && currentUser) {
-              saveCRMToCloud(crmClients).catch(e => console.error("Auto CRM sync failed", e));
-          }
+      if (!currentUser) return;
+      localStorage.setItem('tradeScoutClients', JSON.stringify(crmClients));
+      if (isSupabaseConfigured()) {
+          syncCrmClients(crmClients).catch(e => console.error("Supabase CRM sync failed", e));
+      } else if (isGitHubConnected && crmClients.length > 0) {
+          saveCRMToCloud(crmClients).catch(e => console.error("Auto CRM sync failed", e));
       }
   }, [crmClients, isGitHubConnected, currentUser]);
 
@@ -240,7 +308,7 @@ const App: React.FC = () => {
     try {
       const result = await analyzeCompany(domain, 'detailed'); setAnalysisData(result); incrementUsage('analysis');
       const historyItem: HistoryItem = { id: Date.now().toString(), type: ModuleType.BACKGROUND, data: result, timestamp: Date.now(), domain: result.companyInfo.website };
-      await saveHistory(historyItem); setHistory(prev => [historyItem, ...prev]); updateCrmStatus(result);
+      await persistHistoryItem(historyItem); setHistory(prev => [historyItem, ...prev]); updateCrmStatus(result);
     } catch (e: any) { setErrorMsg(`Error: ${e.message}`); } finally { setLoading(false); }
   };
 
@@ -692,7 +760,7 @@ const App: React.FC = () => {
                 {activeModule === ModuleType.DISCOVERY && (
                     <ClientFinder 
                         state={discoveryState} 
-                        onStateChange={setDiscoveryState} 
+                        onStateChange={handleDiscoveryStateChange} 
                         onSelect={(d) => { setDomainInput(d); handleAnalyzeInput(d); }} 
                         onBatchAddToCRM={handleBatchAddToCRM}
                         onBatchAnalyze={handleBatchAnalyzeExisting}

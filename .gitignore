@@ -11,6 +11,10 @@ node_modules
 dist
 dist-ssr
 *.local
+tsconfig.tsbuildinfo
+backups/
+file_list.txt
+fetch_search.txt
 
 # Editor directories and files
 .vscode/*

@@ -14,17 +14,21 @@ interface ClientFinderProps {
 
 export const ClientFinder: React.FC<ClientFinderProps> = ({ state, onStateChange, onSelect, onBatchAddToCRM, onBatchAnalyze }) => {
   const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
 
   const handleSearch = async () => {
     if (!state.product) return;
     setLoading(true);
+    setErrorMsg(null);
     try {
       const results = await searchPotentialClients(state.product, state.country, state.industry, state.clientType);
       onStateChange({ ...state, results, hasSearched: true });
       setSelectedIndices(new Set());
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      setErrorMsg(e?.message || '搜索失败，请稍后重试');
+      onStateChange({ ...state, results: [], hasSearched: true });
     } finally {
       setLoading(false);
     }
@@ -96,6 +100,11 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({ state, onStateChange
         >
           {loading ? <Loader2 className="animate-spin" size={20} /> : '开始搜索 (Search Potential Clients)'}
         </button>
+        {errorMsg && (
+          <div className="mt-4 p-4 bg-red-50 border border-red-100 rounded-xl text-sm font-bold text-red-600">
+            {errorMsg}
+          </div>
+        )}
       </div>
 
       {state.hasSearched && (

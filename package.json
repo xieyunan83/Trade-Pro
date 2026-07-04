@@ -13,11 +13,14 @@
     "@google/genai": "latest",
     "@octokit/rest": "^20.0.2",
     "@supabase/supabase-js": "^2.110.0",
+    "dayjs": "^1.11.21",
+    "file-saver": "^2.0.5",
     "lucide-react": "^0.454.0",
     "quill": "^2.0.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-quill": "^2.0.0"
+    "react-quill": "^2.0.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@eslint/js": "^9.13.0",

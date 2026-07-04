@@ -4,8 +4,8 @@ import { GlobalConfig, ApiConfig, TaskType, User, KnowledgeFile } from '../types
 import { 
   Settings, Shield, Key, Bell, Save, Plus, Trash2, Globe, Server, 
   CheckCircle2, AlertTriangle, LogOut, Cloud, Users, Database, 
-  Link as LinkIcon, RefreshCw, X, FileText, Upload, Github, Play, Loader2,
-  Youtube, Music, Video, FileSpreadsheet, FilePieChart, FileCode
+  Link as LinkIcon, RefreshCw, X, FileText, Upload, Play, Loader2,
+  Youtube, Music, Video, FileSpreadsheet, FilePieChart, FileCode, Image
 } from 'lucide-react';
 import { 
   setManualGitHubConfig, 
@@ -14,10 +14,35 @@ import {
   fetchGlobalConfig,
   fetchUsersFromCloud,
   saveUsersToCloud,
-  fetchDocumentsFromRepo,
-  saveKnowledgeBaseToCloud
 } from '../services/githubService';
 import { getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/db';
+import { testApiKey, testQwenApiKey } from '../services/geminiService';
+import { saveApiConfig, getApiConfig, isSupabaseConfigured, saveKnowledgeFile, getKnowledgeFiles, deleteKnowledgeFile } from '../services/supabase';
+import { env } from '../services/env';
+
+const KB_ACCEPT = [
+  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+  '.txt', '.md', '.csv', '.json', '.rtf', '.odt', '.ods', '.odp',
+  '.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp', '.tiff', '.tif', '.ico', '.heic', '.avif',
+  '.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.wma',
+  '.mp4', '.mov', '.avi', '.mkv', '.webm', '.flv', '.wmv', '.mpeg', '.mpg', '.m4v',
+  'image/*', 'audio/*', 'video/*',
+].join(',');
+
+const TEXT_EXTENSIONS = new Set(['txt', 'md', 'csv', 'json', 'js', 'ts', 'html', 'css', 'xml', 'svg', 'rtf']);
+
+const isTextKnowledgeFile = (file: File): boolean => {
+  if (file.type.startsWith('text/')) return true;
+  const ext = file.name.split('.').pop()?.toLowerCase() || '';
+  return TEXT_EXTENSIONS.has(ext) ||
+    ['application/json', 'application/javascript', 'text/csv', 'image/svg+xml'].includes(file.type);
+};
+
+const formatFileSize = (bytes: number): string => {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
 
 interface AdminDashboardProps {
   onLogout: () => void;
@@ -36,6 +61,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const [localApiConfigs, setLocalApiConfigs] = useState<ApiConfig[]>([]);
   const [kbFiles, setKbFiles] = useState<KnowledgeFile[]>([]);
   const [proxyUrl, setProxyUrl] = useState('https://corshub.org/api/proxy?');
+  const [qwenApiKey, setQwenApiKey] = useState('');
+  const [qwenBaseUrl, setQwenBaseUrl] = useState('');
+  const [qwenModelId, setQwenModelId] = useState('qwen-max');
+  const [defaultAIModel, setDefaultAIModel] = useState<'qwen' | 'gemini' | 'auto'>('qwen');
+  const [testingApiId, setTestingApiId] = useState<string | null>(null);
+  const [isTestingQwen, setIsTestingQwen] = useState(false);
   
   // GitHub Cloud State
   const [ghToken, setGhToken] = useState(localStorage.getItem('trade_scout_gh_token') || '');
@@ -44,9 +75,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const [isCloudConnected, setIsCloudConnected] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [ytLink, setYtLink] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
 
   useEffect(() => {
-    // Load local API configs
     const stored = localStorage.getItem('trade_scout_api_configs');
     if (stored) {
       try {
@@ -56,21 +87,119 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
       }
     }
 
-    // Load KB files from DB
+    const savedProxy = localStorage.getItem('trade_scout_custom_proxy');
+    if (savedProxy) setProxyUrl(savedProxy);
+
+    const savedModel = localStorage.getItem('trade_scout_default_ai_model') as 'qwen' | 'gemini' | 'auto' | null;
+    if (savedModel) setDefaultAIModel(savedModel);
+    else if (env.defaultAIModel) setDefaultAIModel(env.defaultAIModel);
+
+    const loadQwenKey = async () => {
+      const localKey = localStorage.getItem('trade_scout_qwen_api_key');
+      const localBase = localStorage.getItem('trade_scout_qwen_base_url');
+      const localModel = localStorage.getItem('trade_scout_qwen_model_id');
+      if (localKey) setQwenApiKey(localKey);
+      if (localBase) setQwenBaseUrl(localBase);
+      if (localModel) setQwenModelId(localModel);
+
+      const cloudConfig = await getApiConfig('qwen');
+      if (cloudConfig?.apiKey) setQwenApiKey(cloudConfig.apiKey);
+      if (cloudConfig?.baseUrl) setQwenBaseUrl(cloudConfig.baseUrl);
+      if (cloudConfig?.modelId) setQwenModelId(cloudConfig.modelId);
+
+      if (!localKey && !cloudConfig?.apiKey && env.qwenApiKey) {
+        setQwenApiKey(env.qwenApiKey);
+      }
+      if (!localBase && !cloudConfig?.baseUrl && env.qwenBaseUrl) {
+        setQwenBaseUrl(env.qwenBaseUrl);
+      }
+      if (!localModel && !cloudConfig?.modelId && env.qwenModelId) {
+        setQwenModelId(env.qwenModelId);
+      }
+    };
+    loadQwenKey();
+
     const loadKB = async () => {
+      if (isSupabaseConfigured()) {
+        const cloudFiles = await getKnowledgeFiles();
+        for (const f of cloudFiles) {
+          await saveFileToDB(f);
+        }
+      }
       const files = await getAllFilesFromDB();
       setKbFiles(files);
     };
     loadKB();
 
-    // Check cloud status
     const status = checkGitHubStatus();
     setIsCloudConnected(status.ok);
   }, []);
 
-  const handleSaveApiConfigs = () => {
+  const updateApiConfig = (idx: number, field: keyof ApiConfig, value: string | number) => {
+    setLocalApiConfigs(prev => {
+      const next = [...prev];
+      next[idx] = { ...next[idx], [field]: value };
+      return next;
+    });
+  };
+
+  const handleSaveApiConfigs = async () => {
     localStorage.setItem('trade_scout_api_configs', JSON.stringify(localApiConfigs));
-    alert('API 配置已保存到本地浏览器 (API Configs saved locally)');
+    localStorage.setItem('trade_scout_default_ai_model', defaultAIModel);
+    if (qwenApiKey.trim()) {
+      localStorage.setItem('trade_scout_qwen_api_key', qwenApiKey.trim());
+    }
+    if (qwenBaseUrl.trim()) {
+      localStorage.setItem('trade_scout_qwen_base_url', qwenBaseUrl.trim());
+    }
+    if (qwenModelId.trim()) {
+      localStorage.setItem('trade_scout_qwen_model_id', qwenModelId.trim());
+    }
+
+    if (qwenApiKey.trim() && isSupabaseConfigured()) {
+      await saveApiConfig({
+        provider: 'qwen',
+        apiKey: qwenApiKey.trim(),
+        baseUrl: qwenBaseUrl.trim() || undefined,
+        modelId: qwenModelId.trim() || 'qwen-max',
+      });
+    }
+
+    alert('API 配置已保存 (本地 + 云端 Qwen)');
+  };
+
+  const handleSaveProxy = () => {
+    localStorage.setItem('trade_scout_custom_proxy', proxyUrl);
+    alert('代理地址已保存');
+  };
+
+  const handleTestQwen = async (testSearch = false) => {
+    if (!qwenApiKey.trim()) {
+      alert('请先填写 Qwen API Key');
+      return;
+    }
+    setIsTestingQwen(true);
+    try {
+      const result = await testQwenApiKey(qwenApiKey, qwenBaseUrl, qwenModelId, testSearch);
+      alert(result.message);
+    } finally {
+      setIsTestingQwen(false);
+    }
+  };
+
+  const handleTestApi = async (api: ApiConfig) => {
+    if (!api.apiKey?.trim()) {
+      alert('请先填写 API Key');
+      return;
+    }
+    setTestingApiId(api.id);
+    try {
+      const baseUrl = api.baseUrl?.includes('generativelanguage.googleapis.com') ? 'native' : api.baseUrl;
+      const result = await testApiKey(api.apiKey, baseUrl, api.modelId);
+      alert(result.message);
+    } finally {
+      setTestingApiId(null);
+    }
   };
 
   const handleAddApi = () => {
@@ -91,7 +220,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
       next[idx].baseUrl = 'https://hiapi.online/';
       next[idx].modelId = 'gemini-3-flash';
     } else if (type === 'google') {
-      next[idx].baseUrl = 'https://generativelanguage.googleapis.com/';
+      next[idx].baseUrl = 'native';
       next[idx].modelId = 'gemini-1.5-flash';
     } else if (type === 'siliconflow') {
       next[idx].baseUrl = 'https://api.siliconflow.cn/v1';
@@ -145,18 +274,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
           }
         }
 
-        // 4. Sync Knowledge Base
-        const cloudFiles = await fetchDocumentsFromRepo();
-        if (cloudFiles && cloudFiles.length > 0) {
-          if (confirm(`发现云端知识库文件 (${cloudFiles.length} 个)，是否同步到本地数据库？`)) {
-            for (const f of cloudFiles) {
-              await saveFileToDB(f);
-            }
-            const allFiles = await getAllFilesFromDB();
-            setKbFiles(allFiles);
-          }
-        }
-        
         alert('云端连接成功并已同步数据！');
       } else {
         alert('连接失败，请检查 Token 或仓库信息。');
@@ -196,12 +313,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
+    if (!isSupabaseConfigured()) {
+      alert('Supabase 未配置，无法上传。请在 .env.local 中设置 REACT_APP_SUPABASE_URL 和 REACT_APP_SUPABASE_ANON_KEY。');
+      e.target.value = '';
+      return;
+    }
+
+    setIsUploading(true);
     try {
+      let successCount = 0;
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        const isText = file.type.startsWith('text/') || 
-                       ['application/json', 'application/javascript', 'text/csv'].includes(file.type) ||
-                       file.name.endsWith('.md') || file.name.endsWith('.txt');
+        const isText = isTextKnowledgeFile(file);
 
         const content = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader();
@@ -221,23 +344,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
         });
 
         const newFile: KnowledgeFile = {
-          id: Math.random().toString(36).substr(2, 9),
+          id: crypto.randomUUID(),
           name: file.name,
           size: file.size,
           data: content,
-          type: file.name.split('.').pop()?.toLowerCase() || 'txt',
+          type: file.name.split('.').pop()?.toLowerCase() || 'bin',
           mimeType: file.type || 'application/octet-stream'
         };
 
+        const saved = await saveKnowledgeFile(newFile);
+        if (!saved) {
+          alert(`文件 ${file.name} 上传到 Supabase 失败，请检查控制台。`);
+          continue;
+        }
         await saveFileToDB(newFile);
+        successCount++;
       }
       const allFiles = await getAllFilesFromDB();
       setKbFiles(allFiles);
-      alert('所有文件上传成功！');
+      if (successCount > 0) {
+        alert(`已成功上传 ${successCount} 个文件到 Supabase 云端！`);
+      }
       e.target.value = '';
     } catch (err) {
       console.error("Upload process error:", err);
       alert('文件处理失败');
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -248,7 +381,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
       return;
     }
     const newFile: KnowledgeFile = {
-      id: Math.random().toString(36).substr(2, 9),
+      id: crypto.randomUUID(),
       name: `YouTube: ${ytLink.split('v=')[1]?.split('&')[0] || ytLink.split('/').pop()}`,
       size: 0,
       data: ytLink,
@@ -256,6 +389,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
       mimeType: 'text/x-uri'
     };
     await saveFileToDB(newFile);
+    if (isSupabaseConfigured()) {
+      await saveKnowledgeFile(newFile);
+    } else {
+      alert('Supabase 未配置，链接仅保存到本地。');
+    }
     const allFiles = await getAllFilesFromDB();
     setKbFiles(allFiles);
     setYtLink('');
@@ -265,25 +403,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const handleDeleteFile = async (id: string) => {
     if (confirm('确定要删除这个文件吗？')) {
       await deleteFileFromDB(id);
+      if (isSupabaseConfigured()) {
+        await deleteKnowledgeFile(id);
+      }
       const allFiles = await getAllFilesFromDB();
       setKbFiles(allFiles);
-    }
-  };
-
-  const handleSyncKBToCloud = async () => {
-    if (!isCloudConnected) {
-      alert('请先连接 GitHub (Please connect GitHub first)');
-      return;
-    }
-    setIsSyncing(true);
-    try {
-      await saveKnowledgeBaseToCloud(kbFiles);
-      alert('知识库已同步到 GitHub 仓库！');
-    } catch (e) {
-      console.error(e);
-      alert('同步失败');
-    } finally {
-      setIsSyncing(false);
     }
   };
 
@@ -344,7 +468,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     <h3 className="text-2xl font-black text-slate-800 flex items-center gap-2">
                       <Key className="text-blue-600" /> API 密钥配置池
                     </h3>
-                    <p className="text-sm text-slate-400 font-bold mt-1">本地安全存储 (LocalStorage Only) - 密钥不会上传到云端</p>
+                    <p className="text-sm text-slate-400 font-bold mt-1">国内千问 API — 支持联网搜索、背景调查、PPT 导出等全部功能</p>
                   </div>
                   <button onClick={handleSaveApiConfigs} className="bg-slate-900 hover:bg-slate-800 text-white px-6 py-3 rounded-xl font-black flex items-center gap-2 shadow-lg">
                     <Save size={20} /> 保存配置
@@ -352,6 +476,83 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                   <button onClick={handleAddApi} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-black flex items-center gap-2 shadow-lg shadow-blue-100">
                     <Plus size={20} /> 添加新密钥
                   </button>
+                </div>
+
+                {/* Qwen + Supabase */}
+                <div className="bg-emerald-50/50 border border-emerald-100 rounded-2xl p-6 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-emerald-800 font-black text-sm">
+                      <Database size={16} /> 千问 / Supabase 配置（国内大模型）
+                    </div>
+                    <span className={`px-3 py-1 rounded-full text-[10px] font-black ${isSupabaseConfigured() ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                      {isSupabaseConfigured() ? 'Supabase 已连接' : 'Supabase 未配置'}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">AI 引擎</label>
+                      <select
+                        value={defaultAIModel}
+                        onChange={e => setDefaultAIModel(e.target.value as 'qwen' | 'gemini' | 'auto')}
+                        className="w-full bg-white border border-emerald-100 rounded-xl px-4 py-3 font-bold text-sm"
+                      >
+                        <option value="qwen">千问（推荐，国内联网搜索）</option>
+                        <option value="auto">自动（千问优先，Gemini 备用）</option>
+                        <option value="gemini">Gemini（备用，需额外付费）</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Qwen 模型 ID</label>
+                      <input
+                        type="text"
+                        value={qwenModelId}
+                        onChange={e => setQwenModelId(e.target.value)}
+                        placeholder="qwen-max / qwen-plus / qwen-turbo"
+                        className="w-full bg-white border border-emerald-100 rounded-xl px-4 py-3 font-bold text-sm"
+                      />
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Qwen API Key</label>
+                      <input
+                        type="password"
+                        value={qwenApiKey}
+                        onChange={e => setQwenApiKey(e.target.value)}
+                        placeholder="sk-ws-... (MaaS 工作空间 Key)"
+                        className="w-full bg-white border border-emerald-100 rounded-xl px-4 py-3 font-bold text-sm"
+                      />
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">API Base URL（OpenAI 兼容地址）</label>
+                      <input
+                        type="text"
+                        value={qwenBaseUrl}
+                        onChange={e => setQwenBaseUrl(e.target.value)}
+                        placeholder="https://ws-xxx.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+                        className="w-full bg-white border border-emerald-100 rounded-xl px-4 py-3 font-bold text-sm"
+                      />
+                      <p className="text-[10px] text-slate-400 font-bold mt-2">
+                        联网搜索、客户搜索、深度调查均走千问 enable_search。建议使用 qwen-plus 或 qwen-max。
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex justify-end gap-3">
+                    <button
+                      onClick={() => handleTestQwen(false)}
+                      disabled={isTestingQwen}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-3 rounded-xl font-black flex items-center gap-2 disabled:opacity-50"
+                    >
+                      {isTestingQwen ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} fill="currentColor" />}
+                      测试连接
+                    </button>
+                    <button
+                      onClick={() => handleTestQwen(true)}
+                      disabled={isTestingQwen}
+                      className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-black flex items-center gap-2 disabled:opacity-50"
+                    >
+                      {isTestingQwen ? <Loader2 size={16} className="animate-spin" /> : <Globe size={16} />}
+                      测试联网搜索
+                    </button>
+                  </div>
                 </div>
 
                 {/* Recommended Sources */}
@@ -384,7 +585,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                         className="flex-1 bg-transparent border-none focus:ring-0 text-xs font-bold text-slate-600"
                       />
                     </div>
-                    <button className="bg-blue-600 text-white px-6 py-2 rounded-lg text-xs font-black">Save Proxy</button>
+                    <button onClick={handleSaveProxy} className="bg-blue-600 text-white px-6 py-2 rounded-lg text-xs font-black">Save Proxy</button>
                   </div>
                 </div>
 
@@ -419,31 +620,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                       <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-6 gap-6">
                         <div>
                           <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">优先级 (Priority)</label>
-                          <input type="number" value={api.priority} className="w-full bg-slate-50 border-slate-100 rounded-xl px-4 py-3 font-bold text-sm" />
+                          <input type="number" value={api.priority ?? 2} onChange={e => updateApiConfig(idx, 'priority', parseInt(e.target.value) || 2)} className="w-full bg-slate-50 border-slate-100 rounded-xl px-4 py-3 font-bold text-sm" />
                         </div>
                         <div className="lg:col-span-1">
                           <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">任务分配 (Task)</label>
-                          <select value={api.taskAssignment} className="w-full bg-slate-50 border-slate-100 rounded-xl px-4 py-3 font-bold text-xs appearance-none">
+                          <select value={api.taskAssignment || 'default'} onChange={e => updateApiConfig(idx, 'taskAssignment', e.target.value)} className="w-full bg-slate-50 border-slate-100 rounded-xl px-4 py-3 font-bold text-xs appearance-none">
+                            <option value="default">默认 (Default)</option>
                             <option value="email">开发信撰写 (Email)</option>
                             <option value="search">客户搜索 (Search)</option>
                             <option value="analysis">深度分析 (Analysis)</option>
+                            <option value="chat">策略对话 (Chat)</option>
+                            <option value="keywords">关键词提取 (Keywords)</option>
                           </select>
                         </div>
                         <div className="lg:col-span-1">
                           <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">代理地址 (Base URL)</label>
-                          <input type="text" value={api.baseUrl} className="w-full bg-slate-50 border-slate-100 rounded-xl px-4 py-3 font-bold text-[10px]" />
+                          <input type="text" value={api.baseUrl} onChange={e => updateApiConfig(idx, 'baseUrl', e.target.value)} className="w-full bg-slate-50 border-slate-100 rounded-xl px-4 py-3 font-bold text-[10px]" />
                         </div>
                         <div className="lg:col-span-1">
                           <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">API 密钥 (Key)</label>
-                          <input type="password" value={api.apiKey} className="w-full bg-slate-50 border-slate-100 rounded-xl px-4 py-3 font-bold text-sm" placeholder="••••••••••••" />
+                          <input type="password" value={api.apiKey} onChange={e => updateApiConfig(idx, 'apiKey', e.target.value)} className="w-full bg-slate-50 border-slate-100 rounded-xl px-4 py-3 font-bold text-sm" placeholder="••••••••••••" />
                         </div>
                         <div className="lg:col-span-1">
                           <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">模型 ID (Model)</label>
-                          <input type="text" value={api.modelId} className="w-full bg-slate-50 border-slate-100 rounded-xl px-4 py-3 font-bold text-xs" />
+                          <input type="text" value={api.modelId || ''} onChange={e => updateApiConfig(idx, 'modelId', e.target.value)} className="w-full bg-slate-50 border-slate-100 rounded-xl px-4 py-3 font-bold text-xs" />
                         </div>
                         <div className="flex items-end">
-                           <button className="w-full bg-slate-900 text-white p-3 rounded-xl hover:bg-blue-600 transition-all">
-                              <Play size={16} fill="currentColor" />
+                           <button onClick={() => handleTestApi(api)} disabled={testingApiId === api.id} className="w-full bg-slate-900 text-white p-3 rounded-xl hover:bg-blue-600 transition-all disabled:opacity-50">
+                              {testingApiId === api.id ? <Loader2 size={16} className="animate-spin mx-auto" /> : <Play size={16} fill="currentColor" className="mx-auto" />}
                            </button>
                         </div>
                       </div>
@@ -577,86 +781,46 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                   </h3>
                 </div>
 
-                <div className="bg-white border border-slate-100 rounded-[32px] p-8 shadow-sm space-y-8">
-                  <div className="flex items-center gap-2 text-slate-800 font-black mb-2">
-                    <Github size={18} className="text-slate-400" /> GITHUB REPOSITORY CONNECTION
+                <div className="bg-white border border-slate-100 rounded-[32px] p-8 shadow-sm">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-2 text-slate-800 font-black">
+                      <Database size={18} className="text-emerald-600" /> SUPABASE 云端知识库
+                    </div>
+                    <span className={`px-3 py-1 rounded-full text-[10px] font-black ${isSupabaseConfigured() ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                      {isSupabaseConfigured() ? 'Supabase 已连接' : 'Supabase 未配置'}
+                    </span>
                   </div>
-                  
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                    <div>
-                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">OWNER</label>
-                      <input 
-                        type="text" 
-                        placeholder="e.g. NanGe" 
-                        value={ghOwner}
-                        onChange={e => setGhOwner(e.target.value)}
-                        className="w-full bg-[#1E293B] border-none rounded-xl px-4 py-3 text-white font-bold text-sm" 
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">REPOSITORY</label>
-                      <input 
-                        type="text" 
-                        placeholder="e.g. knowledge-base" 
-                        value={ghRepo}
-                        onChange={e => setGhRepo(e.target.value)}
-                        className="w-full bg-[#1E293B] border-none rounded-xl px-4 py-3 text-white font-bold text-sm" 
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">PATH</label>
-                      <input type="text" placeholder="e.g. docs" className="w-full bg-[#1E293B] border-none rounded-xl px-4 py-3 text-white font-bold text-sm" />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">TOKEN</label>
-                      <input 
-                        type="password" 
-                        placeholder="ghp_..." 
-                        value={ghToken}
-                        onChange={e => setGhToken(e.target.value)}
-                        className="w-full bg-[#1E293B] border-none rounded-xl px-4 py-3 text-white font-bold text-sm" 
-                      />
-                    </div>
-                  </div>
-                  
-                  <div className="flex justify-end">
-                    <button 
-                      onClick={handleConnectCloud}
-                      className="bg-[#A855F7] hover:bg-[#9333EA] text-white px-10 py-4 rounded-2xl font-black flex items-center gap-2 shadow-lg shadow-purple-100 transition-all"
-                    >
-                      <RefreshCw size={20} /> Update Connection
-                    </button>
+                  <p className="text-sm text-slate-500 font-medium mb-4">
+                    上传的文件将直接保存到 Supabase 云端，支持 Word、Excel、PPT、PDF、图片、音频、视频等全部常见格式。
+                  </p>
+                  <div className="flex flex-wrap gap-2 text-[10px] font-bold text-slate-400">
+                    {['PDF', 'Word', 'Excel', 'PPT', '图片', '音频', '视频', 'TXT/MD'].map(tag => (
+                      <span key={tag} className="bg-slate-50 border border-slate-100 px-2 py-1 rounded-lg">{tag}</span>
+                    ))}
                   </div>
                 </div>
 
                 <div className="space-y-6">
                   <div className="flex justify-between items-center">
                     <div className="text-lg font-black text-slate-800">
-                      Active Files: <span className="text-blue-600">{kbFiles.length}</span>
+                      云端文件: <span className="text-blue-600">{kbFiles.length}</span>
                     </div>
-                    <div className="flex items-center gap-4">
-                      <button 
-                        onClick={handleSyncKBToCloud}
-                        disabled={isSyncing || kbFiles.length === 0}
-                        className="text-purple-600 font-black text-sm flex items-center gap-1 hover:underline disabled:opacity-30"
-                      >
-                        <Cloud size={16} /> Push to GitHub
-                      </button>
-                      <label 
-                        htmlFor="kb-upload-input"
-                        className="text-blue-600 font-black text-sm flex items-center gap-1 hover:underline cursor-pointer"
-                      >
-                        <Plus size={16} /> Upload Local
-                      </label>
-                      <input 
-                        id="kb-upload-input"
-                        type="file" 
-                        multiple
-                        onChange={handleFileUpload} 
-                        className="sr-only" 
-                        accept=".txt,.md,.json,.csv,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.mp3,.wav,.mp4,.mov"
-                      />
-                    </div>
+                    <label 
+                      htmlFor="kb-upload-input"
+                      className={`bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl font-black text-sm flex items-center gap-2 cursor-pointer transition-all ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}
+                    >
+                      {isUploading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+                      {isUploading ? '上传中...' : '上传到 Supabase'}
+                    </label>
+                    <input 
+                      id="kb-upload-input"
+                      type="file" 
+                      multiple
+                      onChange={handleFileUpload} 
+                      className="sr-only" 
+                      accept={KB_ACCEPT}
+                      disabled={isUploading}
+                    />
                   </div>
 
                   {/* YouTube Link Input */}
@@ -685,20 +849,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     {kbFiles.length > 0 ? kbFiles.map((file, i) => {
                       const getFileIcon = () => {
                         const t = file.type.toLowerCase();
-                        if (['mp3', 'wav', 'm4a'].includes(t)) return <Music size={20} />;
-                        if (['mp4', 'mov', 'avi'].includes(t)) return <Video size={20} />;
+                        if (['mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac', 'wma'].includes(t)) return <Music size={20} />;
+                        if (['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'mpeg', 'mpg', 'm4v'].includes(t)) return <Video size={20} />;
+                        if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tiff', 'tif', 'ico', 'heic', 'avif'].includes(t)) return <Image size={20} />;
                         if (['pdf', 'doc', 'docx'].includes(t)) return <FileText size={20} />;
                         if (['xls', 'xlsx', 'csv'].includes(t)) return <FileSpreadsheet size={20} />;
                         if (['ppt', 'pptx'].includes(t)) return <FilePieChart size={20} />;
                         if (['json', 'js', 'ts', 'html', 'css'].includes(t)) return <FileCode size={20} />;
                         if (t === 'youtube') return <Youtube size={20} />;
+                        if (t === 'svg') return <Image size={20} />;
                         return <FileText size={20} />;
                       };
 
                       const getIconBg = () => {
                         const t = file.type.toLowerCase();
-                        if (['mp3', 'wav', 'm4a'].includes(t)) return 'bg-purple-600';
-                        if (['mp4', 'mov', 'avi'].includes(t)) return 'bg-indigo-600';
+                        if (['mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac', 'wma'].includes(t)) return 'bg-purple-600';
+                        if (['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'mpeg', 'mpg', 'm4v'].includes(t)) return 'bg-indigo-600';
+                        if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tiff', 'tif', 'ico', 'heic', 'avif', 'svg'].includes(t)) return 'bg-pink-600';
                         if (['pdf', 'doc', 'docx'].includes(t)) return 'bg-red-600';
                         if (['xls', 'xlsx', 'csv'].includes(t)) return 'bg-green-600';
                         if (['ppt', 'pptx'].includes(t)) return 'bg-orange-600';
@@ -714,7 +881,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                           <div className="flex-1 min-w-0">
                             <div className="text-xs font-black text-slate-800 truncate">{file.name}</div>
                             <div className="text-[10px] text-slate-400 font-bold mt-1">
-                              {file.type === 'youtube' ? 'Video Link' : `${(file.size / 1024).toFixed(1)} KB`}
+                              {file.type === 'youtube' ? 'Video Link' : formatFileSize(file.size)}
                             </div>
                           </div>
                           <button 
