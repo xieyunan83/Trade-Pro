@@ -18,8 +18,7 @@ import {
 import { getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/db';
 import { testApiKey, testQwenApiKey } from '../services/geminiService';
 import { saveApiConfig, getApiConfig, isSupabaseConfigured, saveKnowledgeFile, getKnowledgeFiles, deleteKnowledgeFile, resetSupabaseClient } from '../services/supabase';
-import { getRuntimeConfig, saveSupabaseConfig, initRuntimeConfig, clearSupabaseConfigCache } from '../services/runtimeConfig';
-import { env } from '../services/env';
+import { getSupabaseConfig, saveSupabaseConfig, clearSupabaseOverride, env } from '../services/env';
 
 const KB_ACCEPT = [
   '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
@@ -68,6 +67,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const [defaultAIModel, setDefaultAIModel] = useState<'qwen' | 'gemini' | 'auto'>('qwen');
   const [supabaseUrl, setSupabaseUrl] = useState('');
   const [supabaseAnonKey, setSupabaseAnonKey] = useState('');
+  const [supabaseReady, setSupabaseReady] = useState(isSupabaseConfigured());
   const [testingApiId, setTestingApiId] = useState<string | null>(null);
   const [isTestingQwen, setIsTestingQwen] = useState(false);
   
@@ -122,9 +122,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     };
     loadQwenKey();
 
-    const runtimeCfg = getRuntimeConfig();
-    setSupabaseUrl(runtimeCfg.supabaseUrl);
-    setSupabaseAnonKey(runtimeCfg.supabaseAnonKey);
+    const sb = getSupabaseConfig();
+    setSupabaseUrl(sb.url);
+    setSupabaseAnonKey(sb.key);
+    setSupabaseReady(isSupabaseConfigured());
 
     const loadKB = async () => {
       if (isSupabaseConfigured()) {
@@ -157,10 +158,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     }
     saveSupabaseConfig(supabaseUrl, supabaseAnonKey);
     resetSupabaseClient();
-    clearSupabaseConfigCache();
-    await initRuntimeConfig();
+    setSupabaseReady(true);
     alert('Supabase 配置已保存，页面将刷新以同步云端数据');
     window.location.reload();
+  };
+
+  const handleResetSupabaseOverride = () => {
+    clearSupabaseOverride();
+    resetSupabaseClient();
+    const sb = getSupabaseConfig();
+    setSupabaseUrl(sb.url);
+    setSupabaseAnonKey(sb.key);
+    setSupabaseReady(isSupabaseConfigured());
+    alert('已恢复为 .env.local / bakedConfig 中的默认 Supabase 配置');
   };
 
   const handleSaveApiConfigs = async () => {
@@ -334,7 +344,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     if (!files || files.length === 0) return;
 
     if (!isSupabaseConfigured()) {
-      alert('Supabase 未配置，无法上传。请在管理后台填写 Supabase 连接，或确保 app-config.json 已配置。');
+      alert('Supabase 未配置。请在项目根目录 .env.local 中设置 REACT_APP_SUPABASE_URL 和 REACT_APP_SUPABASE_ANON_KEY，然后重启 npm run dev。');
       e.target.value = '';
       return;
     }
@@ -504,8 +514,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     <div className="flex items-center gap-2 text-emerald-800 font-black text-sm">
                       <Database size={16} /> 千问 / Supabase 配置（国内大模型）
                     </div>
-                    <span className={`px-3 py-1 rounded-full text-[10px] font-black ${isSupabaseConfigured() ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
-                      {isSupabaseConfigured() ? 'Supabase 已连接' : 'Supabase 未配置'}
+                    <span className={`px-3 py-1 rounded-full text-[10px] font-black ${supabaseReady ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                      {supabaseReady ? 'Supabase 已连接' : 'Supabase 未配置'}
                     </span>
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -551,10 +561,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                         className="w-full bg-white border border-emerald-100 rounded-xl px-4 py-3 font-bold text-sm"
                       />
                       <p className="text-[10px] text-slate-400 font-bold mt-2">
-                        GitHub / AI Studio 挂载版无 .env.local，需在此配置或通过 app-config.json 提供。Anon Key 可公开，由 RLS 保护数据。
+                        Cursor 本地开发：在项目根目录 .env.local 中配置即可自动连接。此处仅用于手动覆盖。
                       </p>
                     </div>
-                    <div className="md:col-span-2 flex justify-end">
+                    <div className="md:col-span-2 flex justify-end gap-3">
+                      <button
+                        type="button"
+                        onClick={handleResetSupabaseOverride}
+                        className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-6 py-3 rounded-xl font-black"
+                      >
+                        恢复默认配置
+                      </button>
                       <button
                         onClick={handleSaveSupabaseConfig}
                         className="bg-slate-800 hover:bg-slate-900 text-white px-6 py-3 rounded-xl font-black flex items-center gap-2"
@@ -837,8 +854,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     <div className="flex items-center gap-2 text-slate-800 font-black">
                       <Database size={18} className="text-emerald-600" /> SUPABASE 云端知识库
                     </div>
-                    <span className={`px-3 py-1 rounded-full text-[10px] font-black ${isSupabaseConfigured() ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
-                      {isSupabaseConfigured() ? 'Supabase 已连接' : 'Supabase 未配置'}
+                    <span className={`px-3 py-1 rounded-full text-[10px] font-black ${supabaseReady ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                      {supabaseReady ? 'Supabase 已连接' : 'Supabase 未配置'}
                     </span>
                   </div>
                   <p className="text-sm text-slate-500 font-medium mb-4">

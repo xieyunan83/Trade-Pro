@@ -1,8 +1,8 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { KnowledgeFile, HistoryItem, DiscoveryState, Client } from '../types'
-import { getRuntimeConfig, isSupabaseConfigured, clearSupabaseConfigCache } from './runtimeConfig'
+import { getSupabaseConfig, isSupabaseConfigured } from './env'
 
-export { isSupabaseConfigured, clearSupabaseConfigCache }
+export { isSupabaseConfigured }
 
 export interface ApiConfig {
   provider: string
@@ -41,10 +41,10 @@ let supabaseClient: SupabaseClient | null = null;
 
 export const getSupabaseClient = (): SupabaseClient => {
   if (!supabaseClient) {
-    const cfg = getRuntimeConfig();
+    const { url, key } = getSupabaseConfig();
     supabaseClient = createClient(
-      cfg.supabaseUrl || 'https://placeholder.supabase.co',
-      cfg.supabaseAnonKey || 'placeholder'
+      url || 'https://placeholder.supabase.co',
+      key || 'placeholder'
     );
   }
   return supabaseClient;
