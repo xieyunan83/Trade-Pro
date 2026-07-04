@@ -20,7 +20,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({ data
 
   return (
     <div className="space-y-8 animate-fade-in">
-      <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
+      <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
         <h3 className="text-2xl font-black text-slate-800 mb-6 flex items-center gap-2">
           <Users className="text-blue-600" /> 关键决策人挖掘 (Decision Makers)
         </h3>

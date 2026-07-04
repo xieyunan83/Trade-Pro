@@ -11,7 +11,7 @@ import { getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/d
 import { testApiKey, testQwenApiKey } from '../services/geminiService';
 import { saveApiConfig, getApiConfig, isSupabaseConfigured, saveKnowledgeFile, getKnowledgeFiles, deleteKnowledgeFile, resetSupabaseClient } from '../services/supabase';
 import { getSupabaseConfig, saveSupabaseConfig, clearSupabaseOverride, saveEmailSearchKeys, getEmailSearchKeys, env } from '../services/env';
-import { hashPassword } from '../services/auth';
+import { hashPassword, saveUsersToStorage, findUserByName, updateUserPassword } from '../services/auth';
 
 type AdminTab = 'api' | 'users' | 'kb';
 
@@ -289,7 +289,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const handleDeleteUser = (username: string) => {
     if (username === 'admin') return;
     if (confirm(`确定要删除用户 ${username} 吗？`)) {
-      setUsers(users.filter(u => u.username !== username));
+      const next = users.filter(u => u.username !== username);
+      setUsers(next);
+      saveUsersToStorage(next);
     }
   };
 
@@ -297,7 +299,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     const username = prompt('请输入新用户名:');
     if (!username?.trim()) return;
     const trimmed = username.trim();
-    if (users.find(u => u.username === trimmed)) {
+    if (findUserByName(users, trimmed)) {
       alert('该用户名已存在');
       return;
     }
@@ -313,7 +315,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
       isFirstLogin: true,
       createdAt: Date.now()
     };
-    setUsers([...users, newUser]);
+    const next = [...users, newUser];
+    setUsers(next);
+    saveUsersToStorage(next);
+    alert(`用户 ${trimmed} 已创建，请使用刚设置的密码登录`);
   };
 
   const handleResetPassword = async (username: string) => {
@@ -323,8 +328,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
       return;
     }
     const hashed = await hashPassword(pwd);
-    setUsers(prev => prev.map(u => u.username === username ? { ...u, password: hashed } : u));
-    alert(`已重置 ${username} 的密码`);
+    const next = updateUserPassword(users, username, hashed);
+    setUsers(next);
+    saveUsersToStorage(next);
+    alert(`已重置 ${username} 的密码，请用新密码登录`);
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -430,25 +437,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   };
 
   return (
-    <div className="min-h-screen bg-[#F0F2F5] flex flex-col">
+    <div className="min-h-screen min-h-[100dvh] bg-[#F0F2F5] flex flex-col">
       {/* Header */}
-      <header className="bg-[#0F172A] text-white px-8 py-4 flex justify-between items-center shadow-lg">
+      <header className="bg-[#0F172A] text-white px-4 sm:px-8 py-3 sm:py-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 shadow-lg">
         <div className="flex items-center gap-3">
           <div className="bg-blue-600 p-2 rounded-lg">
-            <Shield size={24} />
+            <Shield size={22} className="sm:w-6 sm:h-6" />
           </div>
           <div>
-            <h1 className="text-lg font-black tracking-tight">管理员控制台 (Admin Console)</h1>
+            <h1 className="text-base sm:text-lg font-black tracking-tight">管理员控制台</h1>
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">System Management</p>
           </div>
         </div>
-        <div className="flex items-center gap-6">
-          <div className="text-sm font-bold">
+        <div className="flex items-center gap-4 w-full sm:w-auto justify-between sm:justify-end">
+          <div className="text-sm font-bold truncate">
             当前登录: <span className="text-blue-400">{currentUser.username}</span>
           </div>
           <button 
             onClick={onLogout}
-            className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg text-sm font-black flex items-center gap-2 transition-all"
+            className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg text-sm font-black flex items-center gap-2 transition-all touch-manipulation flex-shrink-0"
           >
             <LogOut size={16} /> 退出登录
           </button>
@@ -456,42 +463,45 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 p-8 max-w-7xl mx-auto w-full">
-        <div className="bg-white rounded-[32px] shadow-xl overflow-hidden border border-white">
+      <main className="flex-1 p-4 sm:p-6 md:p-8 max-w-7xl mx-auto w-full">
+        <div className="bg-white rounded-2xl sm:rounded-[32px] shadow-xl overflow-hidden border border-white">
           {/* Tabs */}
-          <div className="flex border-b bg-slate-50/50">
+          <div className="flex border-b bg-slate-50/50 overflow-x-auto scrollbar-hide">
             {([
-              { id: 'api' as AdminTab, label: 'API 密钥配置 (API Keys)', icon: Key },
-              { id: 'users' as AdminTab, label: '用户管理', icon: Users },
-              { id: 'kb' as AdminTab, label: '知识库', icon: Database },
+              { id: 'api' as AdminTab, label: 'API 密钥配置', short: 'API', icon: Key },
+              { id: 'users' as AdminTab, label: '用户管理', short: '用户', icon: Users },
+              { id: 'kb' as AdminTab, label: '知识库', short: '知识库', icon: Database },
             ]).map(tab => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex-1 py-6 flex items-center justify-center gap-2 font-black text-sm transition-all border-b-4 ${activeTab === tab.id ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+                className={`flex-1 min-w-[120px] py-4 sm:py-6 px-3 sm:px-4 flex items-center justify-center gap-2 font-black text-xs sm:text-sm transition-all border-b-4 whitespace-nowrap touch-manipulation ${activeTab === tab.id ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
               >
                 <tab.icon size={18} />
-                <span>{tab.label}</span>
+                <span className="hidden sm:inline">{tab.label}</span>
+                <span className="sm:hidden">{tab.short}</span>
               </button>
             ))}
           </div>
 
-          <div className="p-10">
+          <div className="p-4 sm:p-6 md:p-10">
             {activeTab === 'api' && (
               <div className="space-y-8 animate-fade-in">
-                <div className="flex justify-between items-center">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                   <div>
-                    <h3 className="text-2xl font-black text-slate-800 flex items-center gap-2">
+                    <h3 className="text-xl sm:text-2xl font-black text-slate-800 flex items-center gap-2">
                       <Key className="text-blue-600" /> API 密钥配置池
                     </h3>
-                    <p className="text-sm text-slate-400 font-bold mt-1">国内千问 API — 支持联网搜索、背景调查、PPT 导出等全部功能</p>
+                    <p className="text-xs sm:text-sm text-slate-400 font-bold mt-1">国内千问 API — 支持联网搜索、背景调查、PPT 导出等全部功能</p>
                   </div>
-                  <button onClick={handleSaveApiConfigs} className="bg-slate-900 hover:bg-slate-800 text-white px-6 py-3 rounded-xl font-black flex items-center gap-2 shadow-lg">
+                  <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+                  <button onClick={handleSaveApiConfigs} className="bg-slate-900 hover:bg-slate-800 text-white px-4 sm:px-6 py-3 rounded-xl font-black flex items-center justify-center gap-2 shadow-lg touch-manipulation">
                     <Save size={20} /> 保存配置
                   </button>
-                  <button onClick={handleAddApi} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-black flex items-center gap-2 shadow-lg shadow-blue-100">
+                  <button onClick={handleAddApi} className="bg-blue-600 hover:bg-blue-700 text-white px-4 sm:px-6 py-3 rounded-xl font-black flex items-center justify-center gap-2 shadow-lg shadow-blue-100 touch-manipulation">
                     <Plus size={20} /> 添加新密钥
                   </button>
+                  </div>
                 </div>
 
                 {/* Qwen + Supabase */}
@@ -688,7 +698,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                 {/* API List */}
                 <div className="space-y-4">
                   {localApiConfigs.map((api, idx) => (
-                    <div key={api.id} className="bg-white border border-slate-100 rounded-3xl p-8 shadow-sm relative group">
+                    <div key={api.id} className="bg-white border border-slate-100 rounded-2xl sm:rounded-3xl p-4 sm:p-6 md:p-8 shadow-sm relative group">
                       <button onClick={() => setLocalApiConfigs(localApiConfigs.filter(a => a.id !== api.id))} className="absolute top-6 right-6 text-slate-300 hover:text-red-500 transition-all">
                         <Trash2 size={20} />
                       </button>
@@ -754,44 +764,68 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
             )}
 
             {activeTab === 'users' && (
-              <div className="space-y-8 animate-fade-in">
-                <div className="flex justify-between items-center">
-                  <h3 className="text-2xl font-black text-slate-800 flex items-center gap-2">
+              <div className="space-y-4 sm:space-y-8 animate-fade-in">
+                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
+                  <h3 className="text-xl sm:text-2xl font-black text-slate-800 flex items-center gap-2">
                     <Users className="text-blue-600" /> 系统用户管理
                   </h3>
-                  <button onClick={handleAddUser} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-black flex items-center gap-2 shadow-lg shadow-blue-100">
+                  <button onClick={handleAddUser} className="bg-blue-600 hover:bg-blue-700 text-white px-4 sm:px-6 py-3 rounded-xl font-black flex items-center justify-center gap-2 shadow-lg shadow-blue-100 touch-manipulation w-full sm:w-auto">
                     <Plus size={20} /> 添加用户
                   </button>
                 </div>
 
-                <div className="bg-white border border-slate-100 rounded-[32px] overflow-hidden shadow-sm">
-                  <table className="w-full text-left border-collapse">
+                {/* Mobile cards */}
+                <div className="md:hidden space-y-3">
+                  {users.map(user => (
+                    <div key={user.username} className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
+                      <div className="flex items-center justify-between gap-3 mb-3">
+                        <div className="font-black text-slate-800">{user.username}</div>
+                        <span className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest ${user.role === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-slate-100 text-slate-600'}`}>
+                          {user.role}
+                        </span>
+                      </div>
+                      <div className="flex gap-3">
+                        <button onClick={() => handleResetPassword(user.username)} className="flex-1 text-center py-2 rounded-xl bg-blue-50 text-blue-600 text-xs font-black touch-manipulation">
+                          重置密码
+                        </button>
+                        {user.username !== 'admin' && (
+                          <button onClick={() => handleDeleteUser(user.username)} className="px-4 py-2 rounded-xl bg-red-50 text-red-500 touch-manipulation">
+                            <Trash2 size={18} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="hidden md:block bg-white border border-slate-100 rounded-2xl sm:rounded-[32px] overflow-hidden shadow-sm overflow-x-auto">
+                  <table className="w-full text-left border-collapse min-w-[480px]">
                     <thead>
                       <tr className="bg-slate-50/50 border-b border-slate-100">
-                        <th className="px-8 py-6 text-xs font-black text-slate-400 uppercase tracking-widest">用户名</th>
-                        <th className="px-8 py-6 text-xs font-black text-slate-400 uppercase tracking-widest">角色</th>
-                        <th className="px-8 py-6 text-xs font-black text-slate-400 uppercase tracking-widest text-right">操作</th>
+                        <th className="px-4 lg:px-8 py-4 lg:py-6 text-xs font-black text-slate-400 uppercase tracking-widest">用户名</th>
+                        <th className="px-4 lg:px-8 py-4 lg:py-6 text-xs font-black text-slate-400 uppercase tracking-widest">角色</th>
+                        <th className="px-4 lg:px-8 py-4 lg:py-6 text-xs font-black text-slate-400 uppercase tracking-widest text-right">操作</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {users.map((user, i) => (
+                      {users.map((user) => (
                         <tr key={user.username} className="border-b border-slate-50 last:border-none hover:bg-slate-50/30 transition-all">
-                          <td className="px-8 py-6 font-black text-slate-800">{user.username}</td>
-                          <td className="px-8 py-6">
+                          <td className="px-4 lg:px-8 py-4 lg:py-6 font-black text-slate-800">{user.username}</td>
+                          <td className="px-4 lg:px-8 py-4 lg:py-6">
                             <span className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest ${user.role === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-slate-100 text-slate-600'}`}>
                               {user.role}
                             </span>
                           </td>
-                          <td className="px-8 py-6 text-right">
+                          <td className="px-4 lg:px-8 py-4 lg:py-6 text-right">
                             <div className="flex items-center justify-end gap-2">
                               <button
                                 onClick={() => handleResetPassword(user.username)}
-                                className="text-slate-400 hover:text-blue-600 transition-all text-[10px] font-black uppercase"
+                                className="text-slate-400 hover:text-blue-600 transition-all text-[10px] font-black uppercase touch-manipulation"
                               >
                                 重置密码
                               </button>
                               {user.username !== 'admin' && (
-                                <button onClick={() => handleDeleteUser(user.username)} className="text-slate-300 hover:text-red-500 transition-all">
+                                <button onClick={() => handleDeleteUser(user.username)} className="text-slate-300 hover:text-red-500 transition-all touch-manipulation">
                                   <Trash2 size={18} />
                                 </button>
                               )}
@@ -806,14 +840,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
             )}
 
             {activeTab === 'kb' && (
-              <div className="space-y-8 animate-fade-in">
+              <div className="space-y-4 sm:space-y-8 animate-fade-in">
                 <div className="flex justify-between items-center">
-                  <h3 className="text-2xl font-black text-slate-800 flex items-center gap-2">
-                    <Database className="text-blue-600" /> Knowledge Base Management
+                  <h3 className="text-xl sm:text-2xl font-black text-slate-800 flex items-center gap-2">
+                    <Database className="text-blue-600" /> 知识库管理
                   </h3>
                 </div>
 
-                <div className="bg-white border border-slate-100 rounded-[32px] p-8 shadow-sm">
+                <div className="bg-white border border-slate-100 rounded-2xl sm:rounded-[32px] p-4 sm:p-6 md:p-8 shadow-sm">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-2 text-slate-800 font-black">
                       <Database size={18} className="text-emerald-600" /> SUPABASE 云端知识库
@@ -832,14 +866,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                   </div>
                 </div>
 
-                <div className="space-y-6">
-                  <div className="flex justify-between items-center">
-                    <div className="text-lg font-black text-slate-800">
+                <div className="space-y-4 sm:space-y-6">
+                  <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
+                    <div className="text-base sm:text-lg font-black text-slate-800">
                       云端文件: <span className="text-blue-600">{kbFiles.length}</span>
                     </div>
                     <label 
                       htmlFor="kb-upload-input"
-                      className={`bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl font-black text-sm flex items-center gap-2 cursor-pointer transition-all ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}
+                      className={`bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl font-black text-sm flex items-center justify-center gap-2 cursor-pointer transition-all touch-manipulation w-full sm:w-auto ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}
                     >
                       {isUploading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
                       {isUploading ? '上传中...' : '上传到 Supabase'}
@@ -856,22 +890,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                   </div>
 
                   {/* YouTube Link Input */}
-                  <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100 flex items-center gap-4">
-                    <div className="bg-red-100 text-red-600 p-3 rounded-xl">
+                  <div className="bg-slate-50 p-4 sm:p-6 rounded-2xl border border-slate-100 flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4">
+                    <div className="bg-red-100 text-red-600 p-3 rounded-xl self-start sm:self-center flex-shrink-0">
                       <Youtube size={20} />
                     </div>
-                    <div className="flex-1">
+                    <div className="flex-1 min-w-0">
                       <input 
                         type="text" 
-                        placeholder="粘贴 YouTube 视频链接 (Paste YouTube Link)..." 
+                        placeholder="粘贴 YouTube 视频链接..." 
                         value={ytLink}
                         onChange={e => setYtLink(e.target.value)}
-                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm font-bold focus:ring-2 focus:ring-red-500 outline-none"
+                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold focus:ring-2 focus:ring-red-500 outline-none"
                       />
                     </div>
                     <button 
                       onClick={handleAddYoutube}
-                      className="bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded-xl font-black text-xs transition-all"
+                      className="bg-red-600 hover:bg-red-700 text-white px-6 py-2.5 rounded-xl font-black text-xs transition-all touch-manipulation w-full sm:w-auto"
                     >
                       添加链接
                     </button>

@@ -141,37 +141,37 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
   };
 
   return (
-    <div className="max-w-7xl mx-auto space-y-8 animate-fade-in">
-      <div className="flex gap-2 bg-white p-2 rounded-2xl border border-slate-200 shadow-sm w-fit">
+    <div className="max-w-7xl mx-auto space-y-4 sm:space-y-8 animate-fade-in">
+      <div className="flex flex-wrap gap-2 bg-white p-2 rounded-2xl border border-slate-200 shadow-sm w-full sm:w-fit overflow-x-auto">
         <button 
           onClick={() => setActiveTab('tasks')}
-          className={`px-6 py-2 rounded-xl text-sm font-black transition-all flex items-center gap-2 ${activeTab === 'tasks' ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'}`}
+          className={`flex-1 sm:flex-none px-4 sm:px-6 py-2 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center justify-center gap-2 touch-manipulation ${activeTab === 'tasks' ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'}`}
         >
           <Users size={16} /> 发送任务
         </button>
         <button 
           onClick={() => setActiveTab('templates')}
-          className={`px-6 py-2 rounded-xl text-sm font-black transition-all flex items-center gap-2 ${activeTab === 'templates' ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'}`}
+          className={`flex-1 sm:flex-none px-4 sm:px-6 py-2 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center justify-center gap-2 touch-manipulation ${activeTab === 'templates' ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'}`}
         >
           <Layout size={16} /> 邮件模板
         </button>
         <button 
           onClick={() => setActiveTab('config')}
-          className={`px-6 py-2 rounded-xl text-sm font-black transition-all flex items-center gap-2 ${activeTab === 'config' ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'}`}
+          className={`flex-1 sm:flex-none px-4 sm:px-6 py-2 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center justify-center gap-2 touch-manipulation ${activeTab === 'config' ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'}`}
         >
           <Settings size={16} /> 接口配置
         </button>
       </div>
 
       {activeTab === 'tasks' && (
-        <div className="space-y-6">
-          <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex justify-between items-center">
-            <div className="flex items-center gap-4">
-              <h3 className="text-lg font-black text-slate-800">待发送列表 ({tasks.length})</h3>
+        <div className="space-y-4 sm:space-y-6">
+          <div className="bg-white p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm flex flex-col lg:flex-row lg:justify-between lg:items-center gap-4">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 w-full lg:w-auto">
+              <h3 className="text-base sm:text-lg font-black text-slate-800">待发送列表 ({tasks.length})</h3>
               <select 
                 value={selectedTemplateId} 
                 onChange={e => setSelectedTemplateId(e.target.value)}
-                className="px-4 py-2 rounded-xl border border-slate-200 text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none"
+                className="w-full sm:w-auto px-4 py-2 rounded-xl border border-slate-200 text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none"
               >
                 <option value="">选择发送模板...</option>
                 {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
@@ -180,13 +180,13 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
             <button 
               disabled={selectedTaskIds.size === 0 || !selectedTemplateId || !config}
               onClick={() => onSendBatch(Array.from(selectedTaskIds), selectedTemplateId)}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-black shadow-lg transition-all flex items-center gap-2 disabled:opacity-50"
+              className="bg-blue-600 hover:bg-blue-700 text-white px-6 sm:px-8 py-3 rounded-xl font-black shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 w-full lg:w-auto touch-manipulation"
             >
               <Send size={18} /> 立即群发 ({selectedTaskIds.size})
             </button>
           </div>
 
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">
@@ -259,7 +259,7 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
 
       {activeTab === 'templates' && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div onClick={() => { setNewTemplate({ id: '', name: '', subject: '', body: '', lastUpdated: Date.now() }); setIsCreatingTemplate(true); }} className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm flex flex-col items-center justify-center border-dashed cursor-pointer hover:bg-slate-50 transition-all min-h-[200px]">
+          <div onClick={() => { setNewTemplate({ id: '', name: '', subject: '', body: '', lastUpdated: Date.now() }); setIsCreatingTemplate(true); }} className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm flex flex-col items-center justify-center border-dashed cursor-pointer hover:bg-slate-50 transition-all min-h-[200px]">
             <div className="bg-blue-50 p-4 rounded-2xl text-blue-600 mb-4">
               <Plus size={32} />
             </div>
@@ -267,7 +267,7 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
             <p className="text-slate-400 font-bold text-sm">使用 AI 或手动编写邮件模板</p>
           </div>
           {templates.map(template => (
-            <div key={template.id} className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm hover:border-blue-200 transition-all group">
+            <div key={template.id} className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm hover:border-blue-200 transition-all group">
               <div className="flex justify-between items-start mb-4">
                 <div className="bg-slate-50 p-3 rounded-2xl text-slate-400">
                   <FileText size={24} />
@@ -321,7 +321,7 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
       )}
 
       {activeTab === 'config' && (
-        <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm max-w-2xl mx-auto">
+        <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm max-w-2xl mx-auto">
           <h3 className="text-2xl font-black text-slate-800 mb-8 flex items-center gap-2">
             <Settings className="text-blue-600" /> 阿里云邮件推送配置
           </h3>

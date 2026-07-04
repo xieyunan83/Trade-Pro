@@ -11,7 +11,7 @@ export const ModuleProducts: React.FC<ModuleProductsProps> = ({ data }) => {
   return (
     <div className="space-y-8 animate-fade-in">
       {data.productSummary && (
-        <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
+        <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
           <h3 className="text-2xl font-black text-slate-800 mb-6 flex items-center gap-2">
             <PieChart className="text-blue-600" /> 市场喜好与产品策略 (Product Strategy)
           </h3>
@@ -53,7 +53,7 @@ export const ModuleProducts: React.FC<ModuleProductsProps> = ({ data }) => {
         </div>
       )}
 
-      <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
+      <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
         <h3 className="text-2xl font-black text-slate-800 mb-6 flex items-center gap-2">
           <PackageSearch className="text-blue-600" /> 核心产品线分析 (Core Product Lines)
         </h3>

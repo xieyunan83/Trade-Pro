@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { analyzeCompany, hasApiKeyConfigured, searchPotentialClients, generateMailGroupStrategy } from './services/geminiService';
 import { exportToPPT } from './services/exportService';
 import { saveHistory, getHistory, getAllFilesFromDB, saveAutomationTask, getAutomationQueue, deleteAutomationTask, saveFileToDB } from './services/db';
-import { fetchGlobalConfig, fetchDocumentsFromRepo, backupUserHistory, fetchCRMFromCloud, saveCRMToCloud, fetchUserHistoryFromCloud, checkGitHubStatus, fetchApiConfigsFromCloud, setManualGitHubConfig, fetchUsersFromCloud, saveUsersToCloud } from './services/githubService';
+import { fetchGlobalConfig, fetchDocumentsFromRepo, backupUserHistory, fetchCRMFromCloud, saveCRMToCloud, fetchUserHistoryFromCloud, checkGitHubStatus, fetchApiConfigsFromCloud, setManualGitHubConfig } from './services/githubService';
 import { isSupabaseConfigured, getKnowledgeFiles, getInvestigationHistory, saveInvestigationHistory, getLatestDiscoverySearch, saveDiscoverySearch, getCrmClients, syncCrmClients } from './services/supabase';
 import { checkLimit, incrementUsage, updateLocalConfig } from './services/limitService';
 import { ModuleType, AnalysisResult, DiscoveryState, Client, User, HistoryItem, AutomationResult, ClientSearchResult } from './types';
@@ -17,7 +17,7 @@ import { ModuleClientCRM } from './components/ModuleClientCRM';
 import { ModuleEmailCampaign } from './components/ModuleEmailCampaign'; 
 import { ClientFinder } from './components/ClientFinder';
 import { Login } from './components/Login';
-import { createDefaultUsers, ensureUserPasswords } from './services/auth';
+import { loadUsersWithMigration, saveUsersToStorage } from './services/auth';
 import { AdminDashboard } from './components/AdminDashboard';
 import { 
   LayoutDashboard, PackageSearch, Users, PenTool, Network, Search, Loader2, Menu, Globe, Zap, FileSpreadsheet, History, Clock, ChevronRight, AlertTriangle, RefreshCw, LogOut, Briefcase, Ruler, CheckCircle2, Hourglass, StopCircle, PlayCircle, Layers, Mail, Cloud, Download, Info, Link2, X, Database, Github
@@ -91,24 +91,10 @@ const App: React.FC = () => {
   useEffect(() => {
     const loadUsers = async () => {
       try {
-        const savedUsers = localStorage.getItem('trade_scout_users');
-        if (savedUsers) {
-          const parsed: User[] = JSON.parse(savedUsers);
-          const withPasswords = await ensureUserPasswords(parsed);
-          setUsers(withPasswords);
-          if (JSON.stringify(withPasswords) !== savedUsers) {
-            localStorage.setItem('trade_scout_users', JSON.stringify(withPasswords));
-          }
-        } else {
-          const defaultUsers = await createDefaultUsers();
-          setUsers(defaultUsers);
-          localStorage.setItem('trade_scout_users', JSON.stringify(defaultUsers));
-        }
+        const loaded = await loadUsersWithMigration();
+        setUsers(loaded);
       } catch (e) {
         console.error('Failed to load users', e);
-        const defaultUsers = await createDefaultUsers();
-        setUsers(defaultUsers);
-        localStorage.setItem('trade_scout_users', JSON.stringify(defaultUsers));
       } finally {
         setAuthReady(true);
       }
@@ -232,15 +218,7 @@ const App: React.FC = () => {
                     localStorage.setItem('tradeScoutClients', JSON.stringify(cloudCRM));
                 }
 
-                // Users
-                const cloudUsers = await fetchUsersFromCloud();
-                if (cloudUsers.length > 0) {
-                    const withPasswords = await ensureUserPasswords(cloudUsers);
-                    setUsers(withPasswords);
-                    localStorage.setItem('trade_scout_users', JSON.stringify(withPasswords));
-                }
-
-                // History
+                // Users: 不再从 GitHub 覆盖本地（避免密码被旧云端数据冲掉）
                 const cloudHistory = await fetchUserHistoryFromCloud(currentUser.username);
                 if(cloudHistory.length > 0) {
                     const existingIds = new Set(h.map(i => i.id));
@@ -285,12 +263,9 @@ const App: React.FC = () => {
 
   useEffect(() => {
       if (users.length > 0) {
-          localStorage.setItem('trade_scout_users', JSON.stringify(users));
-          if (isGitHubConnected && currentUser?.role === 'admin') {
-              saveUsersToCloud(users).catch(e => console.error("Auto user sync failed", e));
-          }
+          saveUsersToStorage(users);
       }
-  }, [users, isGitHubConnected, currentUser]);
+  }, [users]);
 
   const handleManualConnect = async () => {
       if (!manualToken || !manualOwner || !manualRepo) {
@@ -576,7 +551,7 @@ const App: React.FC = () => {
   if (hasKey === null) return <div className="h-screen flex items-center justify-center bg-slate-50"><Loader2 className="animate-spin text-blue-600" size={40} /></div>;
   if (!currentUser) {
     if (!authReady) return <div className="h-screen flex items-center justify-center bg-slate-50"><Loader2 className="animate-spin text-blue-600" size={40} /></div>;
-    return <Login onLogin={setCurrentUser} users={users} />;
+    return <Login onLogin={setCurrentUser} />;
   }
   
   if (currentUser.role === 'admin') {
@@ -604,8 +579,12 @@ const App: React.FC = () => {
   const alwaysActiveModules = [ModuleType.DISCOVERY, ModuleType.PROMO_GENERATOR, ModuleType.CLIENT_CRM, ModuleType.STRATEGY, ModuleType.EMAIL_CAMPAIGN];
 
   return (
-    <div className="flex h-screen bg-slate-100 overflow-hidden">
-      <aside className={`fixed md:static z-30 h-full w-72 bg-white border-r border-slate-200 transition-transform ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'} flex flex-col shadow-2xl md:shadow-none`}>
+    <div className="flex min-h-screen min-h-[100dvh] bg-slate-100 overflow-hidden">
+      {/* Mobile sidebar backdrop */}
+      {mobileMenuOpen && (
+        <div className="fixed inset-0 bg-slate-900/50 z-20 md:hidden" onClick={() => setMobileMenuOpen(false)} />
+      )}
+      <aside className={`fixed md:static z-30 h-full w-[min(100vw-3rem,18rem)] md:w-72 bg-white border-r border-slate-200 transition-transform duration-300 ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'} flex flex-col shadow-2xl md:shadow-none`}>
         <div className="p-6 border-b flex items-center gap-3">
             <div className="bg-blue-600 p-2 rounded-lg text-white shadow-md shadow-blue-100"><Zap size={20} /></div>
             <div>
@@ -634,20 +613,21 @@ const App: React.FC = () => {
             </div>
         )}
 
-        <nav className="p-4 space-y-1 flex-1 overflow-y-auto custom-scrollbar">
+        <nav className="p-3 sm:p-4 space-y-1 flex-1 overflow-y-auto custom-scrollbar">
           {[
-            { id: ModuleType.DISCOVERY, label: '客户搜索 (Discovery)', icon: Globe },
-            { id: ModuleType.BACKGROUND, label: '背景调查 (Background)', icon: LayoutDashboard },
-            { id: ModuleType.PRODUCTS, label: '产品分析 (Products)', icon: PackageSearch },
-            { id: ModuleType.DECISION_MAKERS, label: '决策人挖掘 (Contacts)', icon: Users },
-            { id: ModuleType.STRATEGY, label: '开发策略 (Strategy)', icon: PenTool },
-            { id: ModuleType.SIMILAR, label: '同类推荐 (Similar)', icon: Network },
-            { id: ModuleType.CLIENT_CRM, label: '客户管理 (CRM)', icon: Briefcase },
-            { id: ModuleType.EMAIL_CAMPAIGN, label: '邮件营销 (DirectMail)', icon: Mail }, 
-            { id: ModuleType.PROMO_GENERATOR, label: '营销工具 (Tools)', icon: Ruler },
+            { id: ModuleType.DISCOVERY, label: '客户搜索', sub: 'Discovery', icon: Globe },
+            { id: ModuleType.BACKGROUND, label: '背景调查', sub: 'Background', icon: LayoutDashboard },
+            { id: ModuleType.PRODUCTS, label: '产品分析', sub: 'Products', icon: PackageSearch },
+            { id: ModuleType.DECISION_MAKERS, label: '决策人挖掘', sub: 'Contacts', icon: Users },
+            { id: ModuleType.STRATEGY, label: '开发策略', sub: 'Strategy', icon: PenTool },
+            { id: ModuleType.SIMILAR, label: '同类推荐', sub: 'Similar', icon: Network },
+            { id: ModuleType.CLIENT_CRM, label: '客户管理', sub: 'CRM', icon: Briefcase },
+            { id: ModuleType.EMAIL_CAMPAIGN, label: '邮件营销', sub: 'DirectMail', icon: Mail }, 
+            { id: ModuleType.PROMO_GENERATOR, label: '营销工具', sub: 'Tools', icon: Ruler },
           ].map(item => (
-            <button key={item.id} onClick={() => { setActiveModule(item.id); setMobileMenuOpen(false); }} disabled={!analysisData && !alwaysActiveModules.includes(item.id)} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl text-sm font-bold transition-all ${activeModule === item.id ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800 disabled:opacity-30'}`}>
-              <item.icon size={18} /> {item.label}
+            <button key={item.id} onClick={() => { setActiveModule(item.id); setMobileMenuOpen(false); }} disabled={!analysisData && !alwaysActiveModules.includes(item.id)} className={`w-full flex items-center gap-3 px-3 sm:px-4 py-3 sm:py-3.5 rounded-xl sm:rounded-2xl text-sm font-bold transition-all touch-manipulation ${activeModule === item.id ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800 disabled:opacity-30'}`}>
+              <item.icon size={18} className="flex-shrink-0" />
+              <span className="truncate"><span className="md:hidden">{item.label}</span><span className="hidden md:inline">{item.label} ({item.sub})</span></span>
             </button>
           ))}
         </nav>
@@ -679,7 +659,7 @@ const App: React.FC = () => {
       
       {/* History Sidebar */}
       {historyOpen && (
-          <div className="fixed inset-y-0 left-72 w-80 bg-white shadow-2xl z-20 border-r border-slate-200 transform transition-transform animate-fade-in flex flex-col">
+          <div className="fixed inset-y-0 left-0 md:left-72 w-full sm:w-80 max-w-full bg-white shadow-2xl z-40 border-r border-slate-200 transform transition-transform animate-fade-in flex flex-col">
               <div className="p-4 border-b bg-slate-50 font-bold text-slate-700 flex justify-between items-center">
                   <span>Recent Analysis</span>
                   <div className="flex gap-2">
@@ -730,25 +710,27 @@ const App: React.FC = () => {
       )}
 
       {/* Main Content Area */}
-      <main className="flex-1 flex flex-col overflow-hidden relative">
-        <header className="bg-white border-b px-6 py-4 flex items-center gap-4 shadow-sm z-10 min-h-[96px]">
-          <button onClick={() => setMobileMenuOpen(true)} className="md:hidden p-2 text-slate-500"><Menu size={24} /></button>
-          <div className="flex-1 relative group">
-            <Search className="absolute left-4 top-5 text-slate-400" size={20} />
-            <textarea 
-                className="w-full pl-12 pr-4 py-4 border border-slate-200 rounded-2xl bg-slate-50 text-slate-900 font-bold focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all shadow-inner resize-none overflow-hidden min-h-[56px] focus:min-h-[120px] z-20 relative" 
-                placeholder="输入目标网址或公司名称 (支持批量输入)..." 
-                value={domainInput} 
-                onChange={e => setDomainInput(e.target.value)} 
-                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAnalyzeInput(); } }}
-            />
+      <main className="flex-1 flex flex-col overflow-hidden relative min-w-0">
+        <header className="bg-white border-b px-3 sm:px-6 py-3 sm:py-4 flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4 shadow-sm z-10">
+          <div className="flex items-center gap-3 sm:contents">
+            <button onClick={() => setMobileMenuOpen(true)} className="md:hidden p-2 text-slate-500 flex-shrink-0 touch-manipulation" aria-label="打开菜单"><Menu size={24} /></button>
+            <div className="flex-1 relative group min-w-0 sm:order-none">
+              <Search className="absolute left-3 sm:left-4 top-3 sm:top-5 text-slate-400 pointer-events-none" size={20} />
+              <textarea 
+                  className="w-full pl-10 sm:pl-12 pr-3 sm:pr-4 py-3 sm:py-4 border border-slate-200 rounded-2xl bg-slate-50 text-slate-900 font-bold text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all shadow-inner resize-none overflow-hidden min-h-[48px] sm:min-h-[56px] focus:min-h-[100px] sm:focus:min-h-[120px] z-20 relative" 
+                  placeholder="输入目标网址或公司名称..." 
+                  value={domainInput} 
+                  onChange={e => setDomainInput(e.target.value)} 
+                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAnalyzeInput(); } }}
+              />
+            </div>
           </div>
-          <button onClick={() => handleAnalyzeInput()} disabled={loading || !domainInput.trim()} className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-2xl font-black shadow-lg disabled:opacity-50 min-w-[140px] flex justify-center h-[56px] items-center">
+          <button onClick={() => handleAnalyzeInput()} disabled={loading || !domainInput.trim()} className="bg-blue-600 hover:bg-blue-700 text-white px-6 sm:px-8 py-3 sm:py-3 rounded-2xl font-black shadow-lg disabled:opacity-50 w-full sm:w-auto sm:min-w-[140px] flex justify-center items-center touch-manipulation flex-shrink-0">
             {loading ? <Loader2 className="animate-spin" size={20} /> : '深度调查'}
           </button>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-6 relative custom-scrollbar">
+        <div className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 relative custom-scrollbar">
           {cooldownTime > 0 && (
               <div className="absolute inset-0 bg-white/90 z-50 flex flex-col items-center justify-center backdrop-blur-sm animate-fade-in cursor-wait">
                   <div className="relative"><Hourglass size={64} className="text-blue-600 animate-pulse" /><div className="absolute -top-2 -right-2 bg-red-500 text-white w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs">{cooldownTime}</div></div>
@@ -811,8 +793,8 @@ const App: React.FC = () => {
                 {activeModule === ModuleType.STRATEGY && (
                     <div className="animate-fade-in max-w-7xl mx-auto pb-10">
                         {analysisData && (
-                            <div className="mb-8 flex flex-col md:flex-row md:items-end justify-between gap-4 bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
-                                <div><h2 className="text-4xl font-black text-slate-900 tracking-tight">{analysisData.companyInfo?.name}</h2><div className="text-sm text-slate-500 font-bold mt-2">上下文：深度调查报告</div></div>
+                            <div className="mb-6 sm:mb-8 flex flex-col md:flex-row md:items-end justify-between gap-4 bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
+                                <div className="min-w-0"><h2 className="text-2xl sm:text-3xl md:text-4xl font-black text-slate-900 tracking-tight truncate">{analysisData.companyInfo?.name}</h2><div className="text-xs sm:text-sm text-slate-500 font-bold mt-2">上下文：深度调查报告</div></div>
                             </div>
                         )}
                         <ModuleStrategy data={analysisData} />
@@ -820,12 +802,12 @@ const App: React.FC = () => {
                 )}
                 {analysisData && !alwaysActiveModules.includes(activeModule) && (
                     <div className="animate-fade-in max-w-7xl mx-auto pb-10">
-                    <div className="mb-8 flex flex-col md:flex-row md:items-end justify-between gap-4 bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
-                        <div>
-                            <h2 className="text-4xl font-black text-slate-900 tracking-tight">{analysisData.companyInfo?.name}</h2>
-                            <a href={analysisData.companyInfo?.website.startsWith('http') ? analysisData.companyInfo.website : `https://${analysisData.companyInfo?.website}`} target="_blank" rel="noreferrer" className="text-blue-600 font-bold mt-2 hover:underline">{analysisData.companyInfo?.website}</a>
+                    <div className="mb-6 sm:mb-8 flex flex-col md:flex-row md:items-end justify-between gap-4 bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
+                        <div className="min-w-0">
+                            <h2 className="text-2xl sm:text-3xl md:text-4xl font-black text-slate-900 tracking-tight break-words">{analysisData.companyInfo?.name}</h2>
+                            <a href={analysisData.companyInfo?.website.startsWith('http') ? analysisData.companyInfo.website : `https://${analysisData.companyInfo?.website}`} target="_blank" rel="noreferrer" className="text-blue-600 font-bold mt-2 hover:underline text-sm sm:text-base break-all">{analysisData.companyInfo?.website}</a>
                         </div>
-                        <button onClick={handleExportReport} className="flex items-center gap-2 bg-slate-900 hover:bg-blue-600 transition-colors text-white px-6 py-3 rounded-2xl font-bold shadow-lg"><FileSpreadsheet size={18} /> 下载 PPT 报告</button>
+                        <button onClick={handleExportReport} className="flex items-center justify-center gap-2 bg-slate-900 hover:bg-blue-600 transition-colors text-white px-4 sm:px-6 py-3 rounded-2xl font-bold shadow-lg w-full md:w-auto touch-manipulation flex-shrink-0"><FileSpreadsheet size={18} /> 下载 PPT 报告</button>
                     </div>
                     {activeModule === ModuleType.BACKGROUND && <ModuleBackground data={analysisData} onAddToCRM={handleAddToCRM} />}
                     {activeModule === ModuleType.PRODUCTS && <ModuleProducts data={analysisData} />}
@@ -874,7 +856,6 @@ const App: React.FC = () => {
           </div>
       )}
 
-      {mobileMenuOpen && <div className="fixed inset-0 bg-slate-900/50 z-10 md:hidden" onClick={() => setMobileMenuOpen(false)} />}
     </div>
   );
 };

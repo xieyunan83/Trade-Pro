@@ -12,17 +12,17 @@ export const ModuleBackground: React.FC<ModuleBackgroundProps> = ({ data, onAddT
   return (
     <div className="space-y-8 animate-fade-in">
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="md:col-span-2 bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
-          <div className="flex justify-between items-start mb-6">
-            <h3 className="text-2xl font-black text-slate-800 flex items-center gap-2">
+        <div className="md:col-span-2 bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
+          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-3 mb-4 sm:mb-6">
+            <h3 className="text-xl sm:text-2xl font-black text-slate-800 flex items-center gap-2">
               <LayoutDashboard className="text-blue-600" /> 公司基本面 (Company Profile)
             </h3>
-            <button onClick={onAddToCRM} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-xs font-bold shadow-lg transition-all flex items-center gap-2">
+            <button onClick={onAddToCRM} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-xs font-bold shadow-lg transition-all flex items-center justify-center gap-2 touch-manipulation w-full sm:w-auto">
               <ShieldCheck size={14} /> 导入 CRM
             </button>
           </div>
           
-          <div className="grid grid-cols-2 gap-8">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-8">
             <div className="space-y-4">
               <div className="flex items-center gap-3">
                 <div className="bg-slate-50 p-3 rounded-2xl text-slate-400"><Globe size={20} /></div>
@@ -63,7 +63,7 @@ export const ModuleBackground: React.FC<ModuleBackgroundProps> = ({ data, onAddT
           </div>
         </div>
         
-        <div className="bg-slate-900 p-8 rounded-3xl border border-slate-800 shadow-2xl text-white">
+        <div className="bg-slate-900 p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-800 shadow-2xl text-white">
           <h3 className="text-xl font-black mb-6 flex items-center gap-2">
             <TrendingUp className="text-green-400" /> 财务与规模估算
           </h3>
@@ -85,7 +85,7 @@ export const ModuleBackground: React.FC<ModuleBackgroundProps> = ({ data, onAddT
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
+        <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
           <h3 className="text-xl font-black text-slate-800 mb-6 flex items-center gap-2">
             <ShieldCheck className="text-blue-600" /> SWOT 分析
           </h3>
@@ -117,7 +117,7 @@ export const ModuleBackground: React.FC<ModuleBackgroundProps> = ({ data, onAddT
           </div>
         </div>
         
-        <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
+        <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
           <h3 className="text-xl font-black text-slate-800 mb-6 flex items-center gap-2">
             <Target className="text-blue-600" /> 业务模式与定位
           </h3>

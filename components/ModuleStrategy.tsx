@@ -209,7 +209,7 @@ export const ModuleStrategy: React.FC<Props> = ({ data }) => {
   };
 
   return (
-    <div className="h-[calc(100vh-140px)] flex flex-col gap-6 max-w-7xl mx-auto animate-fade-in overflow-hidden">
+    <div className="h-[calc(100dvh-120px)] sm:h-[calc(100vh-140px)] flex flex-col gap-4 sm:gap-6 max-w-7xl mx-auto animate-fade-in overflow-hidden px-0">
         {/* MAIN CHAT INTERFACE - NOW FULL WIDTH */}
         <div className="flex-1 bg-white rounded-2xl border border-slate-200 shadow-xl flex flex-col overflow-hidden relative">
             {/* Chat Header */}
@@ -235,7 +235,7 @@ export const ModuleStrategy: React.FC<Props> = ({ data }) => {
             </div>
 
             {/* Messages Area */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar bg-slate-50/50">
+            <div className="flex-1 overflow-y-auto p-3 sm:p-6 space-y-4 sm:space-y-6 custom-scrollbar bg-slate-50/50">
                 {messages.map((msg, idx) => (
                     <div key={idx} className={`flex gap-4 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                         {msg.role === 'model' && (

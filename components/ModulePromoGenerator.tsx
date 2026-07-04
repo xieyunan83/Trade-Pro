@@ -31,13 +31,13 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   };
 
   return (
-    <div className="max-w-7xl mx-auto space-y-8 animate-fade-in">
-      <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
-        <h2 className="text-2xl font-black text-slate-800 mb-6 flex items-center gap-2">
-          <Ruler className="text-blue-600" /> 自动化获客工作流 (Automation Workflow)
+    <div className="max-w-7xl mx-auto space-y-4 sm:space-y-8 animate-fade-in">
+      <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
+        <h2 className="text-xl sm:text-2xl font-black text-slate-800 mb-4 sm:mb-6 flex items-center gap-2">
+          <Ruler className="text-blue-600" /> 自动化获客工作流
         </h2>
         
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-8">
           <div className="space-y-4">
             <div>
               <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">搜索关键词</label>
@@ -83,8 +83,8 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
         </button>
       </div>
 
-      <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+      <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+        <div className="p-4 sm:p-6 border-b border-slate-100 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 bg-slate-50/50">
           <h3 className="text-lg font-black text-slate-800 flex items-center gap-2">
             <Clock className="text-slate-400" /> 任务队列 ({automationResults.length})
           </h3>

@@ -11,7 +11,7 @@ interface ModuleSimilarProps {
 export const ModuleSimilar: React.FC<ModuleSimilarProps> = ({ data, onAnalyze }) => {
   return (
     <div className="space-y-8 animate-fade-in">
-      <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
+      <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
         <h3 className="text-2xl font-black text-slate-800 mb-6 flex items-center gap-2">
           <Network className="text-blue-600" /> 同类公司推荐 (Similar Companies)
         </h3>
