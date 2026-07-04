@@ -3,11 +3,7 @@ import { GoogleGenAI, Type, Part } from "@google/genai";
 import { AnalysisResult, ClientSearchResult, DecisionMaker, ChatMessage, KnowledgeFile, KeywordExtractionResult, MailGroup, EmailTemplateRequest, ApiConfig, TaskType } from "../types";
 import { getAllFilesFromDB } from "./db";
 import { getApiConfig as getSupabaseApiConfig } from './supabase';
-import { env } from './env';
-
-const HUNTER_API_KEY = env.hunterApiKey;
-const FINDYMAIL_API_KEY = env.findymailApiKey;
-const ANYMAIL_FINDER_API_KEY = env.anymailFinderApiKey;
+import { env, getEmailSearchKeys } from './env';
 
 const NATIVE_MODEL = 'gemini-3-pro-preview';
 
@@ -96,6 +92,7 @@ const cleanDomain = (domain: string) => domain.replace(/^(?:https?:\/\/)?(?:www\
 
 // --- External APIs ---
 const fetchHunterEmails = async (domain: string): Promise<{ people: DecisionMaker[], pattern: string | null }> => {
+    const HUNTER_API_KEY = getEmailSearchKeys().hunter;
     if (!domain || !HUNTER_API_KEY) return { people: [], pattern: null };
     try {
         const url = `https://api.hunter.io/v2/domain-search?domain=${cleanDomain(domain)}&api_key=${HUNTER_API_KEY}&limit=20`;
@@ -122,6 +119,7 @@ const fetchHunterEmails = async (domain: string): Promise<{ people: DecisionMake
 };
 
 const findEmailWithHunter = async (firstName: string, lastName: string, domain: string): Promise<{ email: string, confidence: number } | null> => {
+    const HUNTER_API_KEY = getEmailSearchKeys().hunter;
     if (!HUNTER_API_KEY || !domain || !firstName) return null;
     try {
         const url = `https://api.hunter.io/v2/email-finder?domain=${cleanDomain(domain)}&first_name=${encodeURIComponent(firstName)}&last_name=${encodeURIComponent(lastName || '')}&api_key=${HUNTER_API_KEY}`;
@@ -135,6 +133,7 @@ const findEmailWithHunter = async (firstName: string, lastName: string, domain: 
 };
 
 const findEmailWithFindymail = async (name: string, domain: string): Promise<{ email: string, isVerified: boolean } | null> => {
+    const FINDYMAIL_API_KEY = getEmailSearchKeys().findymail;
     if (!FINDYMAIL_API_KEY || !domain || !name) return null;
     try {
         const url = `https://app.findymail.com/api/search/name?domain=${cleanDomain(domain)}&name=${encodeURIComponent(name)}`;
@@ -150,6 +149,7 @@ const findEmailWithFindymail = async (name: string, domain: string): Promise<{ e
 };
 
 const fetchFindymail = async (domain: string): Promise<DecisionMaker[]> => {
+    const FINDYMAIL_API_KEY = getEmailSearchKeys().findymail;
     if (!domain || !FINDYMAIL_API_KEY) return [];
     try {
         const response = await fetch(`https://app.findymail.com/api/search/domain?domain=${cleanDomain(domain)}`, {
@@ -172,6 +172,7 @@ const fetchFindymail = async (domain: string): Promise<DecisionMaker[]> => {
 };
 
 const fetchAnymailFinder = async (domain: string): Promise<DecisionMaker[]> => {
+    const ANYMAIL_FINDER_API_KEY = getEmailSearchKeys().anymailFinder;
     if (!domain || !ANYMAIL_FINDER_API_KEY) return [];
     try {
         const response = await fetch(`https://api.anymailfinder.com/v1.0/search/company.json`, {

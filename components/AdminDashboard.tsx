@@ -3,22 +3,16 @@ import React, { useState, useEffect } from 'react';
 import { GlobalConfig, ApiConfig, TaskType, User, KnowledgeFile } from '../types';
 import { 
   Settings, Shield, Key, Bell, Save, Plus, Trash2, Globe, Server, 
-  CheckCircle2, AlertTriangle, LogOut, Cloud, Users, Database, 
-  Link as LinkIcon, RefreshCw, X, FileText, Upload, Play, Loader2,
-  Youtube, Music, Video, FileSpreadsheet, FilePieChart, FileCode, Image
+  CheckCircle2, AlertTriangle, LogOut, Users, Database, 
+  RefreshCw, X, FileText, Upload, Play, Loader2,
+  Youtube, Music, Video, FileSpreadsheet, FilePieChart, FileCode, Image, Mail
 } from 'lucide-react';
-import { 
-  setManualGitHubConfig, 
-  checkGitHubStatus, 
-  fetchApiConfigsFromCloud, 
-  fetchGlobalConfig,
-  fetchUsersFromCloud,
-  saveUsersToCloud,
-} from '../services/githubService';
 import { getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/db';
 import { testApiKey, testQwenApiKey } from '../services/geminiService';
 import { saveApiConfig, getApiConfig, isSupabaseConfigured, saveKnowledgeFile, getKnowledgeFiles, deleteKnowledgeFile, resetSupabaseClient } from '../services/supabase';
-import { getSupabaseConfig, saveSupabaseConfig, clearSupabaseOverride, env } from '../services/env';
+import { getSupabaseConfig, saveSupabaseConfig, clearSupabaseOverride, saveEmailSearchKeys, getEmailSearchKeys, env } from '../services/env';
+
+type AdminTab = 'api' | 'users' | 'kb';
 
 const KB_ACCEPT = [
   '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
@@ -52,7 +46,7 @@ interface AdminDashboardProps {
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, currentUser, users, setUsers }) => {
-  const [activeTab, setActiveTab] = useState<number>(1);
+  const [activeTab, setActiveTab] = useState<AdminTab>('api');
   const [localConfig, setLocalConfig] = useState<GlobalConfig>({
     lastUpdated: Date.now(),
     dailyLimits: { search: 50, analysis: 20 },
@@ -68,15 +62,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const [supabaseUrl, setSupabaseUrl] = useState('');
   const [supabaseAnonKey, setSupabaseAnonKey] = useState('');
   const [supabaseReady, setSupabaseReady] = useState(isSupabaseConfigured());
+  const [hunterApiKey, setHunterApiKey] = useState('');
+  const [findymailApiKey, setFindymailApiKey] = useState('');
+  const [anymailFinderApiKey, setAnymailFinderApiKey] = useState('');
   const [testingApiId, setTestingApiId] = useState<string | null>(null);
   const [isTestingQwen, setIsTestingQwen] = useState(false);
-  
-  // GitHub Cloud State
-  const [ghToken, setGhToken] = useState(localStorage.getItem('trade_scout_gh_token') || '');
-  const [ghOwner, setGhOwner] = useState(localStorage.getItem('trade_scout_gh_owner') || '');
-  const [ghRepo, setGhRepo] = useState(localStorage.getItem('trade_scout_gh_repo') || '');
-  const [isCloudConnected, setIsCloudConnected] = useState(false);
-  const [isSyncing, setIsSyncing] = useState(false);
   const [ytLink, setYtLink] = useState('');
   const [isUploading, setIsUploading] = useState(false);
 
@@ -127,6 +117,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     setSupabaseAnonKey(sb.key);
     setSupabaseReady(isSupabaseConfigured());
 
+    const emailKeys = getEmailSearchKeys();
+    setHunterApiKey(emailKeys.hunter);
+    setFindymailApiKey(emailKeys.findymail);
+    setAnymailFinderApiKey(emailKeys.anymailFinder);
+
+    const loadEmailKeysFromCloud = async () => {
+      if (!isSupabaseConfigured()) return;
+      const [hunter, findymail, anymail] = await Promise.all([
+        getApiConfig('hunter'),
+        getApiConfig('findymail'),
+        getApiConfig('anymailfinder'),
+      ]);
+      if (hunter?.apiKey) setHunterApiKey(hunter.apiKey);
+      if (findymail?.apiKey) setFindymailApiKey(findymail.apiKey);
+      if (anymail?.apiKey) setAnymailFinderApiKey(anymail.apiKey);
+    };
+    loadEmailKeysFromCloud();
+
     const loadKB = async () => {
       if (isSupabaseConfigured()) {
         const cloudFiles = await getKnowledgeFiles();
@@ -138,9 +146,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
       setKbFiles(files);
     };
     loadKB();
-
-    const status = checkGitHubStatus();
-    setIsCloudConnected(status.ok);
   }, []);
 
   const updateApiConfig = (idx: number, field: keyof ApiConfig, value: string | number) => {
@@ -186,6 +191,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
       localStorage.setItem('trade_scout_qwen_model_id', qwenModelId.trim());
     }
 
+    saveEmailSearchKeys({
+      hunter: hunterApiKey,
+      findymail: findymailApiKey,
+      anymailFinder: anymailFinderApiKey,
+    });
+
     if (qwenApiKey.trim() && isSupabaseConfigured()) {
       await saveApiConfig({
         provider: 'qwen',
@@ -195,7 +206,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
       });
     }
 
-    alert('API 配置已保存 (本地 + 云端 Qwen)');
+    if (isSupabaseConfigured()) {
+      if (hunterApiKey.trim()) {
+        await saveApiConfig({ provider: 'hunter', apiKey: hunterApiKey.trim() });
+      }
+      if (findymailApiKey.trim()) {
+        await saveApiConfig({ provider: 'findymail', apiKey: findymailApiKey.trim() });
+      }
+      if (anymailFinderApiKey.trim()) {
+        await saveApiConfig({ provider: 'anymailfinder', apiKey: anymailFinderApiKey.trim() });
+      }
+    }
+
+    alert('API 配置已保存 (本地 + 云端)');
   };
 
   const handleSaveProxy = () => {
@@ -260,60 +283,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
       next[idx].modelId = 'llama3-70b-8192';
     }
     setLocalApiConfigs(next);
-  };
-
-  const handleConnectCloud = async () => {
-    if (!ghToken || !ghOwner || !ghRepo) {
-      alert('请填写完整的 GitHub 凭证 (Please fill all GitHub credentials)');
-      return;
-    }
-    
-    setIsSyncing(true);
-    try {
-      setManualGitHubConfig(ghToken, ghOwner, ghRepo);
-      const status = checkGitHubStatus();
-      setIsCloudConnected(status.ok);
-      
-      if (status.ok) {
-        // 1. Sync API Configs
-        const cloudConfigs = await fetchApiConfigsFromCloud();
-        if (cloudConfigs && cloudConfigs.length > 0) {
-          if (confirm('发现云端 API 配置，是否覆盖本地设置？')) {
-            setLocalApiConfigs(cloudConfigs);
-            localStorage.setItem('trade_scout_api_configs', JSON.stringify(cloudConfigs));
-          }
-        }
-        
-        // 2. Sync Global Config
-        const cloudGlobal = await fetchGlobalConfig();
-        if (cloudGlobal) {
-          setLocalConfig(cloudGlobal);
-        }
-
-        // 3. Sync Users
-        const cloudUsers = await fetchUsersFromCloud();
-        if (cloudUsers && cloudUsers.length > 0) {
-          if (confirm(`发现云端用户数据 (${cloudUsers.length} 个用户)，是否同步？`)) {
-            setUsers(cloudUsers);
-            localStorage.setItem('trade_scout_users', JSON.stringify(cloudUsers));
-          }
-        } else {
-          // If no users in cloud, maybe backup current users?
-          if (confirm('云端无用户数据，是否将当前用户列表备份到云端？')) {
-            await saveUsersToCloud(users);
-          }
-        }
-
-        alert('云端连接成功并已同步数据！');
-      } else {
-        alert('连接失败，请检查 Token 或仓库信息。');
-      }
-    } catch (e) {
-      console.error("Cloud connection error", e);
-      alert('连接过程中发生错误。');
-    } finally {
-      setIsSyncing(false);
-    }
   };
 
   const handleDeleteUser = (username: string) => {
@@ -472,26 +441,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
         <div className="bg-white rounded-[32px] shadow-xl overflow-hidden border border-white">
           {/* Tabs */}
           <div className="flex border-b bg-slate-50/50">
-            {[
-              { id: 1, label: 'API 密钥配置 (API Keys)', icon: Key },
-              { id: 2, label: '云端连接 (Cloud DB)', icon: Cloud },
-              { id: 3, label: '用户管理', icon: Users },
-              { id: 4, label: '知识库', icon: Database },
-            ].map(tab => (
+            {([
+              { id: 'api' as AdminTab, label: 'API 密钥配置 (API Keys)', icon: Key },
+              { id: 'users' as AdminTab, label: '用户管理', icon: Users },
+              { id: 'kb' as AdminTab, label: '知识库', icon: Database },
+            ]).map(tab => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
                 className={`flex-1 py-6 flex items-center justify-center gap-2 font-black text-sm transition-all border-b-4 ${activeTab === tab.id ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
               >
                 <tab.icon size={18} />
-                <span>{tab.id} {tab.label}</span>
+                <span>{tab.label}</span>
               </button>
             ))}
           </div>
 
           <div className="p-10">
-            {/* Tab 1: API Keys */}
-            {activeTab === 1 && (
+            {activeTab === 'api' && (
               <div className="space-y-8 animate-fade-in">
                 <div className="flex justify-between items-center">
                   <div>
@@ -623,6 +590,48 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                   </div>
                 </div>
 
+                {/* 第三方邮箱搜索 API */}
+                <div className="bg-violet-50/50 border border-violet-100 rounded-2xl p-6 space-y-4">
+                  <div className="flex items-center gap-2 text-violet-800 font-black text-sm">
+                    <Mail size={16} /> 第三方邮箱搜索 API
+                  </div>
+                  <p className="text-[10px] text-slate-400 font-bold">
+                    背调时用于 enrich 决策人真实邮箱。配置后深度调查会自动调用 Hunter.io、Findymail、AnymailFinder。
+                  </p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="md:col-span-2">
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Hunter.io API Key</label>
+                      <input
+                        type="password"
+                        value={hunterApiKey}
+                        onChange={e => setHunterApiKey(e.target.value)}
+                        placeholder="hunter.io 控制台获取"
+                        className="w-full bg-white border border-violet-100 rounded-xl px-4 py-3 font-bold text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Findymail API Key</label>
+                      <input
+                        type="password"
+                        value={findymailApiKey}
+                        onChange={e => setFindymailApiKey(e.target.value)}
+                        placeholder="app.findymail.com"
+                        className="w-full bg-white border border-violet-100 rounded-xl px-4 py-3 font-bold text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">AnymailFinder API Key</label>
+                      <input
+                        type="password"
+                        value={anymailFinderApiKey}
+                        onChange={e => setAnymailFinderApiKey(e.target.value)}
+                        placeholder="anymailfinder.com"
+                        className="w-full bg-white border border-violet-100 rounded-xl px-4 py-3 font-bold text-sm"
+                      />
+                    </div>
+                  </div>
+                </div>
+
                 {/* Recommended Sources */}
                 <div className="bg-blue-50/50 border border-blue-100 rounded-2xl p-6">
                   <div className="flex items-center gap-2 text-blue-800 font-black text-sm mb-4">
@@ -637,7 +646,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     ].map((src, i) => (
                       <div key={i} className="bg-white p-4 rounded-xl border border-blue-100 shadow-sm">
                         <div className="font-black text-blue-600 text-sm mb-1 flex items-center justify-between">
-                          {i+1}. {src.name} <LinkIcon size={12} />
+                          {src.name}
                         </div>
                         <p className="text-[10px] text-slate-400 font-bold">{src.desc}</p>
                       </div>
@@ -725,86 +734,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
               </div>
             )}
 
-            {/* Tab 2: Cloud DB */}
-            {activeTab === 2 && (
-              <div className="max-w-2xl mx-auto space-y-8 animate-fade-in">
-                <div className="flex items-center gap-4 mb-8">
-                  <div className="bg-blue-50 p-4 rounded-2xl text-blue-600">
-                    <Cloud size={32} />
-                  </div>
-                  <div>
-                       <div className={`px-3 py-1 rounded-full text-[10px] font-black flex items-center gap-1 border ${isCloudConnected ? 'bg-green-50 text-green-500 border-green-100' : 'bg-red-50 text-red-500 border-red-100'}`}>
-                    {isCloudConnected ? <CheckCircle2 size={10} /> : <AlertTriangle size={10} />}
-                    {isCloudConnected ? '已连接 (Connected)' : '未连接 (Disconnected)'}
-                  </div>
-                </div>
-              </div>
-
-                <div className="bg-white border border-slate-100 rounded-[32px] p-10 shadow-sm space-y-8">
-                  <div className="flex items-center gap-2 text-slate-800 font-black mb-2">
-                    <LinkIcon size={18} /> 首次配置 / 新设备连接
-                  </div>
-                  <p className="text-sm text-slate-500 font-medium">在新浏览器或设备上，您只需输入一次 GitHub 凭证。连接成功后，系统将自动拉取之前保存的所有 API Key 和用户设置。</p>
-                  
-                  <div className="space-y-6">
-                    <div>
-                      <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">GitHub Personal Access Token</label>
-                      <input 
-                        type="password" 
-                        placeholder="ghp_xxxxxxxxxxxx" 
-                        value={ghToken}
-                        onChange={e => setGhToken(e.target.value)}
-                        className="w-full bg-slate-50 border-slate-100 rounded-2xl px-6 py-4 font-bold" 
-                      />
-                    </div>
-                    <div className="grid grid-cols-2 gap-6">
-                      <div>
-                        <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Owner (用户名)</label>
-                        <input 
-                          type="text" 
-                          placeholder="例如: NanGe" 
-                          value={ghOwner}
-                          onChange={e => setGhOwner(e.target.value)}
-                          className="w-full bg-slate-50 border-slate-100 rounded-2xl px-6 py-4 font-bold" 
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Repo (仓库名)</label>
-                        <input 
-                          type="text" 
-                          placeholder="例如: trade-data" 
-                          value={ghRepo}
-                          onChange={e => setGhRepo(e.target.value)}
-                          className="w-full bg-slate-50 border-slate-100 rounded-2xl px-6 py-4 font-bold" 
-                        />
-                      </div>
-                    </div>
-                    <button 
-                      onClick={handleConnectCloud}
-                      disabled={isSyncing}
-                      className="w-full bg-blue-600 hover:bg-blue-700 text-white py-5 rounded-2xl font-black text-lg shadow-lg shadow-blue-100 flex items-center justify-center gap-2 transition-all mt-4 disabled:opacity-50"
-                    >
-                      {isSyncing ? <Loader2 className="animate-spin" size={20} /> : <Cloud size={20} />}
-                      {isSyncing ? '正在同步...' : '连接并同步数据 (Connect & Sync)'}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-            {activeTab === 3 && (
+            {activeTab === 'users' && (
               <div className="space-y-8 animate-fade-in">
                 <div className="flex justify-between items-center">
                   <h3 className="text-2xl font-black text-slate-800 flex items-center gap-2">
                     <Users className="text-blue-600" /> 系统用户管理
                   </h3>
-                  <div className="flex gap-4">
-                    <button onClick={handleConnectCloud} className="bg-purple-100 text-purple-600 px-6 py-3 rounded-xl font-black flex items-center gap-2 hover:bg-purple-200 transition-all">
-                      <RefreshCw size={18} /> 强制同步
-                    </button>
-                    <button onClick={handleAddUser} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-black flex items-center gap-2 shadow-lg shadow-blue-100">
-                      <Plus size={20} /> 添加用户
-                    </button>
-                  </div>
+                  <button onClick={handleAddUser} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-black flex items-center gap-2 shadow-lg shadow-blue-100">
+                    <Plus size={20} /> 添加用户
+                  </button>
                 </div>
 
                 <div className="bg-white border border-slate-100 rounded-[32px] overflow-hidden shadow-sm">
@@ -840,8 +778,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
               </div>
             )}
 
-            {/* Tab 4: Knowledge Base */}
-            {activeTab === 4 && (
+            {activeTab === 'kb' && (
               <div className="space-y-8 animate-fade-in">
                 <div className="flex justify-between items-center">
                   <h3 className="text-2xl font-black text-slate-800 flex items-center gap-2">

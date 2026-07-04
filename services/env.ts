@@ -44,6 +44,23 @@ export const clearSupabaseOverride = (): void => {
   localStorage.removeItem(LS_KEY);
 };
 
+const ls = (key: string): string =>
+  (typeof localStorage !== 'undefined' ? localStorage.getItem(key)?.trim() : '') || '';
+
+/** 第三方邮箱搜索 API（管理后台可覆盖 .env.local） */
+export const getEmailSearchKeys = () => ({
+  hunter: ls('trade_scout_hunter_api_key') || read('REACT_APP_HUNTER_API_KEY') || read('HUNTER_API_KEY'),
+  findymail: ls('trade_scout_findymail_api_key') || read('FINDYMAIL_API_KEY'),
+  anymailFinder: ls('trade_scout_anymail_finder_api_key') || read('ANYMAIL_FINDER_API_KEY'),
+});
+
+export const saveEmailSearchKeys = (keys: { hunter?: string; findymail?: string; anymailFinder?: string }) => {
+  if (typeof localStorage === 'undefined') return;
+  if (keys.hunter !== undefined) localStorage.setItem('trade_scout_hunter_api_key', keys.hunter.trim());
+  if (keys.findymail !== undefined) localStorage.setItem('trade_scout_findymail_api_key', keys.findymail.trim());
+  if (keys.anymailFinder !== undefined) localStorage.setItem('trade_scout_anymail_finder_api_key', keys.anymailFinder.trim());
+};
+
 export const env = {
   apiKey: read('API_KEY') || read('REACT_APP_GEMINI_API_KEY'),
   qwenApiKey: read('REACT_APP_QWEN_API_KEY'),
