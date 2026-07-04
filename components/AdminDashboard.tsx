@@ -11,6 +11,7 @@ import { getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/d
 import { testApiKey, testQwenApiKey } from '../services/geminiService';
 import { saveApiConfig, getApiConfig, isSupabaseConfigured, saveKnowledgeFile, getKnowledgeFiles, deleteKnowledgeFile, resetSupabaseClient } from '../services/supabase';
 import { getSupabaseConfig, saveSupabaseConfig, clearSupabaseOverride, saveEmailSearchKeys, getEmailSearchKeys, env } from '../services/env';
+import { hashPassword } from '../services/auth';
 
 type AdminTab = 'api' | 'users' | 'kb';
 
@@ -292,20 +293,38 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     }
   };
 
-  const handleAddUser = () => {
+  const handleAddUser = async () => {
     const username = prompt('请输入新用户名:');
-    if (!username) return;
-    if (users.find(u => u.username === username)) {
+    if (!username?.trim()) return;
+    const trimmed = username.trim();
+    if (users.find(u => u.username === trimmed)) {
       alert('该用户名已存在');
       return;
     }
+    const pwd = prompt('请设置登录密码（至少 6 位）:');
+    if (!pwd || pwd.length < 6) {
+      alert('密码至少需要 6 位');
+      return;
+    }
     const newUser: User = {
-      username,
+      username: trimmed,
       role: 'user',
+      password: await hashPassword(pwd),
       isFirstLogin: true,
       createdAt: Date.now()
     };
     setUsers([...users, newUser]);
+  };
+
+  const handleResetPassword = async (username: string) => {
+    const pwd = prompt(`为「${username}」设置新密码（至少 6 位）:`);
+    if (!pwd || pwd.length < 6) {
+      alert('密码至少需要 6 位');
+      return;
+    }
+    const hashed = await hashPassword(pwd);
+    setUsers(prev => prev.map(u => u.username === username ? { ...u, password: hashed } : u));
+    alert(`已重置 ${username} 的密码`);
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -764,11 +783,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                             </span>
                           </td>
                           <td className="px-8 py-6 text-right">
-                            {user.username !== 'admin' && (
-                              <button onClick={() => handleDeleteUser(user.username)} className="text-slate-300 hover:text-red-500 transition-all">
-                                <Trash2 size={18} />
+                            <div className="flex items-center justify-end gap-2">
+                              <button
+                                onClick={() => handleResetPassword(user.username)}
+                                className="text-slate-400 hover:text-blue-600 transition-all text-[10px] font-black uppercase"
+                              >
+                                重置密码
                               </button>
-                            )}
+                              {user.username !== 'admin' && (
+                                <button onClick={() => handleDeleteUser(user.username)} className="text-slate-300 hover:text-red-500 transition-all">
+                                  <Trash2 size={18} />
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       ))}

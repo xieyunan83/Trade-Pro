@@ -17,6 +17,7 @@ import { ModuleClientCRM } from './components/ModuleClientCRM';
 import { ModuleEmailCampaign } from './components/ModuleEmailCampaign'; 
 import { ClientFinder } from './components/ClientFinder';
 import { Login } from './components/Login';
+import { createDefaultUsers, ensureUserPasswords } from './services/auth';
 import { AdminDashboard } from './components/AdminDashboard';
 import { 
   LayoutDashboard, PackageSearch, Users, PenTool, Network, Search, Loader2, Menu, Globe, Zap, FileSpreadsheet, History, Clock, ChevronRight, AlertTriangle, RefreshCw, LogOut, Briefcase, Ruler, CheckCircle2, Hourglass, StopCircle, PlayCircle, Layers, Mail, Cloud, Download, Info, Link2, X, Database, Github
@@ -69,6 +70,7 @@ const App: React.FC = () => {
   const [manualToken, setManualToken] = useState('');
   const [manualOwner, setManualOwner] = useState('');
   const [manualRepo, setManualRepo] = useState('');
+  const [authReady, setAuthReady] = useState(false);
 
   const shouldStopRef = useRef(false);
 
@@ -85,6 +87,34 @@ const App: React.FC = () => {
       saveDiscoverySearch(state).catch(e => console.error('Supabase discovery save failed', e));
     }
   };
+
+  useEffect(() => {
+    const loadUsers = async () => {
+      try {
+        const savedUsers = localStorage.getItem('trade_scout_users');
+        if (savedUsers) {
+          const parsed: User[] = JSON.parse(savedUsers);
+          const withPasswords = await ensureUserPasswords(parsed);
+          setUsers(withPasswords);
+          if (JSON.stringify(withPasswords) !== savedUsers) {
+            localStorage.setItem('trade_scout_users', JSON.stringify(withPasswords));
+          }
+        } else {
+          const defaultUsers = await createDefaultUsers();
+          setUsers(defaultUsers);
+          localStorage.setItem('trade_scout_users', JSON.stringify(defaultUsers));
+        }
+      } catch (e) {
+        console.error('Failed to load users', e);
+        const defaultUsers = await createDefaultUsers();
+        setUsers(defaultUsers);
+        localStorage.setItem('trade_scout_users', JSON.stringify(defaultUsers));
+      } finally {
+        setAuthReady(true);
+      }
+    };
+    loadUsers();
+  }, []);
 
   useEffect(() => {
     const checkKey = async () => {
@@ -108,19 +138,6 @@ const App: React.FC = () => {
             const h = await getHistory(); setHistory(h);
             const q = await getAutomationQueue(); setAutomationResults(q);
             const files = await getAllFilesFromDB(); setKbCount(files.length);
-            
-            // Load Users from LocalStorage
-            const savedUsers = localStorage.getItem('trade_scout_users');
-            if (savedUsers) {
-                setUsers(JSON.parse(savedUsers));
-            } else {
-                const defaultUsers: User[] = [
-                    { username: 'admin', role: 'admin', isFirstLogin: false, createdAt: Date.now() },
-                    { username: 'user', role: 'user', isFirstLogin: false, createdAt: Date.now() }
-                ];
-                setUsers(defaultUsers);
-                localStorage.setItem('trade_scout_users', JSON.stringify(defaultUsers));
-            }
 
             // Check GitHub Status
             const ghStatus = checkGitHubStatus();
@@ -218,8 +235,9 @@ const App: React.FC = () => {
                 // Users
                 const cloudUsers = await fetchUsersFromCloud();
                 if (cloudUsers.length > 0) {
-                    setUsers(cloudUsers);
-                    localStorage.setItem('trade_scout_users', JSON.stringify(cloudUsers));
+                    const withPasswords = await ensureUserPasswords(cloudUsers);
+                    setUsers(withPasswords);
+                    localStorage.setItem('trade_scout_users', JSON.stringify(withPasswords));
                 }
 
                 // History
@@ -244,7 +262,7 @@ const App: React.FC = () => {
     };
     
     if (currentUser) loadData();
-    
+
     const savedClients = localStorage.getItem('tradeScoutClients');
     if (savedClients && crmClients.length === 0) { 
         try { 
@@ -556,7 +574,10 @@ const App: React.FC = () => {
   const handleAddClients = (newClients: Client[]) => { setCrmClients(prev => [...prev, ...newClients]); alert(`已成功导入 ${newClients.length} 个客户资料！`); };
 
   if (hasKey === null) return <div className="h-screen flex items-center justify-center bg-slate-50"><Loader2 className="animate-spin text-blue-600" size={40} /></div>;
-  if (!currentUser) return <Login onLogin={setCurrentUser} users={users} />;
+  if (!currentUser) {
+    if (!authReady) return <div className="h-screen flex items-center justify-center bg-slate-50"><Loader2 className="animate-spin text-blue-600" size={40} /></div>;
+    return <Login onLogin={setCurrentUser} users={users} />;
+  }
   
   if (currentUser.role === 'admin') {
     return (

@@ -1,7 +1,8 @@
 
 import React, { useState } from 'react';
 import { User } from '../types';
-import { User as UserIcon, Lock, Loader2 } from 'lucide-react';
+import { User as UserIcon, Lock, Loader2, AlertTriangle } from 'lucide-react';
+import { verifyPassword } from '../services/auth';
 
 interface LoginProps {
   onLogin: (user: User) => void;
@@ -12,27 +13,31 @@ export const Login: React.FC<LoginProps> = ({ onLogin, users }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    
-    // Check against users list
-    setTimeout(() => {
-      const foundUser = users.find(u => u.username === username);
-      if (foundUser) {
-        onLogin(foundUser);
-      } else {
-        // Fallback for demo if no users found (should not happen with default users)
-        onLogin({
-          username,
-          role: username === 'admin' ? 'admin' : 'user',
-          isFirstLogin: false,
-          createdAt: Date.now()
-        });
-      }
+    setError('');
+
+    const trimmed = username.trim();
+    const foundUser = users.find(u => u.username === trimmed);
+
+    if (!foundUser || !foundUser.password) {
+      setError('用户名或密码错误');
       setLoading(false);
-    }, 800);
+      return;
+    }
+
+    const ok = await verifyPassword(password, foundUser.password);
+    if (!ok) {
+      setError('用户名或密码错误');
+      setLoading(false);
+      return;
+    }
+
+    onLogin(foundUser);
+    setLoading(false);
   };
 
   return (
@@ -51,6 +56,13 @@ export const Login: React.FC<LoginProps> = ({ onLogin, users }) => {
           </div>
           <h2 className="text-3xl font-black text-slate-800">登录系统</h2>
         </div>
+
+        {error && (
+          <div className="mb-6 flex items-center gap-2 bg-red-50 text-red-600 px-4 py-3 rounded-xl text-sm font-bold border border-red-100">
+            <AlertTriangle size={16} />
+            {error}
+          </div>
+        )}
         
         <form onSubmit={handleLogin} className="space-y-8">
           <div>
@@ -66,6 +78,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin, users }) => {
                 className="w-full pl-14 pr-6 py-5 rounded-2xl border-2 border-slate-100 focus:border-blue-500 focus:ring-0 focus:outline-none font-bold text-lg transition-all placeholder:text-slate-300"
                 placeholder="输入用户名"
                 required
+                autoComplete="username"
               />
             </div>
           </div>
@@ -82,6 +95,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin, users }) => {
                 className="w-full pl-14 pr-6 py-5 rounded-2xl border-2 border-slate-100 focus:border-blue-500 focus:ring-0 focus:outline-none font-bold text-lg transition-all placeholder:text-slate-300"
                 placeholder="••••••••"
                 required
+                autoComplete="current-password"
               />
             </div>
           </div>
