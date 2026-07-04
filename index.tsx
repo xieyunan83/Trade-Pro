@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import { initRuntimeConfig } from './services/runtimeConfig';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
@@ -8,8 +9,26 @@ if (!rootElement) {
 }
 
 const root = ReactDOM.createRoot(rootElement);
+
 root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
+  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', color: '#64748b', fontFamily: 'Inter, sans-serif' }}>
+    正在加载配置…
+  </div>
 );
+
+initRuntimeConfig()
+  .then(() => {
+    root.render(
+      <React.StrictMode>
+        <App />
+      </React.StrictMode>
+    );
+  })
+  .catch((err) => {
+    console.error('Runtime config init failed', err);
+    root.render(
+      <React.StrictMode>
+        <App />
+      </React.StrictMode>
+    );
+  });

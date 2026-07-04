@@ -1,8 +1,8 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { KnowledgeFile, HistoryItem, DiscoveryState, Client } from '../types'
-import { env, isSupabaseConfigured } from './env'
+import { getRuntimeConfig, isSupabaseConfigured, clearSupabaseConfigCache } from './runtimeConfig'
 
-// ==================== 类型定义 ====================
+export { isSupabaseConfigured, clearSupabaseConfigCache }
 
 export interface ApiConfig {
   provider: string
@@ -35,14 +35,31 @@ export interface Customer {
   created_at?: string
 }
 
-// ==================== Supabase客户端初始化 ====================
+// ==================== Supabase 客户端（运行时配置） ====================
 
-export const supabase: SupabaseClient = createClient(
-  env.supabaseUrl || 'https://placeholder.supabase.co',
-  env.supabaseAnonKey || 'placeholder'
-)
+let supabaseClient: SupabaseClient | null = null;
 
-export { isSupabaseConfigured }
+export const getSupabaseClient = (): SupabaseClient => {
+  if (!supabaseClient) {
+    const cfg = getRuntimeConfig();
+    supabaseClient = createClient(
+      cfg.supabaseUrl || 'https://placeholder.supabase.co',
+      cfg.supabaseAnonKey || 'placeholder'
+    );
+  }
+  return supabaseClient;
+};
+
+export const resetSupabaseClient = (): void => {
+  supabaseClient = null;
+};
+
+/** @deprecated 使用 getSupabaseClient() */
+export const supabase = new Proxy({} as SupabaseClient, {
+  get(_target, prop) {
+    return (getSupabaseClient() as any)[prop];
+  },
+});
 
 // ==================== 工具函数 ====================
 

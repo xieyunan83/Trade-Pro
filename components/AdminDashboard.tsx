@@ -17,7 +17,8 @@ import {
 } from '../services/githubService';
 import { getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/db';
 import { testApiKey, testQwenApiKey } from '../services/geminiService';
-import { saveApiConfig, getApiConfig, isSupabaseConfigured, saveKnowledgeFile, getKnowledgeFiles, deleteKnowledgeFile } from '../services/supabase';
+import { saveApiConfig, getApiConfig, isSupabaseConfigured, saveKnowledgeFile, getKnowledgeFiles, deleteKnowledgeFile, resetSupabaseClient } from '../services/supabase';
+import { getRuntimeConfig, saveSupabaseConfig, initRuntimeConfig, clearSupabaseConfigCache } from '../services/runtimeConfig';
 import { env } from '../services/env';
 
 const KB_ACCEPT = [
@@ -65,6 +66,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const [qwenBaseUrl, setQwenBaseUrl] = useState('');
   const [qwenModelId, setQwenModelId] = useState('qwen-max');
   const [defaultAIModel, setDefaultAIModel] = useState<'qwen' | 'gemini' | 'auto'>('qwen');
+  const [supabaseUrl, setSupabaseUrl] = useState('');
+  const [supabaseAnonKey, setSupabaseAnonKey] = useState('');
   const [testingApiId, setTestingApiId] = useState<string | null>(null);
   const [isTestingQwen, setIsTestingQwen] = useState(false);
   
@@ -119,6 +122,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     };
     loadQwenKey();
 
+    const runtimeCfg = getRuntimeConfig();
+    setSupabaseUrl(runtimeCfg.supabaseUrl);
+    setSupabaseAnonKey(runtimeCfg.supabaseAnonKey);
+
     const loadKB = async () => {
       if (isSupabaseConfigured()) {
         const cloudFiles = await getKnowledgeFiles();
@@ -141,6 +148,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
       next[idx] = { ...next[idx], [field]: value };
       return next;
     });
+  };
+
+  const handleSaveSupabaseConfig = async () => {
+    if (!supabaseUrl.trim() || !supabaseAnonKey.trim()) {
+      alert('请填写 Supabase URL 和 Anon Key');
+      return;
+    }
+    saveSupabaseConfig(supabaseUrl, supabaseAnonKey);
+    resetSupabaseClient();
+    clearSupabaseConfigCache();
+    await initRuntimeConfig();
+    alert('Supabase 配置已保存，页面将刷新以同步云端数据');
+    window.location.reload();
   };
 
   const handleSaveApiConfigs = async () => {
@@ -314,7 +334,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     if (!files || files.length === 0) return;
 
     if (!isSupabaseConfigured()) {
-      alert('Supabase 未配置，无法上传。请在 .env.local 中设置 REACT_APP_SUPABASE_URL 和 REACT_APP_SUPABASE_ANON_KEY。');
+      alert('Supabase 未配置，无法上传。请在管理后台填写 Supabase 连接，或确保 app-config.json 已配置。');
       e.target.value = '';
       return;
     }
@@ -510,6 +530,37 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                         placeholder="qwen-max / qwen-plus / qwen-turbo"
                         className="w-full bg-white border border-emerald-100 rounded-xl px-4 py-3 font-bold text-sm"
                       />
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Supabase Project URL</label>
+                      <input
+                        type="text"
+                        value={supabaseUrl}
+                        onChange={e => setSupabaseUrl(e.target.value)}
+                        placeholder="https://xxx.supabase.co"
+                        className="w-full bg-white border border-emerald-100 rounded-xl px-4 py-3 font-bold text-sm"
+                      />
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Supabase Anon Key</label>
+                      <input
+                        type="password"
+                        value={supabaseAnonKey}
+                        onChange={e => setSupabaseAnonKey(e.target.value)}
+                        placeholder="eyJhbGciOiJIUzI1NiIs..."
+                        className="w-full bg-white border border-emerald-100 rounded-xl px-4 py-3 font-bold text-sm"
+                      />
+                      <p className="text-[10px] text-slate-400 font-bold mt-2">
+                        GitHub / AI Studio 挂载版无 .env.local，需在此配置或通过 app-config.json 提供。Anon Key 可公开，由 RLS 保护数据。
+                      </p>
+                    </div>
+                    <div className="md:col-span-2 flex justify-end">
+                      <button
+                        onClick={handleSaveSupabaseConfig}
+                        className="bg-slate-800 hover:bg-slate-900 text-white px-6 py-3 rounded-xl font-black flex items-center gap-2"
+                      >
+                        <Save size={16} /> 保存 Supabase 连接
+                      </button>
                     </div>
                     <div className="md:col-span-2">
                       <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Qwen API Key</label>
