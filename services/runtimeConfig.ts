@@ -1,7 +1,9 @@
 /**
  * 运行时配置：部署环境（AI Studio / GitHub 挂载）没有 .env.local，
- * 因此按优先级合并：构建时 env → localStorage → public/app-config.json
+ * 因此按优先级合并：localStorage → 构建 env → bakedConfig（打包进代码）→ fetch app-config.json
  */
+
+import { bakedAppConfig } from './bakedConfig';
 
 export interface AppRuntimeConfig {
   supabaseUrl: string;
@@ -30,6 +32,12 @@ const fromBuildEnv = (): Partial<AppRuntimeConfig> => ({
   supabaseUrl: readEnv('REACT_APP_SUPABASE_URL'),
   supabaseAnonKey: readEnv('REACT_APP_SUPABASE_ANON_KEY'),
   defaultAIModel: (readEnv('REACT_APP_DEFAULT_AI_MODEL') || 'qwen') as AppRuntimeConfig['defaultAIModel'],
+});
+
+const fromBakedConfig = (): Partial<AppRuntimeConfig> => ({
+  supabaseUrl: bakedAppConfig.supabaseUrl || '',
+  supabaseAnonKey: bakedAppConfig.supabaseAnonKey || '',
+  defaultAIModel: (bakedAppConfig.defaultAIModel || 'qwen') as AppRuntimeConfig['defaultAIModel'],
 });
 
 const fetchPublicConfig = async (): Promise<Partial<AppRuntimeConfig>> => {
@@ -74,7 +82,7 @@ export const initRuntimeConfig = async (): Promise<AppRuntimeConfig> => {
 
   initPromise = (async () => {
     const publicCfg = await fetchPublicConfig();
-    cached = mergeConfig(fromBuildEnv(), publicCfg, fromLocalStorage());
+    cached = mergeConfig(fromBuildEnv(), fromBakedConfig(), publicCfg, fromLocalStorage());
     return cached;
   })();
 
@@ -82,7 +90,7 @@ export const initRuntimeConfig = async (): Promise<AppRuntimeConfig> => {
 };
 
 export const getRuntimeConfig = (): AppRuntimeConfig =>
-  cached || mergeConfig(fromBuildEnv(), fromLocalStorage());
+  cached || mergeConfig(fromBuildEnv(), fromBakedConfig(), fromLocalStorage());
 
 export const isSupabaseConfigured = (): boolean => {
   const cfg = getRuntimeConfig();
