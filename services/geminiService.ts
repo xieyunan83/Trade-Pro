@@ -2,7 +2,7 @@
 import { GoogleGenAI, Type, Part } from "@google/genai";
 import { AnalysisResult, ClientSearchResult, DecisionMaker, ChatMessage, KnowledgeFile, KeywordExtractionResult, MailGroup, EmailTemplateRequest, ApiConfig, TaskType } from "../types";
 import { getAllFilesFromDB } from "./db";
-import { getApiConfig as getSupabaseApiConfig } from './supabase';
+import { getApiConfig as getSupabaseApiConfig, getAllApiConfigs, isSupabaseConfigured } from './supabase';
 import { env, getEmailSearchKeys } from './env';
 
 const NATIVE_MODEL = 'gemini-3-pro-preview';
@@ -219,10 +219,52 @@ export const getGeminiConfig = (): ApiConfig[] => {
 
 export const hasApiKeyConfigured = (): boolean => {
     if (env.qwenApiKey) return true;
-    if (typeof localStorage !== 'undefined' && localStorage.getItem('trade_scout_qwen_api_key')) return true;
+    if (typeof localStorage !== 'undefined' && localStorage.getItem('trade_scout_qwen_api_key')?.trim()) return true;
     if (getGeminiConfig().length > 0) return true;
     if (env.apiKey) return true;
     return false;
+};
+
+/** 从 Supabase 拉取管理员保存的 API 密钥到 localStorage，供普通用户登录后使用 */
+export const hydrateApiConfigsFromCloud = async (): Promise<boolean> => {
+    if (hasApiKeyConfigured()) return true;
+    if (!isSupabaseConfigured()) return false;
+
+    try {
+        const configs = await getAllApiConfigs();
+        if (configs.length === 0) return false;
+
+        for (const c of configs) {
+            if (c.provider === 'qwen' && c.apiKey?.trim()) {
+                localStorage.setItem('trade_scout_qwen_api_key', c.apiKey.trim());
+                if (c.baseUrl?.trim()) localStorage.setItem('trade_scout_qwen_base_url', c.baseUrl.trim());
+                if (c.modelId?.trim()) localStorage.setItem('trade_scout_qwen_model_id', c.modelId.trim());
+            }
+            if (c.provider === 'hunter' && c.apiKey?.trim()) {
+                localStorage.setItem('trade_scout_hunter_api_key', c.apiKey.trim());
+            }
+            if (c.provider === 'findymail' && c.apiKey?.trim()) {
+                localStorage.setItem('trade_scout_findymail_api_key', c.apiKey.trim());
+            }
+            if (c.provider === 'anymailfinder' && c.apiKey?.trim()) {
+                localStorage.setItem('trade_scout_anymail_finder_api_key', c.apiKey.trim());
+            }
+        }
+
+        return hasApiKeyConfigured();
+    } catch (e) {
+        console.error('Failed to hydrate API configs from Supabase', e);
+        return hasApiKeyConfigured();
+    }
+};
+
+export const checkApiKeyAvailability = async (): Promise<boolean> => {
+    if (hasApiKeyConfigured()) return true;
+    if (typeof window !== 'undefined' && window.aistudio?.hasSelectedApiKey) {
+        const studioKey = await window.aistudio.hasSelectedApiKey();
+        if (studioKey) return true;
+    }
+    return hydrateApiConfigsFromCloud();
 };
 
 const getDefaultAIModel = (): 'qwen' | 'gemini' | 'auto' => {

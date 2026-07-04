@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { analyzeCompany, hasApiKeyConfigured, searchPotentialClients, generateMailGroupStrategy } from './services/geminiService';
+import { analyzeCompany, hasApiKeyConfigured, checkApiKeyAvailability, hydrateApiConfigsFromCloud, searchPotentialClients, generateMailGroupStrategy } from './services/geminiService';
 import { exportToPPT } from './services/exportService';
 import { saveHistory, getHistory, getAllFilesFromDB, saveAutomationTask, getAutomationQueue, deleteAutomationTask, saveFileToDB } from './services/db';
 import { fetchGlobalConfig, fetchDocumentsFromRepo, backupUserHistory, fetchCRMFromCloud, saveCRMToCloud, fetchUserHistoryFromCloud, checkGitHubStatus, fetchApiConfigsFromCloud, setManualGitHubConfig } from './services/githubService';
@@ -104,15 +104,10 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const checkKey = async () => {
-      if (hasApiKeyConfigured()) {
-          setHasKey(true);
-          return;
-      }
-      if (window.aistudio?.hasSelectedApiKey) {
-        const studioKey = await window.aistudio.hasSelectedApiKey();
-        if (studioKey) { setHasKey(true); return; }
-      } 
-      setHasKey(false);
+      if (!currentUser || currentUser.role === 'admin') return;
+      setHasKey(null);
+      const ok = await checkApiKeyAvailability();
+      setHasKey(ok);
     };
     checkKey();
   }, [currentUser]);
@@ -131,6 +126,12 @@ const App: React.FC = () => {
 
             // Supabase 知识库同步（不依赖 GitHub）
             if (currentUser && isSupabaseConfigured()) {
+                // 普通用户：从 Supabase 同步管理员保存的 API 密钥
+                if (currentUser.role !== 'admin') {
+                    const apiReady = await hydrateApiConfigsFromCloud();
+                    if (apiReady) setHasKey(true);
+                }
+
                 setIsKBSyncing(true);
                 try {
                     console.log("Auto-syncing Supabase Knowledge Base...");
@@ -232,6 +233,7 @@ const App: React.FC = () => {
                 const apiKeys = await fetchApiConfigsFromCloud();
                 if (apiKeys.length > 0) {
                     localStorage.setItem('trade_scout_api_configs', JSON.stringify(apiKeys));
+                    setHasKey(hasApiKeyConfigured());
                 }
             }
         } catch (e) {
@@ -548,12 +550,11 @@ const App: React.FC = () => {
   const handleSyncToGitHub = async () => { if(!currentUser) return; setIsSyncing(true); try { await backupUserHistory(currentUser.username, history); await saveCRMToCloud(crmClients); alert("数据同步成功!"); } catch (e: any) { alert("同步失败: " + e.message); } finally { setIsSyncing(false); } };
   const handleAddClients = (newClients: Client[]) => { setCrmClients(prev => [...prev, ...newClients]); alert(`已成功导入 ${newClients.length} 个客户资料！`); };
 
-  if (hasKey === null) return <div className="h-screen flex items-center justify-center bg-slate-50"><Loader2 className="animate-spin text-blue-600" size={40} /></div>;
   if (!currentUser) {
     if (!authReady) return <div className="h-screen flex items-center justify-center bg-slate-50"><Loader2 className="animate-spin text-blue-600" size={40} /></div>;
     return <Login onLogin={setCurrentUser} />;
   }
-  
+
   if (currentUser.role === 'admin') {
     return (
       <AdminDashboard 
@@ -565,13 +566,15 @@ const App: React.FC = () => {
     );
   }
 
+  if (hasKey === null) return <div className="h-screen flex items-center justify-center bg-slate-50"><Loader2 className="animate-spin text-blue-600" size={40} /></div>;
+
   if (hasKey === false) {
       return (
-          <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 p-6 text-center">
+          <div className="min-h-screen min-h-[100dvh] flex flex-col items-center justify-center bg-slate-50 p-6 text-center">
               <div className="bg-red-100 p-4 rounded-full text-red-600 mb-4"><AlertTriangle size={32}/></div>
-              <h2 className="text-xl font-bold text-slate-800">System Configuration Required</h2>
-              <p className="text-slate-500 mt-2 max-w-md">Please contact admin to configure API Keys.</p>
-              <button onClick={handleLogout} className="mt-6 text-blue-600 hover:underline">Back to Login</button>
+              <h2 className="text-xl font-bold text-slate-800">系统尚未配置 API 密钥</h2>
+              <p className="text-slate-500 mt-2 max-w-md text-sm sm:text-base">请联系管理员在控制台保存千问 API 配置（将同步至云端），然后重新登录。</p>
+              <button onClick={handleLogout} className="mt-6 text-blue-600 hover:underline touch-manipulation">返回登录</button>
           </div>
       );
   }
