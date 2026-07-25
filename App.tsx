@@ -1,11 +1,11 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { analyzeCompany, hasApiKeyConfigured, checkApiKeyAvailability, hydrateApiConfigsFromCloud, searchPotentialClients, generateMailGroupStrategy } from './services/geminiService';
-import { exportToPPT } from './services/exportService';
+import { exportToPPT, exportAutomationReportToPPT, exportBatchAutomationReportsToPPT } from './services/exportService';
 import { saveHistory, getHistory, getAllFilesFromDB, saveAutomationTask, getAutomationQueue, deleteAutomationTask, saveFileToDB } from './services/db';
 import { fetchGlobalConfig, fetchDocumentsFromRepo, backupUserHistory, fetchCRMFromCloud, saveCRMToCloud, fetchUserHistoryFromCloud, checkGitHubStatus, fetchApiConfigsFromCloud, setManualGitHubConfig } from './services/githubService';
 import { isSupabaseConfigured, getKnowledgeFiles, getInvestigationHistory, saveInvestigationHistory, getLatestDiscoverySearch, saveDiscoverySearch, getCrmClients, syncCrmClients } from './services/supabase';
-import { checkLimit, incrementUsage, updateLocalConfig } from './services/limitService';
+import { checkLimit, incrementUsage, updateLocalConfig, resetDailyUsage, getDailyUsagePublic } from './services/limitService';
 import { ModuleType, AnalysisResult, DiscoveryState, Client, User, HistoryItem, AutomationResult, ClientSearchResult } from './types';
 import { ModuleBackground } from './components/ModuleBackground';
 import { ModuleProducts } from './components/ModuleProducts';
@@ -15,12 +15,13 @@ import { ModuleSimilar } from './components/ModuleSimilar';
 import { ModulePromoGenerator } from './components/ModulePromoGenerator';
 import { ModuleClientCRM } from './components/ModuleClientCRM';
 import { ModuleEmailCampaign } from './components/ModuleEmailCampaign'; 
+import { ModuleImageGenerator } from './components/ModuleImageGenerator';
 import { ClientFinder } from './components/ClientFinder';
 import { Login } from './components/Login';
 import { loadUsersWithMigration, saveUsersToStorage } from './services/auth';
 import { AdminDashboard } from './components/AdminDashboard';
 import { 
-  LayoutDashboard, PackageSearch, Users, PenTool, Network, Search, Loader2, Menu, Globe, Zap, FileSpreadsheet, History, Clock, ChevronRight, AlertTriangle, RefreshCw, LogOut, Briefcase, Ruler, CheckCircle2, Hourglass, StopCircle, PlayCircle, Layers, Mail, Cloud, Download, Info, Link2, X, Database, Github
+  LayoutDashboard, PackageSearch, Users, PenTool, Network, Search, Loader2, Menu, Globe, Zap, FileSpreadsheet, History, Clock, ChevronRight, AlertTriangle, RefreshCw, LogOut, Briefcase, Ruler, CheckCircle2, Hourglass, StopCircle, PlayCircle, Layers, Mail, Cloud, Download, Info, Link2, X, Database, Github, Image
 } from 'lucide-react';
 
 declare global {
@@ -55,7 +56,14 @@ const App: React.FC = () => {
   const [isGitHubConnected, setIsGitHubConnected] = useState(false);
   
   const [discoveryState, setDiscoveryState] = useState<DiscoveryState>({
-    product: '', country: '', industry: '', clientType: '', results: [], hasSearched: false
+    product: '',
+    country: '',
+    countries: [],
+    industry: '',
+    clientType: '',
+    clientTypes: [],
+    results: [],
+    hasSearched: false,
   });
 
   const [automationResults, setAutomationResults] = useState<AutomationResult[]>([]);
@@ -89,6 +97,24 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
+    // 一次性解除旧默认「每日 20 次」卡死：抬高限额（用量保留，500 内仍可继续）
+    try {
+      updateLocalConfig({
+        lastUpdated: Date.now(),
+        dailyLimits: { search: 500, analysis: 500 },
+        systemNotice: '',
+      });
+      const usage = getDailyUsagePublic();
+      // 若已顶满旧限额，清零今日计数以便立即继续批量
+      if (usage.analysisCount >= 20) {
+        resetDailyUsage();
+      }
+    } catch (e) {
+      console.warn('limit migrate failed', e);
+    }
+  }, []);
+
+  useEffect(() => {
     const loadUsers = async () => {
       try {
         const loaded = await loadUsersWithMigration();
@@ -116,9 +142,41 @@ const App: React.FC = () => {
     const loadData = async () => {
         try {
             // 1. Load Local DB Data First
-            const h = await getHistory(); setHistory(h);
-            const q = await getAutomationQueue(); setAutomationResults(q);
+            const h = await getHistory();
+            const q = await getAutomationQueue();
+            setAutomationResults(q);
             const files = await getAllFilesFromDB(); setKbCount(files.length);
+
+            // 恢复：批量任务已完成但未写入历史时，补录到历史（避免额度白花）
+            const knownDomains = new Set(
+              h.map((i) => (i.domain || i.data?.companyInfo?.website || '').toLowerCase()).filter(Boolean)
+            );
+            const recovered: HistoryItem[] = [];
+            for (const task of q) {
+              if (task.status !== 'completed' || !task.analysis) continue;
+              const domain = (
+                task.analysis.companyInfo?.website ||
+                task.website ||
+                task.clientName ||
+                ''
+              ).toLowerCase();
+              if (!domain || knownDomains.has(domain)) continue;
+              const item: HistoryItem = {
+                id: `recover_${task.id}`,
+                type: ModuleType.BACKGROUND,
+                data: task.analysis,
+                timestamp: Date.now() - recovered.length,
+                domain: task.analysis.companyInfo?.website || task.website || task.clientName,
+              };
+              try {
+                await persistHistoryItem(item);
+                recovered.push(item);
+                knownDomains.add(domain);
+              } catch (e) {
+                console.warn('Recover history failed', e);
+              }
+            }
+            setHistory([...recovered, ...h]);
 
             // Check GitHub Status
             const ghStatus = checkGitHubStatus();
@@ -135,14 +193,17 @@ const App: React.FC = () => {
                 setIsKBSyncing(true);
                 try {
                     console.log("Auto-syncing Supabase Knowledge Base...");
-                    const cloudFiles = await getKnowledgeFiles();
+                    const { files: cloudFiles, error } = await getKnowledgeFiles();
+                    if (error) console.warn('KB cloud sync:', error);
                     if (cloudFiles.length > 0) {
                         for (const f of cloudFiles) { await saveFileToDB(f); }
-                        const allFiles = await getAllFilesFromDB();
-                        setKbCount(allFiles.length);
                     }
+                    const allFiles = await getAllFilesFromDB();
+                    setKbCount(allFiles.length);
                 } catch (e) {
                     console.error("Supabase KB Sync failed", e);
+                    const allFiles = await getAllFilesFromDB();
+                    setKbCount(allFiles.length);
                 } finally {
                     setIsKBSyncing(false);
                 }
@@ -291,7 +352,7 @@ const App: React.FC = () => {
       const lines = input.split(/[\n;]+/).map(s => s.trim()).filter(s => s.length > 0);
       if (lines.length === 1) {
           const limit = checkLimit('analysis');
-          if (!limit.allowed) { alert(`Daily Analysis Limit Reached (${limit.max}).`); return; }
+          if (!limit.allowed) { alert(`今日背调次数已达上限（${limit.current}/${limit.max}）。请联系管理员提高限额，或明日再试。`); return; }
           performSingleAnalysis(lines[0]);
       } else {
           setPendingBatch(lines); setPendingBatchContext('Manual Input'); setBatchModalOpen(true);
@@ -302,8 +363,8 @@ const App: React.FC = () => {
     setLoading(true); setErrorMsg(null); setActiveModule(ModuleType.BACKGROUND); setMobileMenuOpen(false);
     try {
       const result = await analyzeCompany(domain, 'detailed'); setAnalysisData(result); incrementUsage('analysis');
-      const historyItem: HistoryItem = { id: Date.now().toString(), type: ModuleType.BACKGROUND, data: result, timestamp: Date.now(), domain: result.companyInfo.website };
-      await persistHistoryItem(historyItem); setHistory(prev => [historyItem, ...prev]); updateCrmStatus(result);
+      await saveAnalysisToHistory(result, 'single');
+      updateCrmStatus(result);
     } catch (e: any) { setErrorMsg(`Error: ${e.message}`); } finally { setLoading(false); }
   };
 
@@ -338,31 +399,38 @@ const App: React.FC = () => {
   // RESTORED: Handle batch adding clients from Discovery
   const handleBatchAddToCRM = (results: ClientSearchResult[]) => { 
       if (!results || results.length === 0) return;
+      const mapType = (t?: string): Client['type'] => {
+          const s = (t || '').toLowerCase();
+          if (s.includes('retail')) return '零售商';
+          if (s.includes('wholesale')) return '批发商';
+          if (s.includes('distribut')) return '分销商';
+          return '进口商';
+      };
       const newClients: Client[] = results.map(r => ({
           id: Date.now() + Math.random().toString(36).substr(2, 9),
           name: r.name,
           website: r.website,
           country: r.country,
-          type: '进口商', 
+          type: mapType(r.clientType),
           status: '新建/潜在', 
-          productType: discoveryState.product || 'General', 
-          industry: 'Unknown',
-          priceRange: 'Unknown', 
+          productType: discoveryState.product || r.mainProducts || 'General', 
+          industry: discoveryState.industry || 'Unknown',
+          priceRange: r.estimatedScale || 'Unknown', 
           isSampleNeeded: false, 
           hasAnalyzed: false, 
           lastOrderDate: '', 
           lastContactSent: '', 
           lastContactReceived: '', 
           nextFollowUpDate: new Date().toISOString().split('T')[0], 
-          activityLog: `Batch Added from Discovery. Desc: ${r.description}`,
-          contacts: [] // Empty contacts for discovery
+          activityLog: `Discovery 导入。匹配度:${r.fitScore ?? '-'}。${r.fitReason || r.description}`,
+          contacts: []
       }));
 
       setCrmClients(prev => {
           const existingWebsites = new Set(prev.map(c => c.website?.toLowerCase()));
-          const unique = newClients.filter(c => !existingWebsites.has(c.website?.toLowerCase()));
-          if (unique.length > 0) alert(`Added ${unique.length} new clients to CRM.`);
-          else alert("All selected clients already exist in CRM.");
+          const unique = newClients.filter(c => !c.website || !existingWebsites.has(c.website?.toLowerCase()));
+          if (unique.length > 0) alert(`已导入 ${unique.length} 个新客户到 CRM`);
+          else alert("所选客户已在 CRM 中");
           return [...unique, ...prev];
       });
   };
@@ -373,14 +441,65 @@ const App: React.FC = () => {
           if (c.website?.toLowerCase() === analysis.companyInfo.website?.toLowerCase() || c.name === analysis.companyInfo.name) {
               return { 
                   ...c, 
-                  hasAnalyzed: true, 
+                  hasAnalyzed: true,
+                  hasBackgroundCheck: true,
                   activityLog: c.activityLog + ` [Analyzed ${new Date().toLocaleDateString()}]`,
-                  // Optionally merge contacts, here we just keep existing unless explicit sync requested
                   contacts: (c.contacts && c.contacts.length > 0) ? c.contacts : (analysis.decisionMakers || [])
               };
           }
           return c;
       }));
+  };
+
+  /** 批量/单次分析完成后写入历史（IndexedDB + Supabase） */
+  const saveAnalysisToHistory = async (result: AnalysisResult, source = 'batch'): Promise<HistoryItem> => {
+      const domain = result.companyInfo?.website || result.companyInfo?.name || 'unknown';
+      const historyItem: HistoryItem = {
+          id: `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+          type: ModuleType.BACKGROUND,
+          data: result,
+          timestamp: Date.now(),
+          domain,
+      };
+      await persistHistoryItem(historyItem);
+      setHistory(prev => {
+          // 同域名短时间内去重，避免重复刷屏
+          const filtered = prev.filter(
+              (h) => !(h.domain?.toLowerCase() === domain.toLowerCase() && Date.now() - h.timestamp < 60_000)
+          );
+          return [historyItem, ...filtered];
+      });
+      console.log(`[History] saved (${source}):`, domain);
+      return historyItem;
+  };
+
+  const handleViewAutomationResult = (task: AutomationResult) => {
+      if (!task.analysis) {
+          alert('该任务尚无完整分析数据，请重新运行。');
+          return;
+      }
+      setAnalysisData(task.analysis);
+      setDomainInput(task.analysis.companyInfo?.website || task.website || '');
+      setActiveModule(ModuleType.BACKGROUND);
+      setErrorMsg(null);
+      setMobileMenuOpen(false);
+  };
+
+  const handleDownloadAutomationResult = (task: AutomationResult) => {
+      if (!task.analysis) {
+          alert('该任务尚无完整分析数据，无法下载。');
+          return;
+      }
+      exportAutomationReportToPPT(task);
+  };
+
+  const handleDownloadAllCompleted = async () => {
+      const completed = automationResults.filter((t) => t.status === 'completed' && t.analysis);
+      if (completed.length === 0) {
+          alert('暂无已完成的报告可下载');
+          return;
+      }
+      await exportBatchAutomationReportsToPPT(completed);
   };
 
   const stopAutomation = () => { shouldStopRef.current = true; setIsAutomating(false); };
@@ -435,7 +554,7 @@ const App: React.FC = () => {
           // Check limits before running
           const limit = checkLimit('analysis');
           if (!limit.allowed) {
-              alert("Daily Analysis Limit Reached. Automation Paused.");
+              alert(`今日背调次数已达上限（${limit.current}/${limit.max}），批量任务已暂停。可在刷新后继续，或联系管理员提高限额。`);
               break;
           }
 
@@ -454,9 +573,12 @@ const App: React.FC = () => {
                   mailGroup = await generateMailGroupStrategy(result, task.productImages || [], kbFiles);
               }
 
-              // 3. Complete
+              // 3. Complete — 立刻落盘任务 + 写入历史，避免额度白花
               const completedTask: AutomationResult = { 
-                  ...task, 
+                  ...task,
+                  clientName: result.companyInfo?.name || task.clientName,
+                  website: result.companyInfo?.website || task.website,
+                  country: result.companyInfo?.headquarters?.split(',').pop()?.trim() || task.country,
                   status: 'completed', 
                   analysis: result, 
                   mailGroup: mailGroup 
@@ -464,13 +586,20 @@ const App: React.FC = () => {
               
               await saveAutomationTask(completedTask);
               setAutomationResults(prev => prev.map(t => t.id === task.id ? completedTask : t));
+
+              try {
+                  await saveAnalysisToHistory(result, 'batch');
+              } catch (histErr) {
+                  console.error('批量结果写入历史失败，但任务队列已保存', histErr);
+              }
               
               incrementUsage('analysis');
-              updateCrmStatus(result); // Also update CRM if matches
+              updateCrmStatus(result);
 
           } catch (e: any) {
               console.error(`Task ${task.id} failed`, e);
               const failedTask: AutomationResult = { ...task, status: 'failed' };
+              await saveAutomationTask(failedTask);
               setAutomationResults(prev => prev.map(t => t.id === task.id ? failedTask : t));
               
               // Simple Rate Limit Handling
@@ -489,6 +618,23 @@ const App: React.FC = () => {
           await new Promise(r => setTimeout(r, 2000));
       }
       setIsAutomating(false);
+
+      const done = tasksToRun.filter((t) => {
+        const latest = automationResults.find((x) => x.id === t.id);
+        return latest?.status === 'completed' || t.status === 'completed';
+      }).length;
+      // 用队列最新状态统计（state 可能滞后，再读一遍本地库更准）
+      try {
+        const q = await getAutomationQueue();
+        const completedNow = q.filter(
+          (t) => tasksToRun.some((r) => r.id === t.id) && t.status === 'completed' && t.analysis
+        ).length;
+        if (completedNow > 0) {
+          alert(`批量背调完成 ${completedNow} 条。结果已写入「历史记录」与任务队列，可查看并下载 PPT。`);
+        }
+      } catch {
+        if (done > 0) alert('批量背调已结束，请到历史记录或自动化队列查看结果。');
+      }
   };
 
   const handleBatchAnalyzeExisting = async (results: ClientSearchResult[]) => { 
@@ -579,7 +725,7 @@ const App: React.FC = () => {
       );
   }
 
-  const alwaysActiveModules = [ModuleType.DISCOVERY, ModuleType.PROMO_GENERATOR, ModuleType.CLIENT_CRM, ModuleType.STRATEGY, ModuleType.EMAIL_CAMPAIGN];
+  const alwaysActiveModules = [ModuleType.DISCOVERY, ModuleType.PROMO_GENERATOR, ModuleType.CLIENT_CRM, ModuleType.STRATEGY, ModuleType.EMAIL_CAMPAIGN, ModuleType.IMAGE_GENERATOR];
 
   return (
     <div className="flex min-h-screen min-h-[100dvh] bg-slate-100 overflow-hidden">
@@ -626,6 +772,7 @@ const App: React.FC = () => {
             { id: ModuleType.SIMILAR, label: '同类推荐', sub: 'Similar', icon: Network },
             { id: ModuleType.CLIENT_CRM, label: '客户管理', sub: 'CRM', icon: Briefcase },
             { id: ModuleType.EMAIL_CAMPAIGN, label: '邮件营销', sub: 'DirectMail', icon: Mail }, 
+            { id: ModuleType.IMAGE_GENERATOR, label: '图片生成', sub: 'Wanxiang', icon: Image },
             { id: ModuleType.PROMO_GENERATOR, label: '营销工具', sub: 'Tools', icon: Ruler },
           ].map(item => (
             <button key={item.id} onClick={() => { setActiveModule(item.id); setMobileMenuOpen(false); }} disabled={!analysisData && !alwaysActiveModules.includes(item.id)} className={`w-full flex items-center gap-3 px-3 sm:px-4 py-3 sm:py-3.5 rounded-xl sm:rounded-2xl text-sm font-bold transition-all touch-manipulation ${activeModule === item.id ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800 disabled:opacity-30'}`}>
@@ -671,11 +818,24 @@ const App: React.FC = () => {
                   </div>
               </div>
               <div className="flex-1 overflow-y-auto p-2 space-y-2 custom-scrollbar">
-                  {history.map((item, idx) => (
+                  {history.length === 0 ? (
+                      <div className="p-6 text-center text-slate-400 text-sm font-bold">暂无背调历史。单次或批量分析完成后会自动保存在此。</div>
+                  ) : history.map((item) => (
                       <button key={item.id} onClick={() => loadFromHistory(item)} className="w-full text-left p-3 rounded-xl hover:bg-blue-50 border border-transparent hover:border-blue-100 group transition-all">
-                          <div className="font-bold text-slate-800 text-sm truncate group-hover:text-blue-700">{item.data.companyInfo.name || "Unknown"}</div>
+                          <div className="font-bold text-slate-800 text-sm truncate group-hover:text-blue-700">{item.data?.companyInfo?.name || "Unknown"}</div>
                           <div className="text-xs text-slate-400 truncate">{item.domain}</div>
-                          <div className="flex items-center gap-1 mt-1 text-[10px] text-slate-300"><Clock size={10} /> {new Date(item.timestamp).toLocaleDateString()}</div>
+                          <div className="flex items-center justify-between gap-2 mt-1">
+                            <span className="inline-flex items-center gap-1 text-[10px] text-slate-300"><Clock size={10} /> {new Date(item.timestamp).toLocaleString()}</span>
+                            <span
+                              className="text-[10px] font-black text-blue-600 hover:underline"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (item.data) exportToPPT(item.data);
+                              }}
+                            >
+                              下载 PPT
+                            </span>
+                          </div>
                       </button>
                   ))}
               </div>
@@ -746,7 +906,7 @@ const App: React.FC = () => {
             <div className="absolute inset-0 bg-white/95 z-50 flex flex-col items-center justify-center backdrop-blur-sm animate-fade-in">
               <Loader2 className="animate-spin w-16 h-16 text-blue-600 mb-6" />
               <h3 className="text-2xl font-black text-slate-800">正在深度挖掘情报...</h3>
-              <p className="text-slate-500 mt-2 font-medium">抓取官网架构、LinkedIn 决策人、及海关采购记录中...</p>
+              <p className="text-slate-500 mt-2 font-medium text-center px-4">正在联网检索官网、贸易线索、认证信息与决策人邮箱...</p>
             </div>
           )}
           
@@ -783,6 +943,9 @@ const App: React.FC = () => {
                 {activeModule === ModuleType.EMAIL_CAMPAIGN && (
                     <ModuleEmailCampaign crmClients={crmClients} onAddClients={handleAddClients} />
                 )}
+                {activeModule === ModuleType.IMAGE_GENERATOR && (
+                    <ModuleImageGenerator />
+                )}
                 {activeModule === ModuleType.PROMO_GENERATOR && (
                     <ModulePromoGenerator 
                         onStartAutomation={handleStartQueueGeneration} 
@@ -791,6 +954,9 @@ const App: React.FC = () => {
                         onRunPending={handleRunPending}
                         onRunSingle={handleRunSingle}
                         onDelete={handleDeleteTask}
+                        onViewResult={handleViewAutomationResult}
+                        onDownloadResult={handleDownloadAutomationResult}
+                        onDownloadAll={handleDownloadAllCompleted}
                     />
                 )}
                 {activeModule === ModuleType.STRATEGY && (
@@ -814,7 +980,12 @@ const App: React.FC = () => {
                     </div>
                     {activeModule === ModuleType.BACKGROUND && <ModuleBackground data={analysisData} onAddToCRM={handleAddToCRM} />}
                     {activeModule === ModuleType.PRODUCTS && <ModuleProducts data={analysisData} />}
-                    {activeModule === ModuleType.DECISION_MAKERS && <ModuleDecisionMakers data={analysisData} />}
+                    {activeModule === ModuleType.DECISION_MAKERS && (
+                      <ModuleDecisionMakers
+                        data={analysisData}
+                        onUpdate={(dms) => setAnalysisData(prev => prev ? { ...prev, decisionMakers: dms } : prev)}
+                      />
+                    )}
                     {activeModule === ModuleType.SIMILAR && <ModuleSimilar data={analysisData} onAnalyze={handleAnalyzeInput} />}
                     </div>
                 )}

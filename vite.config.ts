@@ -1,42 +1,37 @@
 
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
+import { aliyunDevProxyPlugin } from './vite.aliyunProxy'
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
   const pick = (...keys: string[]) => keys.map(k => env[k] || '').find(Boolean) || '';
 
+  let fallbackOrigin = 'https://dashscope.aliyuncs.com';
+  try {
+    const raw = env.REACT_APP_QWEN_BASE_URL || '';
+    if (raw) fallbackOrigin = new URL(raw).origin;
+  } catch {
+    /* keep default */
+  }
+
   return {
-    plugins: [react()],
+    plugins: [react(), aliyunDevProxyPlugin(fallbackOrigin)],
     build: {
       sourcemap: false,
       minify: 'esbuild',
     },
-    server: {
-      proxy: {
-        // 开发环境代理千问 API，避免浏览器 CORS / Failed to fetch
-        '/qwen-api': {
-          target: (() => {
-            const raw = env.REACT_APP_QWEN_BASE_URL || '';
-            try {
-              return raw ? new URL(raw).origin : 'https://dashscope.aliyuncs.com';
-            } catch {
-              return 'https://dashscope.aliyuncs.com';
-            }
-          })(),
-          changeOrigin: true,
-          secure: true,
-          rewrite: (path) => path.replace(/^\/qwen-api/, ''),
-        },
-      },
-    },
+    // 不再使用 server.proxy 的 router（不可靠）；改由 aliyunDevProxyPlugin 处理 /qwen-api
     define: {
       'process.env.API_KEY': JSON.stringify(pick('API_KEY', 'REACT_APP_GEMINI_API_KEY')),
       'process.env.REACT_APP_GEMINI_API_KEY': JSON.stringify(pick('REACT_APP_GEMINI_API_KEY', 'API_KEY')),
       'process.env.REACT_APP_QWEN_API_KEY': JSON.stringify(env.REACT_APP_QWEN_API_KEY || ''),
       'process.env.REACT_APP_QWEN_BASE_URL': JSON.stringify(env.REACT_APP_QWEN_BASE_URL || ''),
       'process.env.REACT_APP_QWEN_MODEL': JSON.stringify(env.REACT_APP_QWEN_MODEL || env.REACT_APP_QWEN_MODEL_ID || ''),
+      'process.env.REACT_APP_WAN_API_KEY': JSON.stringify(env.REACT_APP_WAN_API_KEY || ''),
+      'process.env.REACT_APP_WAN_BASE_URL': JSON.stringify(env.REACT_APP_WAN_BASE_URL || ''),
+      'process.env.REACT_APP_WAN_MODEL': JSON.stringify(env.REACT_APP_WAN_MODEL || 'wan2.7-image'),
       'process.env.REACT_APP_DEFAULT_AI_MODEL': JSON.stringify(env.REACT_APP_DEFAULT_AI_MODEL || 'auto'),
       'process.env.HUNTER_API_KEY': JSON.stringify(pick('HUNTER_API_KEY', 'REACT_APP_HUNTER_API_KEY')),
       'process.env.REACT_APP_HUNTER_API_KEY': JSON.stringify(pick('REACT_APP_HUNTER_API_KEY', 'HUNTER_API_KEY')),

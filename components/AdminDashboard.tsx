@@ -9,7 +9,8 @@ import {
 } from 'lucide-react';
 import { getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/db';
 import { testApiKey, testQwenApiKey } from '../services/geminiService';
-import { saveApiConfig, getApiConfig, isSupabaseConfigured, saveKnowledgeFile, getKnowledgeFiles, deleteKnowledgeFile, resetSupabaseClient } from '../services/supabase';
+import { testWanImageApi } from '../services/wanImageService';
+import { saveApiConfig, getApiConfig, isSupabaseConfigured, saveKnowledgeFile, getKnowledgeFiles, deleteKnowledgeFile, resetSupabaseClient, testSupabaseConnection } from '../services/supabase';
 import { getSupabaseConfig, saveSupabaseConfig, clearSupabaseOverride, saveEmailSearchKeys, getEmailSearchKeys, env } from '../services/env';
 import { hashPassword, saveUsersToStorage, findUserByName, updateUserPassword } from '../services/auth';
 
@@ -50,7 +51,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const [activeTab, setActiveTab] = useState<AdminTab>('api');
   const [localConfig, setLocalConfig] = useState<GlobalConfig>({
     lastUpdated: Date.now(),
-    dailyLimits: { search: 50, analysis: 20 },
+    dailyLimits: { search: 500, analysis: 500 },
     systemNotice: ''
   });
   const [localApiConfigs, setLocalApiConfigs] = useState<ApiConfig[]>([]);
@@ -59,15 +60,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const [qwenApiKey, setQwenApiKey] = useState('');
   const [qwenBaseUrl, setQwenBaseUrl] = useState('');
   const [qwenModelId, setQwenModelId] = useState('qwen-max');
+  const [wanApiKey, setWanApiKey] = useState('');
+  const [wanBaseUrl, setWanBaseUrl] = useState('https://token-plan.cn-beijing.maas.aliyuncs.com');
+  const [wanModelId, setWanModelId] = useState('wan2.7-image');
   const [defaultAIModel, setDefaultAIModel] = useState<'qwen' | 'gemini' | 'auto'>('qwen');
   const [supabaseUrl, setSupabaseUrl] = useState('');
   const [supabaseAnonKey, setSupabaseAnonKey] = useState('');
   const [supabaseReady, setSupabaseReady] = useState(isSupabaseConfigured());
+  const [supabaseLiveOk, setSupabaseLiveOk] = useState<boolean | null>(null);
+  const [supabaseLiveMsg, setSupabaseLiveMsg] = useState('');
+  const [kbCloudError, setKbCloudError] = useState<string | null>(null);
   const [hunterApiKey, setHunterApiKey] = useState('');
   const [findymailApiKey, setFindymailApiKey] = useState('');
   const [anymailFinderApiKey, setAnymailFinderApiKey] = useState('');
   const [testingApiId, setTestingApiId] = useState<string | null>(null);
   const [isTestingQwen, setIsTestingQwen] = useState(false);
+  const [isTestingWan, setIsTestingWan] = useState(false);
   const [ytLink, setYtLink] = useState('');
   const [isUploading, setIsUploading] = useState(false);
 
@@ -96,10 +104,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
       if (localBase) setQwenBaseUrl(localBase);
       if (localModel) setQwenModelId(localModel);
 
+      // 仅在本地没有配置时，才用云端 / .env 填充，避免覆盖刚录入的 Token Plan Key
       const cloudConfig = await getApiConfig('qwen');
-      if (cloudConfig?.apiKey) setQwenApiKey(cloudConfig.apiKey);
-      if (cloudConfig?.baseUrl) setQwenBaseUrl(cloudConfig.baseUrl);
-      if (cloudConfig?.modelId) setQwenModelId(cloudConfig.modelId);
+      if (!localKey && cloudConfig?.apiKey) setQwenApiKey(cloudConfig.apiKey);
+      if (!localBase && cloudConfig?.baseUrl) setQwenBaseUrl(cloudConfig.baseUrl);
+      if (!localModel && cloudConfig?.modelId) setQwenModelId(cloudConfig.modelId);
 
       if (!localKey && !cloudConfig?.apiKey && env.qwenApiKey) {
         setQwenApiKey(env.qwenApiKey);
@@ -112,6 +121,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
       }
     };
     loadQwenKey();
+
+    const loadWanKey = async () => {
+      const localKey = localStorage.getItem('trade_scout_wan_api_key');
+      const localBase = localStorage.getItem('trade_scout_wan_base_url');
+      const localModel = localStorage.getItem('trade_scout_wan_model_id');
+      if (localKey) setWanApiKey(localKey);
+      if (localBase) setWanBaseUrl(localBase);
+      if (localModel) setWanModelId(localModel);
+
+      const cloud = await getApiConfig('wan');
+      if (!localKey && cloud?.apiKey) setWanApiKey(cloud.apiKey);
+      if (!localBase && cloud?.baseUrl) setWanBaseUrl(cloud.baseUrl);
+      if (!localModel && cloud?.modelId) setWanModelId(cloud.modelId);
+
+      if (!localKey && !cloud?.apiKey && env.wanApiKey) setWanApiKey(env.wanApiKey);
+      if (!localBase && !cloud?.baseUrl && env.wanBaseUrl) setWanBaseUrl(env.wanBaseUrl);
+      if (!localModel && !cloud?.modelId && env.wanModelId) setWanModelId(env.wanModelId);
+    };
+    loadWanKey();
 
     const sb = getSupabaseConfig();
     setSupabaseUrl(sb.url);
@@ -137,14 +165,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     loadEmailKeysFromCloud();
 
     const loadKB = async () => {
+      setKbCloudError(null);
+      // 先加载本地，保证云端挂了也能看到已有文件
+      const localFiles = await getAllFilesFromDB();
+      setKbFiles(localFiles);
+
       if (isSupabaseConfigured()) {
-        const cloudFiles = await getKnowledgeFiles();
+        const ping = await testSupabaseConnection();
+        setSupabaseLiveOk(ping.ok);
+        setSupabaseLiveMsg(ping.message);
+        if (!ping.ok) {
+          setKbCloudError(ping.message);
+          return;
+        }
+        const { files: cloudFiles, error } = await getKnowledgeFiles();
+        if (error) {
+          setKbCloudError(error);
+          return;
+        }
         for (const f of cloudFiles) {
           await saveFileToDB(f);
         }
+        const merged = await getAllFilesFromDB();
+        setKbFiles(merged);
+      } else {
+        setSupabaseLiveOk(false);
+        setSupabaseLiveMsg('Supabase 未配置');
       }
-      const files = await getAllFilesFromDB();
-      setKbFiles(files);
     };
     loadKB();
   }, []);
@@ -191,6 +238,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     if (qwenModelId.trim()) {
       localStorage.setItem('trade_scout_qwen_model_id', qwenModelId.trim());
     }
+    if (wanApiKey.trim()) {
+      localStorage.setItem('trade_scout_wan_api_key', wanApiKey.trim());
+    } else if (qwenApiKey.trim()) {
+      // 未单独填万相 Key 时，与千问共用
+      localStorage.setItem('trade_scout_wan_api_key', qwenApiKey.trim());
+    }
+    if (wanBaseUrl.trim()) {
+      localStorage.setItem('trade_scout_wan_base_url', wanBaseUrl.trim());
+    } else if (qwenBaseUrl.trim()) {
+      localStorage.setItem('trade_scout_wan_base_url', qwenBaseUrl.trim());
+    }
+    if (wanModelId.trim()) {
+      localStorage.setItem('trade_scout_wan_model_id', wanModelId.trim());
+    }
 
     saveEmailSearchKeys({
       hunter: hunterApiKey,
@@ -204,6 +265,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
         apiKey: qwenApiKey.trim(),
         baseUrl: qwenBaseUrl.trim() || undefined,
         modelId: qwenModelId.trim() || 'qwen-max',
+      });
+    }
+
+    const wanKeyToSave = wanApiKey.trim() || qwenApiKey.trim();
+    if (wanKeyToSave && isSupabaseConfigured()) {
+      await saveApiConfig({
+        provider: 'wan',
+        apiKey: wanKeyToSave,
+        baseUrl: (wanBaseUrl.trim() || qwenBaseUrl.trim()) || undefined,
+        modelId: wanModelId.trim() || 'wan2.7-image',
       });
     }
 
@@ -232,12 +303,35 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
       alert('请先填写 Qwen API Key');
       return;
     }
+    // 测试前先写入 localStorage，保证请求用的是当前表单里的 Token Plan 配置
+    localStorage.setItem('trade_scout_qwen_api_key', qwenApiKey.trim());
+    if (qwenBaseUrl.trim()) localStorage.setItem('trade_scout_qwen_base_url', qwenBaseUrl.trim());
+    if (qwenModelId.trim()) localStorage.setItem('trade_scout_qwen_model_id', qwenModelId.trim());
+
     setIsTestingQwen(true);
     try {
       const result = await testQwenApiKey(qwenApiKey, qwenBaseUrl, qwenModelId, testSearch);
       alert(result.message);
     } finally {
       setIsTestingQwen(false);
+    }
+  };
+
+  const handleTestWan = async () => {
+    const key = wanApiKey.trim() || qwenApiKey.trim();
+    if (!key) {
+      alert('请先填写万相 API Key（可与千问 Token Plan 共用）');
+      return;
+    }
+    localStorage.setItem('trade_scout_wan_api_key', key);
+    localStorage.setItem('trade_scout_wan_base_url', (wanBaseUrl.trim() || qwenBaseUrl.trim() || 'https://token-plan.cn-beijing.maas.aliyuncs.com'));
+    localStorage.setItem('trade_scout_wan_model_id', wanModelId.trim() || 'wan2.7-image');
+    setIsTestingWan(true);
+    try {
+      const result = await testWanImageApi();
+      alert(result.message);
+    } finally {
+      setIsTestingWan(false);
     }
   };
 
@@ -338,15 +432,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    if (!isSupabaseConfigured()) {
-      alert('Supabase 未配置。请在项目根目录 .env.local 中设置 REACT_APP_SUPABASE_URL 和 REACT_APP_SUPABASE_ANON_KEY，然后重启 npm run dev。');
-      e.target.value = '';
-      return;
-    }
-
     setIsUploading(true);
     try {
-      let successCount = 0;
+      let localCount = 0;
+      let cloudCount = 0;
+      const cloudErrors: string[] = [];
+
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         const isText = isTextKnowledgeFile(file);
@@ -377,18 +468,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
           mimeType: file.type || 'application/octet-stream'
         };
 
-        const saved = await saveKnowledgeFile(newFile);
-        if (!saved) {
-          alert(`文件 ${file.name} 上传到 Supabase 失败，请检查控制台。`);
-          continue;
-        }
+        // 本地优先：云端挂了也不丢文件
         await saveFileToDB(newFile);
-        successCount++;
+        localCount++;
+
+        if (isSupabaseConfigured()) {
+          const saved = await saveKnowledgeFile(newFile);
+          if (saved.ok) cloudCount++;
+          else cloudErrors.push(`${file.name}: ${saved.error || '未知错误'}`);
+        }
       }
+
       const allFiles = await getAllFilesFromDB();
       setKbFiles(allFiles);
-      if (successCount > 0) {
-        alert(`已成功上传 ${successCount} 个文件到 Supabase 云端！`);
+
+      if (!isSupabaseConfigured()) {
+        alert(`已保存 ${localCount} 个文件到本地。未配置 Supabase，无法同步云端。`);
+      } else if (cloudCount === localCount) {
+        alert(`已成功保存 ${localCount} 个文件（本地 + Supabase 云端）`);
+      } else {
+        setKbCloudError(cloudErrors.join('\n') || '云端同步失败');
+        alert(
+          `已保存 ${localCount} 个到本地；云端成功 ${cloudCount} 个。\n` +
+          `云端失败原因：${cloudErrors[0] || '请检查 Supabase 项目是否暂停/删除'}\n` +
+          `提示：请确认 .env.local 中的 URL 对应的项目仍在 dashboard.supabase.com 可打开。`
+        );
       }
       e.target.value = '';
     } catch (err) {
@@ -415,14 +519,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     };
     await saveFileToDB(newFile);
     if (isSupabaseConfigured()) {
-      await saveKnowledgeFile(newFile);
+      const saved = await saveKnowledgeFile(newFile);
+      if (!saved.ok) {
+        alert(`链接已保存到本地；云端同步失败：${saved.error}`);
+      } else {
+        alert('YouTube 链接已添加（本地 + 云端）');
+      }
     } else {
-      alert('Supabase 未配置，链接仅保存到本地。');
+      alert('YouTube 链接已保存到本地（Supabase 未配置）');
     }
     const allFiles = await getAllFilesFromDB();
     setKbFiles(allFiles);
     setYtLink('');
-    alert('YouTube 链接已添加');
   };
 
   const handleDeleteFile = async (id: string) => {
@@ -581,7 +689,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                         type="password"
                         value={qwenApiKey}
                         onChange={e => setQwenApiKey(e.target.value)}
-                        placeholder="sk-ws-... (MaaS 工作空间 Key)"
+                        placeholder="sk-sp-...（Token Plan）或 sk-ws-...（工作空间）"
                         className="w-full bg-white border border-emerald-100 rounded-xl px-4 py-3 font-bold text-sm"
                       />
                     </div>
@@ -591,19 +699,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                         type="text"
                         value={qwenBaseUrl}
                         onChange={e => setQwenBaseUrl(e.target.value)}
-                        placeholder="https://ws-xxx.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+                        placeholder="https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
                         className="w-full bg-white border border-emerald-100 rounded-xl px-4 py-3 font-bold text-sm"
                       />
                       <p className="text-[10px] text-slate-400 font-bold mt-2">
-                        联网搜索、客户搜索、深度调查均走千问 enable_search。建议使用 qwen-plus 或 qwen-max。
+                        必须完整填到 /compatible-mode/v1。Key 用 sk-sp-（Token Plan），不要用按量付费 sk-ws-。改完后请先「保存配置」再测；若仍 401 请重启 npm run dev。
                       </p>
                     </div>
                   </div>
-                  <div className="flex justify-end gap-3">
+                  <div className="flex flex-col sm:flex-row justify-end gap-3">
                     <button
                       onClick={() => handleTestQwen(false)}
                       disabled={isTestingQwen}
-                      className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-3 rounded-xl font-black flex items-center gap-2 disabled:opacity-50"
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-3 rounded-xl font-black flex items-center justify-center gap-2 disabled:opacity-50"
                     >
                       {isTestingQwen ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} fill="currentColor" />}
                       测试连接
@@ -611,11 +719,63 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     <button
                       onClick={() => handleTestQwen(true)}
                       disabled={isTestingQwen}
-                      className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-black flex items-center gap-2 disabled:opacity-50"
+                      className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-black flex items-center justify-center gap-2 disabled:opacity-50"
                     >
                       {isTestingQwen ? <Loader2 size={16} className="animate-spin" /> : <Globe size={16} />}
                       测试联网搜索
                     </button>
+                  </div>
+                </div>
+
+                {/* 万相图片生成 */}
+                <div className="bg-pink-50/50 border border-pink-100 rounded-2xl p-6 space-y-4">
+                  <div className="flex items-center gap-2 text-pink-800 font-black text-sm">
+                    <Image size={16} /> 万相图片生成（wan2.7-image）
+                  </div>
+                  <p className="text-xs text-slate-500 font-medium">
+                    可与上方千问 Token Plan 共用同一 API Key。若留空 Key，保存时自动使用千问 Key。
+                  </p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="md:col-span-2">
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">万相 API Key（可选）</label>
+                      <input
+                        type="password"
+                        value={wanApiKey}
+                        onChange={e => setWanApiKey(e.target.value)}
+                        placeholder="留空则与千问共用 sk-sp-... Key"
+                        className="w-full bg-white border border-pink-100 rounded-xl px-4 py-3 font-bold text-sm"
+                      />
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">万相 API Origin / Base</label>
+                      <input
+                        type="text"
+                        value={wanBaseUrl}
+                        onChange={e => setWanBaseUrl(e.target.value)}
+                        placeholder="https://token-plan.cn-beijing.maas.aliyuncs.com"
+                        className="w-full bg-white border border-pink-100 rounded-xl px-4 py-3 font-bold text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">模型 ID</label>
+                      <input
+                        type="text"
+                        value={wanModelId}
+                        onChange={e => setWanModelId(e.target.value)}
+                        placeholder="wan2.7-image"
+                        className="w-full bg-white border border-pink-100 rounded-xl px-4 py-3 font-bold text-sm"
+                      />
+                    </div>
+                    <div className="flex items-end">
+                      <button
+                        onClick={handleTestWan}
+                        disabled={isTestingWan}
+                        className="w-full bg-pink-600 hover:bg-pink-700 text-white px-6 py-3 rounded-xl font-black flex items-center justify-center gap-2 disabled:opacity-50"
+                      >
+                        {isTestingWan ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} fill="currentColor" />}
+                        测试万相生图
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -852,12 +1012,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     <div className="flex items-center gap-2 text-slate-800 font-black">
                       <Database size={18} className="text-emerald-600" /> SUPABASE 云端知识库
                     </div>
-                    <span className={`px-3 py-1 rounded-full text-[10px] font-black ${supabaseReady ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
-                      {supabaseReady ? 'Supabase 已连接' : 'Supabase 未配置'}
+                    <span className={`px-3 py-1 rounded-full text-[10px] font-black ${
+                      supabaseLiveOk === true ? 'bg-green-100 text-green-700' :
+                      supabaseLiveOk === false ? 'bg-red-100 text-red-700' :
+                      supabaseReady ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'
+                    }`}>
+                      {supabaseLiveOk === true ? '云端在线' :
+                       supabaseLiveOk === false ? '云端不可用' :
+                       supabaseReady ? '仅配置凭证' : '未配置'}
                     </span>
                   </div>
+                  {kbCloudError && (
+                    <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-100 text-xs font-bold text-red-600 whitespace-pre-wrap">
+                      云端同步异常：{kbCloudError}
+                      <div className="mt-1 text-red-400 font-medium">
+                        文件仍会保存在本机 IndexedDB。请到 Supabase Dashboard 确认项目是否仍存在；若已重建项目，请更新 .env.local 中的 URL/Key，并执行 scripts/supabase-schema.sql。
+                      </div>
+                    </div>
+                  )}
                   <p className="text-sm text-slate-500 font-medium mb-4">
-                    上传的文件将直接保存到 Supabase 云端，支持 Word、Excel、PPT、PDF、图片、音频、视频等全部常见格式。
+                    上传优先保存到本机；云端可用时自动同步。支持 Word、Excel、PPT、PDF、图片、音频、视频等格式。
+                    {supabaseLiveMsg ? `（${supabaseLiveMsg}）` : ''}
                   </p>
                   <div className="flex flex-wrap gap-2 text-[10px] font-bold text-slate-400">
                     {['PDF', 'Word', 'Excel', 'PPT', '图片', '音频', '视频', 'TXT/MD'].map(tag => (
@@ -869,14 +1044,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                 <div className="space-y-4 sm:space-y-6">
                   <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
                     <div className="text-base sm:text-lg font-black text-slate-800">
-                      云端文件: <span className="text-blue-600">{kbFiles.length}</span>
+                      知识库文件: <span className="text-blue-600">{kbFiles.length}</span>
+                      <span className="ml-2 text-xs font-bold text-slate-400">（本地缓存；云端在线时自动同步）</span>
                     </div>
                     <label 
                       htmlFor="kb-upload-input"
                       className={`bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl font-black text-sm flex items-center justify-center gap-2 cursor-pointer transition-all touch-manipulation w-full sm:w-auto ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}
                     >
                       {isUploading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
-                      {isUploading ? '上传中...' : '上传到 Supabase'}
+                      {isUploading ? '上传中...' : '上传文件'}
                     </label>
                     <input 
                       id="kb-upload-input"

@@ -534,6 +534,35 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
     slide.addText(`销售渠道: ${data.businessModel.channels.join(', ')}\n\n电商布局: ${data.businessModel.ecommercePresence.join(', ')}\n\n采购习惯: ${data.businessModel.procurementInfo}`,
         { x: 0.7, y: 3.7, w: 8.6, h: 1.2, ...contentStyle });
 
+    // --- TRADE INTELLIGENCE SLIDE ---
+    if (data.tradeIntelligence) {
+        const ti = data.tradeIntelligence;
+        slide = pptx.addSlide();
+        addFooter(slide);
+        slide.addShape(pptx.ShapeType.rect, headerRect);
+        slide.addText("贸易情报与合规 (Trade Intelligence)", headerStyle);
+
+        slide.addShape(pptx.ShapeType.rect, { x: 0.5, y: 1.0, w: 9.0, h: 1.6, fill: "ECFEFF", line: { color: "A5F3FC" }, r: 0.1 });
+        slide.addText("海关 / 进口线索摘要", { x: 0.7, y: 1.1, fontSize: 12, bold: true, color: "0E7490", fontFace: PPT_FONT });
+        slide.addText(sanitize(ti.customsSummary || data.businessModel.procurementInfo), {
+            x: 0.7, y: 1.45, w: 8.6, h: 1.0, ...bodyTextOpts(10)
+        });
+
+        const tradeRows = [
+            [{ text: "HS / 品类", options: { bold: true, fill: "F8FAFC" } }, { text: sanitize([...(ti.hsCodes || []), ...(ti.importCategories || [])].join(' / ') || '公开信息未找到') }],
+            [{ text: "来源国", options: { bold: true, fill: "F8FAFC" } }, { text: sanitize((ti.topSourceCountries || []).join(', ') || '公开信息未找到') }],
+            [{ text: "认证", options: { bold: true, fill: "F8FAFC" } }, { text: sanitize((ti.certifications || []).join(', ') || '公开信息未找到') }],
+            [{ text: "Incoterms / MOQ", options: { bold: true, fill: "F8FAFC" } }, { text: sanitize(`${ti.preferredIncoterms || '—'} / ${ti.typicalMoq || '—'}`) }],
+            [{ text: "采购季 / 办公室", options: { bold: true, fill: "F8FAFC" } }, { text: sanitize(`${ti.buyingSeasons || '—'} / ${data.strategy.buyingOfficeLocation || '—'}`) }],
+            [{ text: "风险等级", options: { bold: true, fill: "F8FAFC" } }, { text: sanitize(`${ti.riskLevel || '未知'} — ${ti.riskNotes || ''}`) }],
+            [{ text: "预估年进口", options: { bold: true, fill: "F8FAFC" } }, { text: sanitize(ti.estimatedAnnualImport || '公开信息未找到') }],
+        ];
+        slide.addTable(tradeRows, {
+            x: 0.5, y: 2.8, w: 9.0, fontSize: 10, rowH: 0.32,
+            border: { pt: 0.5, color: "E2E8F0" }, valign: 'middle', fontFace: PPT_FONT
+        });
+    }
+
     // --- SLIDE 5: PRODUCT DEPTH ANALYSIS (背调重点 - NEW) ---
     if (data.productSummary) {
         slide = pptx.addSlide();
@@ -606,24 +635,33 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
 
     if (data.decisionMakers && data.decisionMakers.length > 0) {
         const headers = [
-            { text: "姓名", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF", w: 2.0 } },
-            { text: "职位", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF", w: 2.5 } },
-            { text: "预估邮箱", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF", w: 3.5 } },
-            { text: "类型", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF", w: 1.0 } }
+            { text: "姓名", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF" } },
+            { text: "职位", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF" } },
+            { text: "邮箱", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF" } },
+            { text: "类型", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF" } },
+            { text: "来源/验证", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF" } },
+            { text: "LinkedIn", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF" } },
         ];
         
         const rows = data.decisionMakers.slice(0, 10).map(dm => [
             { text: sanitize(dm.name) },
             { text: sanitize(dm.title) },
             { text: sanitize(dm.emailGuess || "待补充") },
-            { text: sanitize(dm.type) }
+            { text: sanitize(dm.type) },
+            { text: sanitize(`${dm.source}${dm.isVerified ? ' ✓' : ''}`) },
+            { text: sanitize(dm.linkedin || "—") },
         ]);
 
         slide.addTable([headers, ...rows], { 
-            x: 0.5, y: 1.2, w: 9.0, 
-            fontSize: 9, rowH: 0.38, 
+            x: 0.35, y: 1.1, w: 9.3, 
+            colW: [1.3, 1.7, 2.2, 0.8, 1.5, 1.8],
+            fontSize: 8, rowH: 0.36, 
             border: { pt: 0.5, color: "E2E8F0" }, 
-            valign: "middle" 
+            valign: "middle",
+            fontFace: PPT_FONT,
+        });
+        slide.addText("说明：已验证邮箱来自 Hunter/Findymail 等交叉核验；未验证邮箱请人工确认后再群发。", {
+            x: 0.5, y: 5.0, w: 9, fontSize: 8, color: COLORS.TEXT_MUTED, italic: true, fontFace: PPT_FONT
         });
     } else {
         slide.addText("未在公开渠道发现关键联系人信息。", { x: 0.5, y: 2.5, w: 9, align: 'center', fontSize: 14, color: COLORS.TEXT_MUTED });

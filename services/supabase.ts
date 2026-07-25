@@ -233,7 +233,7 @@ export const getKnowledgeList = async (category?: string): Promise<KnowledgeItem
     return data as KnowledgeItem[]
   } catch (error) {
     console.error('获取知识库失败:', error)
-    return []
+    throw error
   }
 }
 
@@ -265,10 +265,9 @@ const toKnowledgeFile = (row: KnowledgeItem): KnowledgeFile => {
   };
 };
 
-export const saveKnowledgeFile = async (file: KnowledgeFile): Promise<boolean> => {
+export const saveKnowledgeFile = async (file: KnowledgeFile): Promise<{ ok: boolean; error?: string }> => {
   if (!isSupabaseConfigured()) {
-    console.warn('Supabase 未配置，跳过知识库云端保存')
-    return false
+    return { ok: false, error: 'Supabase 未配置' }
   }
   try {
     const { error } = await supabase
@@ -281,18 +280,59 @@ export const saveKnowledgeFile = async (file: KnowledgeFile): Promise<boolean> =
         category: file.type,
       })
 
-    if (error) throw error
+    if (error) {
+      console.error('保存知识库文件失败:', error)
+      return { ok: false, error: error.message }
+    }
     console.log('✅ 知识库文件已保存到 Supabase:', file.name)
-    return true
-  } catch (error) {
+    return { ok: true }
+  } catch (error: any) {
     console.error('保存知识库文件失败:', error)
-    return false
+    return { ok: false, error: error?.message || String(error) }
   }
 }
 
-export const getKnowledgeFiles = async (): Promise<KnowledgeFile[]> => {
-  const rows = await getKnowledgeList()
-  return rows.filter(r => r.id).map(toKnowledgeFile)
+export const getKnowledgeFiles = async (): Promise<{ files: KnowledgeFile[]; error?: string }> => {
+  if (!isSupabaseConfigured()) return { files: [], error: 'Supabase 未配置' }
+  try {
+    const rows = await getKnowledgeList()
+    return { files: rows.filter(r => r.id).map(toKnowledgeFile) }
+  } catch (error: any) {
+    return { files: [], error: error?.message || String(error) }
+  }
+}
+
+/** 探测云端是否真的可达（不只是填了 URL） */
+export const testSupabaseConnection = async (): Promise<{ ok: boolean; message: string }> => {
+  if (!isSupabaseConfigured()) {
+    return { ok: false, message: '未配置 Supabase URL / Anon Key' }
+  }
+  try {
+    const { error } = await supabase
+      .from('knowledge_base')
+      .select('id', { count: 'exact', head: true })
+
+    if (error) {
+      const msg = error.message || ''
+      if (/relation .*knowledge_base.* does not exist|Could not find the table/i.test(msg)) {
+        return {
+          ok: false,
+          message: '已连上项目，但缺少 knowledge_base 表。请在 SQL Editor 执行 scripts/supabase-schema.sql',
+        }
+      }
+      if (/Failed to fetch|NetworkError|fetch failed|ENOTFOUND|DNS/i.test(msg)) {
+        return { ok: false, message: '无法访问 Supabase 域名（项目可能已暂停/删除，或网络不通）' }
+      }
+      return { ok: false, message: msg }
+    }
+    return { ok: true, message: 'Supabase 云端连接正常' }
+  } catch (e: any) {
+    const msg = e?.message || String(e)
+    if (/Failed to fetch|NetworkError|fetch failed|ENOTFOUND/i.test(msg)) {
+      return { ok: false, message: '无法访问 Supabase（DNS/网络失败，项目可能已暂停或 URL 错误）' }
+    }
+    return { ok: false, message: msg }
+  }
 }
 
 export const deleteKnowledgeFile = async (id: string): Promise<boolean> => {
@@ -447,14 +487,16 @@ export const deleteInvestigationHistory = async (localId: string): Promise<boole
 export const saveDiscoverySearch = async (state: DiscoveryState): Promise<boolean> => {
   if (!isSupabaseConfigured() || !state.hasSearched) return false
   try {
+    const countryStr = (state.countries?.length ? state.countries.join(', ') : state.country) || ''
+    const typeStr = (state.clientTypes?.length ? state.clientTypes.join(', ') : state.clientType) || ''
     const { error } = await supabase
       .from('discovery_searches')
       .insert({
         user_id: 'default',
         product: state.product,
-        country: state.country,
+        country: countryStr,
         industry: state.industry,
-        client_type: state.clientType,
+        client_type: typeStr,
         results: state.results,
         has_searched: state.hasSearched,
       })
@@ -481,11 +523,16 @@ export const getLatestDiscoverySearch = async (): Promise<DiscoveryState | null>
     if (error) throw error
     if (!data) return null
 
+    const countryStr = data.country || ''
+    const typeStr = data.client_type || ''
+    const split = (s: string) => s.split(/[,，;/|]+/).map((x: string) => x.trim()).filter(Boolean)
     return {
       product: data.product || '',
-      country: data.country || '',
+      country: countryStr,
+      countries: split(countryStr),
       industry: data.industry || '',
-      clientType: data.client_type || '',
+      clientType: typeStr,
+      clientTypes: split(typeStr),
       results: data.results || [],
       hasSearched: data.has_searched ?? true,
     }

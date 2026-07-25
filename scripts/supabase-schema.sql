@@ -1,7 +1,33 @@
--- Trade-Pro Supabase 扩展表（在 Supabase Dashboard → SQL Editor 中执行）
--- 背调历史、客户搜索、CRM 云端持久化
+-- Trade-Pro Supabase 全量表（在 Supabase Dashboard → SQL Editor 中执行）
+-- 含：知识库、API 配置、背调历史、客户搜索、CRM
 
--- 背调历史
+-- ==================== 知识库 ====================
+CREATE TABLE IF NOT EXISTS knowledge_base (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id text NOT NULL DEFAULT 'default',
+  title text NOT NULL,
+  content text NOT NULL DEFAULT '',
+  category text DEFAULT 'bin',
+  file_url text,
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_base_user_created
+  ON knowledge_base (user_id, created_at DESC);
+
+-- ==================== API 配置 ====================
+CREATE TABLE IF NOT EXISTS api_configs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id text NOT NULL DEFAULT 'default',
+  provider text NOT NULL,
+  encrypted_key text NOT NULL DEFAULT '',
+  base_url text,
+  model_id text,
+  updated_at timestamptz DEFAULT now(),
+  UNIQUE(user_id, provider)
+);
+
+-- ==================== 背调历史 ====================
 CREATE TABLE IF NOT EXISTS investigation_history (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id text NOT NULL DEFAULT 'default',
@@ -16,7 +42,7 @@ CREATE TABLE IF NOT EXISTS investigation_history (
 CREATE INDEX IF NOT EXISTS idx_investigation_history_user_created
   ON investigation_history (user_id, created_at DESC);
 
--- 客户搜索记录
+-- ==================== 客户搜索记录 ====================
 CREATE TABLE IF NOT EXISTS discovery_searches (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id text NOT NULL DEFAULT 'default',
@@ -32,7 +58,7 @@ CREATE TABLE IF NOT EXISTS discovery_searches (
 CREATE INDEX IF NOT EXISTS idx_discovery_searches_user_created
   ON discovery_searches (user_id, created_at DESC);
 
--- CRM 客户（完整 Client JSON）
+-- ==================== CRM 客户 ====================
 CREATE TABLE IF NOT EXISTS crm_clients (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id text NOT NULL DEFAULT 'default',
@@ -45,10 +71,20 @@ CREATE TABLE IF NOT EXISTS crm_clients (
 CREATE INDEX IF NOT EXISTS idx_crm_clients_user_updated
   ON crm_clients (user_id, updated_at DESC);
 
--- RLS（与 knowledge_base / api_configs 一致：允许 anon 读写 default 用户数据）
+-- ==================== RLS（允许 anon 读写，便于本工具本地开发） ====================
+ALTER TABLE knowledge_base ENABLE ROW LEVEL SECURITY;
+ALTER TABLE api_configs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE investigation_history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE discovery_searches ENABLE ROW LEVEL SECURITY;
 ALTER TABLE crm_clients ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "knowledge_base_all" ON knowledge_base;
+CREATE POLICY "knowledge_base_all" ON knowledge_base
+  FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "api_configs_all" ON api_configs;
+CREATE POLICY "api_configs_all" ON api_configs
+  FOR ALL USING (true) WITH CHECK (true);
 
 DROP POLICY IF EXISTS "investigation_history_all" ON investigation_history;
 CREATE POLICY "investigation_history_all" ON investigation_history
@@ -61,3 +97,5 @@ CREATE POLICY "discovery_searches_all" ON discovery_searches
 DROP POLICY IF EXISTS "crm_clients_all" ON crm_clients;
 CREATE POLICY "crm_clients_all" ON crm_clients
   FOR ALL USING (true) WITH CHECK (true);
+
+-- Storage：Dashboard → Storage 新建 public bucket 名称 knowledge-files（可选）

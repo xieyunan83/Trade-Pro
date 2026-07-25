@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { AutomationResult } from '../types';
-import { Ruler, PlayCircle, StopCircle, Trash2, CheckCircle2, Loader2, AlertTriangle, Clock, Hourglass, Mail, FileText, ChevronRight } from 'lucide-react';
+import { Ruler, PlayCircle, Trash2, CheckCircle2, Loader2, AlertTriangle, Clock, Hourglass, FileText, Download } from 'lucide-react';
 
 interface ModulePromoGeneratorProps {
   onStartAutomation: (keyword: string, productContext: string, countries: string[], productImages: string[], clientType: string) => void;
@@ -10,6 +10,9 @@ interface ModulePromoGeneratorProps {
   onRunPending: () => void;
   onRunSingle: (id: string) => void;
   onDelete: (id: string) => void;
+  onViewResult: (task: AutomationResult) => void;
+  onDownloadResult: (task: AutomationResult) => void;
+  onDownloadAll: () => void;
 }
 
 export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({ 
@@ -18,12 +21,17 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   isAutomating, 
   onRunPending, 
   onRunSingle, 
-  onDelete 
+  onDelete,
+  onViewResult,
+  onDownloadResult,
+  onDownloadAll,
 }) => {
   const [keyword, setKeyword] = useState('');
   const [productContext, setProductContext] = useState('');
   const [countries, setCountries] = useState('USA, UK, Germany');
   const [clientType, setClientType] = useState('Importer');
+
+  const completedCount = automationResults.filter((r) => r.status === 'completed' && r.analysis).length;
 
   const handleStart = () => {
     const countryList = countries.split(',').map(c => c.trim()).filter(c => c.length > 0);
@@ -87,14 +95,29 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
         <div className="p-4 sm:p-6 border-b border-slate-100 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 bg-slate-50/50">
           <h3 className="text-lg font-black text-slate-800 flex items-center gap-2">
             <Clock className="text-slate-400" /> 任务队列 ({automationResults.length})
+            {completedCount > 0 && (
+              <span className="text-xs font-black text-green-600 bg-green-50 px-2 py-1 rounded-lg">
+                已完成 {completedCount}
+              </span>
+            )}
           </h3>
-          <button 
-            onClick={onRunPending}
-            disabled={isAutomating || automationResults.filter(r => r.status === 'pending' || r.status === 'failed').length === 0}
-            className="bg-slate-900 text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-blue-600 transition-colors disabled:opacity-50"
-          >
-            继续待处理任务
-          </button>
+          <div className="flex flex-wrap gap-2">
+            {completedCount > 0 && (
+              <button
+                onClick={onDownloadAll}
+                className="inline-flex items-center gap-1.5 bg-white border border-slate-200 text-slate-700 px-4 py-2 rounded-xl text-xs font-bold hover:bg-slate-50"
+              >
+                <Download size={14} /> 批量下载 PPT
+              </button>
+            )}
+            <button 
+              onClick={onRunPending}
+              disabled={isAutomating || automationResults.filter(r => r.status === 'pending' || r.status === 'failed').length === 0}
+              className="bg-slate-900 text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-blue-600 transition-colors disabled:opacity-50"
+            >
+              继续待处理任务
+            </button>
+          </div>
         </div>
         
         <div className="overflow-x-auto">
@@ -137,11 +160,24 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                       <span className="text-[10px] font-black text-slate-400 uppercase">{task.mode || 'economy'}</span>
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <div className="flex justify-end gap-2">
-                        {task.status === 'completed' && (
-                          <button className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="查看结果">
-                            <FileText size={16} />
-                          </button>
+                      <div className="flex justify-end gap-1">
+                        {task.status === 'completed' && task.analysis && (
+                          <>
+                            <button
+                              onClick={() => onViewResult(task)}
+                              className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                              title="查看背调结果"
+                            >
+                              <FileText size={16} />
+                            </button>
+                            <button
+                              onClick={() => onDownloadResult(task)}
+                              className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                              title="下载 PPT"
+                            >
+                              <Download size={16} />
+                            </button>
+                          </>
                         )}
                         {(task.status === 'pending' || task.status === 'failed') && (
                           <button 

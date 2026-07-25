@@ -8,7 +8,8 @@ export enum ModuleType {
   SIMILAR = 'similar',
   PROMO_GENERATOR = 'promo_generator',
   CLIENT_CRM = 'client_crm',
-  EMAIL_CAMPAIGN = 'email_campaign' // New Module
+  EMAIL_CAMPAIGN = 'email_campaign',
+  IMAGE_GENERATOR = 'image_generator',
 }
 
 export interface User {
@@ -73,13 +74,46 @@ export interface DecisionMaker {
   firstName?: string;
   lastName?: string;
   title: string;
+  department?: string;
   yearsActive?: string;
   emailGuess?: string;
+  phone?: string;
   linkedin?: string;
   type: 'CEO' | 'Buyer' | 'Other';
   source: 'AI' | 'AI (Pattern Guess)' | 'Hunter.io' | 'Findymail' | 'AnymailFinder' | 'Manual';
   isVerified: boolean;
   confidence?: number;
+  /** 采购决策权重 1-5，Buyer/CEO 通常更高 */
+  influenceScore?: number;
+}
+
+export interface TradeIntelligence {
+  /** HS 海关编码（公开信息或合理推断） */
+  hsCodes: string[];
+  /** 主要进口品类 */
+  importCategories: string[];
+  /** 海关/提单公开信息摘要（ImportYeti、提单目录、新闻等） */
+  customsSummary: string;
+  /** 近两年公开进口线索 */
+  recentShipments: string[];
+  /** 主要采购来源国 */
+  topSourceCountries: string[];
+  /** 预估年进口额 */
+  estimatedAnnualImport: string;
+  /** 认证：CE / FDA / BSCI / ISO / REACH / UL 等 */
+  certifications: string[];
+  /** 合规与风险提示 */
+  complianceNotes: string;
+  preferredIncoterms: string;
+  typicalMoq: string;
+  buyingSeasons: string;
+  /** 注册号/税号等公开标识（如有） */
+  registrationId: string;
+  /** 公司 LinkedIn / 官网关于页等 */
+  companyLinkedin: string;
+  /** 信用与风险简评 */
+  riskLevel: '低' | '中' | '高' | '未知';
+  riskNotes: string;
 }
 
 export interface Client {
@@ -156,6 +190,9 @@ export interface AnalysisResult {
     scale: string;
     website: string;
     description: string;
+    /** 员工数区间等 */
+    employeeRange?: string;
+    city?: string;
   };
   swot: SwotAnalysis;
   financialTrends: YearTrend[];
@@ -181,6 +218,8 @@ export interface AnalysisResult {
     role: string;
     serviceType: string;
   };
+  /** 外贸背调核心：贸易、海关、认证、合规 */
+  tradeIntelligence?: TradeIntelligence;
   targetAudience: string[];
   financials: {
     revenueEstimate: string;
@@ -224,6 +263,20 @@ export interface ClientSearchResult {
   website: string;
   description: string;
   country: string;
+  /** 进口商 / 分销商 / 批发商 / 零售商 / 品牌商 等 */
+  clientType?: string;
+  /** 主营产品匹配说明 */
+  mainProducts?: string;
+  /** 规模粗估 */
+  estimatedScale?: string;
+  city?: string;
+  /** 公司 LinkedIn */
+  linkedinCompanyUrl?: string;
+  /** 联系页 / 通用邮箱线索 */
+  contactHint?: string;
+  /** 1-5 匹配度 */
+  fitScore?: number;
+  fitReason?: string;
 }
 
 export interface EmailTemplateRequest {
@@ -239,12 +292,27 @@ export interface EmailTemplateRequest {
 
 export interface DiscoveryState {
   product: string;
+  /** @deprecated 兼容旧数据；优先用 countries */
   country: string;
+  /** 多选目标国家（英文名，供搜索） */
+  countries: string[];
   industry: string;
+  /** @deprecated 兼容旧数据；优先用 clientTypes */
   clientType: string;
+  /** 多选客户类型 */
+  clientTypes: string[];
   results: ClientSearchResult[];
   hasSearched: boolean;
 }
+
+export const CLIENT_TYPE_OPTIONS = [
+  { value: 'Importer', label: '进口商 (Importer)' },
+  { value: 'Wholesaler', label: '批发商 (Wholesaler)' },
+  { value: 'Retailer', label: '零售商 (Retailer)' },
+  { value: 'Distributor', label: '分销商 (Distributor)' },
+  { value: 'Brand', label: '品牌商 (Brand)' },
+  { value: 'Buying Office', label: '采购办公室 (Buying Office)' },
+] as const;
 
 export interface KnowledgeFile {
   id: string;

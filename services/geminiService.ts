@@ -10,9 +10,10 @@ const NATIVE_MODEL = 'gemini-3-pro-preview';
 const WEB_SEARCH_TASKS: TaskType[] = ['search', 'analysis'];
 
 const TASK_TIMEOUT_MS: Partial<Record<TaskType, number>> = {
-  search: 120_000,
-  analysis: 180_000,
-  email: 120_000,
+  // 联网搜索拉客户列表常需 2–4 分钟，后台短测能过但前端重任务会超时
+  search: 300_000,
+  analysis: 360_000,
+  email: 180_000,
 };
 
 const fetchWithTimeout = async (
@@ -57,13 +58,36 @@ Structure the report professionally in Chinese.
 
 const QWEN_SYSTEM = '你是外贸客户开发专家「楠哥的小助理」，擅长背景调查、客户搜索和开发信撰写。请使用联网搜索获取真实最新信息。所有输出使用简体中文。';
 
-const qwenSearchPayload = (enableSearch: boolean): Record<string, unknown> | undefined =>
-  enableSearch
-    ? { enable_search: true, search_options: { forced_search: true } }
-    : undefined;
+/** forced_search 会显著拖慢大任务，仅在明确要求时开启 */
+const qwenSearchPayload = (
+  enableSearch: boolean,
+  forced = false
+): Record<string, unknown> | undefined => {
+  if (!enableSearch) return undefined;
+  if (forced) {
+    return { enable_search: true, search_options: { forced_search: true } };
+  }
+  return { enable_search: true };
+};
 
 const isDomesticQwenEndpoint = (url: string): boolean =>
   url.startsWith('/qwen-api') || /aliyuncs\.com|dashscope\.aliyun/i.test(url);
+
+/** 清理 API Key：去空格、零宽字符、Bearer 前缀 */
+export const sanitizeApiKey = (key: string): string =>
+  (key || '')
+    .replace(/^\uFEFF/, '')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/^Bearer\s+/i, '')
+    .replace(/\s+/g, '')
+    .trim();
+
+const describeKey = (key: string): string => {
+  const k = sanitizeApiKey(key);
+  if (!k) return '空';
+  const kind = k.startsWith('sk-sp-') ? 'Token Plan (sk-sp-)' : k.startsWith('sk-ws-') ? '工作空间 (sk-ws-)' : k.startsWith('sk-') ? '通用/其他 (sk-)' : '未知格式';
+  return `${kind}, 长度 ${k.length}`;
+};
 
 export interface TaskTypeAssignment {
     task: TaskType;
@@ -171,17 +195,70 @@ const fetchFindymail = async (domain: string): Promise<DecisionMaker[]> => {
     return [];
 };
 
+const classifyDecisionMakerType = (title: string): 'CEO' | 'Buyer' | 'Other' => {
+  const t = (title || '').toLowerCase();
+  if (/ceo|founder|owner|president|managing director|md\b|总经理|创始/.test(t)) return 'CEO';
+  if (/buyer|procurement|purchasing|sourcing|category|merchandis|采购|买手|供应链/.test(t)) return 'Buyer';
+  return 'Other';
+};
+
+const rankDecisionMakers = (list: DecisionMaker[]): DecisionMaker[] => {
+  const typeWeight = (t: DecisionMaker['type']) => (t === 'Buyer' ? 3 : t === 'CEO' ? 2 : 1);
+  return [...list].sort((a, b) => {
+    const scoreA = (a.influenceScore || typeWeight(a.type)) + (a.isVerified ? 1 : 0) + (a.emailGuess ? 0.5 : 0) + (a.linkedin ? 0.3 : 0);
+    const scoreB = (b.influenceScore || typeWeight(b.type)) + (b.isVerified ? 1 : 0) + (b.emailGuess ? 0.5 : 0) + (b.linkedin ? 0.3 : 0);
+    return scoreB - scoreA;
+  });
+};
+
 const fetchAnymailFinder = async (domain: string): Promise<DecisionMaker[]> => {
     const ANYMAIL_FINDER_API_KEY = getEmailSearchKeys().anymailFinder;
     if (!domain || !ANYMAIL_FINDER_API_KEY) return [];
     try {
-        const response = await fetch(`https://api.anymailfinder.com/v1.0/search/company.json`, {
+        const response = await fetch(`https://api.anymailfinder.com/v5.0/search/company.json`, {
             method: 'POST',
             headers: { 'X-Api-Key': ANYMAIL_FINDER_API_KEY, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ domain: cleanDomain(domain) })
+            body: JSON.stringify({ domain: cleanDomain(domain), email_type: 'all' })
         });
-        await response.json();
-        return []; 
+        if (!response.ok) {
+            // fallback older endpoint shape
+            const legacy = await fetch(`https://api.anymailfinder.com/v1.0/search/company.json`, {
+                method: 'POST',
+                headers: { 'X-Api-Key': ANYMAIL_FINDER_API_KEY, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ domain: cleanDomain(domain) })
+            });
+            if (!legacy.ok) return [];
+            const legacyData = await legacy.json();
+            const emails = legacyData?.emails || legacyData?.results || [];
+            if (!Array.isArray(emails)) return [];
+            return emails.slice(0, 20).map((e: any) => ({
+                name: e.name || [e.first_name, e.last_name].filter(Boolean).join(' ') || 'Contact',
+                firstName: e.first_name,
+                lastName: e.last_name,
+                title: e.title || e.job_title || 'Manager',
+                emailGuess: e.email || e.value,
+                linkedin: e.linkedin || e.linkedin_url,
+                type: classifyDecisionMakerType(e.title || e.job_title || ''),
+                source: 'AnymailFinder' as const,
+                isVerified: !!(e.valid || e.verified || e.confidence > 0.8),
+                confidence: typeof e.confidence === 'number' ? e.confidence : undefined,
+            }));
+        }
+        const data = await response.json();
+        const emails = data?.emails || data?.results || data?.all_emails || [];
+        if (!Array.isArray(emails)) return [];
+        return emails.slice(0, 20).map((e: any) => ({
+            name: e.name || [e.first_name, e.last_name].filter(Boolean).join(' ') || 'Contact',
+            firstName: e.first_name,
+            lastName: e.last_name,
+            title: e.title || e.job_title || 'Manager',
+            emailGuess: e.email || e.value,
+            linkedin: e.linkedin || e.linkedin_url,
+            type: classifyDecisionMakerType(e.title || e.job_title || ''),
+            source: 'AnymailFinder' as const,
+            isVerified: !!(e.valid || e.verified),
+            confidence: typeof e.confidence === 'number' ? e.confidence : undefined,
+        }));
     } catch (e) { console.error("Anymail Finder Error", e); }
     return [];
 };
@@ -249,6 +326,11 @@ export const hydrateApiConfigsFromCloud = async (): Promise<boolean> => {
             if (c.provider === 'anymailfinder' && c.apiKey?.trim()) {
                 localStorage.setItem('trade_scout_anymail_finder_api_key', c.apiKey.trim());
             }
+            if (c.provider === 'wan' && c.apiKey?.trim()) {
+                localStorage.setItem('trade_scout_wan_api_key', c.apiKey.trim());
+                if (c.baseUrl?.trim()) localStorage.setItem('trade_scout_wan_base_url', c.baseUrl.trim());
+                if (c.modelId?.trim()) localStorage.setItem('trade_scout_wan_model_id', c.modelId.trim());
+            }
         }
 
         return hasApiKeyConfigured();
@@ -280,7 +362,7 @@ const callOpenAICompatible = async (
     config: ApiConfig,
     messages: any[],
     jsonMode: boolean = false,
-    options: { extraPayload?: Record<string, unknown>; timeoutMs?: number; maxTokens?: number } = {}
+    options: { extraPayload?: Record<string, unknown>; timeoutMs?: number; maxTokens?: number; proxyOrigin?: string } = {}
 ): Promise<string> => {
     // Construct URL robustly
     let baseUrl = config.baseUrl.trim();
@@ -316,8 +398,13 @@ const callOpenAICompatible = async (
         
         const headers: Record<string, string> = {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${config.apiKey.trim()}`
+            'Authorization': `Bearer ${sanitizeApiKey(config.apiKey)}`
         };
+
+        // 开发代理动态路由：把管理员填写的 Token Plan / MaaS 域名带给 Vite
+        if (targetUrl.startsWith('/qwen-api') && options.proxyOrigin) {
+            headers['X-Qwen-Origin'] = options.proxyOrigin;
+        }
 
         // --- CRITICAL FIX FOR OPENROUTER ---
         // OpenRouter requires these headers to identify the app and prevent blocks
@@ -356,9 +443,21 @@ const callOpenAICompatible = async (
             if (!response.ok) {
                 const errText = await response.text();
                 
-                // If 401, key is wrong. STOP.
+                // If 401, key is wrong or proxy hit wrong host. STOP.
                 if (response.status === 401) {
-                    throw new Error(`API Key Rejected (401). Please check your Key.`);
+                    const proxiedTo = response.headers.get('X-Proxied-To') || '';
+                    let detail = errText.slice(0, 240);
+                    try { detail = JSON.parse(errText).error?.message || detail; } catch { /* ignore */ }
+                    const wrongHost =
+                      /Incorrect API key provided/i.test(detail) &&
+                      (proxiedTo.includes('dashscope') || !proxiedTo.includes('token-plan'));
+                    throw new Error(
+                      `API Key Rejected (401). Key=${describeKey(config.apiKey)}; ` +
+                      `目标=${proxiedTo || config.baseUrl}. ${detail}` +
+                      (wrongHost
+                        ? ' —— 请求可能打到了 dashscope 而不是 Token Plan。请重启 npm run dev 后再测。'
+                        : ' —— 请确认使用完整 sk-sp- Key，且与 token-plan 域名配套。')
+                    );
                 }
                 
                 // If 402, Quota exceeded. STOP.
@@ -518,34 +617,78 @@ const callQwenChat = async (
   options: {
     jsonMode?: boolean;
     enableSearch?: boolean;
+    /** 强制联网；大任务默认 false，避免 120s+ 无响应 */
+    forcedSearch?: boolean;
     task?: TaskType;
     override?: Partial<QwenRuntimeConfig>;
+    timeoutMs?: number;
   } = {}
 ): Promise<string> => {
   const config = await resolveQwenConfig(options.override);
-  const timeoutMs = (options.task && TASK_TIMEOUT_MS[options.task]) || 120_000;
-  const searchPayload = qwenSearchPayload(!!options.enableSearch);
-  const maxTokens = options.task === 'search' ? 8192 : options.task === 'analysis' ? 8192 : 4096;
+  const timeoutMs =
+    options.timeoutMs ||
+    (options.task && TASK_TIMEOUT_MS[options.task]) ||
+    180_000;
+  const searchPayload = qwenSearchPayload(!!options.enableSearch, !!options.forcedSearch);
+  // 搜索/分析 JSON 体量大，但过高 max_tokens 会拖慢首包
+  const maxTokens = options.task === 'search' ? 4096 : options.task === 'analysis' ? 6144 : 4096;
 
-  if (isQwenOpenAICompatible(config.baseUrl) || config.baseUrl.startsWith('/qwen-api')) {
-    return callOpenAICompatible(
-      {
-        id: 'qwen',
-        apiKey: config.apiKey,
-        baseUrl: config.baseUrl,
-        modelId: config.modelId,
-        taskAssignment: 'default',
-      },
-      messages,
+  const runOnce = async (extraPayload: Record<string, unknown> | undefined) => {
+    if (isQwenOpenAICompatible(config.baseUrl) || config.baseUrl.startsWith('/qwen-api')) {
+      return callOpenAICompatible(
+        {
+          id: 'qwen',
+          apiKey: config.apiKey,
+          baseUrl: config.baseUrl,
+          modelId: config.modelId,
+          taskAssignment: 'default',
+        },
+        messages,
+        options.jsonMode ?? false,
+        { timeoutMs, extraPayload, maxTokens, proxyOrigin: config.proxyOrigin }
+      );
+    }
+
+    const combined = messages
+      .map(m => `${m.role}: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`)
+      .join('\n\n');
+    return callQwenNative(
+      config,
+      combined,
       options.jsonMode ?? false,
-      { timeoutMs, extraPayload: searchPayload, maxTokens }
+      !!options.enableSearch,
+      timeoutMs,
+      !!options.forcedSearch
     );
-  }
+  };
 
-  const combined = messages
-    .map(m => `${m.role}: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`)
-    .join('\n\n');
-  return callQwenNative(config, combined, options.jsonMode ?? false, !!options.enableSearch, timeoutMs);
+  try {
+    return await runOnce(searchPayload);
+  } catch (err: any) {
+    const msg = String(err?.message || '');
+    const isTimeout = /超时|timeout|AbortError/i.test(msg);
+    // 若曾强制联网导致超时，降级为普通联网再试
+    if (isTimeout && options.enableSearch && options.forcedSearch) {
+      console.warn('[Qwen] 强制联网超时，降级为普通联网重试…');
+      return await runOnce(qwenSearchPayload(true, false));
+    }
+    // 非搜索/分析任务：超时后允许不联网兜底
+    if (
+      isTimeout &&
+      options.enableSearch &&
+      options.task !== 'search' &&
+      options.task !== 'analysis'
+    ) {
+      console.warn('[Qwen] 联网超时，降级为不联网重试…');
+      return await runOnce(undefined);
+    }
+    if (isTimeout) {
+      throw new Error(
+        `${msg} 客户搜索/背调联网较慢，已等待 ${Math.round(timeoutMs / 1000)} 秒仍未返回。请确认模型支持联网（如 qwen-plus / qwen-max / qwen3.x），或减少目标国家后重试。`
+      );
+    }
+    throw err;
+  }
 };
 
 // --- Unified Generator：国内千问优先，Gemini 仅作可选备用 ---
@@ -575,6 +718,8 @@ const generateContentUnified = async (
       return await callQwenChat(messages, {
         jsonMode,
         enableSearch: needsWebSearch,
+        // 客户搜索用普通联网即可；强制搜索易导致数分钟无响应
+        forcedSearch: false,
         task,
       });
     } catch (qwenErr: any) {
@@ -698,65 +843,69 @@ export const generateConsolidatedEmailStrategy = async (clients: AnalysisResult[
 export const analyzeCompany = async (domainOrName: string, mode: 'detailed' | 'economy' = 'detailed'): Promise<AnalysisResult> => {
   const prompt = `
   Target: "${domainOrName}".
-  Task: DEEP COMMERCIAL INVESTIGATION.
-  
-  Action:
-  1. Identify company nature, scale, and headquarters.
-  2. Analyze product pricing, positioning, and supply chain role.
-  3. Find 5-10 specific decision makers (Name + Title).
-     - **CRITICAL**: Prioritize finding REAL LinkedIn profiles AND REAL professional email addresses.
-     - For Name, provide "firstName", "lastName", and "name" (Full Name).
-     - You MUST attempt to construct a professional email for every decision maker found. If you cannot find a direct email, use standard professional email patterns (e.g., first.last@company.com, first@company.com) based on the company domain and label it as 'AI (Pattern Guess)'.
-     - Look for "Contact Us", "About Us", or "Team" pages to find real names and contact info.
-  4. Find 3-5 competitors.
-  5. Identify website product categories.
-  6. **PRODUCT ANALYSIS (CRITICAL)**: Analyze the company's products in detail:
-     - Features/Functions (功能)
-     - Colors (颜色)
-     - Packaging (包装)
-     - Market Preference (分析客户和终端市场的喜好)
-     - Recommendation (给出最适合的产品推荐建议)
-  7. **CRITICAL**: Search for "SimilarWeb stats", "site traffic", "organic keywords". ESTIMATE if not found. Populate "trafficAnalysis".
-  8. **FINANCIAL TRENDS (MANDATORY)**: You MUST provide an ESTIMATE for "revenue" and "procurement" for the last 5 years (2020-2024).
-     - If exact financial reports are not public, you MUST ESTIMATE based on: Employee Count * Industry Revenue Per Capita (approx $150k-$300k/employee for trading).
-     - Procurement is typically 30-50% of Revenue.
-     - **DO NOT RETURN 0**. Give me your best AI estimate based on company size.
-  
-  IMPORTANT: All text fields (description, positioning, strategy, etc.) MUST be in Simplified Chinese.
-  
-  Output JSON matching the following structure exactly (no markdown):
+  Task: DEEP B2B FOREIGN-TRADE DUE DILIGENCE for Chinese exporters selling to this buyer/importer.
+
+  You MUST use web search. Prefer official website, LinkedIn company page, trade directories, exhibition pages,
+  ImportYeti / Bill of Lading public indexes, news, certification pages. If a fact is unknown, write "公开信息未找到" — NEVER invent customs shipment IDs.
+
+  Action checklist:
+  1. Company identity: legal/trading name, HQ city, founded year, nature (importer/distributor/retailer/brand/manufacturer), scale, employees.
+  2. Business model: channels, distributors, ecommerce, exhibitions, procurement habits, supply-chain role.
+  3. TRADE INTELLIGENCE (critical for exporters):
+     - HS codes / product categories they likely import
+     - Public customs/shipment clues (summarize; cite source type)
+     - Top source countries
+     - Certifications (CE, FDA, UL, BSCI, ISO, REACH, GRS, OEKO-TEX, etc.) if mentioned on site or news
+     - Preferred Incoterms / MOQ / buying season if found
+     - Risk level (低/中/高/未知) + short notes (sanctions/adverse media only if real evidence)
+  4. DECISION MAKERS (5-12 people) — prioritize accuracy:
+     - Prefer Procurement / Purchasing / Sourcing / Category / Merchandising / Supply Chain / Owner / CEO / Founder
+     - Require firstName, lastName, full name, title, department if possible
+     - Real LinkedIn URL when searchable; otherwise leave empty (do NOT invent LinkedIn paths)
+     - Email: real if found; else professional pattern guess with source "AI (Pattern Guess)"
+     - phone if public; yearsActive if known; influenceScore 1-5 (Buyer/CEO higher)
+     - type must be CEO | Buyer | Other
+  5. Products, pricing, SWOT, traffic estimates, competitors, action plan for Chinese suppliers.
+  6. Financial trends last 5 years — estimate if needed, never all zeros.
+
+  IMPORTANT: All descriptive text in Simplified Chinese.
+
+  Output JSON only (no markdown) matching:
   {
-    "companyInfo": { "name": "...", "headquarters": "...", "foundedYear": "...", "nature": "...", "scale": "...", "website": "...", "description": "简要中文描述..." },
+    "companyInfo": { "name": "", "headquarters": "", "city": "", "foundedYear": "", "nature": "", "scale": "", "employeeRange": "", "website": "", "description": "" },
     "swot": { "strengths": [], "weaknesses": [], "opportunities": [], "threats": [] },
-    "financialTrends": [
-        { "year": "2020", "revenue": 1000000, "procurement": 300000 },
-        { "year": "2021", "revenue": 1200000, "procurement": 400000 },
-        { "year": "2022", "revenue": 1500000, "procurement": 500000 },
-        { "year": "2023", "revenue": 1800000, "procurement": 600000 },
-        { "year": "2024", "revenue": 2000000, "procurement": 700000 }
-    ],
-    "trafficAnalysis": [
-        { "category": "General", "trafficType": "Organic (SEO)", "topKeywords": "brand name, product key", "volumeEst": "Medium" }
-    ],
-    "websiteCategories": [{ "categoryName": "...", "items": ["..."] }],
-    "businessScope": { "coreProducts": [], "relevantProducts": [], "brandPositioning": "...", "consumerGroup": "...", "productVariety": "...", "priceSensitivity": "...", "websiteStructure": "..." },
-    "businessModel": { "channels": [], "hasDistributors": false, "exhibitionHistory": [], "ecommercePresence": [], "procurementInfo": "..." },
-    "supplyChain": { "role": "...", "serviceType": "..." },
-    "targetAudience": [],
-    "financials": { "revenueEstimate": "...", "paymentTerms": "...", "ipInfo": "..." },
-    "productSummary": {
-        "marketPreference": "终端市场喜好分析...",
-        "recommendedProducts": "最适合的产品推荐...",
-        "packagingAnalysis": "包装风格分析...",
-        "colorPreference": "颜色偏好分析...",
-        "featureAnalysis": "产品功能特点分析..."
+    "financialTrends": [{ "year": "2020", "revenue": 0, "procurement": 0 }],
+    "trafficAnalysis": [{ "category": "", "trafficType": "Organic (SEO)", "topKeywords": "", "volumeEst": "Medium" }],
+    "websiteCategories": [{ "categoryName": "", "items": [] }],
+    "businessScope": { "coreProducts": [], "relevantProducts": [], "brandPositioning": "", "consumerGroup": "", "productVariety": "Medium", "priceSensitivity": "", "websiteStructure": "" },
+    "businessModel": { "channels": [], "hasDistributors": false, "exhibitionHistory": [], "ecommercePresence": [], "procurementInfo": "" },
+    "supplyChain": { "role": "", "serviceType": "" },
+    "tradeIntelligence": {
+      "hsCodes": [],
+      "importCategories": [],
+      "customsSummary": "",
+      "recentShipments": [],
+      "topSourceCountries": [],
+      "estimatedAnnualImport": "",
+      "certifications": [],
+      "complianceNotes": "",
+      "preferredIncoterms": "",
+      "typicalMoq": "",
+      "buyingSeasons": "",
+      "registrationId": "",
+      "companyLinkedin": "",
+      "riskLevel": "未知",
+      "riskNotes": ""
     },
-    "socials": { "linkedin": "", "facebook": "" },
-    "products": [{ "name": "...", "retailPrice": "...", "retailPriceCNY": 0, "estimatedFOBPriceCNY": 0, "imageUrl": "", "competitorLink": "...", "pricingStrategy": "...", "pitchPoint": "...", "techSpecs": "...", "features": "...", "colors": "...", "packaging": "..." }],
-    "marketTrends": "...",
-    "decisionMakers": [{ "firstName": "...", "lastName": "...", "name": "...", "title": "...", "emailGuess": "...", "linkedin": "...", "type": "...", "source": "AI", "isVerified": false }],
-    "strategy": { "buyingOfficeLocation": "...", "actionPlan": [] },
-    "similarCompanies": [{ "name": "...", "website": "...", "country": "...", "mainProducts": "..." }]
+    "targetAudience": [],
+    "financials": { "revenueEstimate": "", "paymentTerms": "", "ipInfo": "" },
+    "productSummary": { "marketPreference": "", "recommendedProducts": "", "packagingAnalysis": "", "colorPreference": "", "featureAnalysis": "" },
+    "socials": { "linkedin": "", "facebook": "", "instagram": "", "youtube": "" },
+    "products": [{ "name": "", "retailPrice": "", "retailPriceCNY": 0, "estimatedFOBPriceCNY": 0, "imageUrl": "", "competitorLink": "", "pricingStrategy": "", "pitchPoint": "", "techSpecs": "", "features": "", "colors": "", "packaging": "" }],
+    "marketTrends": "",
+    "decisionMakers": [{ "firstName": "", "lastName": "", "name": "", "title": "", "department": "", "emailGuess": "", "phone": "", "linkedin": "", "yearsActive": "", "type": "Buyer", "source": "AI", "isVerified": false, "influenceScore": 4 }],
+    "strategy": { "buyingOfficeLocation": "", "actionPlan": [] },
+    "similarCompanies": [{ "name": "", "website": "", "country": "", "mainProducts": "" }]
   }
   `;
 
@@ -773,7 +922,9 @@ export const analyzeCompany = async (domainOrName: string, mode: 'detailed' | 'e
       nature: aiResult.companyInfo?.nature || "N/A",
       scale: aiResult.companyInfo?.scale || "N/A",
       website: aiResult.companyInfo?.website || "N/A",
-      description: aiResult.companyInfo?.description || "N/A"
+      description: aiResult.companyInfo?.description || "N/A",
+      employeeRange: aiResult.companyInfo?.employeeRange || "",
+      city: aiResult.companyInfo?.city || "",
     },
     swot: {
         strengths: aiResult.swot?.strengths || [],
@@ -804,6 +955,23 @@ export const analyzeCompany = async (domainOrName: string, mode: 'detailed' | 'e
       role: aiResult.supplyChain?.role || "N/A",
       serviceType: aiResult.supplyChain?.serviceType || "N/A"
     },
+    tradeIntelligence: {
+      hsCodes: aiResult.tradeIntelligence?.hsCodes || [],
+      importCategories: aiResult.tradeIntelligence?.importCategories || [],
+      customsSummary: aiResult.tradeIntelligence?.customsSummary || "公开信息未找到",
+      recentShipments: aiResult.tradeIntelligence?.recentShipments || [],
+      topSourceCountries: aiResult.tradeIntelligence?.topSourceCountries || [],
+      estimatedAnnualImport: aiResult.tradeIntelligence?.estimatedAnnualImport || "公开信息未找到",
+      certifications: aiResult.tradeIntelligence?.certifications || [],
+      complianceNotes: aiResult.tradeIntelligence?.complianceNotes || "",
+      preferredIncoterms: aiResult.tradeIntelligence?.preferredIncoterms || "公开信息未找到",
+      typicalMoq: aiResult.tradeIntelligence?.typicalMoq || "公开信息未找到",
+      buyingSeasons: aiResult.tradeIntelligence?.buyingSeasons || "公开信息未找到",
+      registrationId: aiResult.tradeIntelligence?.registrationId || "",
+      companyLinkedin: aiResult.tradeIntelligence?.companyLinkedin || aiResult.socials?.linkedin || "",
+      riskLevel: aiResult.tradeIntelligence?.riskLevel || "未知",
+      riskNotes: aiResult.tradeIntelligence?.riskNotes || "",
+    },
     targetAudience: aiResult.targetAudience || [],
     financials: {
       revenueEstimate: aiResult.financials?.revenueEstimate || "N/A",
@@ -825,7 +993,13 @@ export const analyzeCompany = async (domainOrName: string, mode: 'detailed' | 'e
         packaging: p.packaging || "N/A"
     })),
     marketTrends: aiResult.marketTrends || "N/A",
-    decisionMakers: (aiResult.decisionMakers || []).map((dm: any) => ({ ...dm, source: 'AI', isVerified: false })),
+    decisionMakers: (aiResult.decisionMakers || []).map((dm: any) => ({
+      ...dm,
+      type: dm.type === 'CEO' || dm.type === 'Buyer' ? dm.type : classifyDecisionMakerType(dm.title || ''),
+      source: 'AI' as const,
+      isVerified: false,
+      influenceScore: dm.influenceScore || (classifyDecisionMakerType(dm.title || '') === 'Buyer' ? 5 : classifyDecisionMakerType(dm.title || '') === 'CEO' ? 4 : 2),
+    })),
     strategy: {
       buyingOfficeLocation: aiResult.strategy?.buyingOfficeLocation || "N/A",
       actionPlan: aiResult.strategy?.actionPlan || []
@@ -884,9 +1058,15 @@ export const analyzeCompany = async (domainOrName: string, mode: 'detailed' | 'e
               }
           }
 
-          const newPeople = allExtra.filter(p => p.name && !existingNames.has(p.name.toLowerCase()));
-          result.decisionMakers = [...result.decisionMakers, ...newPeople];
+          const newPeople = allExtra.filter(p => p.name && !existingNames.has(p.name.toLowerCase())).map(p => ({
+              ...p,
+              type: p.type || classifyDecisionMakerType(p.title || ''),
+              influenceScore: p.type === 'Buyer' || classifyDecisionMakerType(p.title || '') === 'Buyer' ? 5 : p.type === 'CEO' ? 4 : 2,
+          }));
+          result.decisionMakers = rankDecisionMakers([...result.decisionMakers, ...newPeople]);
       } catch (e) { console.error("External API enrichment failed", e); }
+  } else {
+      result.decisionMakers = rankDecisionMakers(result.decisionMakers);
   }
 
   // 3. Generate Email Strategy (ONLY IF DETAILED MODE)
@@ -905,27 +1085,66 @@ export const analyzeCompany = async (domainOrName: string, mode: 'detailed' | 'e
 };
 
 // Add this function to export
-export const searchPotentialClients = async (productKeyword: string, country: string, industry: string = '', clientType: string = '', limit: number = 30): Promise<ClientSearchResult[]> => {
+export const searchPotentialClients = async (productKeyword: string, country: string, industry: string = '', clientType: string = '', limit: number = 15): Promise<ClientSearchResult[]> => {
+  const countries = country.split(/[,，;/|]+/).map(s => s.trim()).filter(Boolean);
+  const types = clientType.split(/[,，;/|]+/).map(s => s.trim()).filter(Boolean);
+  const marketHint = countries.length
+    ? `these target markets (cover as many as possible): ${countries.join(', ')}`
+    : 'relevant global target markets';
+  const typeHint = types.length
+    ? types.join(', ')
+    : 'Importer, Distributor, Wholesaler, Retailer, Brand Owner, Buying Office';
+
   const prompt = `
-  Act as a high-performance B2B Database Crawler (楠哥的小助理). 
-  Use 联网搜索 to find REAL potential B2B clients in ${country} for product "${productKeyword}". 
-  Industry: ${industry}. 
-  Types to Include: ${clientType || 'Any B2B type (Importers, Distributors, Wholesalers, Brands)'}.
-  
-  Important:
-  - Return REAL companies with active websites (verify via search).
-  - Return up to ${limit} valid targets.
-  - **Description MUST be in Simplified Chinese (简体中文).**
-  
-  Return a valid JSON Array ONLY. No text.
-  Format: [{ "name": "Company Name", "website": "www.example.com", "description": "Short Description in Chinese", "country": "${country}" }]
+  Act as a high-performance B2B lead discovery engine for Chinese exporters (楠哥的小助理).
+  Use web search to find REAL companies in ${marketHint} that buy / import / distribute "${productKeyword}".
+  Industry focus: ${industry || '与产品相关的行业'}.
+  Preferred buyer types (match ANY of these): ${typeHint}.
+  ${countries.length > 1 ? `- Distribute results across the selected countries when possible.` : ''}
+  ${types.length > 1 ? `- Mix buyer types among: ${types.join(', ')}.` : ''}
+
+  Rules:
+  - Only real companies with active websites. Prefer B2B buyers.
+  - Return up to ${limit} diverse targets (no duplicates).
+  - fitScore 1-5; description / fitReason / mainProducts in Simplified Chinese.
+  - Do NOT invent emails.
+  - Keep each field concise (1 short sentence max for description/fitReason).
+
+  Return a valid JSON Array ONLY:
+  [{
+    "name": "Company Name",
+    "website": "www.example.com",
+    "description": "一句话说明为何适合开发",
+    "country": "Country name in English",
+    "clientType": "Importer|Distributor|Wholesaler|Retailer|Brand|Buying Office",
+    "mainProducts": "主营品类",
+    "estimatedScale": "如 50-200人 / 中型",
+    "city": "城市",
+    "linkedinCompanyUrl": "",
+    "contactHint": "",
+    "fitScore": 4,
+    "fitReason": "匹配原因"
+  }]
   `;
   const text = await generateContentUnified('search', prompt, SYSTEM_INSTRUCTION, true);
   const results = extractJson(text, true);
   if (!Array.isArray(results) || results.length === 0) {
-    throw new Error('搜索未返回有效结果。请确认千问 API 已配置，并使用 qwen-plus 或 qwen-max 模型（支持联网搜索）。');
+    throw new Error('搜索未返回有效结果。请确认千问 API 已配置，并使用支持联网搜索的模型。');
   }
-  return results;
+  return results.map((r: any) => ({
+    name: r.name || 'Unknown',
+    website: r.website || '',
+    description: r.description || '',
+    country: r.country || country || '',
+    clientType: r.clientType || clientType || '',
+    mainProducts: r.mainProducts || '',
+    estimatedScale: r.estimatedScale || '',
+    city: r.city || '',
+    linkedinCompanyUrl: r.linkedinCompanyUrl || '',
+    contactHint: r.contactHint || '',
+    fitScore: typeof r.fitScore === 'number' ? r.fitScore : undefined,
+    fitReason: r.fitReason || '',
+  })).sort((a: ClientSearchResult, b: ClientSearchResult) => (b.fitScore || 0) - (a.fitScore || 0));
 };
 
 export const streamStrategyChat = async function* (
@@ -1013,9 +1232,11 @@ interface QwenRuntimeConfig {
   apiKey: string;
   baseUrl: string;
   modelId: string;
+  /** 开发代理转发用的真实阿里云域名（如 token-plan.cn-beijing.maas.aliyuncs.com） */
+  proxyOrigin?: string;
 }
 
-const DEFAULT_QWEN_BASE = 'https://dashscope.aliyuncs.com';
+const DEFAULT_QWEN_BASE = 'https://dashscope.aliyuncs.com/compatible-mode/v1';
 const DEFAULT_QWEN_MODEL = 'qwen-max';
 
 const normalizeQwenBaseUrl = (raw: string): string => {
@@ -1033,16 +1254,26 @@ const normalizeQwenBaseUrl = (raw: string): string => {
 const isQwenOpenAICompatible = (baseUrl: string): boolean =>
   baseUrl.includes('/compatible-mode/v1');
 
-/** 开发环境走 Vite 代理，生产环境直连 */
-const effectiveQwenBaseUrl = (normalized: string): string => {
+/** 开发环境走 Vite 代理，并保留真实 Origin 供动态路由 */
+const toProxiedQwenEndpoint = (normalized: string): { url: string; proxyOrigin?: string } => {
   const isDev =
     typeof window !== 'undefined' &&
     (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
-  if (isDev && isDomesticQwenEndpoint(normalized)) {
-    return '/qwen-api/compatible-mode/v1';
+
+  if (!isDev || !isDomesticQwenEndpoint(normalized) || normalized.startsWith('/')) {
+    return { url: normalized };
   }
-  return normalized;
+
+  try {
+    const u = new URL(normalized);
+    const path = u.pathname.replace(/\/$/, '') || '/compatible-mode/v1';
+    return { url: `/qwen-api${path}`, proxyOrigin: u.origin };
+  } catch {
+    return { url: normalized };
+  }
 };
+
+const effectiveQwenBaseUrl = (normalized: string): string => toProxiedQwenEndpoint(normalized).url;
 
 const resolveQwenConfig = async (override?: Partial<QwenRuntimeConfig>): Promise<QwenRuntimeConfig> => {
   const readLocal = (key: string) =>
@@ -1052,22 +1283,39 @@ const resolveQwenConfig = async (override?: Partial<QwenRuntimeConfig>): Promise
   const localBase = readLocal('trade_scout_qwen_base_url');
   const localModel = readLocal('trade_scout_qwen_model_id');
 
-  let cloudConfig = await getSupabaseApiConfig('qwen');
+  // localStorage 优先，避免云端旧 Key 覆盖管理员刚录入的 Token Plan Key
+  let cloudConfig: Awaited<ReturnType<typeof getSupabaseApiConfig>> = null;
+  if (!localKey || !localBase) {
+    cloudConfig = await getSupabaseApiConfig('qwen');
+  }
 
-  // localStorage 优先（用户在本浏览器保存的最新配置）
-  const apiKey = override?.apiKey || localKey || cloudConfig?.apiKey || env.qwenApiKey || '';
+  const apiKey = sanitizeApiKey(override?.apiKey || localKey || cloudConfig?.apiKey || env.qwenApiKey || '');
   const rawBase =
     override?.baseUrl || localBase || cloudConfig?.baseUrl || env.qwenBaseUrl || DEFAULT_QWEN_BASE;
-  const baseUrl = effectiveQwenBaseUrl(normalizeQwenBaseUrl(rawBase));
+  const normalized = normalizeQwenBaseUrl(rawBase);
+  const proxied = toProxiedQwenEndpoint(normalized);
   const modelId =
-    override?.modelId || localModel || cloudConfig?.modelId || env.qwenModelId || DEFAULT_QWEN_MODEL;
+    (override?.modelId || localModel || cloudConfig?.modelId || env.qwenModelId || DEFAULT_QWEN_MODEL).trim();
 
   if (!apiKey) {
     throw new Error('未配置 Qwen API Key（请在管理后台、.env.local 或 Supabase 中配置）');
   }
 
-  console.log('[Qwen Config]', { baseUrl, modelId, hasKey: !!apiKey });
-  return { apiKey, baseUrl, modelId };
+  // Token Plan 必须用 sk-sp- + token-plan 域名
+  if (apiKey.startsWith('sk-sp-') && proxied.proxyOrigin && !/token-plan/i.test(proxied.proxyOrigin) && !proxied.url.includes('token-plan')) {
+    console.warn('[Qwen] sk-sp Key 但 Base 不是 token-plan，鉴权极易 401');
+  }
+  if (!apiKey.startsWith('sk-sp-') && /token-plan/i.test(proxied.proxyOrigin || normalized)) {
+    console.warn('[Qwen] Base 是 token-plan 但 Key 不是 sk-sp-，鉴权极易 401');
+  }
+
+  console.log('[Qwen Config]', {
+    baseUrl: proxied.url,
+    proxyOrigin: proxied.proxyOrigin,
+    modelId,
+    keyInfo: describeKey(apiKey),
+  });
+  return { apiKey, baseUrl: proxied.url, modelId, proxyOrigin: proxied.proxyOrigin };
 };
 
 const extractQwenText = (data: any): string | null => {
@@ -1082,7 +1330,8 @@ const callQwenNative = async (
   prompt: string,
   jsonMode: boolean,
   enableSearch = false,
-  timeoutMs = 120_000
+  timeoutMs = 180_000,
+  forcedSearch = false
 ): Promise<string> => {
   let apiRoot = config.baseUrl.replace(/\/$/, '');
   if (apiRoot.endsWith('/api/v1')) {
@@ -1095,6 +1344,9 @@ const callQwenNative = async (
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
       'Content-Type': 'application/json',
+      ...(config.proxyOrigin && url.startsWith('/qwen-api')
+        ? { 'X-Qwen-Origin': config.proxyOrigin }
+        : {}),
     },
     body: JSON.stringify({
       model: config.modelId,
@@ -1109,7 +1361,7 @@ const callQwenNative = async (
       },
       parameters: {
         result_format: jsonMode ? 'message' : 'text',
-        ...(enableSearch ? { enable_search: true, search_options: { forced_search: true } } : {}),
+        ...(qwenSearchPayload(enableSearch, forcedSearch) || {}),
       },
     }),
   }, timeoutMs);
@@ -1138,15 +1390,7 @@ export const callQwen = async (
   } = {}
 ): Promise<string> => {
   try {
-    const override = options.override
-      ? {
-          ...options.override,
-          ...(options.override.baseUrl
-            ? { baseUrl: effectiveQwenBaseUrl(normalizeQwenBaseUrl(options.override.baseUrl)) }
-            : {}),
-        }
-      : undefined;
-
+    // override 只传原始字段，由 resolveQwenConfig / callQwenChat 统一做代理改写
     return await callQwenChat(
       [
         { role: 'system', content: QWEN_SYSTEM },
@@ -1156,7 +1400,7 @@ export const callQwen = async (
         jsonMode: options.jsonMode,
         enableSearch: options.enableSearch,
         task: options.task,
-        override,
+        override: options.override,
       }
     );
   } catch (error) {
@@ -1172,21 +1416,36 @@ export const testQwenApiKey = async (
   testSearch = false
 ): Promise<{ success: boolean; message: string }> => {
   try {
+    const cleanKey = sanitizeApiKey(apiKey);
+    const cleanBase = (baseUrl || '').trim() || 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1';
+    if (cleanKey.startsWith('sk-sp-') && !/token-plan/i.test(cleanBase)) {
+      return {
+        success: false,
+        message: '配置不匹配：Token Plan Key (sk-sp-) 必须搭配 https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
+      };
+    }
+    if (!cleanKey.startsWith('sk-sp-') && /token-plan/i.test(cleanBase)) {
+      return {
+        success: false,
+        message: '配置不匹配：token-plan 域名必须使用 sk-sp- 开头的 Token Plan Key（不要用按量付费 sk-ws-/sk- Key）',
+      };
+    }
     if (testSearch) {
       const text = await callQwen('搜索并告诉我今天日期，用一句话回答。', {
         override: {
-          apiKey: apiKey.trim(),
-          baseUrl: baseUrl?.trim(),
+          apiKey: cleanKey,
+          baseUrl: cleanBase,
           modelId: modelId?.trim(),
         },
         enableSearch: true,
+        task: 'email',
       });
       return { success: true, message: `千问联网搜索成功 ✅ ${text.slice(0, 80)}` };
     }
     const text = await callQwen('Ping. Just reply with the word pong.', {
       override: {
-        apiKey: apiKey.trim(),
-        baseUrl: baseUrl?.trim(),
+        apiKey: cleanKey,
+        baseUrl: cleanBase,
         modelId: modelId?.trim(),
       },
     });
