@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { KnowledgeFile, HistoryItem, DiscoveryState, Client } from '../types'
+import { KnowledgeFile, HistoryItem, DiscoveryState, Client, DiscoveryArchiveItem } from '../types'
 import { getSupabaseConfig, isSupabaseConfigured } from './env'
 
 export { isSupabaseConfigured }
@@ -539,6 +539,71 @@ export const getLatestDiscoverySearch = async (): Promise<DiscoveryState | null>
   } catch (error) {
     console.error('获取搜索记录失败:', error)
     return null
+  }
+}
+
+export const deleteDiscoverySearchFromCloud = async (id: string): Promise<boolean> => {
+  if (!isSupabaseConfigured()) return false
+  try {
+    const { error } = await supabase
+      .from('discovery_searches')
+      .delete()
+      .eq('id', id)
+
+    if (error) throw error
+    console.log('✅ 搜索记录已从 Supabase 删除:', id)
+    return true
+  } catch (error) {
+    console.error('删除搜索记录失败:', error)
+    return false
+  }
+}
+
+/** 按关键词+国家删除（兼容无 UUID 的本地归档同步清云端） */
+export const deleteDiscoverySearchesByMeta = async (product: string, country: string): Promise<boolean> => {
+  if (!isSupabaseConfigured()) return false
+  try {
+    let q = supabase.from('discovery_searches').delete().eq('product', product)
+    if (country) q = q.eq('country', country)
+    const { error } = await q
+    if (error) throw error
+    return true
+  } catch (error) {
+    console.error('按条件删除搜索记录失败:', error)
+    return false
+  }
+}
+
+/** 拉取多条搜索归档（用于记录面板归类） */
+export const getDiscoverySearchArchives = async (): Promise<DiscoveryArchiveItem[]> => {
+  if (!isSupabaseConfigured()) return []
+  try {
+    const { data, error } = await supabase
+      .from('discovery_searches')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(100)
+
+    if (error) throw error
+    const split = (s: string) => s.split(/[,，;/|]+/).map((x: string) => x.trim()).filter(Boolean)
+    return (data || []).map((row: any) => {
+      const countryStr = row.country || ''
+      const typeStr = row.client_type || ''
+      return {
+        id: String(row.id),
+        timestamp: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
+        product: row.product || '',
+        countries: split(countryStr),
+        country: countryStr,
+        industry: row.industry || '',
+        clientTypes: split(typeStr),
+        clientType: typeStr,
+        results: row.results || [],
+      } as DiscoveryArchiveItem
+    })
+  } catch (error) {
+    console.error('获取搜索归档失败:', error)
+    return []
   }
 }
 

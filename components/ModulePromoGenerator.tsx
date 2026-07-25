@@ -13,6 +13,8 @@ interface ModulePromoGeneratorProps {
   onViewResult: (task: AutomationResult) => void;
   onDownloadResult: (task: AutomationResult) => void;
   onDownloadAll: () => void;
+  onClearCompleted: () => void;
+  onClearAll: () => void;
 }
 
 export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({ 
@@ -25,6 +27,8 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   onViewResult,
   onDownloadResult,
   onDownloadAll,
+  onClearCompleted,
+  onClearAll,
 }) => {
   const [keyword, setKeyword] = useState('');
   const [productContext, setProductContext] = useState('');
@@ -108,6 +112,24 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                 className="inline-flex items-center gap-1.5 bg-white border border-slate-200 text-slate-700 px-4 py-2 rounded-xl text-xs font-bold hover:bg-slate-50"
               >
                 <Download size={14} /> 批量下载 PPT
+              </button>
+            )}
+            {completedCount > 0 && (
+              <button
+                onClick={onClearCompleted}
+                disabled={isAutomating}
+                className="inline-flex items-center gap-1.5 bg-white border border-amber-200 text-amber-700 px-4 py-2 rounded-xl text-xs font-bold hover:bg-amber-50 disabled:opacity-50"
+              >
+                <Trash2 size={14} /> 清除已完成
+              </button>
+            )}
+            {automationResults.length > 0 && (
+              <button
+                onClick={onClearAll}
+                disabled={isAutomating}
+                className="inline-flex items-center gap-1.5 bg-white border border-red-200 text-red-600 px-4 py-2 rounded-xl text-xs font-bold hover:bg-red-50 disabled:opacity-50"
+              >
+                <Trash2 size={14} /> 清空列表
               </button>
             )}
             <button 

@@ -47,6 +47,25 @@ export interface HistoryItem {
   data: AnalysisResult;
   timestamp: number;
   domain: string;
+  /** 搜索/开发时的产品关键词，便于归类 */
+  keyword?: string;
+  /** 目标国家 */
+  country?: string;
+  /** 来源标记 */
+  source?: 'single' | 'batch' | 'discovery' | 'crm' | 'recover';
+}
+
+/** 客户搜索归档（每次搜索一条） */
+export interface DiscoveryArchiveItem {
+  id: string;
+  timestamp: number;
+  product: string;
+  countries: string[];
+  industry: string;
+  clientTypes: string[];
+  results: ClientSearchResult[];
+  country?: string;
+  clientType?: string;
 }
 
 export interface MailGroup {
@@ -66,7 +85,10 @@ export interface AutomationResult {
   mailGroup?: MailGroup;
   productContext?: string; 
   productImages?: string[]; 
-  mode?: 'detailed' | 'economy'; 
+  mode?: 'detailed' | 'economy';
+  /** 关联关键词，便于任务归类 */
+  keyword?: string;
+  createdAt?: number;
 }
 
 export interface DecisionMaker {
@@ -119,7 +141,7 @@ export interface TradeIntelligence {
 export interface Client {
   id: string;
   name: string;
-  website?: string; 
+  website?: string;
   country: string;
   type: '进口商' | '零售商' | '批发商' | '分销商';
   status: '新建/潜在' | '已寄样' | '谈判中' | '已成交' | '流失/搁置';
@@ -127,7 +149,7 @@ export interface Client {
   industry: string; // Added industry field
   priceRange: string;
   isSampleNeeded: boolean;
-  hasAnalyzed?: boolean; 
+  hasAnalyzed?: boolean;
   hasBackgroundCheck?: boolean; // Added field
   lastOrderDate: string;
   lastContactSent: string;
@@ -135,6 +157,10 @@ export interface Client {
   nextFollowUpDate: string;
   activityLog: string;
   contacts?: DecisionMaker[]; // Added contacts list
+  /** 搜索来源关键词 */
+  searchKeyword?: string;
+  /** 管理标签 */
+  tags?: string[];
 }
 
 // ... existing interfaces ...
@@ -277,6 +303,14 @@ export interface ClientSearchResult {
   /** 1-5 匹配度 */
   fitScore?: number;
   fitReason?: string;
+  /** 搜索来源：产品关键词 */
+  searchKeyword?: string;
+  /** 搜索来源：目标国家（本次检索选定的国家） */
+  searchCountry?: string;
+  /** 管理标签，如 关键词:Car toy / 国家:Poland */
+  searchTags?: string[];
+  /** 所属搜索归档 ID */
+  searchId?: string;
 }
 
 export interface EmailTemplateRequest {

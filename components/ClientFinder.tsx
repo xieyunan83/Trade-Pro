@@ -1,13 +1,16 @@
 import React, { useMemo, useRef, useState, useEffect } from 'react';
-import { DiscoveryState, ClientSearchResult, CLIENT_TYPE_OPTIONS } from '../types';
-import { Search, Globe, MapPin, Briefcase, Loader2, Plus, Layers, Star, Building2, ChevronDown, X, Check } from 'lucide-react';
+import { DiscoveryState, ClientSearchResult, CLIENT_TYPE_OPTIONS, DiscoveryArchiveItem } from '../types';
+import { Search, Globe, MapPin, Briefcase, Loader2, Plus, Layers, Star, Building2, ChevronDown, X, Check, Tag } from 'lucide-react';
 import { searchPotentialClients } from '../services/geminiService';
 import { CONTINENTS, countryLabel, countrySearchValue, findCountryByEn, type ContinentGroup } from '../data/countriesByContinent';
+import { stampSearchResults } from '../utils/searchTags';
 
 interface ClientFinderProps {
   state: DiscoveryState;
   onStateChange: (state: DiscoveryState) => void;
-  onSelect: (domain: string) => void;
+  /** 每次（按国）搜索完成时可靠归档 */
+  onSearchArchived?: (archive: DiscoveryArchiveItem) => void;
+  onSelect: (result: ClientSearchResult | string) => void;
   onBatchAddToCRM: (results: ClientSearchResult[]) => void;
   onBatchAnalyze: (results: ClientSearchResult[]) => void;
 }
@@ -28,7 +31,7 @@ const normalizeClientTypes = (state: DiscoveryState): string[] => {
   return [];
 };
 
-export const ClientFinder: React.FC<ClientFinderProps> = ({ state, onStateChange, onSelect, onBatchAddToCRM, onBatchAnalyze }) => {
+export const ClientFinder: React.FC<ClientFinderProps> = ({ state, onStateChange, onSearchArchived, onSelect, onBatchAddToCRM, onBatchAnalyze }) => {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
@@ -105,11 +108,63 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({ state, onStateChange
     setLoading(true);
     setErrorMsg(null);
     try {
-      const countryArg = selectedCountries.join(', ') || '';
       const typeArg = selectedTypes.join(', ') || '';
-      const results = await searchPotentialClients(state.product, countryArg, state.industry, typeArg);
-      patchState({ results, hasSearched: true });
+      // 按国家逐个搜索并分别归档，保证「波兰15 / 荷兰15」都能记上且打对标签
+      const targets = selectedCountries.length > 0 ? selectedCountries : [''];
+      const allStamped: ClientSearchResult[] = [];
+      const errors: string[] = [];
+
+      for (const country of targets) {
+        try {
+          const searchId = `disc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+          const raw = await searchPotentialClients(
+            state.product,
+            country,
+            state.industry,
+            typeArg,
+            15
+          );
+          const stamped = stampSearchResults(raw, {
+            keyword: state.product,
+            targetCountry: country || 'Global',
+            clientTypes: selectedTypes,
+            searchId,
+          });
+          allStamped.push(...stamped);
+
+          const archive: DiscoveryArchiveItem = {
+            id: searchId,
+            timestamp: Date.now(),
+            product: state.product,
+            countries: country ? [country] : [],
+            country: country || '',
+            industry: state.industry,
+            clientTypes: selectedTypes,
+            clientType: typeArg,
+            results: stamped,
+          };
+          onSearchArchived?.(archive);
+        } catch (e: any) {
+          console.error(e);
+          errors.push(`${country || '全球'}: ${e?.message || '失败'}`);
+        }
+      }
+
+      patchState({
+        results: allStamped,
+        hasSearched: true,
+        countries: selectedCountries,
+        country: selectedCountries.join(', '),
+        clientTypes: selectedTypes,
+        clientType: typeArg,
+      });
       setSelectedIndices(new Set());
+
+      if (allStamped.length === 0 && errors.length) {
+        setErrorMsg(errors.join('；'));
+      } else if (errors.length) {
+        setErrorMsg(`部分市场失败：${errors.join('；')}（已保存成功的结果）`);
+      }
     } catch (e: any) {
       console.error(e);
       setErrorMsg(e?.message || '搜索失败，请稍后重试');
@@ -361,7 +416,16 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({ state, onStateChange
           disabled={loading || !state.product}
           className="w-full mt-4 sm:mt-6 bg-slate-900 hover:bg-blue-600 text-white py-3 sm:py-4 rounded-xl font-black shadow-lg transition-all flex items-center justify-center gap-2 touch-manipulation"
         >
-          {loading ? <Loader2 className="animate-spin" size={20} /> : '开始搜索'}
+          {loading ? (
+            <>
+              <Loader2 className="animate-spin" size={20} />
+              {selectedCountries.length > 1
+                ? `正在按国搜索（${selectedCountries.length} 个市场）…`
+                : '搜索中…'}
+            </>
+          ) : (
+            '开始搜索'
+          )}
         </button>
         {errorMsg && (
           <div className="mt-4 p-4 bg-red-50 border border-red-100 rounded-xl text-sm font-bold text-red-600">
@@ -412,7 +476,7 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({ state, onStateChange
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        onSelect(res.website || res.name);
+                        onSelect(res);
                       }}
                       className="text-xs font-black text-blue-600 hover:underline"
                     >
@@ -431,6 +495,16 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({ state, onStateChange
                   </span>
                 </div>
                 <div className="flex flex-wrap gap-1.5 mb-3">
+                  {res.searchKeyword && (
+                    <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-lg text-[10px] font-black">
+                      <Tag size={10} /> {res.searchKeyword}
+                    </span>
+                  )}
+                  {(res.searchCountry || res.country) && (
+                    <span className="bg-sky-50 text-sky-700 px-2 py-0.5 rounded-lg text-[10px] font-black">
+                      {res.searchCountry || res.country}
+                    </span>
+                  )}
                   {res.clientType && (
                     <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-lg text-[10px] font-black">
                       {res.clientType}

@@ -2,11 +2,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { analyzeCompany, hasApiKeyConfigured, checkApiKeyAvailability, hydrateApiConfigsFromCloud, searchPotentialClients, generateMailGroupStrategy } from './services/geminiService';
 import { exportToPPT, exportAutomationReportToPPT, exportBatchAutomationReportsToPPT } from './services/exportService';
-import { saveHistory, getHistory, getAllFilesFromDB, saveAutomationTask, getAutomationQueue, deleteAutomationTask, saveFileToDB } from './services/db';
+import { saveHistory, getHistory, getAllFilesFromDB, saveAutomationTask, getAutomationQueue, deleteAutomationTask, saveFileToDB, clearAutomationQueue, clearCompletedAutomationTasks, saveDiscoveryArchive, getDiscoveryArchives, deleteDiscoveryArchive, deleteHistoryItem } from './services/db';
 import { fetchGlobalConfig, fetchDocumentsFromRepo, backupUserHistory, fetchCRMFromCloud, saveCRMToCloud, fetchUserHistoryFromCloud, checkGitHubStatus, fetchApiConfigsFromCloud, setManualGitHubConfig } from './services/githubService';
-import { isSupabaseConfigured, getKnowledgeFiles, getInvestigationHistory, saveInvestigationHistory, getLatestDiscoverySearch, saveDiscoverySearch, getCrmClients, syncCrmClients } from './services/supabase';
+import { isSupabaseConfigured, getKnowledgeFiles, getInvestigationHistory, saveInvestigationHistory, getLatestDiscoverySearch, saveDiscoverySearch, getCrmClients, syncCrmClients, getDiscoverySearchArchives, deleteInvestigationHistory, deleteDiscoverySearchFromCloud, deleteDiscoverySearchesByMeta } from './services/supabase';
+import { addCustomKeyword, addCustomCountry } from './services/taxonomyStore';
+import { normalizeCountryZh } from './utils/countryNormalize';
 import { checkLimit, incrementUsage, updateLocalConfig, resetDailyUsage, getDailyUsagePublic } from './services/limitService';
-import { ModuleType, AnalysisResult, DiscoveryState, Client, User, HistoryItem, AutomationResult, ClientSearchResult } from './types';
+import { ModuleType, AnalysisResult, DiscoveryState, Client, User, HistoryItem, AutomationResult, ClientSearchResult, DiscoveryArchiveItem } from './types';
 import { ModuleBackground } from './components/ModuleBackground';
 import { ModuleProducts } from './components/ModuleProducts';
 import { ModuleDecisionMakers } from './components/ModuleDecisionMakers';
@@ -17,6 +19,7 @@ import { ModuleClientCRM } from './components/ModuleClientCRM';
 import { ModuleEmailCampaign } from './components/ModuleEmailCampaign'; 
 import { ModuleImageGenerator } from './components/ModuleImageGenerator';
 import { ClientFinder } from './components/ClientFinder';
+import { RecordsPanel, archiveToDiscoveryState } from './components/RecordsPanel';
 import { Login } from './components/Login';
 import { loadUsersWithMigration, saveUsersToStorage } from './services/auth';
 import { AdminDashboard } from './components/AdminDashboard';
@@ -65,6 +68,7 @@ const App: React.FC = () => {
     results: [],
     hasSearched: false,
   });
+  const [discoveryArchives, setDiscoveryArchives] = useState<DiscoveryArchiveItem[]>([]);
 
   const [automationResults, setAutomationResults] = useState<AutomationResult[]>([]);
   const [isAutomating, setIsAutomating] = useState(false);
@@ -79,8 +83,31 @@ const App: React.FC = () => {
   const [manualOwner, setManualOwner] = useState('');
   const [manualRepo, setManualRepo] = useState('');
   const [authReady, setAuthReady] = useState(false);
-
   const shouldStopRef = useRef(false);
+
+  const DISCOVERY_TOMBSTONE_KEY = 'trade_scout_discovery_deleted_ids';
+
+  const readDiscoveryTombstones = (): Set<string> => {
+    try {
+      const raw = localStorage.getItem(DISCOVERY_TOMBSTONE_KEY);
+      return new Set(raw ? JSON.parse(raw) : []);
+    } catch {
+      return new Set();
+    }
+  };
+
+  const addDiscoveryTombstone = (id: string, product?: string, country?: string) => {
+    const set = readDiscoveryTombstones();
+    set.add(id);
+    if (product) set.add(`meta:${(product || '').toLowerCase()}|${(country || '').toLowerCase()}`);
+    localStorage.setItem(DISCOVERY_TOMBSTONE_KEY, JSON.stringify([...set]));
+  };
+
+  const isDiscoveryTombstoned = (item: DiscoveryArchiveItem, tombs: Set<string>) => {
+    if (tombs.has(item.id)) return true;
+    const meta = `meta:${(item.product || '').toLowerCase()}|${(item.country || '').toLowerCase()}`;
+    return tombs.has(meta);
+  };
 
   const persistHistoryItem = async (item: HistoryItem) => {
     await saveHistory(item);
@@ -91,8 +118,27 @@ const App: React.FC = () => {
 
   const handleDiscoveryStateChange = (state: DiscoveryState) => {
     setDiscoveryState(state);
-    if (state.hasSearched && isSupabaseConfigured()) {
-      saveDiscoverySearch(state).catch(e => console.error('Supabase discovery save failed', e));
+  };
+
+  /** 可靠归档：每次按国搜索完成后立刻写入本地 + 云端 */
+  const handleSearchArchived = (archive: DiscoveryArchiveItem) => {
+    saveDiscoveryArchive(archive).catch((e) => console.error('local discovery archive failed', e));
+    setDiscoveryArchives((list) => {
+      const without = list.filter((x) => x.id !== archive.id);
+      return [archive, ...without].slice(0, 200);
+    });
+    if (isSupabaseConfigured()) {
+      const stateForCloud: DiscoveryState = {
+        product: archive.product,
+        country: archive.country || (archive.countries || []).join(', '),
+        countries: archive.countries || [],
+        industry: archive.industry,
+        clientType: archive.clientType || (archive.clientTypes || []).join(', '),
+        clientTypes: archive.clientTypes || [],
+        results: archive.results || [],
+        hasSearched: true,
+      };
+      saveDiscoverySearch(stateForCloud).catch((e) => console.error('Supabase discovery save failed', e));
     }
   };
 
@@ -147,9 +193,60 @@ const App: React.FC = () => {
             setAutomationResults(q);
             const files = await getAllFilesFromDB(); setKbCount(files.length);
 
+            // 搜索归档：本地 + 云端合并（排除已删除墓碑）
+            try {
+              const tombs = readDiscoveryTombstones();
+              const localDisc = await getDiscoveryArchives();
+              let cloudDisc: DiscoveryArchiveItem[] = [];
+              if (isSupabaseConfigured()) {
+                cloudDisc = await getDiscoverySearchArchives();
+              }
+              const map = new Map<string, DiscoveryArchiveItem>();
+              [...cloudDisc, ...localDisc]
+                .filter((i) => !isDiscoveryTombstoned(i, tombs))
+                .forEach((i) => map.set(i.id, i));
+              setDiscoveryArchives(Array.from(map.values()).sort((a, b) => b.timestamp - a.timestamp));
+            } catch (e) {
+              console.warn('discovery archives load failed', e);
+            }
+
+            // 背调归类修复：无关键词的历史一律归入 Car toy，并规范化国家为中文
+            addCustomKeyword('Car toy');
+            addCustomCountry('波兰');
+            addCustomCountry('荷兰');
+            addCustomCountry('英国');
+            addCustomCountry('美国');
+            const fixedHistory = await (async () => {
+              const out: HistoryItem[] = [];
+              for (const item of h) {
+                const hq = item.data?.companyInfo?.headquarters || item.data?.companyInfo?.city || '';
+                const normCountry = normalizeCountryZh(item.country || hq);
+                const needKeyword = !item.keyword?.trim();
+                const needCountry = normCountry !== '未分类' && item.country !== normCountry;
+                if (needKeyword || needCountry) {
+                  const next: HistoryItem = {
+                    ...item,
+                    keyword: item.keyword?.trim() || 'Car toy',
+                    country: normCountry !== '未分类' ? normCountry : item.country,
+                  };
+                  try {
+                    await persistHistoryItem(next);
+                  } catch (e) {
+                    console.warn('history backfill failed', e);
+                  }
+                  out.push(next);
+                } else {
+                  out.push(item);
+                }
+              }
+              return out;
+            })();
+            // 用 fixedHistory 继续后续 recover 逻辑
+            const historyForRecover = fixedHistory;
+
             // 恢复：批量任务已完成但未写入历史时，补录到历史（避免额度白花）
             const knownDomains = new Set(
-              h.map((i) => (i.domain || i.data?.companyInfo?.website || '').toLowerCase()).filter(Boolean)
+              historyForRecover.map((i) => (i.domain || i.data?.companyInfo?.website || '').toLowerCase()).filter(Boolean)
             );
             const recovered: HistoryItem[] = [];
             for (const task of q) {
@@ -161,12 +258,16 @@ const App: React.FC = () => {
                 ''
               ).toLowerCase();
               if (!domain || knownDomains.has(domain)) continue;
+              const hq = task.analysis.companyInfo?.headquarters || '';
               const item: HistoryItem = {
                 id: `recover_${task.id}`,
                 type: ModuleType.BACKGROUND,
                 data: task.analysis,
                 timestamp: Date.now() - recovered.length,
                 domain: task.analysis.companyInfo?.website || task.website || task.clientName,
+                keyword: task.keyword || 'Car toy',
+                country: normalizeCountryZh(task.country || hq),
+                source: 'recover',
               };
               try {
                 await persistHistoryItem(item);
@@ -176,7 +277,7 @@ const App: React.FC = () => {
                 console.warn('Recover history failed', e);
               }
             }
-            setHistory([...recovered, ...h]);
+            setHistory([...recovered, ...historyForRecover]);
 
             // Check GitHub Status
             const ghStatus = checkGitHubStatus();
@@ -413,7 +514,7 @@ const App: React.FC = () => {
           country: r.country,
           type: mapType(r.clientType),
           status: '新建/潜在', 
-          productType: discoveryState.product || r.mainProducts || 'General', 
+          productType: discoveryState.product || r.mainProducts || r.searchKeyword || 'General', 
           industry: discoveryState.industry || 'Unknown',
           priceRange: r.estimatedScale || 'Unknown', 
           isSampleNeeded: false, 
@@ -422,8 +523,10 @@ const App: React.FC = () => {
           lastContactSent: '', 
           lastContactReceived: '', 
           nextFollowUpDate: new Date().toISOString().split('T')[0], 
-          activityLog: `Discovery 导入。匹配度:${r.fitScore ?? '-'}。${r.fitReason || r.description}`,
-          contacts: []
+          activityLog: `Discovery 导入。匹配度:${r.fitScore ?? '-'}。标签:${(r.searchTags || []).join(' / ')}。${r.fitReason || r.description}`,
+          contacts: [],
+          searchKeyword: r.searchKeyword || discoveryState.product,
+          tags: r.searchTags || [],
       }));
 
       setCrmClients(prev => {
@@ -454,16 +557,21 @@ const App: React.FC = () => {
   /** 批量/单次分析完成后写入历史（IndexedDB + Supabase） */
   const saveAnalysisToHistory = async (result: AnalysisResult, source = 'batch'): Promise<HistoryItem> => {
       const domain = result.companyInfo?.website || result.companyInfo?.name || 'unknown';
+      const country = normalizeCountryZh(
+        result.companyInfo?.headquarters || result.companyInfo?.city || ''
+      );
       const historyItem: HistoryItem = {
           id: `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
           type: ModuleType.BACKGROUND,
           data: result,
           timestamp: Date.now(),
           domain,
+          keyword: discoveryState.product || undefined,
+          country: country !== '未分类' ? country : undefined,
+          source: source as HistoryItem['source'],
       };
       await persistHistoryItem(historyItem);
       setHistory(prev => {
-          // 同域名短时间内去重，避免重复刷屏
           const filtered = prev.filter(
               (h) => !(h.domain?.toLowerCase() === domain.toLowerCase() && Date.now() - h.timestamp < 60_000)
           );
@@ -581,7 +689,8 @@ const App: React.FC = () => {
                   country: result.companyInfo?.headquarters?.split(',').pop()?.trim() || task.country,
                   status: 'completed', 
                   analysis: result, 
-                  mailGroup: mailGroup 
+                  mailGroup: mailGroup,
+                  keyword: task.keyword || discoveryState.product,
               };
               
               await saveAutomationTask(completedTask);
@@ -639,8 +748,10 @@ const App: React.FC = () => {
 
   const handleBatchAnalyzeExisting = async (results: ClientSearchResult[]) => { 
       if (!results || results.length === 0) return;
+      // 保留关键词标签到批量上下文
+      const kw = results[0]?.searchKeyword || discoveryState.product || 'Discovery Batch';
       setPendingBatch(results.map(r => r.website)); 
-      setPendingBatchContext('Discovery Batch'); 
+      setPendingBatchContext(kw); 
       setBatchModalOpen(true); 
   };
   
@@ -664,7 +775,9 @@ const App: React.FC = () => {
           status: 'pending', 
           productContext: pendingBatchContext, 
           productImages: [], 
-          mode: mode 
+          mode: mode,
+          keyword: discoveryState.product || pendingBatchContext,
+          createdAt: Date.now(),
       })); 
       
       setAutomationResults(prev => [...prev, ...newTasks]); 
@@ -690,6 +803,20 @@ const App: React.FC = () => {
           await deleteAutomationTask(id); 
           setAutomationResults(prev => prev.filter(t => t.id !== id)); 
       } 
+  };
+
+  const handleClearCompletedTasks = async () => {
+      if (!confirm('清除所有已完成的任务？（背调历史仍会保留在记录中心）')) return;
+      const n = await clearCompletedAutomationTasks();
+      setAutomationResults(prev => prev.filter(t => t.status !== 'completed'));
+      alert(`已清除 ${n} 条已完成任务`);
+  };
+
+  const handleClearAllTasks = async () => {
+      if (!confirm('清空整个任务队列？此操作不可恢复（背调历史仍保留在记录中心）。')) return;
+      await clearAutomationQueue();
+      setAutomationResults([]);
+      alert('任务队列已清空');
   };
 
   const handleLogout = () => { setCurrentUser(null); setAnalysisData(null); setDomainInput(''); setActiveModule(ModuleType.DISCOVERY); };
@@ -772,7 +899,7 @@ const App: React.FC = () => {
             { id: ModuleType.SIMILAR, label: '同类推荐', sub: 'Similar', icon: Network },
             { id: ModuleType.CLIENT_CRM, label: '客户管理', sub: 'CRM', icon: Briefcase },
             { id: ModuleType.EMAIL_CAMPAIGN, label: '邮件营销', sub: 'DirectMail', icon: Mail }, 
-            { id: ModuleType.IMAGE_GENERATOR, label: '图片生成', sub: 'Wanxiang', icon: Image },
+            { id: ModuleType.IMAGE_GENERATOR, label: '海报/生图', sub: 'Poster', icon: Image },
             { id: ModuleType.PROMO_GENERATOR, label: '营销工具', sub: 'Tools', icon: Ruler },
           ].map(item => (
             <button key={item.id} onClick={() => { setActiveModule(item.id); setMobileMenuOpen(false); }} disabled={!analysisData && !alwaysActiveModules.includes(item.id)} className={`w-full flex items-center gap-3 px-3 sm:px-4 py-3 sm:py-3.5 rounded-xl sm:rounded-2xl text-sm font-bold transition-all touch-manipulation ${activeModule === item.id ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800 disabled:opacity-30'}`}>
@@ -801,45 +928,62 @@ const App: React.FC = () => {
                 </div>
             </div>
             <button onClick={() => setHistoryOpen(!historyOpen)} className="w-full flex items-center justify-between px-4 py-3 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-xl text-sm font-bold transition-colors">
-                <span className="flex items-center gap-2"><History size={18} /> 历史记录</span><ChevronRight size={16} className={`transition-transform ${historyOpen ? 'rotate-90' : ''}`} />
+                <span className="flex items-center gap-2"><History size={18} /> 记录中心</span><ChevronRight size={16} className={`transition-transform ${historyOpen ? 'rotate-90' : ''}`} />
             </button>
             <button onClick={handleLogout} className="w-full flex items-center gap-2 px-4 py-3 text-red-500 hover:bg-red-50 rounded-xl text-sm font-bold transition-colors"><LogOut size={18} /> 退出登录</button>
         </div>
       </aside>
       
-      {/* History Sidebar */}
       {historyOpen && (
-          <div className="fixed inset-y-0 left-0 md:left-72 w-full sm:w-80 max-w-full bg-white shadow-2xl z-40 border-r border-slate-200 transform transition-transform animate-fade-in flex flex-col">
-              <div className="p-4 border-b bg-slate-50 font-bold text-slate-700 flex justify-between items-center">
-                  <span>Recent Analysis</span>
-                  <div className="flex gap-2">
-                      <button onClick={handleSyncToGitHub} className="text-blue-600 hover:text-blue-800" title="Sync to GitHub">{isSyncing ? <Loader2 className="animate-spin" size={16}/> : <Cloud size={16}/>}</button>
-                      <button onClick={() => setHistoryOpen(false)} className="text-slate-400 hover:text-slate-700">✕</button>
-                  </div>
-              </div>
-              <div className="flex-1 overflow-y-auto p-2 space-y-2 custom-scrollbar">
-                  {history.length === 0 ? (
-                      <div className="p-6 text-center text-slate-400 text-sm font-bold">暂无背调历史。单次或批量分析完成后会自动保存在此。</div>
-                  ) : history.map((item) => (
-                      <button key={item.id} onClick={() => loadFromHistory(item)} className="w-full text-left p-3 rounded-xl hover:bg-blue-50 border border-transparent hover:border-blue-100 group transition-all">
-                          <div className="font-bold text-slate-800 text-sm truncate group-hover:text-blue-700">{item.data?.companyInfo?.name || "Unknown"}</div>
-                          <div className="text-xs text-slate-400 truncate">{item.domain}</div>
-                          <div className="flex items-center justify-between gap-2 mt-1">
-                            <span className="inline-flex items-center gap-1 text-[10px] text-slate-300"><Clock size={10} /> {new Date(item.timestamp).toLocaleString()}</span>
-                            <span
-                              className="text-[10px] font-black text-blue-600 hover:underline"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (item.data) exportToPPT(item.data);
-                              }}
-                            >
-                              下载 PPT
-                            </span>
-                          </div>
-                      </button>
-                  ))}
-              </div>
-          </div>
+        <RecordsPanel
+          history={history}
+          discoveryArchives={discoveryArchives}
+          onClose={() => setHistoryOpen(false)}
+          onOpenHistory={loadFromHistory}
+          onDownloadHistory={(item) => { if (item.data) exportToPPT(item.data); }}
+          onRestoreDiscovery={(archive) => {
+            setDiscoveryState(archiveToDiscoveryState(archive));
+            setActiveModule(ModuleType.DISCOVERY);
+            setHistoryOpen(false);
+            setMobileMenuOpen(false);
+          }}
+          onDeleteHistory={async (id) => {
+            await deleteHistoryItem(id);
+            if (isSupabaseConfigured()) await deleteInvestigationHistory(id);
+            setHistory(prev => prev.filter(h => h.id !== id));
+          }}
+          onDeleteDiscovery={async (id) => {
+            const target = discoveryArchives.find((d) => d.id === id);
+            await deleteDiscoveryArchive(id);
+            addDiscoveryTombstone(id, target?.product, target?.country);
+            if (isSupabaseConfigured()) {
+              const looksUuid = /^[0-9a-f-]{36}$/i.test(id);
+              if (looksUuid) await deleteDiscoverySearchFromCloud(id);
+              if (target?.product) {
+                await deleteDiscoverySearchesByMeta(target.product, target.country || '');
+              }
+            }
+            setDiscoveryArchives((prev) => prev.filter((d) => d.id !== id));
+          }}
+          onPatchHistory={async (id, patch) => {
+            setHistory((prev) => {
+              const next = prev.map((h) => (h.id === id ? { ...h, ...patch } : h));
+              const item = next.find((h) => h.id === id);
+              if (item) persistHistoryItem(item).catch(console.error);
+              return next;
+            });
+          }}
+          onBulkPatchHistory={async (ids, patch) => {
+            const idSet = new Set(ids);
+            setHistory((prev) => {
+              const next = prev.map((h) => (idSet.has(h.id) ? { ...h, ...patch } : h));
+              next.filter((h) => idSet.has(h.id)).forEach((item) => {
+                persistHistoryItem(item).catch(console.error);
+              });
+              return next;
+            });
+          }}
+        />
       )}
 
       {/* Cloud Connect Modal */}
@@ -926,8 +1070,19 @@ const App: React.FC = () => {
                 {activeModule === ModuleType.DISCOVERY && (
                     <ClientFinder 
                         state={discoveryState} 
-                        onStateChange={handleDiscoveryStateChange} 
-                        onSelect={(d) => { setDomainInput(d); handleAnalyzeInput(d); }} 
+                        onStateChange={handleDiscoveryStateChange}
+                        onSearchArchived={handleSearchArchived}
+                        onSelect={(item) => {
+                          const domain = typeof item === 'string' ? item : (item.website || item.name);
+                          const kw = typeof item === 'string' ? discoveryState.product : (item.searchKeyword || discoveryState.product);
+                          if (kw && !discoveryState.product) {
+                            setDiscoveryState(prev => ({ ...prev, product: kw }));
+                          } else if (kw && kw !== discoveryState.product) {
+                            setDiscoveryState(prev => ({ ...prev, product: kw }));
+                          }
+                          setDomainInput(domain);
+                          handleAnalyzeInput(domain);
+                        }} 
                         onBatchAddToCRM={handleBatchAddToCRM}
                         onBatchAnalyze={handleBatchAnalyzeExisting}
                     />
@@ -957,6 +1112,8 @@ const App: React.FC = () => {
                         onViewResult={handleViewAutomationResult}
                         onDownloadResult={handleDownloadAutomationResult}
                         onDownloadAll={handleDownloadAllCompleted}
+                        onClearCompleted={handleClearCompletedTasks}
+                        onClearAll={handleClearAllTasks}
                     />
                 )}
                 {activeModule === ModuleType.STRATEGY && (
