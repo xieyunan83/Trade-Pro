@@ -1,0 +1,16 @@
+{
+  "functions": {
+    "api/qwen-api/[...path].ts": {
+      "maxDuration": 300,
+      "memory": 1024
+    },
+    "api/anymail-api/[...path].ts": {
+      "maxDuration": 60,
+      "memory": 512
+    }
+  },
+  "rewrites": [
+    { "source": "/qwen-api/(.*)", "destination": "/api/qwen-api/$1" },
+    { "source": "/anymail-api/(.*)", "destination": "/api/anymail-api/$1" }
+  ]
+}

@@ -8,6 +8,7 @@ import {
   buildAnymailFetchHeaders,
   isDomesticAliyunUrl,
   isLocalDevHost,
+  isSupabaseQwenProxyUrl,
   qwenCorsHint,
   resolveAnymailUrl,
   resolveQwenRequestTarget,
@@ -599,7 +600,6 @@ const callOpenAICompatible = async (
         }, options.timeoutMs ?? 120_000);
     };
 
-    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     const isWorkerLimit = (status: number, body: string) =>
       status === 546 || /WORKER_RESOURCE_LIMIT/i.test(body);
 
@@ -620,8 +620,6 @@ const callOpenAICompatible = async (
     }
 
     for (const proxy of attempts) {
-        // Edge Function 偶发 546：自动重试 2 次
-        for (let tryNo = 0; tryNo < 3; tryNo++) {
         try {
             const response = await doFetch(proxy, baseUrl);
 
@@ -629,15 +627,10 @@ const callOpenAICompatible = async (
                 const errText = await response.text();
 
                 if (isWorkerLimit(response.status, errText)) {
-                    lastError = new Error(
-                      `云端代理算力不足 (HTTP ${response.status})。正在重试 (${tryNo + 1}/3)…`
-                    );
-                    if (tryNo < 2) {
-                      await sleep(1500 * (tryNo + 1));
-                      continue;
-                    }
                     throw new Error(
-                      `云端代理算力不足 (HTTP 546)。请：① 重新部署流式版 qwen-proxy；② Dashboard 把该函数超时调到 150 秒以上；③ 一次少选几个国家再搜。详情: ${errText.slice(0, 160)}`
+                      `云端代理算力不足 (HTTP 546)。Supabase Edge 无法支撑数分钟联网搜索。` +
+                        `请到管理后台「千问长时中转」改为「同域」或「自定义」，并运行：npm run proxy:aliyun` +
+                        `。详情: ${errText.slice(0, 120)}`
                     );
                 }
                 
@@ -667,7 +660,7 @@ const callOpenAICompatible = async (
                 if (response.status >= 500 || response.status === 403) {
                     console.warn(`Attempt failed with status ${response.status}. Trying next proxy...`);
                     lastError = new Error(`HTTP ${response.status}: ${errText}`);
-                    break; // break retry loop, try next proxy
+                    continue;
                 }
 
                 // Other errors
@@ -690,19 +683,16 @@ const callOpenAICompatible = async (
         } catch (e: any) {
             lastError = e;
             // Fatal errors that shouldn't trigger retry loop
-            if (e.message.includes('401') || e.message.includes('402') || e.message.includes('Key Rejected') || e.message.includes('Rate Limit')) {
+            if (
+              e.message.includes('401') ||
+              e.message.includes('402') ||
+              e.message.includes('Key Rejected') ||
+              e.message.includes('Rate Limit') ||
+              /云端代理算力不足 \(HTTP 546\)/.test(e.message)
+            ) {
                 throw e;
             }
-            if (/云端代理算力不足 \(HTTP 546\)/.test(e.message) && !/正在重试/.test(e.message)) {
-                throw e;
-            }
-            // 546 重试中的中间错误继续
-            if (/正在重试/.test(e.message) && tryNo < 2) {
-                continue;
-            }
-            break; // 换下一个 proxy
         }
-        } // end retry
     }
 
     // Comprehensive Error Message
@@ -836,18 +826,30 @@ const callQwenChat = async (
   } = {}
 ): Promise<string> => {
   const config = await resolveQwenConfig(options.override);
-  const timeoutMs =
+  const viaSupabase = isSupabaseQwenProxyUrl(config.baseUrl);
+  const viaVercel = config.baseUrl.includes('/api/qwen-api');
+  // Supabase Edge 撑不住长任务；Vercel 函数最长约 300s（需 Pro）
+  const rawTimeout =
     options.timeoutMs ||
     (options.task && TASK_TIMEOUT_MS[options.task]) ||
     180_000;
+  const timeoutMs = viaSupabase
+    ? Math.min(rawTimeout, 50_000)
+    : viaVercel
+      ? Math.min(rawTimeout, 280_000)
+      : rawTimeout;
   const searchPayload = qwenSearchPayload(!!options.enableSearch, !!options.forcedSearch);
   const maxTokens =
     options.task === 'search'
-      ? config.baseUrl.includes('/functions/v1/qwen-proxy')
-        ? 2500 // 线上代理易触发资源上限，搜索结果体量收一点
-        : 4096
+      ? viaSupabase
+        ? 2000
+        : config.baseUrl.includes('/functions/v1/qwen-proxy')
+          ? 2500
+          : 4096
       : options.task === 'analysis'
-        ? 6144
+        ? viaSupabase
+          ? 3000
+          : 6144
         : 4096;
 
   const runOnce = async (extraPayload: Record<string, unknown> | undefined) => {
@@ -884,12 +886,24 @@ const callQwenChat = async (
   } catch (err: any) {
     const msg = String(err?.message || '');
     const isTimeout = /超时|timeout|AbortError/i.test(msg);
-    // 若曾强制联网导致超时，降级为普通联网再试
+    const is546 = /546|WORKER_RESOURCE|云端代理算力不足/i.test(msg);
+
+    // Supabase 546 / 超时：降级为不联网再试一次（保证能出结果）
+    if ((is546 || (isTimeout && viaSupabase)) && options.enableSearch) {
+      console.warn('[Qwen] 云端代理受限，降级为不联网重试…');
+      try {
+        return await runOnce(undefined);
+      } catch (e2: any) {
+        throw new Error(
+          `${msg} ${qwenCorsHint(msg)}（已尝试不联网兜底仍失败：${e2?.message || e2}）`
+        );
+      }
+    }
+
     if (isTimeout && options.enableSearch && options.forcedSearch) {
       console.warn('[Qwen] 强制联网超时，降级为普通联网重试…');
       return await runOnce(qwenSearchPayload(true, false));
     }
-    // 非搜索/分析任务：超时后允许不联网兜底
     if (
       isTimeout &&
       options.enableSearch &&
@@ -901,8 +915,11 @@ const callQwenChat = async (
     }
     if (isTimeout) {
       throw new Error(
-        `${msg} 客户搜索/背调联网较慢，已等待 ${Math.round(timeoutMs / 1000)} 秒仍未返回。请确认模型支持联网（如 qwen-plus / qwen-max / qwen3.x），或减少目标国家后重试。`
+        `${msg} 客户搜索/背调联网较慢，已等待 ${Math.round(timeoutMs / 1000)} 秒仍未返回。请确认模型支持联网（如 qwen-plus / qwen-max / qwen3.x），或减少目标国家后重试。${qwenCorsHint(msg)}`
       );
+    }
+    if (is546) {
+      throw new Error(`${msg}${qwenCorsHint(msg)}`);
     }
     throw err;
   }

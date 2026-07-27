@@ -13,6 +13,13 @@ import { testWanImageApi } from '../services/wanImageService';
 import { saveApiConfig, getApiConfig, isSupabaseConfigured, saveKnowledgeFile, getKnowledgeFiles, deleteKnowledgeFile, resetSupabaseClient, testSupabaseConnection } from '../services/supabase';
 import { getSupabaseConfig, saveSupabaseConfig, clearSupabaseOverride, saveEmailSearchKeys, getEmailSearchKeys, env } from '../services/env';
 import { hashPassword, persistUsers, findUserByName, updateUserPassword } from '../services/auth';
+import {
+  getAliyunProxyMode,
+  setAliyunProxyMode,
+  getAliyunProxyBase,
+  setAliyunProxyBase,
+  type AliyunProxyMode,
+} from '../services/qwenProxy';
 
 type AdminTab = 'api' | 'users' | 'kb';
 
@@ -73,6 +80,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const [hunterApiKey, setHunterApiKey] = useState('');
   const [findymailApiKey, setFindymailApiKey] = useState('');
   const [anymailFinderApiKey, setAnymailFinderApiKey] = useState('');
+  const [aliyunProxyMode, setAliyunProxyModeState] = useState<AliyunProxyMode>('auto');
+  const [aliyunProxyBase, setAliyunProxyBaseState] = useState('');
   const [testingApiId, setTestingApiId] = useState<string | null>(null);
   const [isTestingQwen, setIsTestingQwen] = useState(false);
   const [isTestingWan, setIsTestingWan] = useState(false);
@@ -92,6 +101,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
 
     const savedProxy = localStorage.getItem('trade_scout_custom_proxy');
     if (savedProxy) setProxyUrl(savedProxy);
+    setAliyunProxyModeState(getAliyunProxyMode());
+    setAliyunProxyBaseState(getAliyunProxyBase());
 
     const savedModel = localStorage.getItem('trade_scout_default_ai_model') as 'qwen' | 'gemini' | 'auto' | null;
     if (savedModel) setDefaultAIModel(savedModel);
@@ -297,6 +308,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const handleSaveProxy = () => {
     localStorage.setItem('trade_scout_custom_proxy', proxyUrl);
     alert('代理地址已保存');
+  };
+
+  const handleSaveAliyunProxy = () => {
+    setAliyunProxyMode(aliyunProxyMode);
+    setAliyunProxyBase(aliyunProxyBase);
+    alert('千问长时中转已保存。线上请用「同域」或「自定义」+ npm run proxy:aliyun，不要依赖 Supabase 跑长时间联网搜索。');
   };
 
   const handleTestQwen = async (testSearch = false) => {
@@ -719,11 +736,57 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                         className="w-full bg-white border border-emerald-100 rounded-xl px-4 py-3 font-bold text-sm"
                       />
                       <p className="text-[10px] text-slate-400 font-bold mt-2">
-                        必须完整填到 /compatible-mode/v1，Key 用 sk-sp-。本地若报 ENOTFOUND：把电脑 DNS 改为 223.5.5.5 后重启 npm run dev。线上需部署 qwen-proxy；Dashboard 若没有 Maximum duration 可忽略（免费版常没有此项）。
+                        必须完整填到 /compatible-mode/v1，Key 用 sk-sp-。本地若报 ENOTFOUND：把电脑 DNS 改为 223.5.5.5 后重启 npm run dev。
                       </p>
                     </div>
                   </div>
-                  <div className="flex flex-col sm:flex-row justify-end gap-3">
+
+                  {/* 长时中转：解决线上 HTTP 546 */}
+                  <div className="mt-4 p-4 rounded-2xl bg-amber-50 border border-amber-200 space-y-3">
+                    <div className="text-xs font-black text-amber-900">千问长时中转（解决 HTTP 546）</div>
+                    <p className="text-[10px] text-amber-800/80 font-bold leading-relaxed">
+                      线上（babyworld.ltd / Vercel）默认走同域 <code className="px-1 bg-white rounded">/api/qwen-api</code>，
+                      推送 GitHub 后自动部署，无需再跑本机代理。仅当 Vercel 超时不够时，再改用「自定义」+
+                      <code className="mx-1 px-1 bg-white rounded">npm run proxy:aliyun</code>。
+                      不要选「仅 Supabase」做长时间联网搜索（会 HTTP 546）。
+                    </p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">中转模式</label>
+                        <select
+                          value={aliyunProxyMode}
+                          onChange={(e) => setAliyunProxyModeState(e.target.value as AliyunProxyMode)}
+                          className="w-full bg-white border border-amber-100 rounded-xl px-3 py-2.5 text-sm font-bold"
+                        >
+                          <option value="auto">自动（推荐：线上用 Vercel /api/qwen-api）</option>
+                          <option value="same-origin">同域 /api/qwen-api（与自动相同）</option>
+                          <option value="custom">自定义中转地址（额外 Node 代理）</option>
+                          <option value="supabase">仅 Supabase（短测；长任务易 546）</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">自定义中转根地址</label>
+                        <input
+                          type="text"
+                          value={aliyunProxyBase}
+                          onChange={(e) => setAliyunProxyBaseState(e.target.value)}
+                          placeholder="http://服务器IP:8787 或 https://proxy.你的域名"
+                          className="w-full bg-white border border-amber-100 rounded-xl px-3 py-2.5 text-sm font-bold"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={handleSaveAliyunProxy}
+                        className="bg-amber-600 hover:bg-amber-700 text-white px-5 py-2.5 rounded-xl text-xs font-black"
+                      >
+                        保存长时中转
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row justify-end gap-3 mt-4">
                     <button
                       onClick={() => handleTestQwen(false)}
                       disabled={isTestingQwen}
