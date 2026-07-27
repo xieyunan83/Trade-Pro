@@ -45,7 +45,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({ data
               <Users className="text-blue-600" /> 关键决策人挖掘
             </h3>
             <p className="text-sm text-slate-500 font-medium mt-1">
-              邮箱优先由 AnymailFinder 查找并二次校验；卡片会标明「邮箱来源平台」与「是否已验证」。
+              已验证邮箱优先来自 AnymailFinder（查找即含校验，不重复扣验证分）。仅真实姓名才会按人补查；AI 占位联系人不会再拿去烧积分。
             </p>
           </div>
           <button
