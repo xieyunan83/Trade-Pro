@@ -422,6 +422,10 @@ const callOpenAICompatible = async (
         }, options.timeoutMs ?? 120_000);
     };
 
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const isWorkerLimit = (status: number, body: string) =>
+      status === 546 || /WORKER_RESOURCE_LIMIT/i.test(body);
+
     // Multi-Level Proxy Attempt Strategy
     let lastError: any = null;
     
@@ -439,11 +443,26 @@ const callOpenAICompatible = async (
     }
 
     for (const proxy of attempts) {
+        // Edge Function 偶发 546：自动重试 2 次
+        for (let tryNo = 0; tryNo < 3; tryNo++) {
         try {
             const response = await doFetch(proxy, baseUrl);
 
             if (!response.ok) {
                 const errText = await response.text();
+
+                if (isWorkerLimit(response.status, errText)) {
+                    lastError = new Error(
+                      `云端代理算力不足 (HTTP ${response.status})。正在重试 (${tryNo + 1}/3)…`
+                    );
+                    if (tryNo < 2) {
+                      await sleep(1500 * (tryNo + 1));
+                      continue;
+                    }
+                    throw new Error(
+                      `云端代理算力不足 (HTTP 546)。请：① 重新部署流式版 qwen-proxy；② Dashboard 把该函数超时调到 150 秒以上；③ 一次少选几个国家再搜。详情: ${errText.slice(0, 160)}`
+                    );
+                }
                 
                 // If 401, key is wrong or proxy hit wrong host. STOP.
                 if (response.status === 401) {
@@ -471,7 +490,7 @@ const callOpenAICompatible = async (
                 if (response.status >= 500 || response.status === 403) {
                     console.warn(`Attempt failed with status ${response.status}. Trying next proxy...`);
                     lastError = new Error(`HTTP ${response.status}: ${errText}`);
-                    continue; 
+                    break; // break retry loop, try next proxy
                 }
 
                 // Other errors
@@ -497,7 +516,16 @@ const callOpenAICompatible = async (
             if (e.message.includes('401') || e.message.includes('402') || e.message.includes('Key Rejected') || e.message.includes('Rate Limit')) {
                 throw e;
             }
+            if (/云端代理算力不足 \(HTTP 546\)/.test(e.message) && !/正在重试/.test(e.message)) {
+                throw e;
+            }
+            // 546 重试中的中间错误继续
+            if (/正在重试/.test(e.message) && tryNo < 2) {
+                continue;
+            }
+            break; // 换下一个 proxy
         }
+        } // end retry
     }
 
     // Comprehensive Error Message
@@ -636,8 +664,14 @@ const callQwenChat = async (
     (options.task && TASK_TIMEOUT_MS[options.task]) ||
     180_000;
   const searchPayload = qwenSearchPayload(!!options.enableSearch, !!options.forcedSearch);
-  // 搜索/分析 JSON 体量大，但过高 max_tokens 会拖慢首包
-  const maxTokens = options.task === 'search' ? 4096 : options.task === 'analysis' ? 6144 : 4096;
+  const maxTokens =
+    options.task === 'search'
+      ? config.baseUrl.includes('/functions/v1/qwen-proxy')
+        ? 2500 // 线上代理易触发资源上限，搜索结果体量收一点
+        : 4096
+      : options.task === 'analysis'
+        ? 6144
+        : 4096;
 
   const runOnce = async (extraPayload: Record<string, unknown> | undefined) => {
     if (isQwenOpenAICompatible(config.baseUrl) || config.baseUrl.startsWith('/qwen-api')) {
@@ -1179,10 +1213,11 @@ export const streamStrategyChat = async function* (
 
     const response = await fetchWithTimeout(baseUrl, {
         method: 'POST',
-        headers: {
-            Authorization: `Bearer ${config.apiKey}`,
-            'Content-Type': 'application/json',
-        },
+        headers: buildAliyunFetchHeaders({
+            targetUrl: baseUrl,
+            apiKey: config.apiKey,
+            proxyOrigin: config.proxyOrigin,
+        }),
         body: JSON.stringify({
             model: config.modelId,
             messages,

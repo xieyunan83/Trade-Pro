@@ -1,8 +1,6 @@
-// Supabase Edge Function：代理阿里云 Token Plan / DashScope，解决线上 CORS（Failed to fetch）
+// Supabase Edge Function：流式代理阿里云（勿整包缓冲，否则长请求会 HTTP 546 WORKER_RESOURCE_LIMIT）
 // 部署：npx supabase functions deploy qwen-proxy --project-ref pdsjvcgkuolgckrxhcgj
-// 并在 Dashboard → Edge Functions → qwen-proxy → 关闭 JWT 校验（或保持 anon key 可调用）
-
-import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
+// Dashboard → qwen-proxy → Verify JWT = Off；Maximum duration 尽量调到 150s+
 
 const CORS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -21,7 +19,7 @@ const extractUpstreamPath = (pathname: string): string => {
   return rest && rest !== '/' ? rest : '/compatible-mode/v1/chat/completions';
 };
 
-serve(async (req) => {
+Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: CORS });
   }
@@ -37,7 +35,6 @@ serve(async (req) => {
 
     const upstreamAuth =
       req.headers.get('x-upstream-authorization') ||
-      // 兼容误把阿里云 Key 放在 Authorization 的旧客户端
       (req.headers.get('authorization')?.includes('sk-') ? req.headers.get('authorization') : '') ||
       '';
 
@@ -53,23 +50,25 @@ serve(async (req) => {
     const target = new URL(path, origin + '/');
 
     const headers = new Headers();
-    headers.set('Content-Type', req.headers.get('content-type') || 'application/json');
+    const ct = req.headers.get('content-type');
+    if (ct) headers.set('Content-Type', ct);
     headers.set('Authorization', upstreamAuth);
 
-    const body = req.method === 'GET' || req.method === 'HEAD' ? undefined : await req.arrayBuffer();
-
+    // 关键式转发：不要 arrayBuffer() 整包读入，否则联网搜索大响应会触发 WORKER_RESOURCE_LIMIT
     const upstream = await fetch(target.toString(), {
       method: req.method,
       headers,
-      body: body && body.byteLength ? body : undefined,
+      body: req.method === 'GET' || req.method === 'HEAD' ? undefined : req.body,
     });
 
     const outHeaders = new Headers(CORS);
-    const ct = upstream.headers.get('Content-Type');
-    if (ct) outHeaders.set('Content-Type', ct);
+    const upstreamCt = upstream.headers.get('Content-Type');
+    if (upstreamCt) outHeaders.set('Content-Type', upstreamCt);
     outHeaders.set('X-Proxied-To', target.origin);
+    // 避免中间层再缓冲
+    outHeaders.set('Cache-Control', 'no-store');
 
-    return new Response(await upstream.arrayBuffer(), {
+    return new Response(upstream.body, {
       status: upstream.status,
       headers: outHeaders,
     });
