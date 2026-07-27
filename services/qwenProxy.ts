@@ -1,7 +1,7 @@
 /**
  * 阿里云千问 / 万相 / Anymail 请求路由：
  * - 本地：Vite /qwen-api、/anymail-api
- * - 线上（Vercel）：同域 /api/qwen-api、/api/anymail-api（或 rewrite 后的 /qwen-api）
+ * - 线上（Vercel）：同域 /api/qwen、/api/anymail（query 传上游路径，避免多段动态路由 404）
  * - 可选：自定义 Node 中转 / Supabase（短测）
  */
 import { getSupabaseConfig, isSupabaseConfigured } from './env';
@@ -14,7 +14,7 @@ export const isLocalDevHost = (): boolean =>
 
 export const isDomesticAliyunUrl = (url: string): boolean =>
   url.startsWith('/qwen-api') ||
-  url.startsWith('/api/qwen-api') ||
+  url.startsWith('/api/qwen') ||
   url.includes('/functions/v1/qwen-proxy') ||
   /aliyuncs\.com|dashscope\.aliyun/i.test(url);
 
@@ -23,12 +23,16 @@ export const isSupabaseQwenProxyUrl = (url: string): boolean =>
 
 export const isSameOriginQwenProxyUrl = (url: string): boolean =>
   url.startsWith('/qwen-api') ||
-  url.startsWith('/api/qwen-api') ||
+  url.startsWith('/api/qwen') ||
+  url.startsWith('/api/anymail') ||
   (url.includes('/qwen-api/') && !isSupabaseQwenProxyUrl(url));
 
 /** 本地 Vite 或线上 Vercel 同域代理（非 Supabase） */
 export const isAppHostedQwenProxy = (url: string): boolean =>
-  isSameOriginQwenProxyUrl(url) && !isSupabaseQwenProxyUrl(url);
+  (url.startsWith('/qwen-api') ||
+    url.startsWith('/api/qwen') ||
+    url.includes('/qwen-api/')) &&
+  !isSupabaseQwenProxyUrl(url);
 
 export type QwenProxyVia = 'direct' | 'vite' | 'supabase' | 'custom' | 'vercel';
 export type AliyunProxyMode = 'auto' | 'same-origin' | 'custom' | 'supabase';
@@ -57,9 +61,19 @@ export const setAliyunProxyBase = (base: string) => {
   localStorage.setItem(LS_BASE, base.trim().replace(/\/$/, ''));
 };
 
-/** 线上默认挂载点（Vercel） */
-const prodQwenMount = () => '/api/qwen-api';
-const prodAnymailMount = () => '/api/anymail-api';
+/** 线上：把上游 path 放进 query，单文件函数可转发任意深度路径 */
+const toVercelQwenUrl = (pathWithQuery: string): string => {
+  const [pathname, search = ''] = pathWithQuery.split('?');
+  const path = pathname.startsWith('/') ? pathname : `/${pathname}`;
+  const qs = search ? `?${search}` : '';
+  // 注意：后续可能再拼接 /chat/completions，会并入 __upstream 查询值
+  return `/api/qwen?__upstream=${encodeURIComponent(path)}${qs ? `&__qs=${encodeURIComponent(qs)}` : ''}`;
+};
+
+const toVercelAnymailUrl = (cleanPath: string): string => {
+  const path = cleanPath.startsWith('/') ? cleanPath : `/${cleanPath}`;
+  return `/api/anymail?__upstream=${encodeURIComponent(path)}`;
+};
 
 export const DEFAULT_TOKEN_PLAN_ORIGIN = 'https://token-plan.cn-beijing.maas.aliyuncs.com';
 
@@ -72,7 +86,10 @@ export function resolveQwenRequestTarget(absoluteOrRelative: string): {
   if (absoluteOrRelative.startsWith('/')) {
     return {
       url: absoluteOrRelative,
-      via: absoluteOrRelative.includes('qwen-api') ? 'vite' : 'direct',
+      via:
+        absoluteOrRelative.includes('qwen-api') || absoluteOrRelative.startsWith('/api/qwen')
+          ? 'vite'
+          : 'direct',
     };
   }
 
@@ -97,7 +114,6 @@ export function resolveQwenRequestTarget(absoluteOrRelative: string): {
   const mode = getAliyunProxyMode();
   const customBase = getAliyunProxyBase();
 
-  // 显式自定义 Node 中转
   if (mode === 'custom' && customBase) {
     return {
       url: `${customBase}/qwen-api${pathWithQuery}`,
@@ -106,7 +122,6 @@ export function resolveQwenRequestTarget(absoluteOrRelative: string): {
     };
   }
 
-  // 强制 Supabase（不推荐长任务）
   if (mode === 'supabase' && isSupabaseConfigured()) {
     const { url: sb } = getSupabaseConfig();
     return {
@@ -116,25 +131,9 @@ export function resolveQwenRequestTarget(absoluteOrRelative: string): {
     };
   }
 
-  // auto / same-origin：线上走 Vercel 同域 API（推荐，推送 GitHub 后自动可用）
-  if (mode === 'same-origin' || mode === 'auto' || !customBase) {
-    return {
-      url: `${prodQwenMount()}${pathWithQuery}`,
-      proxyOrigin: origin,
-      via: 'vercel',
-    };
-  }
-
-  if (customBase) {
-    return {
-      url: `${customBase}/qwen-api${pathWithQuery}`,
-      proxyOrigin: origin,
-      via: 'custom',
-    };
-  }
-
+  // auto / same-origin：线上走 Vercel 单文件代理
   return {
-    url: `${prodQwenMount()}${pathWithQuery}`,
+    url: toVercelQwenUrl(pathWithQuery),
     proxyOrigin: origin,
     via: 'vercel',
   };
@@ -173,7 +172,7 @@ export function qwenCorsHint(errorMessage?: string): string {
   if (isLocalDevHost()) {
     return ' 本地请确认已 npm run dev（需要 /qwen-api 代理）。';
   }
-  return ' 线上已走同域代理；若仍失败请稍后重试，或联系管理员检查 Vercel 部署是否成功。';
+  return ' 线上已走同域代理；若仍失败请稍后重试。';
 }
 
 const ANYMAIL_ORIGIN = 'https://api.anymailfinder.com';
@@ -197,7 +196,7 @@ export function resolveAnymailUrl(path: string): { url: string; via: QwenProxyVi
       via: 'supabase',
     };
   }
-  return { url: `${prodAnymailMount()}${cleanPath}`, via: 'vercel' };
+  return { url: toVercelAnymailUrl(cleanPath), via: 'vercel' };
 }
 
 export function buildAnymailFetchHeaders(apiKey: string, targetUrl: string): Record<string, string> {

@@ -553,10 +553,22 @@ const callOpenAICompatible = async (
     // Construct URL robustly
     let baseUrl = config.baseUrl.trim();
     if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
-    
-    // Auto-append chat/completions if not present (Standard OpenAI format)
-    // EXCEPTION: Some proxies might not need this, but most do.
-    if (!baseUrl.endsWith('/chat/completions') && !baseUrl.includes('generateContent')) {
+
+    // Vercel 单文件代理：把 /chat/completions 写入 __upstream，避免多段路径 404
+    if (baseUrl.includes('__upstream=')) {
+        try {
+            const u = new URL(baseUrl, 'http://local.invalid');
+            let up = u.searchParams.get('__upstream') || '';
+            if (up && !up.endsWith('/chat/completions') && !up.includes('generateContent')) {
+                up = `${up.replace(/\/$/, '')}/chat/completions`;
+                u.searchParams.set('__upstream', up);
+                baseUrl = `${u.pathname}${u.search}`;
+            }
+        } catch {
+            /* keep */
+        }
+    } else if (!baseUrl.endsWith('/chat/completions') && !baseUrl.includes('generateContent')) {
+        // Auto-append chat/completions if not present (Standard OpenAI format)
         baseUrl += '/chat/completions';
     }
 
@@ -857,7 +869,7 @@ const callQwenChat = async (
     if (
       isQwenOpenAICompatible(config.baseUrl) ||
       config.baseUrl.startsWith('/qwen-api') ||
-      config.baseUrl.startsWith('/api/qwen-api') ||
+      config.baseUrl.startsWith('/api/qwen') ||
       config.baseUrl.includes('/qwen-api/')
     ) {
       return callOpenAICompatible(
@@ -1469,7 +1481,21 @@ export const streamStrategyChat = async function* (
 ) {
     const config = await resolveQwenConfig();
     let baseUrl = config.baseUrl.replace(/\/$/, '');
-    if (!baseUrl.endsWith('/chat/completions')) baseUrl += '/chat/completions';
+    if (baseUrl.includes('__upstream=')) {
+        try {
+            const u = new URL(baseUrl, 'http://local.invalid');
+            let up = u.searchParams.get('__upstream') || '';
+            if (up && !up.endsWith('/chat/completions')) {
+                up = `${up.replace(/\/$/, '')}/chat/completions`;
+                u.searchParams.set('__upstream', up);
+                baseUrl = `${u.pathname}${u.search}`;
+            }
+        } catch {
+            /* keep */
+        }
+    } else if (!baseUrl.endsWith('/chat/completions')) {
+        baseUrl += '/chat/completions';
+    }
 
     let systemInstruction = `${QWEN_SYSTEM} 你是高级外贸策略顾问。`;
     if (companyData) systemInstruction += ` 当前分析对象: ${companyData.companyInfo.name}。`;

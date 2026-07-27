@@ -1,16 +1,18 @@
 {
   "functions": {
-    "api/qwen-api/[...path].ts": {
+    "api/qwen.ts": {
       "maxDuration": 300,
       "memory": 1024
     },
-    "api/anymail-api/[...path].ts": {
+    "api/anymail.ts": {
       "maxDuration": 60,
       "memory": 512
     }
   },
   "rewrites": [
-    { "source": "/qwen-api/:path*", "destination": "/api/qwen-api/:path*" },
-    { "source": "/anymail-api/:path*", "destination": "/api/anymail-api/:path*" }
+    { "source": "/qwen-api/:path*", "destination": "/api/qwen?__upstream=/:path*" },
+    { "source": "/anymail-api/:path*", "destination": "/api/anymail?__upstream=/:path*" },
+    { "source": "/api/qwen-api/:path*", "destination": "/api/qwen?__upstream=/:path*" },
+    { "source": "/api/anymail-api/:path*", "destination": "/api/anymail?__upstream=/:path*" }
   ]
 }
