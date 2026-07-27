@@ -3,6 +3,13 @@ import { GoogleGenAI, Type, Part } from "@google/genai";
 import { AnalysisResult, ClientSearchResult, DecisionMaker, ChatMessage, KnowledgeFile, KeywordExtractionResult, MailGroup, EmailTemplateRequest, ApiConfig, TaskType } from "../types";
 import { getAllFilesFromDB } from "./db";
 import { getApiConfig as getSupabaseApiConfig, getAllApiConfigs, isSupabaseConfigured } from './supabase';
+import {
+  buildAliyunFetchHeaders,
+  isDomesticAliyunUrl,
+  isLocalDevHost,
+  qwenCorsHint,
+  resolveQwenRequestTarget,
+} from './qwenProxy';
 import { env, getEmailSearchKeys } from './env';
 
 const NATIVE_MODEL = 'gemini-3-pro-preview';
@@ -70,8 +77,7 @@ const qwenSearchPayload = (
   return { enable_search: true };
 };
 
-const isDomesticQwenEndpoint = (url: string): boolean =>
-  url.startsWith('/qwen-api') || /aliyuncs\.com|dashscope\.aliyun/i.test(url);
+const isDomesticQwenEndpoint = (url: string): boolean => isDomesticAliyunUrl(url);
 
 /** 清理 API Key：去空格、零宽字符、Bearer 前缀 */
 export const sanitizeApiKey = (key: string): string =>
@@ -395,16 +401,12 @@ const callOpenAICompatible = async (
     // Helper to execute fetch
     const doFetch = async (proxyPrefix: string, targetUrl: string) => {
         const finalUrl = proxyPrefix ? `${proxyPrefix}${encodeURIComponent(targetUrl)}` : targetUrl;
-        
-        const headers: Record<string, string> = {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${sanitizeApiKey(config.apiKey)}`
-        };
 
-        // 开发代理动态路由：把管理员填写的 Token Plan / MaaS 域名带给 Vite
-        if (targetUrl.startsWith('/qwen-api') && options.proxyOrigin) {
-            headers['X-Qwen-Origin'] = options.proxyOrigin;
-        }
+        const headers = buildAliyunFetchHeaders({
+            targetUrl: finalUrl,
+            apiKey: sanitizeApiKey(config.apiKey),
+            proxyOrigin: options.proxyOrigin,
+        });
 
         // --- CRITICAL FIX FOR OPENROUTER ---
         // OpenRouter requires these headers to identify the app and prevent blocks
@@ -506,6 +508,10 @@ const callOpenAICompatible = async (
         errorMsg += `It seems you are using a raw Google URL. Please use the 'Google Official (Native)' preset instead.`;
     } else {
         errorMsg += `Last Error: ${lastError?.message || 'Network Error'}. Check URL/Network.`;
+        errorMsg += qwenCorsHint(lastError?.message);
+        if (!isLocalDevHost() && isDomesticQwenEndpoint(baseUrl) && !baseUrl.includes('/functions/v1/qwen-proxy')) {
+          errorMsg += ' 若尚未部署 qwen-proxy，线上测试必失败。';
+        }
     }
     throw new Error(errorMsg);
 };
@@ -1254,23 +1260,13 @@ const normalizeQwenBaseUrl = (raw: string): string => {
 const isQwenOpenAICompatible = (baseUrl: string): boolean =>
   baseUrl.includes('/compatible-mode/v1');
 
-/** 开发环境走 Vite 代理，并保留真实 Origin 供动态路由 */
+/** 开发走 Vite 代理；线上走 Supabase Edge Function，避免 CORS Failed to fetch */
 const toProxiedQwenEndpoint = (normalized: string): { url: string; proxyOrigin?: string } => {
-  const isDev =
-    typeof window !== 'undefined' &&
-    (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
-
-  if (!isDev || !isDomesticQwenEndpoint(normalized) || normalized.startsWith('/')) {
+  if (!isDomesticQwenEndpoint(normalized) || normalized.startsWith('/')) {
     return { url: normalized };
   }
-
-  try {
-    const u = new URL(normalized);
-    const path = u.pathname.replace(/\/$/, '') || '/compatible-mode/v1';
-    return { url: `/qwen-api${path}`, proxyOrigin: u.origin };
-  } catch {
-    return { url: normalized };
-  }
+  const resolved = resolveQwenRequestTarget(normalized);
+  return { url: resolved.url, proxyOrigin: resolved.proxyOrigin };
 };
 
 const effectiveQwenBaseUrl = (normalized: string): string => toProxiedQwenEndpoint(normalized).url;
@@ -1341,13 +1337,11 @@ const callQwenNative = async (
 
   const response = await fetchWithTimeout(url, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      'Content-Type': 'application/json',
-      ...(config.proxyOrigin && url.startsWith('/qwen-api')
-        ? { 'X-Qwen-Origin': config.proxyOrigin }
-        : {}),
-    },
+    headers: buildAliyunFetchHeaders({
+      targetUrl: url,
+      apiKey: config.apiKey,
+      proxyOrigin: config.proxyOrigin,
+    }),
     body: JSON.stringify({
       model: config.modelId,
       input: {
@@ -1451,7 +1445,8 @@ export const testQwenApiKey = async (
     });
     return { success: true, message: `Qwen 连接成功 ✅ 回复: ${text.slice(0, 50)}` };
   } catch (e: any) {
-    return { success: false, message: `Qwen 测试失败: ${e.message}` };
+    const hint = qwenCorsHint(e?.message);
+    return { success: false, message: `Qwen 测试失败: ${e.message}${hint}` };
   }
 };
 

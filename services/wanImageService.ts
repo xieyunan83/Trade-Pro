@@ -1,5 +1,6 @@
 import { env } from './env';
 import { getApiConfig as getSupabaseApiConfig } from './supabase';
+import { buildAliyunFetchHeaders, isLocalDevHost, resolveQwenRequestTarget } from './qwenProxy';
 
 const LS_KEY = 'trade_scout_wan_api_key';
 const LS_BASE = 'trade_scout_wan_base_url';
@@ -29,10 +30,6 @@ export interface WanImageResult {
   images: string[];
   raw?: unknown;
 }
-
-const isDevHost = () =>
-  typeof window !== 'undefined' &&
-  (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 
 const readLocal = (key: string) =>
   typeof localStorage !== 'undefined' ? localStorage.getItem(key)?.trim() || '' : '';
@@ -79,10 +76,12 @@ export const resolveWanImageConfig = async (): Promise<WanImageConfig> => {
 
 const buildRequestUrl = (origin: string): { url: string; proxyOrigin?: string } => {
   const path = '/api/v1/services/aigc/multimodal-generation/generation';
-  if (isDevHost()) {
+  const absolute = `${origin.replace(/\/$/, '')}${path}`;
+  if (isLocalDevHost()) {
     return { url: `/qwen-api${path}`, proxyOrigin: origin };
   }
-  return { url: `${origin}${path}` };
+  const resolved = resolveQwenRequestTarget(absolute);
+  return { url: resolved.url, proxyOrigin: resolved.proxyOrigin || origin };
 };
 
 const extractImageUrls = (data: any): string[] => {
@@ -140,11 +139,11 @@ export const generateWanImage = async (
     },
   };
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${config.apiKey}`,
-  };
-  if (proxyOrigin) headers['X-Qwen-Origin'] = proxyOrigin;
+  const headers = buildAliyunFetchHeaders({
+    targetUrl: url,
+    apiKey: config.apiKey,
+    proxyOrigin: proxyOrigin,
+  });
 
   const response = await fetch(url, {
     method: 'POST',

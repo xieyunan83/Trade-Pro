@@ -703,7 +703,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                         className="w-full bg-white border border-emerald-100 rounded-xl px-4 py-3 font-bold text-sm"
                       />
                       <p className="text-[10px] text-slate-400 font-bold mt-2">
-                        必须完整填到 /compatible-mode/v1。Key 用 sk-sp-（Token Plan），不要用按量付费 sk-ws-。改完后请先「保存配置」再测；若仍 401 请重启 npm run dev。
+                        必须完整填到 /compatible-mode/v1。Key 用 sk-sp-（Token Plan）。本地用 Vite 代理；线上（babyworld.ltd）需部署 Supabase Edge Function「qwen-proxy」，否则浏览器会被 CORS 拦截出现 Failed to fetch。
                       </p>
                     </div>
                   </div>

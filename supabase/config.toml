@@ -1,0 +1,4 @@
+# 在 Dashboard → Edge Functions 对该函数关闭「Verify JWT」，
+# 以便前端用 anon key 调用（仍通过 X-Upstream-Authorization 传阿里云 Key）。
+[functions.qwen-proxy]
+verify_jwt = false
