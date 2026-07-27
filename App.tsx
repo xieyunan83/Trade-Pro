@@ -12,6 +12,8 @@ import { ModuleType, AnalysisResult, DiscoveryState, Client, User, HistoryItem, 
 import { ModuleBackground } from './components/ModuleBackground';
 import { ModuleProducts } from './components/ModuleProducts';
 import { ModuleDecisionMakers } from './components/ModuleDecisionMakers';
+import { DmEmailSearchPanel } from './components/DmEmailSearchPanel';
+import { enqueueDmEmailSearch, type DmEmailSearchJob } from './services/dmEmailSearchQueue';
 import { ModuleStrategy } from './components/ModuleStrategy';
 import { ModuleSimilar } from './components/ModuleSimilar';
 import { ModulePromoGenerator } from './components/ModulePromoGenerator';
@@ -85,6 +87,19 @@ const App: React.FC = () => {
   const [manualRepo, setManualRepo] = useState('');
   const [authReady, setAuthReady] = useState(false);
   const shouldStopRef = useRef(false);
+  const historyRef = useRef<HistoryItem[]>([]);
+  const viewingHistoryIdRef = useRef<string | null>(null);
+  const analysisDataRef = useRef<AnalysisResult | null>(null);
+
+  useEffect(() => {
+    historyRef.current = history;
+  }, [history]);
+  useEffect(() => {
+    viewingHistoryIdRef.current = viewingHistoryId;
+  }, [viewingHistoryId]);
+  useEffect(() => {
+    analysisDataRef.current = analysisData;
+  }, [analysisData]);
 
   const DISCOVERY_TOMBSTONE_KEY = 'trade_scout_discovery_deleted_ids';
 
@@ -518,14 +533,105 @@ const App: React.FC = () => {
     decisionMakers: DecisionMaker[];
     decisionMakerEmailSearchAt: number;
     decisionMakerEmailSearchHistory: number[];
-  }) => {
-    if (!analysisData) return;
-    await persistCurrentAnalysis({
-      ...analysisData,
-      decisionMakers: patch.decisionMakers,
-      decisionMakerEmailSearchAt: patch.decisionMakerEmailSearchAt,
-      decisionMakerEmailSearchHistory: patch.decisionMakerEmailSearchHistory,
+  }, opts?: { historyId?: string | null; domain?: string; companyName?: string }) => {
+    const matchId = opts?.historyId ?? viewingHistoryIdRef.current;
+    const domainKey = (opts?.domain || analysisDataRef.current?.companyInfo?.website || domainInput || '').toLowerCase();
+    const nameKey = (opts?.companyName || analysisDataRef.current?.companyInfo?.name || '').toLowerCase();
+
+    setAnalysisData((prev) => {
+      if (!prev) return prev;
+      const sameView =
+        (matchId && viewingHistoryIdRef.current === matchId) ||
+        (prev.companyInfo?.website || '').toLowerCase() === domainKey ||
+        (prev.companyInfo?.name || '').toLowerCase() === nameKey;
+      if (!sameView) return prev;
+      return {
+        ...prev,
+        decisionMakers: patch.decisionMakers,
+        decisionMakerEmailSearchAt: patch.decisionMakerEmailSearchAt,
+        decisionMakerEmailSearchHistory: patch.decisionMakerEmailSearchHistory,
+      };
     });
+
+    setHistory((prev) => {
+      let updatedItem: HistoryItem | null = null;
+      const next = prev.map((h) => {
+        const hit =
+          (matchId && h.id === matchId) ||
+          (!matchId &&
+            ((h.domain || '').toLowerCase() === domainKey ||
+              (h.data?.companyInfo?.name || '').toLowerCase() === nameKey));
+        if (!hit || !h.data) return h;
+        updatedItem = {
+          ...h,
+          data: {
+            ...h.data,
+            decisionMakers: patch.decisionMakers,
+            decisionMakerEmailSearchAt: patch.decisionMakerEmailSearchAt,
+            decisionMakerEmailSearchHistory: patch.decisionMakerEmailSearchHistory,
+          },
+        };
+        return updatedItem;
+      });
+      if (updatedItem) {
+        persistHistoryItem(updatedItem).catch((e) =>
+          console.error('persist decision maker research failed', e)
+        );
+      }
+      return next;
+    });
+  };
+
+  /** 将当前报告的决策人邮箱搜索加入后台队列（可并行、不挡浏览） */
+  const enqueueCurrentDmEmailSearch = (fromData?: AnalysisResult | null, historyIdOverride?: string | null): { ok: boolean; message: string } => {
+    const src = fromData || analysisDataRef.current;
+    if (!src) return { ok: false, message: '当前没有打开的背调报告' };
+    const domain = src.companyInfo?.website || '';
+    const companyName = src.companyInfo?.name || domain;
+    const hid = historyIdOverride ?? viewingHistoryIdRef.current;
+
+    const res = enqueueDmEmailSearch({
+      domain,
+      companyName,
+      historyId: hid,
+      existingDecisionMakers: src.decisionMakers || [],
+      resolveExisting: () => {
+        const list = historyRef.current;
+        if (hid) {
+          const item = list.find((h) => h.id === hid);
+          if (item?.data?.decisionMakers) return item.data.decisionMakers;
+        }
+        const key = domain.toLowerCase();
+        const byDomain = list.find((h) => (h.domain || '').toLowerCase() === key);
+        if (byDomain?.data?.decisionMakers) return byDomain.data.decisionMakers;
+        return src.decisionMakers || [];
+      },
+      onComplete: async (job: DmEmailSearchJob) => {
+        if (job.status !== 'completed' || !job.resultDecisionMakers || !job.searchedAt) return;
+        const list = historyRef.current;
+        let prevHistory: number[] = [];
+        const matchId = job.historyId;
+        if (matchId) {
+          const item = list.find((h) => h.id === matchId);
+          prevHistory = item?.data?.decisionMakerEmailSearchHistory || [];
+        } else {
+          const item = list.find((h) => (h.domain || '').toLowerCase() === job.domain.toLowerCase());
+          prevHistory = item?.data?.decisionMakerEmailSearchHistory || [];
+        }
+        const searchHistory = [...prevHistory, job.searchedAt].slice(-30);
+        await persistDecisionMakerResearch(
+          {
+            decisionMakers: job.resultDecisionMakers,
+            decisionMakerEmailSearchAt: job.searchedAt,
+            decisionMakerEmailSearchHistory: searchHistory,
+          },
+          { historyId: job.historyId, domain: job.domain, companyName: job.companyName }
+        );
+      },
+    });
+
+    if (res.ok === false) return { ok: false, message: res.reason };
+    return { ok: true, message: `已加入后台队列：${companyName}（可继续浏览其它客户）` };
   };
   const handleExportReport = () => { if (analysisData) exportToPPT(analysisData); };
   
@@ -1191,20 +1297,37 @@ const App: React.FC = () => {
                             <h2 className="text-2xl sm:text-3xl md:text-4xl font-black text-slate-900 tracking-tight break-words">{analysisData.companyInfo?.name}</h2>
                             <a href={analysisData.companyInfo?.website.startsWith('http') ? analysisData.companyInfo.website : `https://${analysisData.companyInfo?.website}`} target="_blank" rel="noreferrer" className="text-blue-600 font-bold mt-2 hover:underline text-sm sm:text-base break-all">{analysisData.companyInfo?.website}</a>
                         </div>
-                        <button onClick={handleExportReport} className="flex items-center justify-center gap-2 bg-slate-900 hover:bg-blue-600 transition-colors text-white px-4 sm:px-6 py-3 rounded-2xl font-bold shadow-lg w-full md:w-auto touch-manipulation flex-shrink-0"><FileSpreadsheet size={18} /> 下载 PPT 报告</button>
+                        <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto flex-shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const res = enqueueCurrentDmEmailSearch(analysisData, viewingHistoryId);
+                              if (res.message) alert(res.message);
+                            }}
+                            className="flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 transition-colors text-white px-4 sm:px-6 py-3 rounded-2xl font-bold shadow-lg touch-manipulation"
+                          >
+                            <Users size={18} /> 后台搜索决策人邮箱
+                          </button>
+                          <button onClick={handleExportReport} className="flex items-center justify-center gap-2 bg-slate-900 hover:bg-blue-600 transition-colors text-white px-4 sm:px-6 py-3 rounded-2xl font-bold shadow-lg touch-manipulation"><FileSpreadsheet size={18} /> 下载 PPT 报告</button>
+                        </div>
                     </div>
-                    {activeModule === ModuleType.BACKGROUND && <ModuleBackground data={analysisData} onAddToCRM={handleAddToCRM} />}
+                    {activeModule === ModuleType.BACKGROUND && (
+                      <ModuleBackground
+                        data={analysisData}
+                        onAddToCRM={handleAddToCRM}
+                        onEnqueueDmEmailSearch={() => enqueueCurrentDmEmailSearch(analysisData, viewingHistoryId)}
+                      />
+                    )}
                     {activeModule === ModuleType.PRODUCTS && <ModuleProducts data={analysisData} />}
                     {activeModule === ModuleType.DECISION_MAKERS && (
                       <ModuleDecisionMakers
                         data={analysisData}
+                        historyId={viewingHistoryId}
                         onUpdate={(dms) => {
                           const next = { ...analysisData, decisionMakers: dms };
                           persistCurrentAnalysis(next).catch(console.error);
                         }}
-                        onResearchComplete={(patch) => {
-                          persistDecisionMakerResearch(patch).catch(console.error);
-                        }}
+                        onEnqueueEmailSearch={() => enqueueCurrentDmEmailSearch(analysisData, viewingHistoryId)}
                       />
                     )}
                     {activeModule === ModuleType.SIMILAR && <ModuleSimilar data={analysisData} onAnalyze={handleAnalyzeInput} />}
@@ -1250,6 +1373,8 @@ const App: React.FC = () => {
               </div>
           </div>
       )}
+
+      <DmEmailSearchPanel />
 
     </div>
   );

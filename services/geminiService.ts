@@ -1488,7 +1488,8 @@ export const analyzeCompany = async (domainOrName: string, mode: 'detailed' | 'e
        NEVER invent departmental mailbox patterns (e.g. purchasing@, sourcing.toys@, cc@) without a real person name.
      - phone if public; yearsActive if known; influenceScore 1-5 (Buyer/CEO higher)
      - type must be CEO | Buyer | Other
-     - System will enrich real names via AnymailFinder — do not waste slots on fake emails.
+     - System will NOT search Anymail during due diligence. Leave emailGuess empty unless a real public email is known.
+       User will trigger decision-maker email search later after confirming the lead.
   5. Products, pricing, SWOT, traffic estimates, competitors, action plan for Chinese suppliers.
   6. Financial trends last 5 years — estimate if needed, never all zeros.
 
@@ -1647,25 +1648,8 @@ export const analyzeCompany = async (domainOrName: string, mode: 'detailed' | 'e
     similarCompanies: Array.isArray(aiResult.similarCompanies) ? aiResult.similarCompanies : []
   };
 
-  // 2. External Enrichment — 复用专项搜索（可在报告页再次执行）
-  const targetDomain = result.companyInfo.website !== 'N/A' ? result.companyInfo.website : domainOrName;
-  if (targetDomain && String(targetDomain).includes('.')) {
-    try {
-      const research = await researchDecisionMakerEmails({
-        domain: String(targetDomain),
-        existing: result.decisionMakers,
-        reverifyNonAnymail: false, // 首次背调不自动 verify 非 Anymail；报告页可手动再搜并验证
-      });
-      result.decisionMakers = research.decisionMakers;
-      result.decisionMakerEmailSearchAt = research.searchedAt;
-      result.decisionMakerEmailSearchHistory = [research.searchedAt];
-    } catch (e) {
-      console.error('External API enrichment failed', e);
-      result.decisionMakers = rankDecisionMakers(result.decisionMakers);
-    }
-  } else {
-    result.decisionMakers = rankDecisionMakers(result.decisionMakers);
-  }
+  // 2. 背调阶段不调用 Anymail：只整理 AI 决策人线索，邮箱搜索留给用户确认客户后再后台触发
+  result.decisionMakers = rankDecisionMakers(result.decisionMakers);
 
   // 3. Generate Email Strategy (ONLY IF DETAILED MODE)
   // If economy mode, we skip this to save tokens, and generate one at the end of the batch.

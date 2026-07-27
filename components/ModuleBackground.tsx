@@ -1,13 +1,15 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { AnalysisResult } from '../types';
 import {
   LayoutDashboard, Globe, MapPin, Calendar, Users, Briefcase, TrendingUp, ShieldCheck,
-  Lightbulb, Target, Ship, Award, AlertTriangle, Store, Network, Linkedin, Package, Building2
+  Lightbulb, Target, Ship, Award, AlertTriangle, Store, Network, Linkedin, Package, Building2, RefreshCw, Loader2
 } from 'lucide-react';
+import { getActiveDmJobForDomain, subscribeDmEmailSearchJobs } from '../services/dmEmailSearchQueue';
 
 interface ModuleBackgroundProps {
   data: AnalysisResult;
   onAddToCRM: () => void;
+  onEnqueueDmEmailSearch?: () => { ok: boolean; message: string };
 }
 
 const Pill: React.FC<{ children: React.ReactNode; tone?: 'slate' | 'blue' | 'green' | 'amber' | 'red' | 'violet' }> = ({ children, tone = 'slate' }) => {
@@ -31,9 +33,18 @@ const SectionCard: React.FC<{ title: string; icon: React.ReactNode; children: Re
   </div>
 );
 
-export const ModuleBackground: React.FC<ModuleBackgroundProps> = ({ data, onAddToCRM }) => {
+export const ModuleBackground: React.FC<ModuleBackgroundProps> = ({ data, onAddToCRM, onEnqueueDmEmailSearch }) => {
   const trade = data.tradeIntelligence;
   const riskTone = trade?.riskLevel === '低' ? 'green' : trade?.riskLevel === '高' ? 'red' : trade?.riskLevel === '中' ? 'amber' : 'slate';
+  const [jobActive, setJobActive] = useState(false);
+  const [queueMsg, setQueueMsg] = useState('');
+
+  useEffect(() => {
+    const domain = data.companyInfo?.website || '';
+    return subscribeDmEmailSearchJobs(() => {
+      setJobActive(!!getActiveDmJobForDomain(domain));
+    });
+  }, [data.companyInfo?.website]);
 
   return (
     <div className="space-y-4 sm:space-y-6 animate-fade-in">
@@ -55,10 +66,27 @@ export const ModuleBackground: React.FC<ModuleBackgroundProps> = ({ data, onAddT
               >
                 {data.companyInfo.website}
               </a>
+              {queueMsg && <div className="mt-2 text-[11px] font-bold text-emerald-700">{queueMsg}</div>}
             </div>
-            <button onClick={onAddToCRM} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-lg flex items-center justify-center gap-2 touch-manipulation w-full sm:w-auto flex-shrink-0">
-              <ShieldCheck size={14} /> 导入 CRM
-            </button>
+            <div className="flex flex-col gap-2 w-full sm:w-auto flex-shrink-0">
+              {onEnqueueDmEmailSearch && (
+                <button
+                  type="button"
+                  disabled={jobActive}
+                  onClick={() => {
+                    const res = onEnqueueDmEmailSearch();
+                    setQueueMsg(res.message);
+                  }}
+                  className="bg-violet-600 hover:bg-violet-700 disabled:opacity-60 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-lg flex items-center justify-center gap-2 touch-manipulation"
+                >
+                  {jobActive ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                  {jobActive ? '决策人邮箱搜索中…' : '后台搜索决策人邮箱'}
+                </button>
+              )}
+              <button onClick={onAddToCRM} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-lg flex items-center justify-center gap-2 touch-manipulation">
+                <ShieldCheck size={14} /> 导入 CRM
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">

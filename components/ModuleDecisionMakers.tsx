@@ -2,18 +2,19 @@ import React, { useEffect, useState } from 'react';
 import { AnalysisResult, DecisionMaker } from '../types';
 import { Users, Linkedin, Mail, Phone, ExternalLink, UserCheck, AlertTriangle, Download, Briefcase, ShieldCheck, ShieldAlert, RefreshCw, Loader2, Clock } from 'lucide-react';
 import { exportContactsToExcel } from '../services/exportService';
-import { researchDecisionMakerEmails } from '../services/geminiService';
+import {
+  enqueueDmEmailSearch,
+  getActiveDmJobForDomain,
+  subscribeDmEmailSearchJobs,
+} from '../services/dmEmailSearchQueue';
 
 interface ModuleDecisionMakersProps {
   data: AnalysisResult;
+  historyId?: string | null;
   /** 邮箱手工编辑 */
   onUpdate?: (decisionMakers: DecisionMaker[]) => void;
-  /** 重新搜索完成后写回报告（含搜索时间历史） */
-  onResearchComplete?: (patch: {
-    decisionMakers: DecisionMaker[];
-    decisionMakerEmailSearchAt: number;
-    decisionMakerEmailSearchHistory: number[];
-  }) => void;
+  /** 入队后台搜索；由 App 注入写回逻辑 */
+  onEnqueueEmailSearch?: () => { ok: boolean; message: string };
 }
 
 const formatSearchTime = (ts?: number) => {
@@ -33,16 +34,17 @@ const formatSearchTime = (ts?: number) => {
 
 export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
   data,
+  historyId,
   onUpdate,
-  onResearchComplete,
+  onEnqueueEmailSearch,
 }) => {
   const [decisionMakers, setDecisionMakers] = useState(data.decisionMakers || []);
-  const [isSearching, setIsSearching] = useState(false);
   const [lastSearchAt, setLastSearchAt] = useState(data.decisionMakerEmailSearchAt);
   const [searchHistory, setSearchHistory] = useState<number[]>(
     data.decisionMakerEmailSearchHistory || (data.decisionMakerEmailSearchAt ? [data.decisionMakerEmailSearchAt] : [])
   );
-  const [lastStats, setLastStats] = useState<string>('');
+  const [queueMsg, setQueueMsg] = useState('');
+  const [jobActive, setJobActive] = useState(false);
 
   useEffect(() => {
     setDecisionMakers(data.decisionMakers || []);
@@ -52,6 +54,13 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
         (data.decisionMakerEmailSearchAt ? [data.decisionMakerEmailSearchAt] : [])
     );
   }, [data.decisionMakers, data.decisionMakerEmailSearchAt, data.decisionMakerEmailSearchHistory]);
+
+  useEffect(() => {
+    const domain = data.companyInfo?.website || '';
+    return subscribeDmEmailSearchJobs(() => {
+      setJobActive(!!getActiveDmJobForDomain(domain));
+    });
+  }, [data.companyInfo?.website]);
 
   const commit = (next: DecisionMaker[]) => {
     setDecisionMakers(next);
@@ -71,41 +80,23 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
     commit(next);
   };
 
-  const handleResearchEmails = async () => {
-    const domain =
-      data.companyInfo?.website && data.companyInfo.website !== 'N/A'
-        ? data.companyInfo.website
-        : '';
-    if (!domain || !domain.includes('.')) {
-      alert('当前报告缺少有效公司域名，无法搜索决策人邮箱。');
+  const handleEnqueueSearch = () => {
+    setQueueMsg('');
+    if (onEnqueueEmailSearch) {
+      const res = onEnqueueEmailSearch();
+      setQueueMsg(res.message);
       return;
     }
-    if (isSearching) return;
-    setIsSearching(true);
-    setLastStats('');
-    try {
-      const research = await researchDecisionMakerEmails({
-        domain,
-        existing: decisionMakers,
-        reverifyNonAnymail: true, // 非 Anymail 来源可再验证
-      });
-      const history = [...searchHistory, research.searchedAt].slice(-30);
-      setDecisionMakers(research.decisionMakers);
-      setLastSearchAt(research.searchedAt);
-      setSearchHistory(history);
-      setLastStats(
-        `新增 ${research.stats.added} · 更新 ${research.stats.upgraded} · Anymail ${research.stats.anymailFound} · 再验证 ${research.stats.verified}`
-      );
-      onResearchComplete?.({
-        decisionMakers: research.decisionMakers,
-        decisionMakerEmailSearchAt: research.searchedAt,
-        decisionMakerEmailSearchHistory: history,
-      });
-    } catch (e: any) {
-      alert(`决策人邮箱搜索失败：${e?.message || e}`);
-    } finally {
-      setIsSearching(false);
-    }
+    // 兜底：无 App 注入时直接入队（不写历史）
+    const domain = data.companyInfo?.website || '';
+    const res = enqueueDmEmailSearch({
+      domain,
+      companyName: data.companyInfo?.name || domain,
+      historyId,
+      existingDecisionMakers: decisionMakers,
+    });
+    if (res.ok === false) setQueueMsg(res.reason);
+    else setQueueMsg('已加入后台搜索队列，可继续浏览其它客户。');
   };
 
   const buyers = decisionMakers.filter(d => d.type === 'Buyer').length;
@@ -120,7 +111,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
               <Users className="text-blue-600" /> 关键决策人挖掘
             </h3>
             <p className="text-sm text-slate-500 font-medium mt-1">
-              可随时重新搜索决策人邮箱：保留原有联系人，Anymail 已验证的不重复扣分；其它来源可再验证。
+              背调不会自动扣 Anymail 积分。确认客户合适后，点击「后台搜索决策人邮箱」，可离开本页继续浏览其它报告，多客户可并行。
             </p>
             {lastSearchAt ? (
               <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-bold text-slate-500">
@@ -130,21 +121,23 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
                 {searchHistory.length > 1 && (
                   <span className="text-slate-400">累计搜索 {searchHistory.length} 次</span>
                 )}
-                {lastStats && <span className="text-emerald-600">{lastStats}</span>}
               </div>
             ) : (
-              <div className="mt-2 text-[11px] font-bold text-amber-600">尚未单独搜索过决策人邮箱，可点击右侧按钮开始。</div>
+              <div className="mt-2 text-[11px] font-bold text-amber-600">尚未搜索决策人邮箱（背调阶段已跳过，需手动触发）。</div>
+            )}
+            {queueMsg && (
+              <div className="mt-2 text-[11px] font-bold text-emerald-700">{queueMsg}</div>
             )}
           </div>
           <div className="flex flex-col sm:flex-row gap-2 flex-shrink-0">
             <button
               type="button"
-              onClick={handleResearchEmails}
-              disabled={isSearching}
+              onClick={handleEnqueueSearch}
+              disabled={jobActive}
               className="inline-flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 disabled:opacity-60 text-white px-4 py-2.5 rounded-xl text-sm font-bold touch-manipulation"
             >
-              {isSearching ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-              {isSearching ? '正在搜索邮箱…' : '重新搜索决策人邮箱'}
+              {jobActive ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+              {jobActive ? '后台搜索中…' : '后台搜索决策人邮箱'}
             </button>
             <button
               type="button"
@@ -156,9 +149,9 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
           </div>
         </div>
 
-        {isSearching && (
+        {jobActive && (
           <div className="mb-4 rounded-2xl border border-violet-100 bg-violet-50 px-4 py-3 text-xs font-bold text-violet-800">
-            正在用 AnymailFinder 等渠道查找/验证邮箱，不会清空已有联系人。已验证的 Anymail 结果会跳过以免重复扣分。
+            已在后台搜索，可切换到其它客户继续浏览或再排队搜索。右下角可查看任务进度。
           </div>
         )}
 
@@ -191,7 +184,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
           {decisionMakers.length === 0 ? (
             <div className="col-span-full py-12 text-center text-slate-400 font-bold">
-              暂无决策人。可点击「重新搜索决策人邮箱」，或确认公司网站有效且已配置 AnymailFinder。
+              暂无决策人线索。可先点「后台搜索决策人邮箱」，或确认公司网站有效。
             </div>
           ) : decisionMakers.map((dm, i) => (
             <DecisionMakerCard key={`${dm.emailGuess || dm.name}-${i}`} dm={dm} index={i} onEmailChange={handleEmailChange} />
@@ -261,7 +254,7 @@ const DecisionMakerCard: React.FC<{ dm: DecisionMaker; index: number; onEmailCha
                 autoFocus
               />
             ) : (
-              <span className="text-xs font-bold text-slate-600 truncate">{email || '待补充'}</span>
+              <span className="text-xs font-bold text-slate-600 truncate">{email || '待补充（需后台搜索）'}</span>
             )}
           </div>
           <div className="flex gap-2 flex-shrink-0">
