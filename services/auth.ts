@@ -1,6 +1,8 @@
-import { User } from '../types';
+import { User, Department } from '../types';
 import { isSupabaseConfigured, fetchAppUsersFromCloud, saveAppUsersToCloud } from './supabase';
 import { fetchUsersFromCloud, saveUsersToCloud } from './githubService';
+import { loadDepartmentsFromStorage, saveDepartmentsToStorage, getDepartmentsUpdatedAt } from './orgStore';
+import { defaultPermissionsForRole } from './permissions';
 
 const USERS_KEY = 'trade_scout_users';
 const USERS_UPDATED_KEY = 'trade_scout_users_updated_at';
@@ -36,22 +38,52 @@ export function saveUsersToStorage(users: User[], updatedAt: number = Date.now()
   localStorage.setItem(USERS_UPDATED_KEY, String(updatedAt));
 }
 
+/** 规范化旧用户结构 */
+export function normalizeUser(u: User): User {
+  const role = u.role === 'admin' || u.role === 'manager' ? u.role : 'user';
+  return {
+    ...u,
+    role,
+    permissions: u.permissions?.length ? u.permissions : defaultPermissionsForRole(role),
+    departmentId: u.departmentId || undefined,
+    disabled: !!u.disabled,
+  };
+}
+
+export function normalizeUsers(users: User[]): User[] {
+  return users.map(normalizeUser);
+}
+
 /** 本地 + 云端（Supabase / GitHub）一并持久化，保证手机与电脑账号一致 */
-export async function persistUsers(users: User[], updatedAt: number = Date.now()): Promise<User[]> {
-  saveUsersToStorage(users, updatedAt);
+export async function persistUsers(
+  users: User[],
+  updatedAt: number = Date.now(),
+  departments?: Department[]
+): Promise<User[]> {
+  const normalized = normalizeUsers(users);
+  saveUsersToStorage(normalized, updatedAt);
+  const depts = departments ?? loadDepartmentsFromStorage();
+  saveDepartmentsToStorage(depts, updatedAt);
   try {
     if (isSupabaseConfigured()) {
-      await saveAppUsersToCloud(users, updatedAt);
+      await saveAppUsersToCloud(normalized, updatedAt, depts);
     }
   } catch (e) {
     console.warn('Supabase 用户同步失败', e);
   }
   try {
-    await saveUsersToCloud(users);
+    await saveUsersToCloud(normalized);
   } catch (e) {
     console.warn('GitHub 用户同步失败', e);
   }
-  return users;
+  return normalized;
+}
+
+export async function persistDepartments(departments: Department[], updatedAt: number = Date.now()): Promise<Department[]> {
+  saveDepartmentsToStorage(departments, updatedAt);
+  const users = loadUsersFromStorage();
+  await persistUsers(users, updatedAt, departments);
+  return departments;
 }
 
 export function findUserByName(users: User[], username: string): User | undefined {
@@ -109,13 +141,14 @@ async function isStillDefaultPasswords(users: User[]): Promise<boolean> {
 export async function syncUsersAcrossDevices(): Promise<User[]> {
   let local = loadUsersFromStorage();
   let localAt = getUsersUpdatedAt();
+  let localDepts = loadDepartmentsFromStorage();
 
   if (local.length === 0) {
     local = await createDefaultUsers();
     localAt = Date.now();
     saveUsersToStorage(local, localAt);
   } else {
-    const migrated = await ensureUserPasswords(local);
+    const migrated = normalizeUsers(await ensureUserPasswords(local));
     if (JSON.stringify(migrated) !== JSON.stringify(local)) {
       local = migrated;
       localAt = Date.now();
@@ -123,7 +156,7 @@ export async function syncUsersAcrossDevices(): Promise<User[]> {
     }
   }
 
-  let cloud: { users: User[]; updatedAt: number } | null = null;
+  let cloud: { users: User[]; departments?: Department[]; updatedAt: number } | null = null;
   if (isSupabaseConfigured()) {
     cloud = await fetchAppUsersFromCloud();
   }
@@ -132,30 +165,32 @@ export async function syncUsersAcrossDevices(): Promise<User[]> {
   }
 
   if (cloud?.users?.length) {
-    const cloudUsers = await ensureUserPasswords(cloud.users);
+    const cloudUsers = normalizeUsers(await ensureUserPasswords(cloud.users));
+    const cloudDepts = Array.isArray(cloud.departments) ? cloud.departments : [];
     const localDefault = await isStillDefaultPasswords(local);
     const cloudDefault = await isStillDefaultPasswords(cloudUsers);
 
-    // 一端已改密码、另一端仍是默认 → 保留已改的那端
     if (!localDefault && cloudDefault) {
-      await persistUsers(local, Date.now());
+      await persistUsers(local, Date.now(), localDepts);
       return local;
     }
     if (localDefault && !cloudDefault) {
       saveUsersToStorage(cloudUsers, cloud.updatedAt || Date.now());
+      if (cloudDepts.length) saveDepartmentsToStorage(cloudDepts, cloud.updatedAt || Date.now());
       return cloudUsers;
     }
 
-    // 都已定制或都是默认：按更新时间
     if (cloud.updatedAt >= localAt) {
       saveUsersToStorage(cloudUsers, cloud.updatedAt || Date.now());
+      if (cloudDepts.length || getDepartmentsUpdatedAt() <= (cloud.updatedAt || 0)) {
+        saveDepartmentsToStorage(cloudDepts, cloud.updatedAt || Date.now());
+      }
       return cloudUsers;
     }
   }
 
-  // 本地更新（或云端为空）→ 推到云端
   if (local.length) {
-    await persistUsers(local, localAt || Date.now());
+    await persistUsers(local, localAt || Date.now(), localDepts);
   }
   return local;
 }
@@ -195,8 +230,9 @@ export async function authenticateUser(username: string, password: string): Prom
 
   const user = findUserByName(users, trimmedUser);
   if (!user?.password?.trim()) return null;
+  if (user.disabled) return null;
   const ok = await verifyPassword(trimmedPwd, user.password);
-  return ok ? user : null;
+  return ok ? normalizeUser(user) : null;
 }
 
 export function updateUserPassword(users: User[], username: string, hashedPassword: string): User[] {
@@ -208,7 +244,7 @@ export function updateUserPassword(users: User[], username: string, hashedPasswo
 
 export async function createDefaultUsers(): Promise<User[]> {
   const now = Date.now();
-  return [
+  return normalizeUsers([
     {
       username: 'admin',
       role: 'admin',
@@ -223,5 +259,5 @@ export async function createDefaultUsers(): Promise<User[]> {
       isFirstLogin: true,
       createdAt: now,
     },
-  ];
+  ]);
 }

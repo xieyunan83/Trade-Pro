@@ -12,10 +12,51 @@ export enum ModuleType {
   IMAGE_GENERATOR = 'image_generator',
 }
 
+/** 系统角色：管理员 / 部门主管 / 部门员工 */
+export type UserRole = 'admin' | 'manager' | 'user';
+
+/** 细粒度权限（模块 + 功能） */
+export type PermissionKey =
+  | 'module.discovery'
+  | 'module.background'
+  | 'module.products'
+  | 'module.decision_makers'
+  | 'module.strategy'
+  | 'module.similar'
+  | 'module.promo_generator'
+  | 'module.client_crm'
+  | 'module.email_campaign'
+  | 'module.image_generator'
+  | 'feature.search_clients'
+  | 'feature.analyze_company'
+  | 'feature.batch_analyze'
+  | 'feature.dm_email_search'
+  | 'feature.export_report'
+  | 'feature.crm_manage'
+  | 'feature.records_center'
+  | 'feature.manage_team_users';
+
+export interface Department {
+  id: string;
+  name: string;
+  /** 部门主管用户名 */
+  managerUsername?: string;
+  createdAt: number;
+}
+
 export interface User {
   username: string;
   password?: string;
-  role: 'admin' | 'user';
+  role: UserRole;
+  /** 所属部门 */
+  departmentId?: string;
+  /**
+   * 显式授权列表；为空则使用角色默认权限。
+   * 部门主管可调整下属的该字段（不能授予管理下属权限以外的管理权）。
+   */
+  permissions?: PermissionKey[];
+  /** 停用后无法登录 */
+  disabled?: boolean;
   isFirstLogin: boolean;
   createdAt: number;
 }
@@ -53,6 +94,10 @@ export interface HistoryItem {
   country?: string;
   /** 来源标记 */
   source?: 'single' | 'batch' | 'discovery' | 'crm' | 'recover';
+  /** 操作者用户名（用于权限隔离） */
+  ownerUsername?: string;
+  /** 操作者当时所属部门 */
+  departmentId?: string;
 }
 
 /** 客户搜索归档（每次搜索一条） */
@@ -66,6 +111,8 @@ export interface DiscoveryArchiveItem {
   results: ClientSearchResult[];
   country?: string;
   clientType?: string;
+  ownerUsername?: string;
+  departmentId?: string;
 }
 
 export interface MailGroup {
@@ -89,6 +136,8 @@ export interface AutomationResult {
   /** 关联关键词，便于任务归类 */
   keyword?: string;
   createdAt?: number;
+  ownerUsername?: string;
+  departmentId?: string;
 }
 
 export interface DecisionMaker {
@@ -168,6 +217,8 @@ export interface Client {
   searchKeyword?: string;
   /** 管理标签 */
   tags?: string[];
+  ownerUsername?: string;
+  departmentId?: string;
 }
 
 // ... existing interfaces ...

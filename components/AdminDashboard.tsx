@@ -1,11 +1,11 @@
 
 import React, { useState, useEffect } from 'react';
-import { GlobalConfig, ApiConfig, TaskType, User, KnowledgeFile } from '../types';
+import { GlobalConfig, ApiConfig, TaskType, User, KnowledgeFile, Department } from '../types';
 import { 
   Settings, Shield, Key, Bell, Save, Plus, Trash2, Globe, Server, 
   CheckCircle2, AlertTriangle, LogOut, Users, Database, 
   RefreshCw, X, FileText, Upload, Play, Loader2,
-  Youtube, Music, Video, FileSpreadsheet, FilePieChart, FileCode, Image, Mail
+  Youtube, Music, Video, FileSpreadsheet, FilePieChart, FileCode, Image, Mail, Building2
 } from 'lucide-react';
 import { getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/db';
 import { testApiKey, testQwenApiKey, testAnymailFinderApiKey } from '../services/geminiService';
@@ -13,6 +13,9 @@ import { testWanImageApi } from '../services/wanImageService';
 import { saveApiConfig, getApiConfig, isSupabaseConfigured, saveKnowledgeFile, getKnowledgeFiles, deleteKnowledgeFile, resetSupabaseClient, testSupabaseConnection } from '../services/supabase';
 import { getSupabaseConfig, saveSupabaseConfig, clearSupabaseOverride, saveEmailSearchKeys, getEmailSearchKeys, env } from '../services/env';
 import { hashPassword, persistUsers, findUserByName, updateUserPassword } from '../services/auth';
+import { loadDepartmentsFromStorage } from '../services/orgStore';
+import { roleLabel } from '../services/permissions';
+import { OrgPermissionPanel } from './OrgPermissionPanel';
 import {
   getAliyunProxyMode,
   setAliyunProxyMode,
@@ -21,7 +24,7 @@ import {
   type AliyunProxyMode,
 } from '../services/qwenProxy';
 
-type AdminTab = 'api' | 'users' | 'kb';
+type AdminTab = 'api' | 'users' | 'org' | 'kb';
 
 const KB_ACCEPT = [
   '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
@@ -56,6 +59,7 @@ interface AdminDashboardProps {
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, currentUser, users, setUsers }) => {
   const [activeTab, setActiveTab] = useState<AdminTab>('api');
+  const [departments, setDepartments] = useState<Department[]>(() => loadDepartmentsFromStorage());
   const [localConfig, setLocalConfig] = useState<GlobalConfig>({
     lastUpdated: Date.now(),
     dailyLimits: { search: 500, analysis: 500 },
@@ -610,7 +614,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
           <div className="flex border-b bg-slate-50/50 overflow-x-auto scrollbar-hide">
             {([
               { id: 'api' as AdminTab, label: 'API 密钥配置', short: 'API', icon: Key },
-              { id: 'users' as AdminTab, label: '用户管理', short: '用户', icon: Users },
+              { id: 'org' as AdminTab, label: '组织权限', short: '组织', icon: Building2 },
+              { id: 'users' as AdminTab, label: '用户列表', short: '用户', icon: Users },
               { id: 'kb' as AdminTab, label: '知识库', short: '知识库', icon: Database },
             ]).map(tab => (
               <button
@@ -1010,6 +1015,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
               </div>
             )}
 
+            {activeTab === 'org' && (
+              <OrgPermissionPanel
+                currentUser={currentUser}
+                users={users}
+                setUsers={setUsers}
+                departments={departments}
+                setDepartments={setDepartments}
+                mode="admin"
+              />
+            )}
+
             {activeTab === 'users' && (
               <div className="space-y-4 sm:space-y-8 animate-fade-in">
                 <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
@@ -1027,8 +1043,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     <div key={user.username} className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
                       <div className="flex items-center justify-between gap-3 mb-3">
                         <div className="font-black text-slate-800">{user.username}</div>
-                        <span className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest ${user.role === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-slate-100 text-slate-600'}`}>
-                          {user.role}
+                        <span className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest ${user.role === 'admin' ? 'bg-purple-100 text-purple-700' : user.role === 'manager' ? 'bg-violet-100 text-violet-700' : 'bg-slate-100 text-slate-600'}`}>
+                          {roleLabel(user.role)}
                         </span>
                       </div>
                       <div className="flex gap-3">
@@ -1059,8 +1075,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                         <tr key={user.username} className="border-b border-slate-50 last:border-none hover:bg-slate-50/30 transition-all">
                           <td className="px-4 lg:px-8 py-4 lg:py-6 font-black text-slate-800">{user.username}</td>
                           <td className="px-4 lg:px-8 py-4 lg:py-6">
-                            <span className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest ${user.role === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-slate-100 text-slate-600'}`}>
-                              {user.role}
+                            <span className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest ${user.role === 'admin' ? 'bg-purple-100 text-purple-700' : user.role === 'manager' ? 'bg-violet-100 text-violet-700' : 'bg-slate-100 text-slate-600'}`}>
+                              {roleLabel(user.role)}
                             </span>
                           </td>
                           <td className="px-4 lg:px-8 py-4 lg:py-6 text-right">

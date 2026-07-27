@@ -8,12 +8,19 @@ import { isSupabaseConfigured, getKnowledgeFiles, getInvestigationHistory, saveI
 import { addCustomKeyword, addCustomCountry } from './services/taxonomyStore';
 import { normalizeCountryZh } from './utils/countryNormalize';
 import { checkLimit, incrementUsage, updateLocalConfig, resetDailyUsage, getDailyUsagePublic } from './services/limitService';
-import { ModuleType, AnalysisResult, DiscoveryState, Client, User, HistoryItem, AutomationResult, ClientSearchResult, DiscoveryArchiveItem, DecisionMaker } from './types';
+import { ModuleType, AnalysisResult, DiscoveryState, Client, User, HistoryItem, AutomationResult, ClientSearchResult, DiscoveryArchiveItem, DecisionMaker, Department } from './types';
 import { ModuleBackground } from './components/ModuleBackground';
 import { ModuleProducts } from './components/ModuleProducts';
 import { ModuleDecisionMakers } from './components/ModuleDecisionMakers';
 import { DmEmailSearchPanel } from './components/DmEmailSearchPanel';
 import { enqueueDmEmailSearch, type DmEmailSearchJob } from './services/dmEmailSearchQueue';
+import { OrgPermissionPanel } from './components/OrgPermissionPanel';
+import { loadDepartmentsFromStorage } from './services/orgStore';
+import {
+  canAccessModule,
+  filterOwnedRecords,
+  hasPermission,
+} from './services/permissions';
 import { ModuleStrategy } from './components/ModuleStrategy';
 import { ModuleSimilar } from './components/ModuleSimilar';
 import { ModulePromoGenerator } from './components/ModulePromoGenerator';
@@ -54,6 +61,8 @@ const App: React.FC = () => {
   
   const [historyOpen, setHistoryOpen] = useState(false);
   const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [departments, setDepartments] = useState<Department[]>(() => loadDepartmentsFromStorage());
+  const [teamManageOpen, setTeamManageOpen] = useState(false);
   const [crmClients, setCrmClients] = useState<Client[]>([]);
   const [kbCount, setKbCount] = useState(0); 
   const [systemNotice, setSystemNotice] = useState('');
@@ -132,26 +141,44 @@ const App: React.FC = () => {
     }
   };
 
+  /** 给记录打上当前用户归属，用于部门权限隔离 */
+  const stampOwnership = <T,>(item: T): T & { ownerUsername?: string; departmentId?: string } => {
+    if (!currentUser) return item;
+    return {
+      ...item,
+      ownerUsername: currentUser.username,
+      departmentId: currentUser.departmentId,
+    };
+  };
+
+  const scopeHistory = (items: HistoryItem[]) =>
+    currentUser ? filterOwnedRecords(currentUser, items, users, departments) : [];
+  const scopeDiscovery = (items: DiscoveryArchiveItem[]) =>
+    currentUser ? filterOwnedRecords(currentUser, items, users, departments) : [];
+  const scopeClients = (items: Client[]) =>
+    currentUser ? filterOwnedRecords(currentUser, items, users, departments) : [];
+
   const handleDiscoveryStateChange = (state: DiscoveryState) => {
     setDiscoveryState(state);
   };
 
   /** 可靠归档：每次按国搜索完成后立刻写入本地 + 云端 */
   const handleSearchArchived = (archive: DiscoveryArchiveItem) => {
-    saveDiscoveryArchive(archive).catch((e) => console.error('local discovery archive failed', e));
+    const stamped = stampOwnership(archive);
+    saveDiscoveryArchive(stamped).catch((e) => console.error('local discovery archive failed', e));
     setDiscoveryArchives((list) => {
-      const without = list.filter((x) => x.id !== archive.id);
-      return [archive, ...without].slice(0, 200);
+      const without = list.filter((x) => x.id !== stamped.id);
+      return [stamped, ...without].slice(0, 200);
     });
     if (isSupabaseConfigured()) {
       const stateForCloud: DiscoveryState = {
-        product: archive.product,
-        country: archive.country || (archive.countries || []).join(', '),
-        countries: archive.countries || [],
-        industry: archive.industry,
-        clientType: archive.clientType || (archive.clientTypes || []).join(', '),
-        clientTypes: archive.clientTypes || [],
-        results: archive.results || [],
+        product: stamped.product,
+        country: stamped.country || (stamped.countries || []).join(', '),
+        countries: stamped.countries || [],
+        industry: stamped.industry,
+        clientType: stamped.clientType || (stamped.clientTypes || []).join(', '),
+        clientTypes: stamped.clientTypes || [],
+        results: stamped.results || [],
         hasSearched: true,
       };
       saveDiscoverySearch(stateForCloud).catch((e) => console.error('Supabase discovery save failed', e));
@@ -181,6 +208,7 @@ const App: React.FC = () => {
       try {
         const loaded = await loadUsersWithMigration();
         setUsers(loaded);
+        setDepartments(loadDepartmentsFromStorage());
       } catch (e) {
         console.error('Failed to load users', e);
       } finally {
@@ -221,7 +249,8 @@ const App: React.FC = () => {
               [...cloudDisc, ...localDisc]
                 .filter((i) => !isDiscoveryTombstoned(i, tombs))
                 .forEach((i) => map.set(i.id, i));
-              setDiscoveryArchives(Array.from(map.values()).sort((a, b) => b.timestamp - a.timestamp));
+              const discAll = Array.from(map.values()).sort((a, b) => b.timestamp - a.timestamp);
+              setDiscoveryArchives(currentUser ? filterOwnedRecords(currentUser, discAll, users, loadDepartmentsFromStorage()) : discAll);
             } catch (e) {
               console.warn('discovery archives load failed', e);
             }
@@ -275,7 +304,7 @@ const App: React.FC = () => {
               ).toLowerCase();
               if (!domain || knownDomains.has(domain)) continue;
               const hq = task.analysis.companyInfo?.headquarters || '';
-              const item: HistoryItem = {
+              const item: HistoryItem = stampOwnership({
                 id: `recover_${task.id}`,
                 type: ModuleType.BACKGROUND,
                 data: task.analysis,
@@ -284,7 +313,7 @@ const App: React.FC = () => {
                 keyword: task.keyword || 'Car toy',
                 country: normalizeCountryZh(task.country || hq),
                 source: 'recover',
-              };
+              });
               try {
                 await persistHistoryItem(item);
                 recovered.push(item);
@@ -293,7 +322,8 @@ const App: React.FC = () => {
                 console.warn('Recover history failed', e);
               }
             }
-            setHistory([...recovered, ...historyForRecover]);
+            const recoveredAll = [...recovered, ...historyForRecover];
+            setHistory(currentUser ? filterOwnedRecords(currentUser, recoveredAll, users, loadDepartmentsFromStorage()) : recoveredAll);
 
             // Check GitHub Status
             const ghStatus = checkGitHubStatus();
@@ -333,7 +363,7 @@ const App: React.FC = () => {
                         const newItems = cloudHistory.filter(i => !existingIds.has(i.id));
                         for (const item of newItems) { await saveHistory(item); }
                         const merged = [...newItems, ...h].sort((a, b) => b.timestamp - a.timestamp);
-                        setHistory(merged);
+                        setHistory(currentUser ? filterOwnedRecords(currentUser, merged, users, loadDepartmentsFromStorage()) : merged);
                     }
                 } catch (e) {
                     console.error("Supabase history sync failed", e);
@@ -424,7 +454,11 @@ const App: React.FC = () => {
     const savedClients = localStorage.getItem('tradeScoutClients');
     if (savedClients && crmClients.length === 0) { 
         try { 
-            setCrmClients(JSON.parse(savedClients)); 
+            setCrmClients(
+              currentUser
+                ? filterOwnedRecords(currentUser, JSON.parse(savedClients), users, loadDepartmentsFromStorage())
+                : JSON.parse(savedClients)
+            ); 
         } catch(e) {
             console.warn("Failed to parse saved clients", e);
         } 
@@ -469,10 +503,18 @@ const App: React.FC = () => {
       if (!input.trim()) return;
       const lines = input.split(/[\n;]+/).map(s => s.trim()).filter(s => s.length > 0);
       if (lines.length === 1) {
+          if (!hasPermission(currentUser, 'feature.analyze_company')) {
+            alert('你没有「单次背调」权限，请联系管理员或部门主管开通。');
+            return;
+          }
           const limit = checkLimit('analysis');
           if (!limit.allowed) { alert(`今日背调次数已达上限（${limit.current}/${limit.max}）。请联系管理员提高限额，或明日再试。`); return; }
           performSingleAnalysis(lines[0]);
       } else {
+          if (!hasPermission(currentUser, 'feature.batch_analyze')) {
+            alert('你没有「批量背调」权限，请联系管理员或部门主管开通。');
+            return;
+          }
           setPendingBatch(lines); setPendingBatchContext('Manual Input'); setBatchModalOpen(true);
       }
   };
@@ -584,6 +626,9 @@ const App: React.FC = () => {
 
   /** 将当前报告的决策人邮箱搜索加入后台队列（可并行、不挡浏览） */
   const enqueueCurrentDmEmailSearch = (fromData?: AnalysisResult | null, historyIdOverride?: string | null): { ok: boolean; message: string } => {
+    if (!hasPermission(currentUser, 'feature.dm_email_search')) {
+      return { ok: false, message: '你没有「决策人邮箱搜索」权限，请联系管理员或部门主管开通。' };
+    }
     const src = fromData || analysisDataRef.current;
     if (!src) return { ok: false, message: '当前没有打开的背调报告' };
     const domain = src.companyInfo?.website || '';
@@ -633,7 +678,13 @@ const App: React.FC = () => {
     if (res.ok === false) return { ok: false, message: res.reason };
     return { ok: true, message: `已加入后台队列：${companyName}（可继续浏览其它客户）` };
   };
-  const handleExportReport = () => { if (analysisData) exportToPPT(analysisData); };
+  const handleExportReport = () => {
+    if (!hasPermission(currentUser, 'feature.export_report')) {
+      alert('你没有「导出报告」权限，请联系管理员或部门主管开通。');
+      return;
+    }
+    if (analysisData) exportToPPT(analysisData);
+  };
   
   const handleAddToCRM = () => { 
       if (!analysisData) return; 
@@ -656,7 +707,7 @@ const App: React.FC = () => {
           activityLog: `Added from Deep Analysis. Rev: ${analysisData.financials.revenueEstimate}.`,
           contacts: analysisData.decisionMakers || [] // Auto-populate contacts
       }; 
-      setCrmClients(prev => [newClient, ...prev]); 
+      setCrmClients(prev => [stampOwnership(newClient), ...prev]); 
       alert("Added to CRM with " + (newClient.contacts?.length || 0) + " contacts!"); 
   };
   
@@ -670,7 +721,7 @@ const App: React.FC = () => {
           if (s.includes('distribut')) return '分销商';
           return '进口商';
       };
-      const newClients: Client[] = results.map(r => ({
+      const newClients: Client[] = results.map(r => stampOwnership({
           id: Date.now() + Math.random().toString(36).substr(2, 9),
           name: r.name,
           website: r.website,
@@ -723,7 +774,7 @@ const App: React.FC = () => {
       const country = normalizeCountryZh(
         result.companyInfo?.headquarters || result.companyInfo?.city || ''
       );
-      const historyItem: HistoryItem = {
+      const historyItem: HistoryItem = stampOwnership({
           id: `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
           type: ModuleType.BACKGROUND,
           data: result,
@@ -732,7 +783,7 @@ const App: React.FC = () => {
           keyword: discoveryState.product || undefined,
           country: country !== '未分类' ? country : undefined,
           source: source as HistoryItem['source'],
-      };
+      });
       await persistHistoryItem(historyItem);
       setHistory(prev => {
           const filtered = prev.filter(
@@ -928,10 +979,14 @@ const App: React.FC = () => {
   };
 
   const confirmBatchStart = async (mode: 'detailed' | 'economy') => { 
+      if (!hasPermission(currentUser, 'feature.batch_analyze')) {
+        alert('你没有「批量背调」权限，请联系管理员或部门主管开通。');
+        return;
+      }
       setBatchModalOpen(false); 
       setActiveModule(ModuleType.PROMO_GENERATOR); 
       
-      const newTasks: AutomationResult[] = pendingBatch.map(target => ({ 
+      const newTasks: AutomationResult[] = pendingBatch.map(target => stampOwnership({ 
           id: Math.random().toString(36).substr(2, 9), 
           clientName: target, 
           website: target, 
@@ -985,7 +1040,7 @@ const App: React.FC = () => {
 
   const handleLogout = () => { setCurrentUser(null); setAnalysisData(null); setViewingHistoryId(null); setDomainInput(''); setActiveModule(ModuleType.DISCOVERY); };
   const handleSyncToGitHub = async () => { if(!currentUser) return; setIsSyncing(true); try { await backupUserHistory(currentUser.username, history); await saveCRMToCloud(crmClients); alert("数据同步成功!"); } catch (e: any) { alert("同步失败: " + e.message); } finally { setIsSyncing(false); } };
-  const handleAddClients = (newClients: Client[]) => { setCrmClients(prev => [...prev, ...newClients]); alert(`已成功导入 ${newClients.length} 个客户资料！`); };
+  const handleAddClients = (newClients: Client[]) => { setCrmClients(prev => [...prev, ...newClients.map(stampOwnership)]); alert(`已成功导入 ${newClients.length} 个客户资料！`); };
 
   if (!currentUser) {
     if (!authReady) return <div className="h-screen flex items-center justify-center bg-slate-50"><Loader2 className="animate-spin text-blue-600" size={40} /></div>;
@@ -1017,6 +1072,18 @@ const App: React.FC = () => {
   }
 
   const alwaysActiveModules = [ModuleType.DISCOVERY, ModuleType.PROMO_GENERATOR, ModuleType.CLIENT_CRM, ModuleType.STRATEGY, ModuleType.EMAIL_CAMPAIGN, ModuleType.IMAGE_GENERATOR];
+  const navModules = [
+            { id: ModuleType.DISCOVERY, label: '客户搜索', sub: 'Discovery', icon: Globe },
+            { id: ModuleType.BACKGROUND, label: '背景调查', sub: 'Background', icon: LayoutDashboard },
+            { id: ModuleType.PRODUCTS, label: '产品分析', sub: 'Products', icon: PackageSearch },
+            { id: ModuleType.DECISION_MAKERS, label: '决策人挖掘', sub: 'Contacts', icon: Users },
+            { id: ModuleType.STRATEGY, label: '开发策略', sub: 'Strategy', icon: PenTool },
+            { id: ModuleType.SIMILAR, label: '同类推荐', sub: 'Similar', icon: Network },
+            { id: ModuleType.CLIENT_CRM, label: '客户管理', sub: 'CRM', icon: Briefcase },
+            { id: ModuleType.EMAIL_CAMPAIGN, label: '邮件营销', sub: 'DirectMail', icon: Mail }, 
+            { id: ModuleType.IMAGE_GENERATOR, label: '海报/生图', sub: 'Poster', icon: Image },
+            { id: ModuleType.PROMO_GENERATOR, label: '营销工具', sub: 'Tools', icon: Ruler },
+          ].filter((item) => canAccessModule(currentUser, item.id));
 
   return (
     <div className="flex min-h-screen min-h-[100dvh] bg-slate-100 overflow-hidden">
@@ -1029,7 +1096,7 @@ const App: React.FC = () => {
             <div className="bg-blue-600 p-2 rounded-lg text-white shadow-md shadow-blue-100"><Zap size={20} /></div>
             <div>
                 <h1 className="text-lg font-black text-slate-800 tracking-tight leading-tight">楠哥的小助理 <span className="text-blue-600">Pro</span></h1>
-                <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-1 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500"></span>{currentUser.username}</div>
+                <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-1 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500"></span>{currentUser.username}{currentUser.role === 'manager' ? ' · 主管' : ''}</div>
             </div>
         </div>
         
@@ -1054,23 +1121,22 @@ const App: React.FC = () => {
         )}
 
         <nav className="p-3 sm:p-4 space-y-1 flex-1 overflow-y-auto custom-scrollbar">
-          {[
-            { id: ModuleType.DISCOVERY, label: '客户搜索', sub: 'Discovery', icon: Globe },
-            { id: ModuleType.BACKGROUND, label: '背景调查', sub: 'Background', icon: LayoutDashboard },
-            { id: ModuleType.PRODUCTS, label: '产品分析', sub: 'Products', icon: PackageSearch },
-            { id: ModuleType.DECISION_MAKERS, label: '决策人挖掘', sub: 'Contacts', icon: Users },
-            { id: ModuleType.STRATEGY, label: '开发策略', sub: 'Strategy', icon: PenTool },
-            { id: ModuleType.SIMILAR, label: '同类推荐', sub: 'Similar', icon: Network },
-            { id: ModuleType.CLIENT_CRM, label: '客户管理', sub: 'CRM', icon: Briefcase },
-            { id: ModuleType.EMAIL_CAMPAIGN, label: '邮件营销', sub: 'DirectMail', icon: Mail }, 
-            { id: ModuleType.IMAGE_GENERATOR, label: '海报/生图', sub: 'Poster', icon: Image },
-            { id: ModuleType.PROMO_GENERATOR, label: '营销工具', sub: 'Tools', icon: Ruler },
-          ].map(item => (
+          {navModules.map(item => (
             <button key={item.id} onClick={() => { setActiveModule(item.id); setMobileMenuOpen(false); }} disabled={!analysisData && !alwaysActiveModules.includes(item.id)} className={`w-full flex items-center gap-3 px-3 sm:px-4 py-3 sm:py-3.5 rounded-xl sm:rounded-2xl text-sm font-bold transition-all touch-manipulation ${activeModule === item.id ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800 disabled:opacity-30'}`}>
               <item.icon size={18} className="flex-shrink-0" />
               <span className="truncate"><span className="md:hidden">{item.label}</span><span className="hidden md:inline">{item.label} ({item.sub})</span></span>
             </button>
           ))}
+          {hasPermission(currentUser, 'feature.manage_team_users') && currentUser.role === 'manager' && (
+            <button
+              type="button"
+              onClick={() => { setTeamManageOpen(true); setMobileMenuOpen(false); }}
+              className="w-full flex items-center gap-3 px-3 sm:px-4 py-3 sm:py-3.5 rounded-xl sm:rounded-2xl text-sm font-bold text-violet-700 hover:bg-violet-50 touch-manipulation"
+            >
+              <Users size={18} className="flex-shrink-0" />
+              <span>团队权限</span>
+            </button>
+          )}
         </nav>
 
         <div className="p-4 border-t border-slate-100 space-y-2">
@@ -1091,7 +1157,16 @@ const App: React.FC = () => {
                     </div>
                 </div>
             </div>
-            <button onClick={() => setHistoryOpen(!historyOpen)} className="w-full flex items-center justify-between px-4 py-3 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-xl text-sm font-bold transition-colors">
+            <button
+              onClick={() => {
+                if (!hasPermission(currentUser, 'feature.records_center')) {
+                  alert('你没有「记录中心」权限，请联系管理员或部门主管开通。');
+                  return;
+                }
+                setHistoryOpen(!historyOpen);
+              }}
+              className="w-full flex items-center justify-between px-4 py-3 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-xl text-sm font-bold transition-colors"
+            >
                 <span className="flex items-center gap-2"><History size={18} /> 记录中心</span><ChevronRight size={16} className={`transition-transform ${historyOpen ? 'rotate-90' : ''}`} />
             </button>
             <button onClick={handleLogout} className="w-full flex items-center gap-2 px-4 py-3 text-red-500 hover:bg-red-50 rounded-xl text-sm font-bold transition-colors"><LogOut size={18} /> 退出登录</button>
@@ -1375,6 +1450,30 @@ const App: React.FC = () => {
       )}
 
       <DmEmailSearchPanel />
+
+      {teamManageOpen && currentUser.role === 'manager' && (
+        <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-900/50">
+          <div className="bg-[#F0F2F5] w-full sm:max-w-5xl sm:rounded-3xl max-h-[92vh] overflow-y-auto shadow-2xl">
+            <div className="sticky top-0 z-10 bg-white border-b px-4 py-3 flex items-center justify-between">
+              <div>
+                <div className="text-base font-black text-slate-800">团队权限管理</div>
+                <div className="text-[11px] font-bold text-slate-400">仅可管理本部门普通员工；看不到其它主管记录</div>
+              </div>
+              <button type="button" onClick={() => setTeamManageOpen(false)} className="text-slate-400 hover:text-slate-700 font-black px-3 py-2">关闭</button>
+            </div>
+            <div className="p-4">
+              <OrgPermissionPanel
+                currentUser={currentUser}
+                users={users}
+                setUsers={setUsers}
+                departments={departments}
+                setDepartments={setDepartments}
+                mode="manager"
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

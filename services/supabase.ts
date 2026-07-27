@@ -164,7 +164,11 @@ export const getAllApiConfigs = async (): Promise<ApiConfig[]> => {
   }
 }
 
-export type CloudUsersBundle = { users: import('../types').User[]; updatedAt: number }
+export type CloudUsersBundle = {
+  users: import('../types').User[];
+  departments?: import('../types').Department[];
+  updatedAt: number;
+}
 
 /** 拉取云端用户账号（手机/电脑共用同一份） */
 export const fetchAppUsersFromCloud = async (): Promise<CloudUsersBundle | null> => {
@@ -182,8 +186,9 @@ export const fetchAppUsersFromCloud = async (): Promise<CloudUsersBundle | null>
     const parsed = JSON.parse(raw)
     const users = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.users) ? parsed.users : null
     if (!users?.length) return null
+    const departments = Array.isArray(parsed?.departments) ? parsed.departments : []
     const updatedAt = Number(data.model_id) || Number(parsed?.updatedAt) || 0
-    return { users, updatedAt }
+    return { users, departments, updatedAt }
   } catch (e) {
     console.warn('拉取云端用户失败', e)
     return null
@@ -193,11 +198,12 @@ export const fetchAppUsersFromCloud = async (): Promise<CloudUsersBundle | null>
 /** 保存用户账号到云端，使手机端与电脑端密码一致 */
 export const saveAppUsersToCloud = async (
   users: import('../types').User[],
-  updatedAt: number = Date.now()
+  updatedAt: number = Date.now(),
+  departments: import('../types').Department[] = []
 ): Promise<boolean> => {
   if (!isSupabaseConfigured() || !users.length) return false
   try {
-    const payload = JSON.stringify({ users, updatedAt })
+    const payload = JSON.stringify({ users, departments, updatedAt })
     const { error } = await supabase
       .from('api_configs')
       .upsert(
