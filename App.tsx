@@ -8,7 +8,7 @@ import { isSupabaseConfigured, getKnowledgeFiles, getInvestigationHistory, saveI
 import { addCustomKeyword, addCustomCountry } from './services/taxonomyStore';
 import { normalizeCountryZh } from './utils/countryNormalize';
 import { checkLimit, incrementUsage, updateLocalConfig, resetDailyUsage, getDailyUsagePublic } from './services/limitService';
-import { ModuleType, AnalysisResult, DiscoveryState, Client, User, HistoryItem, AutomationResult, ClientSearchResult, DiscoveryArchiveItem } from './types';
+import { ModuleType, AnalysisResult, DiscoveryState, Client, User, HistoryItem, AutomationResult, ClientSearchResult, DiscoveryArchiveItem, DecisionMaker } from './types';
 import { ModuleBackground } from './components/ModuleBackground';
 import { ModuleProducts } from './components/ModuleProducts';
 import { ModuleDecisionMakers } from './components/ModuleDecisionMakers';
@@ -47,6 +47,7 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [analysisData, setAnalysisData] = useState<AnalysisResult | null>(null);
+  const [viewingHistoryId, setViewingHistoryId] = useState<string | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -464,13 +465,68 @@ const App: React.FC = () => {
   const performSingleAnalysis = async (domain: string) => {
     setLoading(true); setErrorMsg(null); setActiveModule(ModuleType.BACKGROUND); setMobileMenuOpen(false);
     try {
-      const result = await analyzeCompany(domain, 'detailed'); setAnalysisData(result); incrementUsage('analysis');
-      await saveAnalysisToHistory(result, 'single');
+      const result = await analyzeCompany(domain, 'detailed');
+      setAnalysisData(result);
+      incrementUsage('analysis');
+      const saved = await saveAnalysisToHistory(result, 'single');
+      setViewingHistoryId(saved.id);
       updateCrmStatus(result);
     } catch (e: any) { setErrorMsg(`Error: ${e.message}`); } finally { setLoading(false); }
   };
 
-  const loadFromHistory = (item: HistoryItem) => { setAnalysisData(item.data); setDomainInput(item.domain); setActiveModule(ModuleType.BACKGROUND); setHistoryOpen(false); setErrorMsg(null); };
+  const loadFromHistory = (item: HistoryItem) => {
+    setAnalysisData(item.data);
+    setViewingHistoryId(item.id);
+    setDomainInput(item.domain);
+    setActiveModule(ModuleType.BACKGROUND);
+    setHistoryOpen(false);
+    setErrorMsg(null);
+  };
+
+  /** 把当前报告写回历史（按 viewingHistoryId / 域名匹配，不新建记录） */
+  const persistCurrentAnalysis = async (nextData: AnalysisResult) => {
+    setAnalysisData(nextData);
+    const matchId = viewingHistoryId;
+    const domainKey = (nextData.companyInfo?.website || domainInput || '').toLowerCase();
+    const nameKey = (nextData.companyInfo?.name || '').toLowerCase();
+
+    setHistory((prev) => {
+      let updatedItem: HistoryItem | null = null;
+      const next = prev.map((h) => {
+        const hit =
+          (matchId && h.id === matchId) ||
+          (!matchId &&
+            ((h.domain || '').toLowerCase() === domainKey ||
+              (h.data?.companyInfo?.name || '').toLowerCase() === nameKey));
+        if (!hit) return h;
+        updatedItem = { ...h, data: nextData };
+        return updatedItem;
+      });
+      if (updatedItem) {
+        persistHistoryItem(updatedItem).catch((e) =>
+          console.error('persist analysis patch failed', e)
+        );
+      } else if (matchId || domainKey) {
+        // 无匹配历史时仍保留内存中的 analysisData；可选新建一条
+        console.warn('[History] no matching report to update for decision maker research');
+      }
+      return next;
+    });
+  };
+
+  const persistDecisionMakerResearch = async (patch: {
+    decisionMakers: DecisionMaker[];
+    decisionMakerEmailSearchAt: number;
+    decisionMakerEmailSearchHistory: number[];
+  }) => {
+    if (!analysisData) return;
+    await persistCurrentAnalysis({
+      ...analysisData,
+      decisionMakers: patch.decisionMakers,
+      decisionMakerEmailSearchAt: patch.decisionMakerEmailSearchAt,
+      decisionMakerEmailSearchHistory: patch.decisionMakerEmailSearchHistory,
+    });
+  };
   const handleExportReport = () => { if (analysisData) exportToPPT(analysisData); };
   
   const handleAddToCRM = () => { 
@@ -588,6 +644,7 @@ const App: React.FC = () => {
           return;
       }
       setAnalysisData(task.analysis);
+      setViewingHistoryId(null);
       setDomainInput(task.analysis.companyInfo?.website || task.website || '');
       setActiveModule(ModuleType.BACKGROUND);
       setErrorMsg(null);
@@ -820,7 +877,7 @@ const App: React.FC = () => {
       alert('任务队列已清空');
   };
 
-  const handleLogout = () => { setCurrentUser(null); setAnalysisData(null); setDomainInput(''); setActiveModule(ModuleType.DISCOVERY); };
+  const handleLogout = () => { setCurrentUser(null); setAnalysisData(null); setViewingHistoryId(null); setDomainInput(''); setActiveModule(ModuleType.DISCOVERY); };
   const handleSyncToGitHub = async () => { if(!currentUser) return; setIsSyncing(true); try { await backupUserHistory(currentUser.username, history); await saveCRMToCloud(crmClients); alert("数据同步成功!"); } catch (e: any) { alert("同步失败: " + e.message); } finally { setIsSyncing(false); } };
   const handleAddClients = (newClients: Client[]) => { setCrmClients(prev => [...prev, ...newClients]); alert(`已成功导入 ${newClients.length} 个客户资料！`); };
 
@@ -1141,7 +1198,13 @@ const App: React.FC = () => {
                     {activeModule === ModuleType.DECISION_MAKERS && (
                       <ModuleDecisionMakers
                         data={analysisData}
-                        onUpdate={(dms) => setAnalysisData(prev => prev ? { ...prev, decisionMakers: dms } : prev)}
+                        onUpdate={(dms) => {
+                          const next = { ...analysisData, decisionMakers: dms };
+                          persistCurrentAnalysis(next).catch(console.error);
+                        }}
+                        onResearchComplete={(patch) => {
+                          persistDecisionMakerResearch(patch).catch(console.error);
+                        }}
                       />
                     )}
                     {activeModule === ModuleType.SIMILAR && <ModuleSimilar data={analysisData} onAnalyze={handleAnalyzeInput} />}

@@ -112,6 +112,8 @@ export interface DecisionMaker {
   confidence?: number;
   /** 采购决策权重 1-5，Buyer/CEO 通常更高 */
   influenceScore?: number;
+  /** 最近一次邮箱查找/校验时间 */
+  lastEmailCheckedAt?: number;
 }
 
 export interface TradeIntelligence {
@@ -274,6 +276,10 @@ export interface AnalysisResult {
   products: ProductAnalysis[];
   marketTrends: string;
   decisionMakers: DecisionMaker[];
+  /** 最近一次「决策人邮箱搜索」完成时间 */
+  decisionMakerEmailSearchAt?: number;
+  /** 历次决策人邮箱搜索时间（保留，不清除） */
+  decisionMakerEmailSearchHistory?: number[];
   strategy: {
     buyingOfficeLocation: string;
     actionPlan: string[];

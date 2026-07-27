@@ -1,19 +1,57 @@
 import React, { useEffect, useState } from 'react';
 import { AnalysisResult, DecisionMaker } from '../types';
-import { Users, Linkedin, Mail, Phone, ExternalLink, UserCheck, AlertTriangle, Download, Briefcase, ShieldCheck, ShieldAlert } from 'lucide-react';
+import { Users, Linkedin, Mail, Phone, ExternalLink, UserCheck, AlertTriangle, Download, Briefcase, ShieldCheck, ShieldAlert, RefreshCw, Loader2, Clock } from 'lucide-react';
 import { exportContactsToExcel } from '../services/exportService';
+import { researchDecisionMakerEmails } from '../services/geminiService';
 
 interface ModuleDecisionMakersProps {
   data: AnalysisResult;
+  /** 邮箱手工编辑 */
   onUpdate?: (decisionMakers: DecisionMaker[]) => void;
+  /** 重新搜索完成后写回报告（含搜索时间历史） */
+  onResearchComplete?: (patch: {
+    decisionMakers: DecisionMaker[];
+    decisionMakerEmailSearchAt: number;
+    decisionMakerEmailSearchHistory: number[];
+  }) => void;
 }
 
-export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({ data, onUpdate }) => {
+const formatSearchTime = (ts?: number) => {
+  if (!ts) return '';
+  try {
+    return new Date(ts).toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return '';
+  }
+};
+
+export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
+  data,
+  onUpdate,
+  onResearchComplete,
+}) => {
   const [decisionMakers, setDecisionMakers] = useState(data.decisionMakers || []);
+  const [isSearching, setIsSearching] = useState(false);
+  const [lastSearchAt, setLastSearchAt] = useState(data.decisionMakerEmailSearchAt);
+  const [searchHistory, setSearchHistory] = useState<number[]>(
+    data.decisionMakerEmailSearchHistory || (data.decisionMakerEmailSearchAt ? [data.decisionMakerEmailSearchAt] : [])
+  );
+  const [lastStats, setLastStats] = useState<string>('');
 
   useEffect(() => {
     setDecisionMakers(data.decisionMakers || []);
-  }, [data.decisionMakers]);
+    setLastSearchAt(data.decisionMakerEmailSearchAt);
+    setSearchHistory(
+      data.decisionMakerEmailSearchHistory ||
+        (data.decisionMakerEmailSearchAt ? [data.decisionMakerEmailSearchAt] : [])
+    );
+  }, [data.decisionMakers, data.decisionMakerEmailSearchAt, data.decisionMakerEmailSearchHistory]);
 
   const commit = (next: DecisionMaker[]) => {
     setDecisionMakers(next);
@@ -33,28 +71,96 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({ data
     commit(next);
   };
 
+  const handleResearchEmails = async () => {
+    const domain =
+      data.companyInfo?.website && data.companyInfo.website !== 'N/A'
+        ? data.companyInfo.website
+        : '';
+    if (!domain || !domain.includes('.')) {
+      alert('当前报告缺少有效公司域名，无法搜索决策人邮箱。');
+      return;
+    }
+    if (isSearching) return;
+    setIsSearching(true);
+    setLastStats('');
+    try {
+      const research = await researchDecisionMakerEmails({
+        domain,
+        existing: decisionMakers,
+        reverifyNonAnymail: true, // 非 Anymail 来源可再验证
+      });
+      const history = [...searchHistory, research.searchedAt].slice(-30);
+      setDecisionMakers(research.decisionMakers);
+      setLastSearchAt(research.searchedAt);
+      setSearchHistory(history);
+      setLastStats(
+        `新增 ${research.stats.added} · 更新 ${research.stats.upgraded} · Anymail ${research.stats.anymailFound} · 再验证 ${research.stats.verified}`
+      );
+      onResearchComplete?.({
+        decisionMakers: research.decisionMakers,
+        decisionMakerEmailSearchAt: research.searchedAt,
+        decisionMakerEmailSearchHistory: history,
+      });
+    } catch (e: any) {
+      alert(`决策人邮箱搜索失败：${e?.message || e}`);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
   const buyers = decisionMakers.filter(d => d.type === 'Buyer').length;
   const verified = decisionMakers.filter(d => d.isVerified).length;
 
   return (
     <div className="space-y-4 sm:space-y-6 animate-fade-in">
       <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
-          <div>
+        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4 mb-6">
+          <div className="min-w-0">
             <h3 className="text-xl sm:text-2xl font-black text-slate-800 flex items-center gap-2">
               <Users className="text-blue-600" /> 关键决策人挖掘
             </h3>
             <p className="text-sm text-slate-500 font-medium mt-1">
-              已验证邮箱优先来自 AnymailFinder（查找即含校验，不重复扣验证分）。仅真实姓名才会按人补查；AI 占位联系人不会再拿去烧积分。
+              可随时重新搜索决策人邮箱：保留原有联系人，Anymail 已验证的不重复扣分；其它来源可再验证。
             </p>
+            {lastSearchAt ? (
+              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-bold text-slate-500">
+                <span className="inline-flex items-center gap-1 text-violet-700">
+                  <Clock size={12} /> 最近搜索：{formatSearchTime(lastSearchAt)}
+                </span>
+                {searchHistory.length > 1 && (
+                  <span className="text-slate-400">累计搜索 {searchHistory.length} 次</span>
+                )}
+                {lastStats && <span className="text-emerald-600">{lastStats}</span>}
+              </div>
+            ) : (
+              <div className="mt-2 text-[11px] font-bold text-amber-600">尚未单独搜索过决策人邮箱，可点击右侧按钮开始。</div>
+            )}
           </div>
-          <button
-            onClick={() => exportContactsToExcel(decisionMakers, data.companyInfo.name)}
-            className="inline-flex items-center justify-center gap-2 bg-slate-900 hover:bg-blue-600 text-white px-4 py-2.5 rounded-xl text-sm font-bold touch-manipulation"
-          >
-            <Download size={16} /> 导出 Excel
-          </button>
+          <div className="flex flex-col sm:flex-row gap-2 flex-shrink-0">
+            <button
+              type="button"
+              onClick={handleResearchEmails}
+              disabled={isSearching}
+              className="inline-flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 disabled:opacity-60 text-white px-4 py-2.5 rounded-xl text-sm font-bold touch-manipulation"
+            >
+              {isSearching ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+              {isSearching ? '正在搜索邮箱…' : '重新搜索决策人邮箱'}
+            </button>
+            <button
+              type="button"
+              onClick={() => exportContactsToExcel(decisionMakers, data.companyInfo.name)}
+              className="inline-flex items-center justify-center gap-2 bg-slate-900 hover:bg-blue-600 text-white px-4 py-2.5 rounded-xl text-sm font-bold touch-manipulation"
+            >
+              <Download size={16} /> 导出 Excel
+            </button>
+          </div>
         </div>
+
+        {isSearching && (
+          <div className="mb-4 rounded-2xl border border-violet-100 bg-violet-50 px-4 py-3 text-xs font-bold text-violet-800">
+            正在用 AnymailFinder 等渠道查找/验证邮箱，不会清空已有联系人。已验证的 Anymail 结果会跳过以免重复扣分。
+          </div>
+        )}
 
         <div className="grid grid-cols-3 gap-3 mb-6">
           <div className="bg-slate-50 rounded-2xl p-3 border border-slate-100 text-center">
@@ -70,12 +176,25 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({ data
             <div className="text-[10px] font-black text-emerald-500 uppercase">已验证邮箱</div>
           </div>
         </div>
+
+        {searchHistory.length > 1 && (
+          <details className="mb-4 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+            <summary className="cursor-pointer text-[11px] font-black text-slate-500">查看历次搜索时间</summary>
+            <ul className="mt-2 space-y-1 text-[11px] font-bold text-slate-600">
+              {[...searchHistory].reverse().map((t) => (
+                <li key={t}>{formatSearchTime(t)}</li>
+              ))}
+            </ul>
+          </details>
+        )}
         
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
           {decisionMakers.length === 0 ? (
-            <div className="col-span-full py-12 text-center text-slate-400 font-bold">未找到决策人，请确认目标网站有效或配置 AnymailFinder API</div>
+            <div className="col-span-full py-12 text-center text-slate-400 font-bold">
+              暂无决策人。可点击「重新搜索决策人邮箱」，或确认公司网站有效且已配置 AnymailFinder。
+            </div>
           ) : decisionMakers.map((dm, i) => (
-            <DecisionMakerCard key={`${dm.name}-${i}`} dm={dm} index={i} onEmailChange={handleEmailChange} />
+            <DecisionMakerCard key={`${dm.emailGuess || dm.name}-${i}`} dm={dm} index={i} onEmailChange={handleEmailChange} />
           ))}
         </div>
       </div>
@@ -156,7 +275,6 @@ const DecisionMakerCard: React.FC<{ dm: DecisionMaker; index: number; onEmailCha
           </div>
         </div>
 
-        {/* 邮箱来源 + 验证状态 */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-violet-50 border border-violet-100">
             <Mail size={12} className="text-violet-500 flex-shrink-0" />
@@ -173,6 +291,12 @@ const DecisionMakerCard: React.FC<{ dm: DecisionMaker; index: number; onEmailCha
             </div>
           </div>
         </div>
+
+        {dm.lastEmailCheckedAt ? (
+          <div className="text-[10px] font-bold text-slate-400 px-1">
+            本条最近处理：{formatSearchTime(dm.lastEmailCheckedAt)}
+          </div>
+        ) : null}
 
         {dm.phone && (
           <div className="flex items-center gap-2 p-3 bg-white rounded-xl border border-slate-100 text-xs font-bold text-slate-600">
