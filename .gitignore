@@ -26,3 +26,4 @@ fetch_search.txt
 *.njsproj
 *.sln
 *.sw?
+supabase/.temp/
