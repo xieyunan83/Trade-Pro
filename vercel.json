@@ -10,7 +10,7 @@
     }
   },
   "rewrites": [
-    { "source": "/qwen-api/(.*)", "destination": "/api/qwen-api/$1" },
-    { "source": "/anymail-api/(.*)", "destination": "/api/anymail-api/$1" }
+    { "source": "/qwen-api/:path*", "destination": "/api/qwen-api/:path*" },
+    { "source": "/anymail-api/:path*", "destination": "/api/anymail-api/:path*" }
   ]
 }

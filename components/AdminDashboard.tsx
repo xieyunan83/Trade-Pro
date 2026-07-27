@@ -313,7 +313,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const handleSaveAliyunProxy = () => {
     setAliyunProxyMode(aliyunProxyMode);
     setAliyunProxyBase(aliyunProxyBase);
-    alert('千问长时中转已保存。线上请用「同域」或「自定义」+ npm run proxy:aliyun，不要依赖 Supabase 跑长时间联网搜索。');
+    alert('中转设置已保存。保持「自动」即可，本机和线上都会自动走通。');
   };
 
   const handleTestQwen = async (testSearch = false) => {
@@ -743,12 +743,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
 
                   {/* 长时中转：解决线上 HTTP 546 */}
                   <div className="mt-4 p-4 rounded-2xl bg-amber-50 border border-amber-200 space-y-3">
-                    <div className="text-xs font-black text-amber-900">千问长时中转（解决 HTTP 546）</div>
+                    <div className="text-xs font-black text-amber-900">千问联网中转</div>
                     <p className="text-[10px] text-amber-800/80 font-bold leading-relaxed">
-                      线上（babyworld.ltd / Vercel）默认走同域 <code className="px-1 bg-white rounded">/api/qwen-api</code>，
-                      推送 GitHub 后自动部署，无需再跑本机代理。仅当 Vercel 超时不够时，再改用「自定义」+
-                      <code className="mx-1 px-1 bg-white rounded">npm run proxy:aliyun</code>。
-                      不要选「仅 Supabase」做长时间联网搜索（会 HTTP 546）。
+                      保持「自动」即可：本机走本地代理，线上自动走网站同域接口。一般不用改。
                     </p>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       <div>
@@ -758,10 +755,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                           onChange={(e) => setAliyunProxyModeState(e.target.value as AliyunProxyMode)}
                           className="w-full bg-white border border-amber-100 rounded-xl px-3 py-2.5 text-sm font-bold"
                         >
-                          <option value="auto">自动（推荐：线上用 Vercel /api/qwen-api）</option>
-                          <option value="same-origin">同域 /api/qwen-api（与自动相同）</option>
-                          <option value="custom">自定义中转地址（额外 Node 代理）</option>
-                          <option value="supabase">仅 Supabase（短测；长任务易 546）</option>
+                          <option value="auto">自动（推荐，勿改）</option>
+                          <option value="same-origin">强制同域接口</option>
+                          <option value="custom">自定义中转（高级）</option>
+                          <option value="supabase">仅 Supabase（不推荐）</option>
                         </select>
                       </div>
                       <div>
@@ -770,7 +767,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                           type="text"
                           value={aliyunProxyBase}
                           onChange={(e) => setAliyunProxyBaseState(e.target.value)}
-                          placeholder="http://服务器IP:8787 或 https://proxy.你的域名"
+                          placeholder="仅「自定义」模式需要填写"
                           className="w-full bg-white border border-amber-100 rounded-xl px-3 py-2.5 text-sm font-bold"
                         />
                       </div>
@@ -781,7 +778,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                         onClick={handleSaveAliyunProxy}
                         className="bg-amber-600 hover:bg-amber-700 text-white px-5 py-2.5 rounded-xl text-xs font-black"
                       >
-                        保存长时中转
+                        保存
                       </button>
                     </div>
                   </div>

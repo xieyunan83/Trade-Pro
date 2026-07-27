@@ -18,6 +18,18 @@ export const isDomesticAliyunUrl = (url: string): boolean =>
   url.includes('/functions/v1/qwen-proxy') ||
   /aliyuncs\.com|dashscope\.aliyun/i.test(url);
 
+export const isSupabaseQwenProxyUrl = (url: string): boolean =>
+  url.includes('/functions/v1/qwen-proxy');
+
+export const isSameOriginQwenProxyUrl = (url: string): boolean =>
+  url.startsWith('/qwen-api') ||
+  url.startsWith('/api/qwen-api') ||
+  (url.includes('/qwen-api/') && !isSupabaseQwenProxyUrl(url));
+
+/** 本地 Vite 或线上 Vercel 同域代理（非 Supabase） */
+export const isAppHostedQwenProxy = (url: string): boolean =>
+  isSameOriginQwenProxyUrl(url) && !isSupabaseQwenProxyUrl(url);
+
 export type QwenProxyVia = 'direct' | 'vite' | 'supabase' | 'custom' | 'vercel';
 export type AliyunProxyMode = 'auto' | 'same-origin' | 'custom' | 'supabase';
 
@@ -45,12 +57,11 @@ export const setAliyunProxyBase = (base: string) => {
   localStorage.setItem(LS_BASE, base.trim().replace(/\/$/, ''));
 };
 
-export const isSupabaseQwenProxyUrl = (url: string): boolean =>
-  url.includes('/functions/v1/qwen-proxy');
-
-/** 线上默认挂载点（Vercel Serverless） */
+/** 线上默认挂载点（Vercel） */
 const prodQwenMount = () => '/api/qwen-api';
 const prodAnymailMount = () => '/api/anymail-api';
+
+export const DEFAULT_TOKEN_PLAN_ORIGIN = 'https://token-plan.cn-beijing.maas.aliyuncs.com';
 
 export function resolveQwenRequestTarget(absoluteOrRelative: string): {
   url: string;
@@ -148,11 +159,8 @@ export function buildAliyunFetchHeaders(opts: {
     if (opts.proxyOrigin) headers['X-Qwen-Origin'] = opts.proxyOrigin;
   } else {
     headers.Authorization = `Bearer ${opts.apiKey}`;
-    if (
-      (opts.targetUrl.includes('/qwen-api') || opts.targetUrl.includes('/api/qwen-api')) &&
-      opts.proxyOrigin
-    ) {
-      headers['X-Qwen-Origin'] = opts.proxyOrigin;
+    if (isAppHostedQwenProxy(opts.targetUrl)) {
+      headers['X-Qwen-Origin'] = opts.proxyOrigin || DEFAULT_TOKEN_PLAN_ORIGIN;
     }
   }
   return headers;
@@ -165,9 +173,7 @@ export function qwenCorsHint(errorMessage?: string): string {
   if (isLocalDevHost()) {
     return ' 本地请确认已 npm run dev（需要 /qwen-api 代理）。';
   }
-  return (
-    ' 线上应走 Vercel /api/qwen-api。若仍失败：① 确认 GitHub 已部署到 Vercel；② Pro 计划可将 api 超时调到 300s；③ 或后台改用自定义中转 npm run proxy:aliyun。'
-  );
+  return ' 线上已走同域代理；若仍失败请稍后重试，或联系管理员检查 Vercel 部署是否成功。';
 }
 
 const ANYMAIL_ORIGIN = 'https://api.anymailfinder.com';

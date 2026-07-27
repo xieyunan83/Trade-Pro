@@ -6,12 +6,14 @@ import { getApiConfig as getSupabaseApiConfig, getAllApiConfigs, isSupabaseConfi
 import {
   buildAliyunFetchHeaders,
   buildAnymailFetchHeaders,
+  isAppHostedQwenProxy,
   isDomesticAliyunUrl,
   isLocalDevHost,
   isSupabaseQwenProxyUrl,
   qwenCorsHint,
   resolveAnymailUrl,
   resolveQwenRequestTarget,
+  DEFAULT_TOKEN_PLAN_ORIGIN,
 } from './qwenProxy';
 import { env, getEmailSearchKeys } from './env';
 
@@ -628,9 +630,7 @@ const callOpenAICompatible = async (
 
                 if (isWorkerLimit(response.status, errText)) {
                     throw new Error(
-                      `云端代理算力不足 (HTTP 546)。Supabase Edge 无法支撑数分钟联网搜索。` +
-                        `请到管理后台「千问长时中转」改为「同域」或「自定义」，并运行：npm run proxy:aliyun` +
-                        `。详情: ${errText.slice(0, 120)}`
+                      `云端代理超时或资源不足 (HTTP 546)。系统会自动降级重试。详情: ${errText.slice(0, 120)}`
                     );
                 }
                 
@@ -827,15 +827,16 @@ const callQwenChat = async (
 ): Promise<string> => {
   const config = await resolveQwenConfig(options.override);
   const viaSupabase = isSupabaseQwenProxyUrl(config.baseUrl);
-  const viaVercel = config.baseUrl.includes('/api/qwen-api');
-  // Supabase Edge 撑不住长任务；Vercel 函数最长约 300s（需 Pro）
+  const viaAppProxy = isAppHostedQwenProxy(config.baseUrl);
+  // 线上 Vercel Edge 约 60s；本地 Vite 可更长
   const rawTimeout =
     options.timeoutMs ||
     (options.task && TASK_TIMEOUT_MS[options.task]) ||
     180_000;
+  // 线上 Vercel Node 最长约 300s；本地 Vite 可更长
   const timeoutMs = viaSupabase
     ? Math.min(rawTimeout, 50_000)
-    : viaVercel
+    : viaAppProxy && !isLocalDevHost()
       ? Math.min(rawTimeout, 280_000)
       : rawTimeout;
   const searchPayload = qwenSearchPayload(!!options.enableSearch, !!options.forcedSearch);
@@ -853,7 +854,12 @@ const callQwenChat = async (
         : 4096;
 
   const runOnce = async (extraPayload: Record<string, unknown> | undefined) => {
-    if (isQwenOpenAICompatible(config.baseUrl) || config.baseUrl.startsWith('/qwen-api')) {
+    if (
+      isQwenOpenAICompatible(config.baseUrl) ||
+      config.baseUrl.startsWith('/qwen-api') ||
+      config.baseUrl.startsWith('/api/qwen-api') ||
+      config.baseUrl.includes('/qwen-api/')
+    ) {
       return callOpenAICompatible(
         {
           id: 'qwen',
@@ -888,8 +894,11 @@ const callQwenChat = async (
     const isTimeout = /超时|timeout|AbortError/i.test(msg);
     const is546 = /546|WORKER_RESOURCE|云端代理算力不足/i.test(msg);
 
-    // Supabase 546 / 超时：降级为不联网再试一次（保证能出结果）
-    if ((is546 || (isTimeout && viaSupabase)) && options.enableSearch) {
+    // 线上代理超时 / 546：降级为不联网再试一次（保证功能可用）
+    const degradeNoSearch =
+      options.enableSearch &&
+      (is546 || (isTimeout && (viaSupabase || (viaAppProxy && !isLocalDevHost()))));
+    if (degradeNoSearch) {
       console.warn('[Qwen] 云端代理受限，降级为不联网重试…');
       try {
         return await runOnce(undefined);
@@ -1559,13 +1568,19 @@ const normalizeQwenBaseUrl = (raw: string): string => {
 const isQwenOpenAICompatible = (baseUrl: string): boolean =>
   baseUrl.includes('/compatible-mode/v1');
 
-/** 开发走 Vite 代理；线上走 Supabase Edge Function，避免 CORS Failed to fetch */
+/** 开发走 Vite；线上走 Vercel /api/qwen-api，始终带上真实阿里云 Origin */
 const toProxiedQwenEndpoint = (normalized: string): { url: string; proxyOrigin?: string } => {
-  if (!isDomesticQwenEndpoint(normalized) || normalized.startsWith('/')) {
+  if (normalized.startsWith('/')) {
+    return { url: normalized, proxyOrigin: DEFAULT_TOKEN_PLAN_ORIGIN };
+  }
+  if (!isDomesticQwenEndpoint(normalized)) {
     return { url: normalized };
   }
   const resolved = resolveQwenRequestTarget(normalized);
-  return { url: resolved.url, proxyOrigin: resolved.proxyOrigin };
+  return {
+    url: resolved.url,
+    proxyOrigin: resolved.proxyOrigin || DEFAULT_TOKEN_PLAN_ORIGIN,
+  };
 };
 
 const effectiveQwenBaseUrl = (normalized: string): string => toProxiedQwenEndpoint(normalized).url;

@@ -1,8 +1,10 @@
 /**
- * Vercel Serverless：同域转发阿里云 Token Plan / DashScope
- * 浏览器 → /api/qwen-api/... → 阿里云（无 CORS，可长超时）
+ * Vercel Serverless（Node）：同域转发阿里云
+ * 浏览器 → /api/qwen-api/... → Token Plan / DashScope
+ * Hobby + Fluid 最长约 300s，足以跑联网搜索
  */
 export const config = {
+  runtime: 'nodejs',
   maxDuration: 300,
   api: {
     bodyParser: {
@@ -13,7 +15,7 @@ export const config = {
 
 const FALLBACK = 'https://token-plan.cn-beijing.maas.aliyuncs.com';
 
-const cors = (res: any) => {
+const applyCors = (res: { setHeader: (k: string, v: string) => void }) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader(
     'Access-Control-Allow-Headers',
@@ -22,8 +24,24 @@ const cors = (res: any) => {
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
 };
 
+const readBody = (req: {
+  method?: string;
+  body?: unknown;
+}): string | undefined => {
+  if (req.method === 'GET' || req.method === 'HEAD') return undefined;
+  const b = req.body;
+  if (b == null || b === '') return undefined;
+  if (typeof b === 'string') return b;
+  if (typeof Buffer !== 'undefined' && Buffer.isBuffer(b)) return b.toString('utf8');
+  try {
+    return JSON.stringify(b);
+  } catch {
+    return String(b);
+  }
+};
+
 export default async function handler(req: any, res: any) {
-  cors(res);
+  applyCors(res);
   if (req.method === 'OPTIONS') {
     res.status(204).end();
     return;
@@ -40,10 +58,10 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    const parts = req.query.path;
+    const parts = req.query?.path;
     const suffix = Array.isArray(parts) ? parts.join('/') : parts ? String(parts) : '';
-    const target = new URL(suffix ? `/${suffix}` : '/', origin + '/');
-    // 保留 query（除 path）
+    const target = new URL(suffix ? `/${suffix}` : '/compatible-mode/v1/chat/completions', origin + '/');
+
     const q = new URLSearchParams();
     for (const [k, v] of Object.entries(req.query || {})) {
       if (k === 'path') continue;
@@ -51,31 +69,34 @@ export default async function handler(req: any, res: any) {
       else if (v != null) q.set(k, String(v));
     }
     const qs = q.toString();
-    if (qs) {
-      target.search = qs;
-    }
+    if (qs) target.search = qs;
 
-    const headers: Record<string, string> = {
-      'Content-Type': (req.headers['content-type'] as string) || 'application/json',
-    };
+    const headers: Record<string, string> = {};
+    const ct = req.headers['content-type'];
+    if (ct) headers['Content-Type'] = String(ct);
+    else if (req.method !== 'GET' && req.method !== 'HEAD') {
+      headers['Content-Type'] = 'application/json';
+    }
     const auth = req.headers.authorization || req.headers['x-upstream-authorization'];
     if (auth) headers.Authorization = String(auth);
 
+    const body = readBody(req);
     const upstream = await fetch(target.toString(), {
       method: req.method || 'POST',
       headers,
-      body: req.method === 'GET' || req.method === 'HEAD' ? undefined : JSON.stringify(req.body ?? {}),
+      body,
     });
 
     const text = await upstream.text();
+    applyCors(res);
     res.status(upstream.status);
     res.setHeader('X-Proxied-To', target.origin);
-    const ct = upstream.headers.get('content-type');
-    if (ct) res.setHeader('Content-Type', ct);
-    cors(res);
+    res.setHeader('Cache-Control', 'no-store');
+    const uct = upstream.headers.get('content-type');
+    if (uct) res.setHeader('Content-Type', uct);
     res.send(text);
   } catch (e: any) {
-    cors(res);
+    applyCors(res);
     res.status(502).json({ error: e?.message || String(e) });
   }
 }
