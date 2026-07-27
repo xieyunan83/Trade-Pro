@@ -21,7 +21,7 @@ import { ModuleImageGenerator } from './components/ModuleImageGenerator';
 import { ClientFinder } from './components/ClientFinder';
 import { RecordsPanel, archiveToDiscoveryState } from './components/RecordsPanel';
 import { Login } from './components/Login';
-import { loadUsersWithMigration, saveUsersToStorage } from './services/auth';
+import { loadUsersWithMigration, saveUsersToStorage, getUsersUpdatedAt } from './services/auth';
 import { AdminDashboard } from './components/AdminDashboard';
 import { 
   LayoutDashboard, PackageSearch, Users, PenTool, Network, Search, Loader2, Menu, Globe, Zap, FileSpreadsheet, History, Clock, ChevronRight, AlertTriangle, RefreshCw, LogOut, Briefcase, Ruler, CheckCircle2, Hourglass, StopCircle, PlayCircle, Layers, Mail, Cloud, Download, Info, Link2, X, Database, Github, Image
@@ -427,7 +427,8 @@ const App: React.FC = () => {
 
   useEffect(() => {
       if (users.length > 0) {
-          saveUsersToStorage(users);
+          // 保持本地缓存；不 bump 时间戳，避免覆盖云端较新账号
+          saveUsersToStorage(users, getUsersUpdatedAt() || Date.now());
       }
   }, [users]);
 

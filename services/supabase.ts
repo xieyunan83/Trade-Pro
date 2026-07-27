@@ -138,6 +138,9 @@ export const getApiConfig = async (provider: string): Promise<ApiConfig | null> 
   }
 }
 
+/** 内部用：账号密码云端同步（勿当普通 API 展示） */
+export const APP_USERS_PROVIDER = '__app_users__'
+
 export const getAllApiConfigs = async (): Promise<ApiConfig[]> => {
   if (!isSupabaseConfigured()) return []
   try {
@@ -147,15 +150,73 @@ export const getAllApiConfigs = async (): Promise<ApiConfig[]> => {
     
     if (error || !data) return []
     
-    return data.map(d => ({
-      provider: d.provider,
-      apiKey: decrypt(d.encrypted_key),
-      baseUrl: d.base_url,
-      modelId: d.model_id
-    }))
+    return data
+      .filter((d) => d.provider !== APP_USERS_PROVIDER)
+      .map(d => ({
+        provider: d.provider,
+        apiKey: decrypt(d.encrypted_key),
+        baseUrl: d.base_url,
+        modelId: d.model_id
+      }))
   } catch (error) {
     console.error('读取所有API配置失败:', error)
     return []
+  }
+}
+
+export type CloudUsersBundle = { users: import('../types').User[]; updatedAt: number }
+
+/** 拉取云端用户账号（手机/电脑共用同一份） */
+export const fetchAppUsersFromCloud = async (): Promise<CloudUsersBundle | null> => {
+  if (!isSupabaseConfigured()) return null
+  try {
+    const { data, error } = await supabase
+      .from('api_configs')
+      .select('*')
+      .eq('user_id', 'default')
+      .eq('provider', APP_USERS_PROVIDER)
+      .maybeSingle()
+
+    if (error || !data?.encrypted_key) return null
+    const raw = decrypt(data.encrypted_key)
+    const parsed = JSON.parse(raw)
+    const users = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.users) ? parsed.users : null
+    if (!users?.length) return null
+    const updatedAt = Number(data.model_id) || Number(parsed?.updatedAt) || 0
+    return { users, updatedAt }
+  } catch (e) {
+    console.warn('拉取云端用户失败', e)
+    return null
+  }
+}
+
+/** 保存用户账号到云端，使手机端与电脑端密码一致 */
+export const saveAppUsersToCloud = async (
+  users: import('../types').User[],
+  updatedAt: number = Date.now()
+): Promise<boolean> => {
+  if (!isSupabaseConfigured() || !users.length) return false
+  try {
+    const payload = JSON.stringify({ users, updatedAt })
+    const { error } = await supabase
+      .from('api_configs')
+      .upsert(
+        {
+          user_id: 'default',
+          provider: APP_USERS_PROVIDER,
+          encrypted_key: encrypt(payload),
+          base_url: null,
+          model_id: String(updatedAt),
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id,provider' }
+      )
+    if (error) throw error
+    console.log('✅ 用户账号已同步到云端')
+    return true
+  } catch (e) {
+    console.error('保存云端用户失败', e)
+    return false
   }
 }
 

@@ -12,7 +12,7 @@ import { testApiKey, testQwenApiKey } from '../services/geminiService';
 import { testWanImageApi } from '../services/wanImageService';
 import { saveApiConfig, getApiConfig, isSupabaseConfigured, saveKnowledgeFile, getKnowledgeFiles, deleteKnowledgeFile, resetSupabaseClient, testSupabaseConnection } from '../services/supabase';
 import { getSupabaseConfig, saveSupabaseConfig, clearSupabaseOverride, saveEmailSearchKeys, getEmailSearchKeys, env } from '../services/env';
-import { hashPassword, saveUsersToStorage, findUserByName, updateUserPassword } from '../services/auth';
+import { hashPassword, persistUsers, findUserByName, updateUserPassword } from '../services/auth';
 
 type AdminTab = 'api' | 'users' | 'kb';
 
@@ -380,12 +380,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     setLocalApiConfigs(next);
   };
 
-  const handleDeleteUser = (username: string) => {
+  const handleDeleteUser = async (username: string) => {
     if (username === 'admin') return;
     if (confirm(`确定要删除用户 ${username} 吗？`)) {
       const next = users.filter(u => u.username !== username);
       setUsers(next);
-      saveUsersToStorage(next);
+      await persistUsers(next);
     }
   };
 
@@ -411,8 +411,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     };
     const next = [...users, newUser];
     setUsers(next);
-    saveUsersToStorage(next);
-    alert(`用户 ${trimmed} 已创建，请使用刚设置的密码登录`);
+    await persistUsers(next);
+    alert(`用户 ${trimmed} 已创建，请使用刚设置的密码登录（已同步云端，手机/电脑通用）`);
   };
 
   const handleResetPassword = async (username: string) => {
@@ -424,8 +424,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     const hashed = await hashPassword(pwd);
     const next = updateUserPassword(users, username, hashed);
     setUsers(next);
-    saveUsersToStorage(next);
-    alert(`已重置 ${username} 的密码，请用新密码登录`);
+    await persistUsers(next);
+    alert(`已重置 ${username} 的密码并同步到云端，手机与电脑请用同一新密码登录`);
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {

@@ -98,4 +98,7 @@ DROP POLICY IF EXISTS "crm_clients_all" ON crm_clients;
 CREATE POLICY "crm_clients_all" ON crm_clients
   FOR ALL USING (true) WITH CHECK (true);
 
--- Storage：Dashboard → Storage 新建 public bucket 名称 knowledge-files（可选）
+-- ==================== 应用用户账号（可选；当前实现复用 api_configs.__app_users__） ====================
+-- 手机端与电脑端共用同一套账号密码。若要用独立表，可执行下方 SQL；
+-- 现有代码已通过 api_configs 的 provider=__app_users__ 同步，无需必须建表。
+
