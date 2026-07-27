@@ -8,7 +8,7 @@ import {
   Youtube, Music, Video, FileSpreadsheet, FilePieChart, FileCode, Image, Mail
 } from 'lucide-react';
 import { getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/db';
-import { testApiKey, testQwenApiKey } from '../services/geminiService';
+import { testApiKey, testQwenApiKey, testAnymailFinderApiKey } from '../services/geminiService';
 import { testWanImageApi } from '../services/wanImageService';
 import { saveApiConfig, getApiConfig, isSupabaseConfigured, saveKnowledgeFile, getKnowledgeFiles, deleteKnowledgeFile, resetSupabaseClient, testSupabaseConnection } from '../services/supabase';
 import { getSupabaseConfig, saveSupabaseConfig, clearSupabaseOverride, saveEmailSearchKeys, getEmailSearchKeys, env } from '../services/env';
@@ -76,6 +76,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const [testingApiId, setTestingApiId] = useState<string | null>(null);
   const [isTestingQwen, setIsTestingQwen] = useState(false);
   const [isTestingWan, setIsTestingWan] = useState(false);
+  const [isTestingAnymail, setIsTestingAnymail] = useState(false);
   const [ytLink, setYtLink] = useState('');
   const [isUploading, setIsUploading] = useState(false);
 
@@ -332,6 +333,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
       alert(result.message);
     } finally {
       setIsTestingWan(false);
+    }
+  };
+
+  const handleTestAnymail = async () => {
+    if (!anymailFinderApiKey.trim()) {
+      alert('请先填写 AnymailFinder API Key');
+      return;
+    }
+    localStorage.setItem('trade_scout_anymail_finder_api_key', anymailFinderApiKey.trim());
+    setIsTestingAnymail(true);
+    try {
+      const result = await testAnymailFinderApiKey(anymailFinderApiKey.trim());
+      alert(result.message);
+    } finally {
+      setIsTestingAnymail(false);
     }
   };
 
@@ -703,7 +719,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                         className="w-full bg-white border border-emerald-100 rounded-xl px-4 py-3 font-bold text-sm"
                       />
                       <p className="text-[10px] text-slate-400 font-bold mt-2">
-                        必须完整填到 /compatible-mode/v1。Key 用 sk-sp-（Token Plan）。本地用 Vite 代理；线上（babyworld.ltd）需部署 Supabase Edge Function「qwen-proxy」，否则浏览器会被 CORS 拦截出现 Failed to fetch。
+                        必须完整填到 /compatible-mode/v1，Key 用 sk-sp-。本地若报 ENOTFOUND：把电脑 DNS 改为 223.5.5.5 后重启 npm run dev。线上需部署 qwen-proxy；Dashboard 若没有 Maximum duration 可忽略（免费版常没有此项）。
                       </p>
                     </div>
                   </div>
@@ -785,11 +801,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     <Mail size={16} /> 第三方邮箱搜索 API
                   </div>
                   <p className="text-[10px] text-slate-400 font-bold">
-                    背调时用于 enrich 决策人真实邮箱。配置后深度调查会自动调用 Hunter.io、Findymail、AnymailFinder。
+                    决策人邮箱默认优先使用 <span className="text-violet-700">AnymailFinder</span> 查找并校验；Hunter / Findymail 作为补充。结果页会标注邮箱来源与是否已验证。
                   </p>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="md:col-span-2">
-                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Hunter.io API Key</label>
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Hunter.io API Key（可选补充）</label>
                       <input
                         type="password"
                         value={hunterApiKey}
@@ -799,7 +815,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                       />
                     </div>
                     <div>
-                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Findymail API Key</label>
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Findymail API Key（可选补充）</label>
                       <input
                         type="password"
                         value={findymailApiKey}
@@ -809,7 +825,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                       />
                     </div>
                     <div>
-                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">AnymailFinder API Key</label>
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">AnymailFinder API Key（主用）</label>
                       <input
                         type="password"
                         value={anymailFinderApiKey}
@@ -818,6 +834,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                         className="w-full bg-white border border-violet-100 rounded-xl px-4 py-3 font-bold text-sm"
                       />
                     </div>
+                  </div>
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={handleTestAnymail}
+                      disabled={isTestingAnymail}
+                      className="bg-violet-600 hover:bg-violet-700 text-white px-6 py-3 rounded-xl font-black flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      {isTestingAnymail ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} fill="currentColor" />}
+                      测试 AnymailFinder
+                    </button>
                   </div>
                 </div>
 

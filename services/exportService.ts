@@ -105,7 +105,9 @@ export const exportContactsToExcel = (contacts: DecisionMaker[], companyName: st
         Title: c.title,
         Email: c.emailGuess || '',
         Type: c.type,
-        Source: c.source,
+        ContactSource: c.source,
+        EmailSource: c.emailSource || c.source || '',
+        EmailStatus: c.emailStatus || (c.isVerified ? 'valid' : 'unverified'),
         Verified: c.isVerified ? 'Yes' : 'No',
         LinkedIn: c.linkedin || ''
     }));
@@ -648,7 +650,7 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
             { text: sanitize(dm.title) },
             { text: sanitize(dm.emailGuess || "待补充") },
             { text: sanitize(dm.type) },
-            { text: sanitize(`${dm.source}${dm.isVerified ? ' ✓' : ''}`) },
+            { text: sanitize(`${dm.emailSource || dm.source} / ${dm.emailStatus || (dm.isVerified ? 'valid' : '未验证')}${dm.isVerified ? ' ✓' : ''}`) },
             { text: sanitize(dm.linkedin || "—") },
         ]);
 

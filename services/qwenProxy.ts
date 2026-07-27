@@ -99,3 +99,40 @@ export function qwenCorsHint(errorMessage?: string): string {
     '（见仓库 supabase/functions/qwen-proxy）。'
   );
 }
+
+const ANYMAIL_ORIGIN = 'https://api.anymailfinder.com';
+
+/** Anymail Finder：本地 /anymail-api，线上复用 qwen-proxy + X-Qwen-Origin */
+export function resolveAnymailUrl(path: string): { url: string; via: QwenProxyVia } {
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  if (isLocalDevHost()) {
+    return { url: `/anymail-api${cleanPath}`, via: 'vite' };
+  }
+  if (isSupabaseConfigured()) {
+    const { url: sb } = getSupabaseConfig();
+    return {
+      url: `${sb.replace(/\/$/, '')}/functions/v1/qwen-proxy${cleanPath}`,
+      via: 'supabase',
+    };
+  }
+  return { url: `${ANYMAIL_ORIGIN}${cleanPath}`, via: 'direct' };
+}
+
+/** Anymail 官方文档：Authorization 放原始 API Key（通常不加 Bearer） */
+export function buildAnymailFetchHeaders(apiKey: string, targetUrl: string): Record<string, string> {
+  const rawKey = apiKey.replace(/^Bearer\s+/i, '').trim();
+  if (targetUrl.includes('/functions/v1/qwen-proxy')) {
+    const { key } = getSupabaseConfig();
+    return {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${key}`,
+      apikey: key,
+      'X-Upstream-Authorization': rawKey,
+      'X-Qwen-Origin': ANYMAIL_ORIGIN,
+    };
+  }
+  return {
+    'Content-Type': 'application/json',
+    Authorization: rawKey,
+  };
+}

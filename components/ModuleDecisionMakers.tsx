@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { AnalysisResult, DecisionMaker } from '../types';
-import { Users, Linkedin, Mail, Phone, ExternalLink, UserCheck, AlertTriangle, Download, Briefcase } from 'lucide-react';
+import { Users, Linkedin, Mail, Phone, ExternalLink, UserCheck, AlertTriangle, Download, Briefcase, ShieldCheck, ShieldAlert } from 'lucide-react';
 import { exportContactsToExcel } from '../services/exportService';
 
 interface ModuleDecisionMakersProps {
@@ -22,7 +22,14 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({ data
 
   const handleEmailChange = (index: number, newEmail: string) => {
     const next = [...decisionMakers];
-    next[index] = { ...next[index], emailGuess: newEmail, source: 'Manual', isVerified: true };
+    next[index] = {
+      ...next[index],
+      emailGuess: newEmail,
+      source: 'Manual',
+      emailSource: 'Manual',
+      emailStatus: 'unverified',
+      isVerified: false,
+    };
     commit(next);
   };
 
@@ -38,7 +45,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({ data
               <Users className="text-blue-600" /> 关键决策人挖掘
             </h3>
             <p className="text-sm text-slate-500 font-medium mt-1">
-              优先展示采购 /  sourcing / 高管。邮箱经 Hunter / Findymail / Anymail 交叉验证时标记「已验证」。
+              邮箱优先由 AnymailFinder 查找并二次校验；卡片会标明「邮箱来源平台」与「是否已验证」。
             </p>
           </div>
           <button
@@ -66,7 +73,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({ data
         
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
           {decisionMakers.length === 0 ? (
-            <div className="col-span-full py-12 text-center text-slate-400 font-bold">未找到决策人，请确认目标网站有效或配置邮箱搜索 API</div>
+            <div className="col-span-full py-12 text-center text-slate-400 font-bold">未找到决策人，请确认目标网站有效或配置 AnymailFinder API</div>
           ) : decisionMakers.map((dm, i) => (
             <DecisionMakerCard key={`${dm.name}-${i}`} dm={dm} index={i} onEmailChange={handleEmailChange} />
           ))}
@@ -82,9 +89,20 @@ const typeBadge = (type: DecisionMaker['type']) => {
   return 'bg-slate-200 text-slate-600';
 };
 
+const statusLabel = (dm: DecisionMaker) => {
+  const s = (dm.emailStatus || (dm.isVerified ? 'valid' : 'unverified')).toLowerCase();
+  if (s === 'valid' || dm.isVerified) return { text: '已验证 · valid', ok: true };
+  if (s === 'risky') return { text: '风险 · risky（未完全确认）', ok: false };
+  if (s === 'invalid') return { text: '无效 · invalid', ok: false };
+  if (s === 'not_found') return { text: '未找到', ok: false };
+  return { text: '未验证', ok: false };
+};
+
 const DecisionMakerCard: React.FC<{ dm: DecisionMaker; index: number; onEmailChange: (i: number, e: string) => void }> = ({ dm, index, onEmailChange }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [email, setEmail] = useState(dm.emailGuess || '');
+  const emailPlatform = dm.emailSource || dm.source || '未知';
+  const verify = statusLabel(dm);
 
   useEffect(() => { setEmail(dm.emailGuess || ''); }, [dm.emailGuess]);
 
@@ -103,7 +121,7 @@ const DecisionMakerCard: React.FC<{ dm: DecisionMaker; index: number; onEmailCha
         </div>
         <div className="flex flex-col items-end gap-2 flex-shrink-0">
           <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black ${typeBadge(dm.type)}`}>{dm.type}</span>
-          {dm.isVerified ? (
+          {verify.ok ? (
             <div className="bg-green-100 text-green-600 p-1.5 rounded-lg" title="已验证"><UserCheck size={16} /></div>
           ) : (
             <div className="bg-yellow-100 text-yellow-600 p-1.5 rounded-lg" title="待验证"><AlertTriangle size={16} /></div>
@@ -138,6 +156,24 @@ const DecisionMakerCard: React.FC<{ dm: DecisionMaker; index: number; onEmailCha
           </div>
         </div>
 
+        {/* 邮箱来源 + 验证状态 */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-violet-50 border border-violet-100">
+            <Mail size={12} className="text-violet-500 flex-shrink-0" />
+            <div className="min-w-0">
+              <div className="text-[9px] font-black text-violet-400 uppercase">邮箱来源平台</div>
+              <div className="text-[11px] font-black text-violet-800 truncate">{email ? emailPlatform : '—'}</div>
+            </div>
+          </div>
+          <div className={`flex items-center gap-2 px-3 py-2 rounded-xl border ${verify.ok ? 'bg-emerald-50 border-emerald-100' : 'bg-amber-50 border-amber-100'}`}>
+            {verify.ok ? <ShieldCheck size={12} className="text-emerald-600 flex-shrink-0" /> : <ShieldAlert size={12} className="text-amber-600 flex-shrink-0" />}
+            <div className="min-w-0">
+              <div className={`text-[9px] font-black uppercase ${verify.ok ? 'text-emerald-500' : 'text-amber-500'}`}>验证状态</div>
+              <div className={`text-[11px] font-black truncate ${verify.ok ? 'text-emerald-800' : 'text-amber-800'}`}>{email ? verify.text : '—'}</div>
+            </div>
+          </div>
+        </div>
+
         {dm.phone && (
           <div className="flex items-center gap-2 p-3 bg-white rounded-xl border border-slate-100 text-xs font-bold text-slate-600">
             <Phone size={14} className="text-slate-400" /> {dm.phone}
@@ -166,7 +202,7 @@ const DecisionMakerCard: React.FC<{ dm: DecisionMaker; index: number; onEmailCha
       
       <div className="mt-4 flex items-center justify-between gap-2">
         <div className="text-[10px] font-black text-slate-400 uppercase tracking-tighter truncate">
-          来源: {dm.source}{dm.yearsActive ? ` · ${dm.yearsActive}` : ''}
+          联系人来源: {dm.source}{dm.yearsActive ? ` · ${dm.yearsActive}` : ''}
           {dm.influenceScore ? ` · 影响力 ${dm.influenceScore}/5` : ''}
         </div>
         {typeof dm.confidence === 'number' && (

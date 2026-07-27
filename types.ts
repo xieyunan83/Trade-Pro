@@ -102,7 +102,12 @@ export interface DecisionMaker {
   phone?: string;
   linkedin?: string;
   type: 'CEO' | 'Buyer' | 'Other';
+  /** 联系人发现来源（AI / 平台域名搜索等） */
   source: 'AI' | 'AI (Pattern Guess)' | 'Hunter.io' | 'Findymail' | 'AnymailFinder' | 'Manual';
+  /** 邮箱具体来自哪个平台（展示用） */
+  emailSource?: 'AnymailFinder' | 'Hunter.io' | 'Findymail' | 'AI (Pattern Guess)' | 'Manual' | string;
+  /** Anymail / 平台返回的校验状态 */
+  emailStatus?: 'valid' | 'risky' | 'invalid' | 'not_found' | 'unverified' | string;
   isVerified: boolean;
   confidence?: number;
   /** 采购决策权重 1-5，Buyer/CEO 通常更高 */

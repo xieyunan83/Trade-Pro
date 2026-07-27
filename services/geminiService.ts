@@ -5,9 +5,11 @@ import { getAllFilesFromDB } from "./db";
 import { getApiConfig as getSupabaseApiConfig, getAllApiConfigs, isSupabaseConfigured } from './supabase';
 import {
   buildAliyunFetchHeaders,
+  buildAnymailFetchHeaders,
   isDomesticAliyunUrl,
   isLocalDevHost,
   qwenCorsHint,
+  resolveAnymailUrl,
   resolveQwenRequestTarget,
 } from './qwenProxy';
 import { env, getEmailSearchKeys } from './env';
@@ -217,56 +219,231 @@ const rankDecisionMakers = (list: DecisionMaker[]): DecisionMaker[] => {
   });
 };
 
-const fetchAnymailFinder = async (domain: string): Promise<DecisionMaker[]> => {
-    const ANYMAIL_FINDER_API_KEY = getEmailSearchKeys().anymailFinder;
-    if (!domain || !ANYMAIL_FINDER_API_KEY) return [];
+const anymailFetch = async (path: string, apiKey: string, body: unknown): Promise<Response> => {
+  const { url } = resolveAnymailUrl(path);
+  return fetch(url, {
+    method: 'POST',
+    headers: buildAnymailFetchHeaders(apiKey, url),
+    body: JSON.stringify(body),
+  });
+};
+
+type AnymailFindResult = {
+  email: string;
+  emailStatus: string;
+  isVerified: boolean;
+  confidence?: number;
+};
+
+/** 用 Anymail Finder 按姓名+域名查找邮箱 */
+const findEmailWithAnymail = async (
+  name: string,
+  domain: string,
+  opts?: { firstName?: string; lastName?: string; linkedin?: string }
+): Promise<AnymailFindResult | null> => {
+  const apiKey = getEmailSearchKeys().anymailFinder;
+  if (!apiKey || !domain || (!name && !opts?.firstName && !opts?.linkedin)) return null;
+  try {
+    const body: Record<string, string> = { domain: cleanDomain(domain) };
+    if (opts?.firstName) body.first_name = opts.firstName;
+    if (opts?.lastName) body.last_name = opts.lastName;
+    if (name) body.full_name = name;
+    if (opts?.linkedin) body.linkedin_url = opts.linkedin;
+
+    const response = await anymailFetch('/v5.1/find-email/person', apiKey, body);
+    if (!response.ok) {
+      const errText = await response.text().catch(() => '');
+      console.warn('Anymail person find failed', response.status, errText.slice(0, 200));
+      return null;
+    }
+    const data = await response.json();
+    const email = data.valid_email || data.email;
+    if (!email) return null;
+    const emailStatus = String(data.email_status || 'unverified').toLowerCase();
+    return {
+      email,
+      emailStatus,
+      isVerified: emailStatus === 'valid',
+      confidence: emailStatus === 'valid' ? 0.95 : emailStatus === 'risky' ? 0.6 : 0.3,
+    };
+  } catch (e) {
+    console.error('Anymail person find error', e);
+    return null;
+  }
+};
+
+/** 验证邮箱（Anymail Finder verify-email） */
+const verifyEmailWithAnymail = async (
+  email: string
+): Promise<{ emailStatus: string; isVerified: boolean } | null> => {
+  const apiKey = getEmailSearchKeys().anymailFinder;
+  if (!apiKey || !email?.includes('@')) return null;
+  try {
+    const response = await anymailFetch('/v5.1/verify-email', apiKey, { email: email.trim() });
+    if (!response.ok) {
+      console.warn('Anymail verify failed', response.status);
+      return null;
+    }
+    const data = await response.json();
+    const emailStatus = String(data.email_status || 'unverified').toLowerCase();
+    return { emailStatus, isVerified: emailStatus === 'valid' };
+  } catch (e) {
+    console.error('Anymail verify error', e);
+    return null;
+  }
+};
+
+/** 按决策人角色从公司挖邮箱（采购/CEO 等） */
+const fetchAnymailDecisionMakers = async (domain: string): Promise<DecisionMaker[]> => {
+  const apiKey = getEmailSearchKeys().anymailFinder;
+  if (!domain || !apiKey) return [];
+  const categories = ['procurement', 'ceo', 'founder', 'sales'];
+  const people: DecisionMaker[] = [];
+
+  for (const category of categories) {
     try {
-        const response = await fetch(`https://api.anymailfinder.com/v5.0/search/company.json`, {
-            method: 'POST',
-            headers: { 'X-Api-Key': ANYMAIL_FINDER_API_KEY, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ domain: cleanDomain(domain), email_type: 'all' })
-        });
-        if (!response.ok) {
-            // fallback older endpoint shape
-            const legacy = await fetch(`https://api.anymailfinder.com/v1.0/search/company.json`, {
-                method: 'POST',
-                headers: { 'X-Api-Key': ANYMAIL_FINDER_API_KEY, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ domain: cleanDomain(domain) })
-            });
-            if (!legacy.ok) return [];
-            const legacyData = await legacy.json();
-            const emails = legacyData?.emails || legacyData?.results || [];
-            if (!Array.isArray(emails)) return [];
-            return emails.slice(0, 20).map((e: any) => ({
-                name: e.name || [e.first_name, e.last_name].filter(Boolean).join(' ') || 'Contact',
-                firstName: e.first_name,
-                lastName: e.last_name,
-                title: e.title || e.job_title || 'Manager',
-                emailGuess: e.email || e.value,
-                linkedin: e.linkedin || e.linkedin_url,
-                type: classifyDecisionMakerType(e.title || e.job_title || ''),
-                source: 'AnymailFinder' as const,
-                isVerified: !!(e.valid || e.verified || e.confidence > 0.8),
-                confidence: typeof e.confidence === 'number' ? e.confidence : undefined,
-            }));
-        }
-        const data = await response.json();
-        const emails = data?.emails || data?.results || data?.all_emails || [];
-        if (!Array.isArray(emails)) return [];
-        return emails.slice(0, 20).map((e: any) => ({
-            name: e.name || [e.first_name, e.last_name].filter(Boolean).join(' ') || 'Contact',
-            firstName: e.first_name,
-            lastName: e.last_name,
-            title: e.title || e.job_title || 'Manager',
-            emailGuess: e.email || e.value,
-            linkedin: e.linkedin || e.linkedin_url,
-            type: classifyDecisionMakerType(e.title || e.job_title || ''),
-            source: 'AnymailFinder' as const,
-            isVerified: !!(e.valid || e.verified),
-            confidence: typeof e.confidence === 'number' ? e.confidence : undefined,
-        }));
-    } catch (e) { console.error("Anymail Finder Error", e); }
-    return [];
+      const response = await anymailFetch('/v5.1/find-email/decision-maker', apiKey, {
+        domain: cleanDomain(domain),
+        decision_maker_category: [category],
+      });
+      if (!response.ok) continue;
+      const data = await response.json();
+      const email = data.valid_email || data.email;
+      if (!email) continue;
+      const emailStatus = String(data.email_status || 'unverified').toLowerCase();
+      const title = data.person_job_title || category;
+      const name = data.person_full_name || 'Decision Maker';
+      people.push({
+        name,
+        title,
+        linkedin: data.linkedin_url || undefined,
+        emailGuess: email,
+        type: classifyDecisionMakerType(title),
+        source: 'AnymailFinder',
+        emailSource: 'AnymailFinder',
+        emailStatus,
+        isVerified: emailStatus === 'valid',
+        confidence: emailStatus === 'valid' ? 0.95 : 0.55,
+        influenceScore: /procurement|buyer|purchasing/i.test(category) ? 5 : /ceo|founder/i.test(category) ? 5 : 3,
+      });
+    } catch (e) {
+      console.warn('Anymail decision-maker error', category, e);
+    }
+  }
+  return people;
+};
+
+const fetchAnymailFinder = async (domain: string): Promise<DecisionMaker[]> => {
+  const apiKey = getEmailSearchKeys().anymailFinder;
+  if (!domain || !apiKey) return [];
+  try {
+    const byRole = await fetchAnymailDecisionMakers(domain);
+    if (byRole.length) return byRole;
+
+    const response = await anymailFetch('/v5.1/find-email/company', apiKey, {
+      domain: cleanDomain(domain),
+      email_type: 'any',
+    });
+    if (!response.ok) {
+      const legacy = await anymailFetch('/v5.0/search/company.json', apiKey, {
+        domain: cleanDomain(domain),
+        email_type: 'all',
+      });
+      if (!legacy.ok) return [];
+      const legacyData = await legacy.json();
+      const emails = legacyData?.emails || legacyData?.results || [];
+      if (!Array.isArray(emails)) return [];
+      return emails.slice(0, 20).map((e: any) => {
+        const email = typeof e === 'string' ? e : e.email || e.value;
+        const title = typeof e === 'string' ? 'Manager' : e.title || e.job_title || 'Manager';
+        const emailStatus = typeof e === 'string' ? 'valid' : String(e.email_status || (e.valid ? 'valid' : 'unverified'));
+        return {
+          name: typeof e === 'string' ? email.split('@')[0] : e.name || [e.first_name, e.last_name].filter(Boolean).join(' ') || 'Contact',
+          firstName: typeof e === 'object' ? e.first_name : undefined,
+          lastName: typeof e === 'object' ? e.last_name : undefined,
+          title,
+          emailGuess: email,
+          linkedin: typeof e === 'object' ? e.linkedin || e.linkedin_url : undefined,
+          type: classifyDecisionMakerType(title),
+          source: 'AnymailFinder' as const,
+          emailSource: 'AnymailFinder',
+          emailStatus,
+          isVerified: emailStatus === 'valid',
+        };
+      });
+    }
+
+    const data = await response.json();
+    const emailStatus = String(data.email_status || 'unverified').toLowerCase();
+    const list: string[] = data.valid_emails?.length
+      ? data.valid_emails
+      : Array.isArray(data.emails)
+        ? data.emails
+        : [];
+    return list.slice(0, 20).map((email: string) => ({
+      name: String(email).split('@')[0] || 'Contact',
+      title: 'Company Contact',
+      emailGuess: email,
+      type: 'Other' as const,
+      source: 'AnymailFinder' as const,
+      emailSource: 'AnymailFinder',
+      emailStatus,
+      isVerified: emailStatus === 'valid',
+      confidence: emailStatus === 'valid' ? 0.9 : 0.5,
+      influenceScore: 2,
+    }));
+  } catch (e) {
+    console.error('Anymail Finder Error', e);
+  }
+  return [];
+};
+
+/** 后台测试 Anymail Finder Key 是否可用 */
+export const testAnymailFinderApiKey = async (
+  apiKey: string
+): Promise<{ success: boolean; message: string }> => {
+  const key = (apiKey || '').replace(/^Bearer\s+/i, '').trim();
+  if (!key) return { success: false, message: '请先填写 AnymailFinder API Key' };
+  try {
+    const response = await anymailFetch('/v5.1/verify-email', key, {
+      email: 'connection-test@example.com',
+    });
+    const text = await response.text();
+    let data: any = {};
+    try {
+      data = JSON.parse(text);
+    } catch {
+      /* ignore */
+    }
+    if (response.status === 401 || response.status === 403) {
+      return { success: false, message: `鉴权失败 (${response.status})：Key 无效或权限不足` };
+    }
+    if (response.status === 402) {
+      return { success: true, message: 'AnymailFinder Key 有效 ✅（账户额度不足/需充值，但鉴权已通过）' };
+    }
+    if (!response.ok) {
+      return {
+        success: false,
+        message: `测试失败 HTTP ${response.status}: ${(data?.error || data?.message || text).toString().slice(0, 160)}`,
+      };
+    }
+    const status = data.email_status || 'ok';
+    return {
+      success: true,
+      message: `AnymailFinder 连接成功 ✅（verify-email 返回 status=${status}）`,
+    };
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    const hint = /Failed to fetch|NetworkError/i.test(msg)
+      ? isLocalDevHost()
+        ? ' 请重启 npm run dev（需要 /anymail-api 代理），然后强制刷新页面再测。'
+        : ' 线上需已部署 qwen-proxy Edge Function（Anymail 复用该代理）。'
+      : '';
+    return {
+      success: false,
+      message: `AnymailFinder 测试失败: ${msg}.${hint}`,
+    };
+  }
 };
 
 // --- API Configuration ---
@@ -1047,64 +1224,134 @@ export const analyzeCompany = async (domainOrName: string, mode: 'detailed' | 'e
     similarCompanies: Array.isArray(aiResult.similarCompanies) ? aiResult.similarCompanies : []
   };
 
-  // 2. External Enrichment (Email Hunting)
+  // 2. External Enrichment — 决策人邮箱以 Anymail Finder 为主，查找后强制校验
   const targetDomain = result.companyInfo.website !== 'N/A' ? result.companyInfo.website : domainOrName;
   if (targetDomain && targetDomain.includes('.')) {
       try {
+          const hasAnymail = !!getEmailSearchKeys().anymailFinder;
           const [hunterData, findy, anymail] = await Promise.all([
               fetchHunterEmails(targetDomain),
               fetchFindymail(targetDomain),
-              fetchAnymailFinder(targetDomain)
+              fetchAnymailFinder(targetDomain),
           ]);
-          
+
           const hunter = hunterData.people;
           const pattern = hunterData.pattern;
-          const allExtra = [...hunter, ...findy, ...anymail];
-          
-          // Merge logic
+          // Anymail 结果优先排在前
+          const allExtra = [...anymail, ...hunter, ...findy];
+
           const existingNames = new Set(result.decisionMakers.map(dm => dm.name.toLowerCase()));
-          
-          // For AI found people, try to find/verify their emails using specific finder APIs
+
           for (const dm of result.decisionMakers) {
-              if (dm.source === 'AI' && dm.firstName && targetDomain) {
-                  // Try Hunter Email Finder for this specific person
+              if (!dm.firstName && !dm.name) continue;
+
+              // ① 优先 Anymail Finder 按人查找
+              if (hasAnymail) {
+                  const found = await findEmailWithAnymail(dm.name || '', targetDomain, {
+                      firstName: dm.firstName,
+                      lastName: dm.lastName,
+                      linkedin: dm.linkedin,
+                  });
+                  if (found?.email) {
+                      dm.emailGuess = found.email;
+                      dm.emailSource = 'AnymailFinder';
+                      dm.source = 'AnymailFinder';
+                      dm.emailStatus = found.emailStatus;
+                      dm.isVerified = found.isVerified;
+                      dm.confidence = found.confidence;
+                      // ② 再走一遍 verify-email 二次确认
+                      const verified = await verifyEmailWithAnymail(found.email);
+                      if (verified) {
+                          dm.emailStatus = verified.emailStatus;
+                          dm.isVerified = verified.isVerified;
+                          dm.emailSource = 'AnymailFinder';
+                      }
+                      continue;
+                  }
+              }
+
+              // ③ 无 Anymail 结果时，回退 Hunter / Findymail，仍尽量用 Anymail 校验
+              if (dm.firstName) {
                   const hunterEmail = await findEmailWithHunter(dm.firstName, dm.lastName || '', targetDomain);
-                  if (hunterEmail && hunterEmail.confidence > 70) {
+                  if (hunterEmail && hunterEmail.confidence > 0.7) {
                       dm.emailGuess = hunterEmail.email;
-                      dm.isVerified = hunterEmail.confidence > 90;
-                      dm.confidence = hunterEmail.confidence;
+                      dm.emailSource = 'Hunter.io';
                       dm.source = 'Hunter.io';
+                      dm.confidence = hunterEmail.confidence;
+                      dm.isVerified = hunterEmail.confidence > 0.9;
+                      dm.emailStatus = dm.isVerified ? 'valid' : 'unverified';
                   } else if (dm.name) {
-                      // Try Findymail
                       const findyEmail = await findEmailWithFindymail(dm.name, targetDomain);
                       if (findyEmail) {
                           dm.emailGuess = findyEmail.email;
-                          dm.isVerified = findyEmail.isVerified;
+                          dm.emailSource = 'Findymail';
                           dm.source = 'Findymail';
+                          dm.isVerified = findyEmail.isVerified;
+                          dm.emailStatus = findyEmail.isVerified ? 'valid' : 'unverified';
                       }
                   }
-                  
-                  // If still no email but we have a pattern from Hunter
-                  if (!dm.emailGuess && pattern && dm.firstName) {
-                      const guessed = pattern
-                          .replace('{first}', dm.firstName.toLowerCase())
-                          .replace('{last}', (dm.lastName || '').toLowerCase())
-                          .replace('{f}', dm.firstName[0].toLowerCase())
-                          .replace('{l}', (dm.lastName || '')[0]?.toLowerCase() || '');
-                      
-                      dm.emailGuess = `${guessed}@${cleanDomain(targetDomain)}`;
-                      dm.source = 'AI (Pattern Guess)';
+              }
+
+              if (dm.emailGuess && hasAnymail) {
+                  const verified = await verifyEmailWithAnymail(dm.emailGuess);
+                  if (verified) {
+                      dm.emailStatus = verified.emailStatus;
+                      dm.isVerified = verified.isVerified;
+                      // 保留原邮箱来源平台，校验方标注在 status
+                  }
+              } else if (!dm.emailGuess && pattern && dm.firstName) {
+                  const guessed = pattern
+                      .replace('{first}', dm.firstName.toLowerCase())
+                      .replace('{last}', (dm.lastName || '').toLowerCase())
+                      .replace('{f}', dm.firstName[0].toLowerCase())
+                      .replace('{l}', (dm.lastName || '')[0]?.toLowerCase() || '');
+                  dm.emailGuess = `${guessed}@${cleanDomain(targetDomain)}`;
+                  dm.source = 'AI (Pattern Guess)';
+                  dm.emailSource = 'AI (Pattern Guess)';
+                  dm.emailStatus = 'unverified';
+                  dm.isVerified = false;
+                  if (hasAnymail) {
+                      const verified = await verifyEmailWithAnymail(dm.emailGuess);
+                      if (verified) {
+                          dm.emailStatus = verified.emailStatus;
+                          dm.isVerified = verified.isVerified;
+                      }
                   }
               }
           }
 
-          const newPeople = allExtra.filter(p => p.name && !existingNames.has(p.name.toLowerCase())).map(p => ({
-              ...p,
-              type: p.type || classifyDecisionMakerType(p.title || ''),
-              influenceScore: p.type === 'Buyer' || classifyDecisionMakerType(p.title || '') === 'Buyer' ? 5 : p.type === 'CEO' ? 4 : 2,
-          }));
+          // 平台挖到的新联系人：已有邮箱的再校验一遍
+          const newPeople = allExtra
+              .filter(p => p.name && !existingNames.has(p.name.toLowerCase()))
+              .map(p => ({
+                  ...p,
+                  type: p.type || classifyDecisionMakerType(p.title || ''),
+                  emailSource: p.emailSource || p.source,
+                  influenceScore:
+                      p.influenceScore ||
+                      (p.type === 'Buyer' || classifyDecisionMakerType(p.title || '') === 'Buyer'
+                          ? 5
+                          : p.type === 'CEO'
+                            ? 4
+                            : 2),
+              }));
+
+          if (hasAnymail) {
+              for (const p of newPeople) {
+                  if (!p.emailGuess) continue;
+                  if (p.emailSource === 'AnymailFinder' && p.isVerified) continue;
+                  const verified = await verifyEmailWithAnymail(p.emailGuess);
+                  if (verified) {
+                      p.emailStatus = verified.emailStatus;
+                      p.isVerified = verified.isVerified;
+                  }
+              }
+          }
+
           result.decisionMakers = rankDecisionMakers([...result.decisionMakers, ...newPeople]);
-      } catch (e) { console.error("External API enrichment failed", e); }
+      } catch (e) {
+          console.error('External API enrichment failed', e);
+      }
   } else {
       result.decisionMakers = rankDecisionMakers(result.decisionMakers);
   }
