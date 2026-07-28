@@ -3,7 +3,6 @@ import { AnalysisResult, DecisionMaker } from '../types';
 import { Users, Linkedin, Mail, Phone, ExternalLink, UserCheck, AlertTriangle, Download, Briefcase, ShieldCheck, ShieldAlert, RefreshCw, Loader2, Clock } from 'lucide-react';
 import { exportContactsToExcel } from '../services/exportService';
 import {
-  enqueueDmEmailSearch,
   getActiveDmJobForDomain,
   subscribeDmEmailSearchJobs,
 } from '../services/dmEmailSearchQueue';
@@ -11,6 +10,8 @@ import {
 interface ModuleDecisionMakersProps {
   data: AnalysisResult;
   historyId?: string | null;
+  canDmEmailSearch?: boolean;
+  canExportExcel?: boolean;
   /** 邮箱手工编辑 / 后台搜索完成写回 */
   onUpdate?: (
     decisionMakers: DecisionMaker[],
@@ -41,6 +42,8 @@ const formatSearchTime = (ts?: number) => {
 export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
   data,
   historyId,
+  canDmEmailSearch = false,
+  canExportExcel = false,
   onUpdate,
   onEnqueueEmailSearch,
 }) => {
@@ -107,21 +110,16 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
 
   const handleEnqueueSearch = () => {
     setQueueMsg('');
+    if (!canDmEmailSearch) {
+      setQueueMsg('你没有「决策人邮箱搜索」权限，请联系管理员或部门主管开通。');
+      return;
+    }
     if (onEnqueueEmailSearch) {
       const res = onEnqueueEmailSearch();
       setQueueMsg(res.message);
       return;
     }
-    // 兜底：无 App 注入时直接入队（不写历史）
-    const domain = data.companyInfo?.website || '';
-    const res = enqueueDmEmailSearch({
-      domain,
-      companyName: data.companyInfo?.name || domain,
-      historyId,
-      existingDecisionMakers: decisionMakers,
-    });
-    if (res.ok === false) setQueueMsg(res.reason);
-    else setQueueMsg('已加入后台搜索队列，可继续浏览其它客户。');
+    setQueueMsg('无法发起搜索，请联系管理员。');
   };
 
   const buyers = decisionMakers.filter(d => d.type === 'Buyer').length;
@@ -155,28 +153,32 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
             )}
           </div>
           <div className="flex flex-col sm:flex-row gap-2 flex-shrink-0">
-            <button
-              type="button"
-              onClick={handleEnqueueSearch}
-              disabled={jobActive}
-              className="inline-flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 disabled:opacity-60 text-white px-4 py-2.5 rounded-xl text-sm font-bold touch-manipulation"
-            >
-              {jobActive ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-              {jobActive ? '后台搜索中…' : '后台搜索决策人邮箱'}
-            </button>
-            <button
-              type="button"
-              onClick={() => exportContactsToExcel(decisionMakers, data.companyInfo.name)}
-              className="inline-flex items-center justify-center gap-2 bg-slate-900 hover:bg-blue-600 text-white px-4 py-2.5 rounded-xl text-sm font-bold touch-manipulation"
-            >
-              <Download size={16} /> 导出 Excel
-            </button>
+            {canDmEmailSearch && (
+              <button
+                type="button"
+                onClick={handleEnqueueSearch}
+                disabled={jobActive}
+                className="inline-flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 disabled:opacity-60 text-white px-4 py-2.5 rounded-xl text-sm font-bold touch-manipulation"
+              >
+                {jobActive ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+                {jobActive ? '后台搜索中…' : lastSearchAt ? '再次深挖决策人邮箱' : '后台搜索决策人邮箱'}
+              </button>
+            )}
+            {canExportExcel && (
+              <button
+                type="button"
+                onClick={() => exportContactsToExcel(decisionMakers, data.companyInfo.name)}
+                className="inline-flex items-center justify-center gap-2 bg-slate-900 hover:bg-blue-600 text-white px-4 py-2.5 rounded-xl text-sm font-bold touch-manipulation"
+              >
+                <Download size={16} /> 导出 Excel
+              </button>
+            )}
           </div>
         </div>
 
-        {jobActive && (
+        {jobActive && canDmEmailSearch && (
           <div className="mb-4 rounded-2xl border border-violet-100 bg-violet-50 px-4 py-3 text-xs font-bold text-violet-800">
-            已在后台搜索，可切换到其它客户继续浏览或再排队搜索。右下角可查看任务进度。
+            已在后台搜索，可切换到其它客户继续浏览；完成后可再次点击「深挖邮箱」查找更多联系人。
           </div>
         )}
 

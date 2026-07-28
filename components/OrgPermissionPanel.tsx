@@ -58,7 +58,11 @@ export const OrgPermissionPanel: React.FC<OrgPermissionPanelProps> = ({
     setDraftRole(u.role);
     setDraftDeptId(u.departmentId || '');
     setDraftDisabled(!!u.disabled);
-    setDraftPerms(effectivePermissions(u));
+    setDraftPerms(
+      u.permissions !== undefined && u.permissions !== null
+        ? u.permissions
+        : defaultPermissionsForRole(u.role)
+    );
     setMsg('');
   };
 
@@ -86,12 +90,12 @@ export const OrgPermissionPanel: React.FC<OrgPermissionPanelProps> = ({
           role: draftRole,
           departmentId: draftDeptId || undefined,
           disabled: draftDisabled,
-          permissions: nextPerms.length ? nextPerms : defaultPermissionsForRole(draftRole),
+          permissions: nextPerms,
         };
       }
       return {
         ...u,
-        permissions: nextPerms.length ? nextPerms : defaultPermissionsForRole('user'),
+        permissions: nextPerms,
       };
     });
     setUsers(next);

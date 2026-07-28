@@ -44,7 +44,10 @@ export function normalizeUser(u: User): User {
   return {
     ...u,
     role,
-    permissions: u.permissions?.length ? u.permissions : defaultPermissionsForRole(role),
+    permissions:
+      u.permissions !== undefined && u.permissions !== null
+        ? u.permissions
+        : defaultPermissionsForRole(role),
     departmentId: u.departmentId || undefined,
     disabled: !!u.disabled,
   };

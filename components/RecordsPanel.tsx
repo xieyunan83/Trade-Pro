@@ -37,6 +37,8 @@ interface RecordsPanelProps {
   onClose: () => void;
   onOpenHistory: (item: HistoryItem) => void;
   onDownloadHistory: (item: HistoryItem) => void;
+  /** 无 PPT 下载权限时不显示下载按钮 */
+  canExportPpt?: boolean;
   onRestoreDiscovery: (archive: DiscoveryArchiveItem) => void;
   onDeleteHistory?: (id: string) => void;
   onDeleteDiscovery?: (id: string) => void;
@@ -75,6 +77,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   onClose,
   onOpenHistory,
   onDownloadHistory,
+  canExportPpt = false,
   onRestoreDiscovery,
   onDeleteHistory,
   onDeleteDiscovery,
@@ -471,16 +474,18 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                             </div>
                           </div>
                           <div className="flex justify-end gap-2 mt-2">
-                            <button
-                              type="button"
-                              className="text-[10px] font-black text-blue-600"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onDownloadHistory(row.item);
-                              }}
-                            >
-                              <Download size={11} className="inline" /> PPT
-                            </button>
+                            {canExportPpt && (
+                              <button
+                                type="button"
+                                className="text-[10px] font-black text-blue-600"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onDownloadHistory(row.item);
+                                }}
+                              >
+                                <Download size={11} className="inline" /> PPT
+                              </button>
+                            )}
                             {onDeleteHistory && (
                               <button
                                 type="button"

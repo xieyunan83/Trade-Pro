@@ -13,6 +13,7 @@ interface ModulePromoGeneratorProps {
   onViewResult: (task: AutomationResult) => void;
   onDownloadResult: (task: AutomationResult) => void;
   onDownloadAll: () => void;
+  canExportPpt?: boolean;
   onClearCompleted: () => void;
   onClearAll: () => void;
 }
@@ -27,6 +28,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   onViewResult,
   onDownloadResult,
   onDownloadAll,
+  canExportPpt = false,
   onClearCompleted,
   onClearAll,
 }) => {
@@ -106,7 +108,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
             )}
           </h3>
           <div className="flex flex-wrap gap-2">
-            {completedCount > 0 && (
+            {completedCount > 0 && canExportPpt && (
               <button
                 onClick={onDownloadAll}
                 className="inline-flex items-center gap-1.5 bg-white border border-slate-200 text-slate-700 px-4 py-2 rounded-xl text-xs font-bold hover:bg-slate-50"
@@ -192,13 +194,15 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                             >
                               <FileText size={16} />
                             </button>
-                            <button
-                              onClick={() => onDownloadResult(task)}
-                              className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                              title="下载 PPT"
-                            >
-                              <Download size={16} />
-                            </button>
+                            {canExportPpt && (
+                              <button
+                                onClick={() => onDownloadResult(task)}
+                                className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                                title="下载 PPT"
+                              >
+                                <Download size={16} />
+                              </button>
+                            )}
                           </>
                         )}
                         {(task.status === 'pending' || task.status === 'failed') && (

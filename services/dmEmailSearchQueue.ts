@@ -32,6 +32,8 @@ export interface DmEmailSearchJob {
 type Listener = (jobs: DmEmailSearchJob[]) => void;
 
 const MAX_CONCURRENT = 3;
+/** 超过该时长仍为 running 的任务视为卡住，允许重新入队 */
+const JOB_STALE_MS = 20 * 60 * 1000;
 const jobs: DmEmailSearchJob[] = [];
 const listeners = new Set<Listener>();
 let pumping = false;
@@ -50,6 +52,38 @@ const notify = () => {
 const cleanDomain = (domain: string) =>
   domain.replace(/^(?:https?:\/\/)?(?:www\.)?/i, '').split('/')[0];
 
+const failStaleRunningJobs = () => {
+  const now = Date.now();
+  let changed = false;
+  for (const job of jobs) {
+    if (job.status !== 'running') continue;
+    const started = job.startedAt || job.createdAt;
+    if (now - started > JOB_STALE_MS) {
+      job.status = 'failed';
+      job.finishedAt = now;
+      job.error = '搜索超时，可再次点击「深挖邮箱」重试';
+      changed = true;
+    }
+  }
+  if (changed) notify();
+};
+
+export const getLatestDmJobForDomain = (domain: string): DmEmailSearchJob | undefined => {
+  const key = cleanDomain(domain || '').toLowerCase();
+  if (!key) return undefined;
+  return jobs.find((j) => cleanDomain(j.domain).toLowerCase() === key);
+};
+
+export const hasCompletedDmSearchForDomain = (domain: string): boolean => {
+  const key = cleanDomain(domain || '').toLowerCase();
+  if (!key) return false;
+  return jobs.some(
+    (j) =>
+      cleanDomain(j.domain).toLowerCase() === key &&
+      (j.status === 'completed' || j.status === 'failed')
+  );
+};
+
 export const subscribeDmEmailSearchJobs = (listener: Listener): (() => void) => {
   listeners.add(listener);
   listener(jobs.map((j) => ({ ...j })));
@@ -61,6 +95,7 @@ export const subscribeDmEmailSearchJobs = (listener: Listener): (() => void) => 
 export const getDmEmailSearchJobs = (): DmEmailSearchJob[] => jobs.map((j) => ({ ...j }));
 
 export const getActiveDmJobForDomain = (domain: string): DmEmailSearchJob | undefined => {
+  failStaleRunningJobs();
   const key = cleanDomain(domain || '').toLowerCase();
   if (!key) return undefined;
   return jobs.find(
@@ -76,6 +111,8 @@ export type EnqueueDmEmailSearchInput = {
   companyLinkedin?: string;
   historyId?: string | null;
   existingDecisionMakers?: DecisionMaker[];
+  /** 调用方已校验 feature.dm_email_search；false 时拒绝入队 */
+  authorized?: boolean;
   /** 任务真正开始前再取一次最新联系人（避免浏览其它报告时覆盖错） */
   resolveExisting?: () => DecisionMaker[] | Promise<DecisionMaker[]>;
   /** 完成后写回报告 */
@@ -164,18 +201,39 @@ const pump = async () => {
 export const enqueueDmEmailSearch = (
   input: EnqueueDmEmailSearchInput
 ): { ok: true; job: DmEmailSearchJob } | { ok: false; reason: string; job?: DmEmailSearchJob } => {
+  if (input.authorized === false) {
+    return {
+      ok: false,
+      reason: '你没有「决策人邮箱搜索」权限，请联系管理员或部门主管开通。',
+    };
+  }
+
   const domain = cleanDomain(input.domain || '');
   if (!domain || !domain.includes('.')) {
     return { ok: false, reason: '缺少有效公司域名，无法搜索决策人邮箱' };
   }
 
+  failStaleRunningJobs();
+
   const existingActive = getActiveDmJobForDomain(domain);
   if (existingActive) {
+    const phase = existingActive.status === 'queued' ? '排队' : '搜索';
     return {
       ok: false,
-      reason: `「${input.companyName || domain}」已在后台搜索队列中`,
+      reason: `「${input.companyName || domain}」正在后台${phase}中，请稍候；完成后可再次点击「深挖邮箱」继续查找更多联系人。`,
       job: existingActive,
     };
+  }
+
+  // 移除同域名已完成/失败记录，便于再次深挖
+  for (let i = jobs.length - 1; i >= 0; i--) {
+    const j = jobs[i];
+    if (
+      cleanDomain(j.domain).toLowerCase() === domain.toLowerCase() &&
+      (j.status === 'completed' || j.status === 'failed')
+    ) {
+      jobs.splice(i, 1);
+    }
   }
 
   const job: DmEmailSearchJob = {

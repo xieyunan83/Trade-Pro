@@ -683,6 +683,7 @@ const App: React.FC = () => {
       domain,
       companyName,
       historyId: hid,
+      authorized: hasPermission(currentUser, 'feature.dm_email_search'),
       existingDecisionMakers: src.decisionMakers || [],
       resolveExisting: () => {
         const list = historyRef.current;
@@ -723,8 +724,8 @@ const App: React.FC = () => {
     return { ok: true, message: `已加入后台队列：${companyName}（可继续浏览其它客户）` };
   };
   const handleExportReport = () => {
-    if (!hasPermission(currentUser, 'feature.export_report')) {
-      alert('你没有「导出报告」权限，请联系管理员或部门主管开通。');
+    if (!hasPermission(currentUser, 'feature.export_ppt')) {
+      alert('你没有「下载 PPT 报告」权限，请联系管理员或部门主管开通。');
       return;
     }
     if (analysisData) exportToPPT(analysisData);
@@ -853,6 +854,10 @@ const App: React.FC = () => {
   };
 
   const handleDownloadAutomationResult = (task: AutomationResult) => {
+      if (!hasPermission(currentUser, 'feature.export_ppt')) {
+          alert('你没有「下载 PPT 报告」权限，请联系管理员或部门主管开通。');
+          return;
+      }
       if (!task.analysis) {
           alert('该任务尚无完整分析数据，无法下载。');
           return;
@@ -861,6 +866,10 @@ const App: React.FC = () => {
   };
 
   const handleDownloadAllCompleted = async () => {
+      if (!hasPermission(currentUser, 'feature.export_ppt')) {
+          alert('你没有「下载 PPT 报告」权限，请联系管理员或部门主管开通。');
+          return;
+      }
       const completed = automationResults.filter((t) => t.status === 'completed' && t.analysis);
       if (completed.length === 0) {
           alert('暂无已完成的报告可下载');
@@ -1222,7 +1231,14 @@ const App: React.FC = () => {
           discoveryArchives={discoveryArchives}
           onClose={() => setHistoryOpen(false)}
           onOpenHistory={loadFromHistory}
-          onDownloadHistory={(item) => { if (item.data) exportToPPT(item.data); }}
+          onDownloadHistory={(item) => {
+            if (!hasPermission(currentUser, 'feature.export_ppt')) {
+              alert('你没有「下载 PPT 报告」权限，请联系管理员或部门主管开通。');
+              return;
+            }
+            if (item.data) exportToPPT(item.data);
+          }}
+          canExportPpt={hasPermission(currentUser, 'feature.export_ppt')}
           onRestoreDiscovery={(archive) => {
             setDiscoveryState(archiveToDiscoveryState(archive));
             setActiveModule(ModuleType.DISCOVERY);
@@ -1394,6 +1410,7 @@ const App: React.FC = () => {
                         onViewResult={handleViewAutomationResult}
                         onDownloadResult={handleDownloadAutomationResult}
                         onDownloadAll={handleDownloadAllCompleted}
+                        canExportPpt={hasPermission(currentUser, 'feature.export_ppt')}
                         onClearCompleted={handleClearCompletedTasks}
                         onClearAll={handleClearAllTasks}
                     />
@@ -1424,17 +1441,22 @@ const App: React.FC = () => {
                             <a href={analysisData.companyInfo?.website.startsWith('http') ? analysisData.companyInfo.website : `https://${analysisData.companyInfo?.website}`} target="_blank" rel="noreferrer" className="text-blue-600 font-bold mt-2 hover:underline text-sm sm:text-base break-all">{analysisData.companyInfo?.website}</a>
                         </div>
                         <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto flex-shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const res = enqueueCurrentDmEmailSearch(analysisData, viewingHistoryId);
-                              if (res.message) alert(res.message);
-                            }}
-                            className="flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 transition-colors text-white px-4 sm:px-6 py-3 rounded-2xl font-bold shadow-lg touch-manipulation"
-                          >
-                            <Users size={18} /> 后台搜索决策人邮箱
-                          </button>
-                          <button onClick={handleExportReport} className="flex items-center justify-center gap-2 bg-slate-900 hover:bg-blue-600 transition-colors text-white px-4 sm:px-6 py-3 rounded-2xl font-bold shadow-lg touch-manipulation"><FileSpreadsheet size={18} /> 下载 PPT 报告</button>
+                          {hasPermission(currentUser, 'feature.dm_email_search') && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const res = enqueueCurrentDmEmailSearch(analysisData, viewingHistoryId);
+                                if (res.message) alert(res.message);
+                              }}
+                              className="flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 transition-colors text-white px-4 sm:px-6 py-3 rounded-2xl font-bold shadow-lg touch-manipulation"
+                            >
+                              <Users size={18} />{' '}
+                              {analysisData.decisionMakerEmailSearchAt ? '再次深挖决策人邮箱' : '后台搜索决策人邮箱'}
+                            </button>
+                          )}
+                          {hasPermission(currentUser, 'feature.export_ppt') && (
+                            <button onClick={handleExportReport} className="flex items-center justify-center gap-2 bg-slate-900 hover:bg-blue-600 transition-colors text-white px-4 sm:px-6 py-3 rounded-2xl font-bold shadow-lg touch-manipulation"><FileSpreadsheet size={18} /> 下载 PPT 报告</button>
+                          )}
                         </div>
                         {(analysisData.decisionMakers?.some((d) => d.emailGuess) ||
                           analysisData.generatedEmails) && (
@@ -1447,7 +1469,12 @@ const App: React.FC = () => {
                       <ModuleBackground
                         data={analysisData}
                         onAddToCRM={handleAddToCRM}
-                        onEnqueueDmEmailSearch={() => enqueueCurrentDmEmailSearch(analysisData, viewingHistoryId)}
+                        onEnqueueDmEmailSearch={
+                          hasPermission(currentUser, 'feature.dm_email_search')
+                            ? () => enqueueCurrentDmEmailSearch(analysisData, viewingHistoryId)
+                            : undefined
+                        }
+                        hasPriorDmSearch={!!analysisData.decisionMakerEmailSearchAt}
                       />
                     )}
                     {activeModule === ModuleType.PRODUCTS && <ModuleProducts data={analysisData} />}
@@ -1455,6 +1482,8 @@ const App: React.FC = () => {
                       <ModuleDecisionMakers
                         data={analysisData}
                         historyId={viewingHistoryId}
+                        canDmEmailSearch={hasPermission(currentUser, 'feature.dm_email_search')}
+                        canExportExcel={hasPermission(currentUser, 'feature.export_report')}
                         onUpdate={(dms, meta) => {
                           const next = {
                             ...analysisData,
@@ -1468,7 +1497,11 @@ const App: React.FC = () => {
                           };
                           persistCurrentAnalysis(next).catch(console.error);
                         }}
-                        onEnqueueEmailSearch={() => enqueueCurrentDmEmailSearch(analysisData, viewingHistoryId)}
+                        onEnqueueEmailSearch={
+                          hasPermission(currentUser, 'feature.dm_email_search')
+                            ? () => enqueueCurrentDmEmailSearch(analysisData, viewingHistoryId)
+                            : undefined
+                        }
                       />
                     )}
                     {activeModule === ModuleType.SIMILAR && <ModuleSimilar data={analysisData} onAnalyze={handleAnalyzeInput} />}
@@ -1514,7 +1547,7 @@ const App: React.FC = () => {
           </div>
       )}
 
-      <DmEmailSearchPanel />
+      {hasPermission(currentUser, 'feature.dm_email_search') && <DmEmailSearchPanel />}
 
       {teamManageOpen && currentUser.role === 'manager' && (
         <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-900/50">

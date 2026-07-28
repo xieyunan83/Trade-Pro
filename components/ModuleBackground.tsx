@@ -10,6 +10,8 @@ interface ModuleBackgroundProps {
   data: AnalysisResult;
   onAddToCRM: () => void;
   onEnqueueDmEmailSearch?: () => { ok: boolean; message: string };
+  /** 是否已搜索过邮箱（用于按钮文案） */
+  hasPriorDmSearch?: boolean;
 }
 
 const Pill: React.FC<{ children: React.ReactNode; tone?: 'slate' | 'blue' | 'green' | 'amber' | 'red' | 'violet' }> = ({ children, tone = 'slate' }) => {
@@ -33,7 +35,7 @@ const SectionCard: React.FC<{ title: string; icon: React.ReactNode; children: Re
   </div>
 );
 
-export const ModuleBackground: React.FC<ModuleBackgroundProps> = ({ data, onAddToCRM, onEnqueueDmEmailSearch }) => {
+export const ModuleBackground: React.FC<ModuleBackgroundProps> = ({ data, onAddToCRM, onEnqueueDmEmailSearch, hasPriorDmSearch }) => {
   const trade = data.tradeIntelligence;
   const riskTone = trade?.riskLevel === '低' ? 'green' : trade?.riskLevel === '高' ? 'red' : trade?.riskLevel === '中' ? 'amber' : 'slate';
   const [jobActive, setJobActive] = useState(false);
@@ -80,7 +82,7 @@ export const ModuleBackground: React.FC<ModuleBackgroundProps> = ({ data, onAddT
                   className="bg-violet-600 hover:bg-violet-700 disabled:opacity-60 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-lg flex items-center justify-center gap-2 touch-manipulation"
                 >
                   {jobActive ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                  {jobActive ? '决策人邮箱搜索中…' : '后台搜索决策人邮箱'}
+                  {jobActive ? '决策人邮箱搜索中…' : hasPriorDmSearch ? '再次深挖决策人邮箱' : '后台搜索决策人邮箱'}
                 </button>
               )}
               <button onClick={onAddToCRM} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-lg flex items-center justify-center gap-2 touch-manipulation">

@@ -32,6 +32,7 @@ export type PermissionKey =
   | 'feature.batch_analyze'
   | 'feature.dm_email_search'
   | 'feature.export_report'
+  | 'feature.export_ppt'
   | 'feature.crm_manage'
   | 'feature.records_center'
   | 'feature.manage_team_users';
@@ -51,7 +52,7 @@ export interface User {
   /** 所属部门 */
   departmentId?: string;
   /**
-   * 显式授权列表；为空则使用角色默认权限。
+   * 显式授权列表；未设置时使用角色默认权限，空数组表示无任何额外授权。
    * 部门主管可调整下属的该字段（不能授予管理下属权限以外的管理权）。
    */
   permissions?: PermissionKey[];

@@ -23,7 +23,8 @@ export const PERMISSION_CATALOG: Array<{
   { key: 'feature.analyze_company', label: '单次背调', group: '功能', description: '对单个公司做背调' },
   { key: 'feature.batch_analyze', label: '批量背调', group: '功能', description: '批量/队列背调任务' },
   { key: 'feature.dm_email_search', label: '决策人邮箱搜索', group: '功能', description: '后台 Anymail 搜索邮箱' },
-  { key: 'feature.export_report', label: '导出报告', group: '功能', description: '下载 PPT / Excel' },
+  { key: 'feature.export_report', label: '导出 Excel', group: '功能', description: '导出联系人 Excel 等' },
+  { key: 'feature.export_ppt', label: '下载 PPT 报告', group: '功能', description: '下载背调 PPT 报告' },
   { key: 'feature.crm_manage', label: 'CRM 编辑', group: '功能', description: '新增/修改 CRM 客户' },
   { key: 'feature.records_center', label: '记录中心', group: '功能', description: '查看历史搜索与背调记录' },
   { key: 'feature.manage_team_users', label: '管理下属权限', group: '功能', description: '部门主管调整下属功能权限' },
@@ -42,17 +43,34 @@ const MODULE_TO_PERM: Record<ModuleType, PermissionKey> = {
   [ModuleType.PROMO_GENERATOR]: 'module.promo_generator',
 };
 
+/** 新员工默认权限：不含邮箱搜索、PPT 下载等需管理员显式开通的功能 */
+const USER_BASELINE: PermissionKey[] = [
+  'module.discovery',
+  'module.background',
+  'module.products',
+  'module.decision_makers',
+  'module.strategy',
+  'module.similar',
+  'module.client_crm',
+  'module.email_campaign',
+  'module.image_generator',
+  'module.promo_generator',
+  'feature.search_clients',
+  'feature.analyze_company',
+  'feature.records_center',
+];
+
 export const ALL_PERMISSION_KEYS: PermissionKey[] = PERMISSION_CATALOG.map((p) => p.key);
 
 export const defaultPermissionsForRole = (role: UserRole): PermissionKey[] => {
   if (role === 'admin') return [...ALL_PERMISSION_KEYS];
   if (role === 'manager') return [...ALL_PERMISSION_KEYS];
-  return ALL_PERMISSION_KEYS.filter((k) => k !== 'feature.manage_team_users');
+  return [...USER_BASELINE];
 };
 
 export const effectivePermissions = (user: User): PermissionKey[] => {
   if (user.role === 'admin') return [...ALL_PERMISSION_KEYS];
-  if (user.permissions && user.permissions.length > 0) {
+  if (user.permissions !== undefined && user.permissions !== null) {
     return [...new Set(user.permissions)];
   }
   return defaultPermissionsForRole(user.role);
