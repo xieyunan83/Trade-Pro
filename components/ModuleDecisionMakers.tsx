@@ -85,7 +85,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
       setQueueMsg(`邮箱搜索已完成，已更新 ${job.resultDecisionMakers.length} 位联系人`);
       // 持久化由 App enqueue onComplete 负责；此处仅刷新 UI
     });
-  }, [data.companyInfo?.website, data.decisionMakerEmailSearchAt, data.decisionMakerEmailSearchHistory, onUpdate]);
+  }, [data.companyInfo?.website, data.decisionMakerEmailSearchAt]);
 
   const commit = (next: DecisionMaker[]) => {
     setDecisionMakers(next);

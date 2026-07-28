@@ -31,7 +31,7 @@ import { ModuleImageGenerator } from './components/ModuleImageGenerator';
 import { ClientFinder } from './components/ClientFinder';
 import { RecordsPanel, archiveToDiscoveryState } from './components/RecordsPanel';
 import { Login } from './components/Login';
-import { loadUsersWithMigration, saveUsersToStorage, getUsersUpdatedAt } from './services/auth';
+import { loadUsersWithMigration, loadUsersFromStorage, saveUsersToStorage, getUsersUpdatedAt } from './services/auth';
 import { AdminDashboard } from './components/AdminDashboard';
 import { 
   LayoutDashboard, PackageSearch, Users, PenTool, Network, Search, Loader2, Menu, Globe, Zap, FileSpreadsheet, History, Clock, ChevronRight, AlertTriangle, RefreshCw, LogOut, Briefcase, Ruler, CheckCircle2, Hourglass, StopCircle, PlayCircle, Layers, Mail, Cloud, Download, Info, Link2, X, Database, Github, Image
@@ -100,6 +100,7 @@ const App: React.FC = () => {
   const historyRef = useRef<HistoryItem[]>([]);
   const viewingHistoryIdRef = useRef<string | null>(null);
   const analysisDataRef = useRef<AnalysisResult | null>(null);
+  const userDataReadyRef = useRef(false);
 
   useEffect(() => {
     historyRef.current = history;
@@ -207,11 +208,18 @@ const App: React.FC = () => {
   useEffect(() => {
     const loadUsers = async () => {
       try {
-        const loaded = await loadUsersWithMigration();
+        const loaded = await Promise.race([
+          loadUsersWithMigration(),
+          new Promise<User[]>((_, reject) =>
+            setTimeout(() => reject(new Error('用户同步超时')), 12_000)
+          ),
+        ]);
         setUsers(loaded);
         setDepartments(loadDepartmentsFromStorage());
       } catch (e) {
         console.error('Failed to load users', e);
+        const fallback = loadUsersFromStorage();
+        if (fallback.length) setUsers(fallback);
       } finally {
         setAuthReady(true);
       }
@@ -223,20 +231,47 @@ const App: React.FC = () => {
     const checkKey = async () => {
       if (!currentUser || currentUser.role === 'admin') return;
       setHasKey(null);
-      const ok = await checkApiKeyAvailability();
-      setHasKey(ok);
+      try {
+        const ok = await Promise.race([
+          checkApiKeyAvailability(),
+          new Promise<boolean>((resolve) =>
+            setTimeout(() => resolve(hasApiKeyConfigured()), 8_000)
+          ),
+        ]);
+        setHasKey(ok);
+      } catch {
+        setHasKey(hasApiKeyConfigured());
+      }
     };
     checkKey();
   }, [currentUser]);
 
   useEffect(() => {
+    if (!currentUser) {
+      userDataReadyRef.current = false;
+      return;
+    }
+
+    let cancelled = false;
+    userDataReadyRef.current = false;
     const loadData = async () => {
+        let nextCrm: Client[] = [];
         try {
+            const savedClients = localStorage.getItem('tradeScoutClients');
+            if (savedClients) {
+              try {
+                nextCrm = JSON.parse(savedClients);
+              } catch {
+                nextCrm = [];
+              }
+            }
+
             // 1. Load Local DB Data First
             const h = await getHistory();
             const q = await getAutomationQueue();
-            setAutomationResults(q);
-            const files = await getAllFilesFromDB(); setKbCount(files.length);
+            if (!cancelled) setAutomationResults(q);
+            const files = await getAllFilesFromDB();
+            if (!cancelled) setKbCount(files.length);
 
             // 搜索归档：本地 + 云端合并（排除已删除墓碑）
             try {
@@ -251,7 +286,11 @@ const App: React.FC = () => {
                 .filter((i) => !isDiscoveryTombstoned(i, tombs))
                 .forEach((i) => map.set(i.id, i));
               const discAll = Array.from(map.values()).sort((a, b) => b.timestamp - a.timestamp);
-              setDiscoveryArchives(currentUser ? filterOwnedRecords(currentUser, discAll, users, loadDepartmentsFromStorage()) : discAll);
+              if (!cancelled) {
+                setDiscoveryArchives(
+                  currentUser ? filterOwnedRecords(currentUser, discAll, users, loadDepartmentsFromStorage()) : discAll
+                );
+              }
             } catch (e) {
               console.warn('discovery archives load failed', e);
             }
@@ -287,10 +326,8 @@ const App: React.FC = () => {
               }
               return out;
             })();
-            // 用 fixedHistory 继续后续 recover 逻辑
             const historyForRecover = fixedHistory;
 
-            // 恢复：批量任务已完成但未写入历史时，补录到历史（避免额度白花）
             const knownDomains = new Set(
               historyForRecover.map((i) => (i.domain || i.data?.companyInfo?.website || '').toLowerCase()).filter(Boolean)
             );
@@ -324,39 +361,36 @@ const App: React.FC = () => {
               }
             }
             const recoveredAll = [...recovered, ...historyForRecover];
-            setHistory(currentUser ? filterOwnedRecords(currentUser, recoveredAll, users, loadDepartmentsFromStorage()) : recoveredAll);
+            if (!cancelled) {
+              setHistory(
+                currentUser ? filterOwnedRecords(currentUser, recoveredAll, users, loadDepartmentsFromStorage()) : recoveredAll
+              );
+            }
 
-            // Check GitHub Status
             const ghStatus = checkGitHubStatus();
-            setIsGitHubConnected(ghStatus.ok);
+            if (!cancelled) setIsGitHubConnected(ghStatus.ok);
 
-            // Supabase 知识库同步（不依赖 GitHub）
             if (currentUser && isSupabaseConfigured()) {
-                // 普通用户：从 Supabase 同步管理员保存的 API 密钥
                 if (currentUser.role !== 'admin') {
                     const apiReady = await hydrateApiConfigsFromCloud();
-                    if (apiReady) setHasKey(true);
+                    if (!cancelled && apiReady) setHasKey(true);
                 }
 
-                setIsKBSyncing(true);
+                if (!cancelled) setIsKBSyncing(true);
                 try {
-                    console.log("Auto-syncing Supabase Knowledge Base...");
                     const { files: cloudFiles, error } = await getKnowledgeFiles();
                     if (error) console.warn('KB cloud sync:', error);
                     if (cloudFiles.length > 0) {
                         for (const f of cloudFiles) { await saveFileToDB(f); }
                     }
                     const allFiles = await getAllFilesFromDB();
-                    setKbCount(allFiles.length);
+                    if (!cancelled) setKbCount(allFiles.length);
                 } catch (e) {
                     console.error("Supabase KB Sync failed", e);
-                    const allFiles = await getAllFilesFromDB();
-                    setKbCount(allFiles.length);
                 } finally {
-                    setIsKBSyncing(false);
+                    if (!cancelled) setIsKBSyncing(false);
                 }
 
-                // 背调历史
                 try {
                     const cloudHistory = await getInvestigationHistory();
                     if (cloudHistory.length > 0) {
@@ -364,110 +398,112 @@ const App: React.FC = () => {
                         const newItems = cloudHistory.filter(i => !existingIds.has(i.id));
                         for (const item of newItems) { await saveHistory(item); }
                         const merged = [...newItems, ...h].sort((a, b) => b.timestamp - a.timestamp);
-                        setHistory(currentUser ? filterOwnedRecords(currentUser, merged, users, loadDepartmentsFromStorage()) : merged);
+                        if (!cancelled) {
+                          setHistory(
+                            currentUser ? filterOwnedRecords(currentUser, merged, users, loadDepartmentsFromStorage()) : merged
+                          );
+                        }
                     }
                 } catch (e) {
                     console.error("Supabase history sync failed", e);
                 }
 
-                // 最新搜索记录
                 try {
                     const latestSearch = await getLatestDiscoverySearch();
-                    if (latestSearch) setDiscoveryState(latestSearch);
+                    if (!cancelled && latestSearch) setDiscoveryState(latestSearch);
                 } catch (e) {
                     console.error("Supabase discovery sync failed", e);
                 }
 
-                // CRM
                 try {
                     const cloudCrm = await getCrmClients();
-                    if (cloudCrm.length > 0) {
-                        setCrmClients(cloudCrm);
-                        localStorage.setItem('tradeScoutClients', JSON.stringify(cloudCrm));
-                    }
+                    if (cloudCrm.length > 0) nextCrm = cloudCrm;
                 } catch (e) {
                     console.error("Supabase CRM sync failed", e);
                 }
             }
 
-            // 2. Sync from GitHub if connected
             if (ghStatus.ok && currentUser) {
-                // Config
                 try {
                     const globalConfig = await fetchGlobalConfig();
                     if (globalConfig) {
                         updateLocalConfig(globalConfig);
-                        if(globalConfig.systemNotice) setSystemNotice(globalConfig.systemNotice);
+                        if (!cancelled && globalConfig.systemNotice) setSystemNotice(globalConfig.systemNotice);
                     }
                 } catch(e) {
                     console.warn("Failed to load global config", e);
                 } 
                 
-                // GitHub KB 同步（仅 Supabase 未配置时）
                 if (!isSupabaseConfigured()) {
-                    setIsKBSyncing(true);
+                    if (!cancelled) setIsKBSyncing(true);
                     try {
-                        console.log("Auto-syncing GitHub Knowledge Base...");
                         const cloudFiles = await fetchDocumentsFromRepo();
                         if (cloudFiles.length > 0) {
                             for (const f of cloudFiles) { await saveFileToDB(f); }
                             const allFiles = await getAllFilesFromDB();
-                            setKbCount(allFiles.length);
+                            if (!cancelled) setKbCount(allFiles.length);
                         }
                     } catch (e) {
                         console.error("Auto KB Sync failed", e);
                     } finally {
-                        setIsKBSyncing(false);
+                        if (!cancelled) setIsKBSyncing(false);
                     }
                 }
 
-                // CRM
-                const cloudCRM = await fetchCRMFromCloud();
-                if(cloudCRM.length > 0) {
-                    setCrmClients(cloudCRM);
-                    localStorage.setItem('tradeScoutClients', JSON.stringify(cloudCRM));
+                try {
+                  const cloudCRM = await fetchCRMFromCloud();
+                  if (cloudCRM.length > 0) nextCrm = cloudCRM;
+                } catch (e) {
+                  console.warn('GitHub CRM sync failed', e);
                 }
 
-                // Users: 不再从 GitHub 覆盖本地（避免密码被旧云端数据冲掉）
-                const cloudHistory = await fetchUserHistoryFromCloud(currentUser.username);
-                if(cloudHistory.length > 0) {
-                    const existingIds = new Set(h.map(i => i.id));
-                    const newItems = cloudHistory.filter(i => !existingIds.has(i.id));
-                    if (newItems.length > 0) {
-                        for(const item of newItems) await persistHistoryItem(item);
-                        setHistory(prev => [...newItems, ...prev]);
-                    }
+                try {
+                  const cloudHistory = await fetchUserHistoryFromCloud(currentUser.username);
+                  if (cloudHistory.length > 0) {
+                      const existingIds = new Set(h.map(i => i.id));
+                      const newItems = cloudHistory.filter(i => !existingIds.has(i.id));
+                      if (newItems.length > 0) {
+                          for(const item of newItems) await persistHistoryItem(item);
+                          if (!cancelled) setHistory(prev => [...newItems, ...prev]);
+                      }
+                  }
+                } catch (e) {
+                  console.warn('GitHub history sync failed', e);
                 }
                 
-                const apiKeys = await fetchApiConfigsFromCloud();
-                if (apiKeys.length > 0) {
-                    localStorage.setItem('trade_scout_api_configs', JSON.stringify(apiKeys));
-                    setHasKey(hasApiKeyConfigured());
+                try {
+                  const apiKeys = await fetchApiConfigsFromCloud();
+                  if (apiKeys.length > 0) {
+                      localStorage.setItem('trade_scout_api_configs', JSON.stringify(apiKeys));
+                      if (!cancelled) setHasKey(hasApiKeyConfigured());
+                  }
+                } catch (e) {
+                  console.warn('GitHub API config sync failed', e);
                 }
+            }
+
+            if (!cancelled) {
+              const filteredCrm = currentUser
+                ? filterOwnedRecords(currentUser, nextCrm, users, loadDepartmentsFromStorage())
+                : nextCrm;
+              setCrmClients(filteredCrm);
+              localStorage.setItem('tradeScoutClients', JSON.stringify(filteredCrm));
+              userDataReadyRef.current = true;
             }
         } catch (e) {
             console.error("Sync Error", e);
+            if (!cancelled) userDataReadyRef.current = true;
         }
     };
-    
-    if (currentUser) loadData();
 
-    const savedClients = localStorage.getItem('tradeScoutClients');
-    if (savedClients && crmClients.length === 0) { 
-        try { 
-            setCrmClients(
-              currentUser
-                ? filterOwnedRecords(currentUser, JSON.parse(savedClients), users, loadDepartmentsFromStorage())
-                : JSON.parse(savedClients)
-            ); 
-        } catch(e) {
-            console.warn("Failed to parse saved clients", e);
-        } 
-    }
-  }, [currentUser, crmClients.length]); 
+    loadData();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser?.username]);
 
   useEffect(() => {
-      if (!currentUser) return;
+      if (!currentUser || !userDataReadyRef.current) return;
       localStorage.setItem('tradeScoutClients', JSON.stringify(crmClients));
       if (isSupabaseConfigured()) {
           syncCrmClients(crmClients).catch(e => console.error("Supabase CRM sync failed", e));
@@ -1038,7 +1074,14 @@ const App: React.FC = () => {
       alert('任务队列已清空');
   };
 
-  const handleLogout = () => { setCurrentUser(null); setAnalysisData(null); setViewingHistoryId(null); setDomainInput(''); setActiveModule(ModuleType.DISCOVERY); };
+  const handleLogout = () => {
+    userDataReadyRef.current = false;
+    setCurrentUser(null);
+    setAnalysisData(null);
+    setViewingHistoryId(null);
+    setDomainInput('');
+    setActiveModule(ModuleType.DISCOVERY);
+  };
   const handleSyncToGitHub = async () => { if(!currentUser) return; setIsSyncing(true); try { await backupUserHistory(currentUser.username, history); await saveCRMToCloud(crmClients); alert("数据同步成功!"); } catch (e: any) { alert("同步失败: " + e.message); } finally { setIsSyncing(false); } };
   const handleAddClients = (newClients: Client[]) => { setCrmClients(prev => [...prev, ...newClients.map(stampOwnership)]); alert(`已成功导入 ${newClients.length} 个客户资料！`); };
 
