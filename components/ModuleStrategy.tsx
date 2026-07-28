@@ -1,18 +1,20 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { AnalysisResult, ChatMessage, KnowledgeFile } from '../types';
-import { streamStrategyChat } from '../services/geminiService';
+import { AnalysisResult, ChatMessage, KnowledgeFile, MailGroup } from '../types';
+import { streamStrategyChat, generateMailGroupStrategy } from '../services/geminiService';
 import { getAllFilesFromDB } from '../services/db';
 import { 
     Send, Paperclip, Loader2, Bot, User, FileText, 
-    X, File, Sparkles, Eraser, FileType 
+    X, File, Sparkles, Eraser, FileType, Mail, Save
 } from 'lucide-react';
 
 interface Props {
   data?: AnalysisResult | null;
+  /** 生成开发信后保存到背调报告 */
+  onSaveGeneratedEmails?: (emails: MailGroup) => void | Promise<void>;
 }
 
-export const ModuleStrategy: React.FC<Props> = ({ data }) => {
+export const ModuleStrategy: React.FC<Props> = ({ data, onSaveGeneratedEmails }) => {
   // --- State: Knowledge Base ---
   const [knowledgeBase, setKnowledgeBase] = useState<KnowledgeFile[]>([]);
   
@@ -40,6 +42,8 @@ export const ModuleStrategy: React.FC<Props> = ({ data }) => {
   const [currentAttachments, setCurrentAttachments] = useState<KnowledgeFile[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isProcessingFile, setIsProcessingFile] = useState(false);
+  const [isGeneratingEmails, setIsGeneratingEmails] = useState(false);
+  const [generateMsg, setGenerateMsg] = useState('');
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -208,8 +212,65 @@ export const ModuleStrategy: React.FC<Props> = ({ data }) => {
       }
   };
 
+  const handleGenerateAndSaveEmails = async () => {
+    if (!data || !onSaveGeneratedEmails) {
+      alert('请先完成背调并打开对应客户报告，再生成开发信。');
+      return;
+    }
+    setIsGeneratingEmails(true);
+    setGenerateMsg('');
+    try {
+      const kbFiles = await getAllFilesFromDB();
+      const mailGroup = await generateMailGroupStrategy(data, [], kbFiles);
+      await onSaveGeneratedEmails(mailGroup);
+      setGenerateMsg('开发信已生成并保存到背调报告，下载 PPT 时会自动包含。');
+    } catch (e: any) {
+      setGenerateMsg(`生成失败：${e?.message || e}`);
+    } finally {
+      setIsGeneratingEmails(false);
+    }
+  };
+
   return (
     <div className="h-[calc(100dvh-120px)] sm:h-[calc(100vh-140px)] flex flex-col gap-4 sm:gap-6 max-w-7xl mx-auto animate-fade-in overflow-hidden px-0">
+        {data && (
+          <div className="bg-white rounded-2xl border border-indigo-200 p-4 sm:p-5 shadow-sm flex-shrink-0">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-black text-slate-800">开发信 · 保存到背调报告</div>
+                <p className="text-xs text-slate-500 font-medium mt-1">
+                  一键生成 3 封定制开发信，写入当前客户背调结果；下载 PPT 时自动附带。
+                </p>
+                {generateMsg && <p className="text-[11px] font-bold text-emerald-700 mt-2">{generateMsg}</p>}
+              </div>
+              <button
+                type="button"
+                onClick={handleGenerateAndSaveEmails}
+                disabled={isGeneratingEmails || !onSaveGeneratedEmails}
+                className="inline-flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white px-5 py-3 rounded-xl font-bold text-sm shadow-lg"
+              >
+                {isGeneratingEmails ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                生成开发信并保存
+              </button>
+            </div>
+            {data.generatedEmails && (
+              <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-1 md:grid-cols-3 gap-3">
+                {[
+                  { label: '邮件 1', body: data.generatedEmails.email1 },
+                  { label: '邮件 2', body: data.generatedEmails.email2 },
+                  { label: '邮件 3', body: data.generatedEmails.email3 },
+                ].map((item) => (
+                  <div key={item.label} className="bg-slate-50 border border-slate-200 rounded-xl p-3">
+                    <div className="text-[10px] font-black text-indigo-600 uppercase mb-1 flex items-center gap-1">
+                      <Mail size={12} /> {item.label}
+                    </div>
+                    <p className="text-xs text-slate-700 whitespace-pre-wrap line-clamp-6">{item.body}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         {/* MAIN CHAT INTERFACE - NOW FULL WIDTH */}
         <div className="flex-1 bg-white rounded-2xl border border-slate-200 shadow-xl flex flex-col overflow-hidden relative">
             {/* Chat Header */}

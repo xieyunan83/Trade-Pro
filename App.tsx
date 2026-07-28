@@ -22,6 +22,7 @@ import {
   hasPermission,
 } from './services/permissions';
 import { ModuleStrategy } from './components/ModuleStrategy';
+import { ReportEnrichmentPanel } from './components/ReportEnrichmentPanel';
 import { ModuleSimilar } from './components/ModuleSimilar';
 import { ModulePromoGenerator } from './components/ModulePromoGenerator';
 import { ModuleClientCRM } from './components/ModuleClientCRM';
@@ -538,6 +539,13 @@ const App: React.FC = () => {
     setActiveModule(ModuleType.BACKGROUND);
     setHistoryOpen(false);
     setErrorMsg(null);
+  };
+
+  /** 合并局部更新到当前背调报告并持久化到历史 */
+  const patchAnalysisData = async (patch: Partial<AnalysisResult>) => {
+    const prev = analysisDataRef.current;
+    if (!prev) return;
+    await persistCurrentAnalysis({ ...prev, ...patch });
   };
 
   /** 把当前报告写回历史（按 viewingHistoryId / 域名匹配，不新建记录） */
@@ -1354,7 +1362,15 @@ const App: React.FC = () => {
                                 <div className="min-w-0"><h2 className="text-2xl sm:text-3xl md:text-4xl font-black text-slate-900 tracking-tight truncate">{analysisData.companyInfo?.name}</h2><div className="text-xs sm:text-sm text-slate-500 font-bold mt-2">上下文：深度调查报告</div></div>
                             </div>
                         )}
-                        <ModuleStrategy data={analysisData} />
+                        <ModuleStrategy
+                          data={analysisData}
+                          onSaveGeneratedEmails={async (emails) => {
+                            await patchAnalysisData({
+                              generatedEmails: emails,
+                              generatedEmailsAt: Date.now(),
+                            });
+                          }}
+                        />
                     </div>
                 )}
                 {analysisData && !alwaysActiveModules.includes(activeModule) && (
@@ -1377,6 +1393,12 @@ const App: React.FC = () => {
                           </button>
                           <button onClick={handleExportReport} className="flex items-center justify-center gap-2 bg-slate-900 hover:bg-blue-600 transition-colors text-white px-4 sm:px-6 py-3 rounded-2xl font-bold shadow-lg touch-manipulation"><FileSpreadsheet size={18} /> 下载 PPT 报告</button>
                         </div>
+                        {(analysisData.decisionMakers?.some((d) => d.emailGuess) ||
+                          analysisData.generatedEmails) && (
+                          <div className="mb-4">
+                            <ReportEnrichmentPanel data={analysisData} />
+                          </div>
+                        )}
                     </div>
                     {activeModule === ModuleType.BACKGROUND && (
                       <ModuleBackground
@@ -1390,8 +1412,17 @@ const App: React.FC = () => {
                       <ModuleDecisionMakers
                         data={analysisData}
                         historyId={viewingHistoryId}
-                        onUpdate={(dms) => {
-                          const next = { ...analysisData, decisionMakers: dms };
+                        onUpdate={(dms, meta) => {
+                          const next = {
+                            ...analysisData,
+                            decisionMakers: dms,
+                            ...(meta?.decisionMakerEmailSearchAt != null
+                              ? { decisionMakerEmailSearchAt: meta.decisionMakerEmailSearchAt }
+                              : {}),
+                            ...(meta?.decisionMakerEmailSearchHistory
+                              ? { decisionMakerEmailSearchHistory: meta.decisionMakerEmailSearchHistory }
+                              : {}),
+                          };
                           persistCurrentAnalysis(next).catch(console.error);
                         }}
                         onEnqueueEmailSearch={() => enqueueCurrentDmEmailSearch(analysisData, viewingHistoryId)}

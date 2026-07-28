@@ -11,8 +11,14 @@ import {
 interface ModuleDecisionMakersProps {
   data: AnalysisResult;
   historyId?: string | null;
-  /** 邮箱手工编辑 */
-  onUpdate?: (decisionMakers: DecisionMaker[]) => void;
+  /** 邮箱手工编辑 / 后台搜索完成写回 */
+  onUpdate?: (
+    decisionMakers: DecisionMaker[],
+    meta?: {
+      decisionMakerEmailSearchAt?: number;
+      decisionMakerEmailSearchHistory?: number[];
+    }
+  ) => void;
   /** 入队后台搜索；由 App 注入写回逻辑 */
   onEnqueueEmailSearch?: () => { ok: boolean; message: string };
 }
@@ -45,6 +51,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
   );
   const [queueMsg, setQueueMsg] = useState('');
   const [jobActive, setJobActive] = useState(false);
+  const lastAppliedJobIdRef = React.useRef<string | null>(null);
 
   useEffect(() => {
     setDecisionMakers(data.decisionMakers || []);
@@ -56,11 +63,29 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
   }, [data.decisionMakers, data.decisionMakerEmailSearchAt, data.decisionMakerEmailSearchHistory]);
 
   useEffect(() => {
-    const domain = data.companyInfo?.website || '';
-    return subscribeDmEmailSearchJobs(() => {
-      setJobActive(!!getActiveDmJobForDomain(domain));
+    const domain = (data.companyInfo?.website || '').replace(/^(?:https?:\/\/)?(?:www\.)?/i, '').split('/')[0].toLowerCase();
+    return subscribeDmEmailSearchJobs((jobs) => {
+      setJobActive(!!getActiveDmJobForDomain(data.companyInfo?.website || ''));
+      const job = jobs.find(
+        (j) =>
+          j.status === 'completed' &&
+          j.resultDecisionMakers &&
+          j.searchedAt &&
+          j.id !== lastAppliedJobIdRef.current &&
+          j.domain.replace(/^(?:https?:\/\/)?(?:www\.)?/i, '').split('/')[0].toLowerCase() === domain &&
+          (!data.decisionMakerEmailSearchAt || j.searchedAt > data.decisionMakerEmailSearchAt)
+      );
+      if (!job?.resultDecisionMakers || !job.searchedAt) return;
+      lastAppliedJobIdRef.current = job.id;
+      setDecisionMakers(job.resultDecisionMakers);
+      setLastSearchAt(job.searchedAt);
+      if (job.searchedAt) {
+        setSearchHistory((prev) => [...prev, job.searchedAt!].slice(-30));
+      }
+      setQueueMsg(`邮箱搜索已完成，已更新 ${job.resultDecisionMakers.length} 位联系人`);
+      // 持久化由 App enqueue onComplete 负责；此处仅刷新 UI
     });
-  }, [data.companyInfo?.website]);
+  }, [data.companyInfo?.website, data.decisionMakerEmailSearchAt, data.decisionMakerEmailSearchHistory, onUpdate]);
 
   const commit = (next: DecisionMaker[]) => {
     setDecisionMakers(next);

@@ -645,7 +645,7 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
             { text: "LinkedIn", options: { bold: true, fill: COLORS.ACCENT_BLUE, color: "FFFFFF" } },
         ];
         
-        const rows = data.decisionMakers.slice(0, 10).map(dm => [
+        const rows = data.decisionMakers.map(dm => [
             { text: sanitize(dm.name) },
             { text: sanitize(dm.title) },
             { text: sanitize(dm.emailGuess || "待补充") },

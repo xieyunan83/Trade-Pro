@@ -336,7 +336,9 @@ export interface AnalysisResult {
     actionPlan: string[];
   };
   similarCompanies: SimilarCompany[];
-  generatedEmails?: MailGroup; 
+  generatedEmails?: MailGroup;
+  /** 开发信生成并保存到报告的时间 */
+  generatedEmailsAt?: number;
 }
 
 export interface SimilarCompany {
