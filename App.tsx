@@ -633,11 +633,14 @@ const App: React.FC = () => {
     if (!src) return { ok: false, message: '当前没有打开的背调报告' };
     const domain = src.companyInfo?.website || '';
     const companyName = src.companyInfo?.name || domain;
+    const companyLinkedin =
+      src.tradeIntelligence?.companyLinkedin || src.socials?.linkedin || '';
     const hid = historyIdOverride ?? viewingHistoryIdRef.current;
 
     const res = enqueueDmEmailSearch({
       domain,
       companyName,
+      companyLinkedin,
       historyId: hid,
       existingDecisionMakers: src.decisionMakers || [],
       resolveExisting: () => {

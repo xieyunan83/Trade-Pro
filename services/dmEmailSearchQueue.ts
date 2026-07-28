@@ -14,6 +14,7 @@ export interface DmEmailSearchJob {
   historyId?: string | null;
   domain: string;
   companyName: string;
+  companyLinkedin?: string;
   status: DmEmailSearchJobStatus;
   createdAt: number;
   startedAt?: number;
@@ -72,6 +73,7 @@ export const getActiveDmJobForDomain = (domain: string): DmEmailSearchJob | unde
 export type EnqueueDmEmailSearchInput = {
   domain: string;
   companyName: string;
+  companyLinkedin?: string;
   historyId?: string | null;
   existingDecisionMakers?: DecisionMaker[];
   /** 任务真正开始前再取一次最新联系人（避免浏览其它报告时覆盖错） */
@@ -113,6 +115,8 @@ const pump = async () => {
           const research = await researchDecisionMakerEmails({
             domain: job.domain,
             existing,
+            companyName: job.companyName,
+            companyLinkedin: job.companyLinkedin,
             reverifyNonAnymail: true,
           });
 
@@ -180,6 +184,7 @@ export const enqueueDmEmailSearch = (
     historyId: input.historyId || null,
     domain,
     companyName: input.companyName || domain,
+    companyLinkedin: input.companyLinkedin || '',
     status: 'queued',
     createdAt: Date.now(),
     existingSnapshot: [...(input.existingDecisionMakers || [])],

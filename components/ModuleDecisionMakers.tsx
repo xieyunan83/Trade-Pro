@@ -92,6 +92,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
     const res = enqueueDmEmailSearch({
       domain,
       companyName: data.companyInfo?.name || domain,
+      companyLinkedin: data.tradeIntelligence?.companyLinkedin || data.socials?.linkedin || '',
       historyId,
       existingDecisionMakers: decisionMakers,
     });
@@ -111,7 +112,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
               <Users className="text-blue-600" /> 关键决策人挖掘
             </h3>
             <p className="text-sm text-slate-500 font-medium mt-1">
-              背调不会自动扣 Anymail 积分。确认客户合适后，点击「后台搜索决策人邮箱」，可离开本页继续浏览其它报告，多客户可并行。
+              背调不会自动扣 Anymail 积分。确认客户后点「后台搜索」：先从公司领英挖全部采购人员，再用 Anymail 按人查邮箱并同步搜官网域名；库内已有邮箱会先验证，无效则重查。采购人员不限人数。
             </p>
             {lastSearchAt ? (
               <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-bold text-slate-500">

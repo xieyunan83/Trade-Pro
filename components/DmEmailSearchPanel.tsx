@@ -68,7 +68,15 @@ export const DmEmailSearchPanel: React.FC = () => {
                     <div className={`text-[10px] font-black mt-1 ${ui.tone}`}>
                       {ui.label}
                       {job.status === 'completed' && job.stats
-                        ? ` · +${job.stats.added} / 更新${job.stats.upgraded} / 验证${job.stats.verified}`
+                        ? ` · +${job.stats.added} / 更新${job.stats.upgraded} / 验证${job.stats.verified}${
+                            job.stats.linkedinDiscovered
+                              ? ` / 领英采购${job.stats.linkedinDiscovered}`
+                              : ''
+                          }${
+                            job.stats.reFoundAfterInvalid
+                              ? ` / 无效重查${job.stats.reFoundAfterInvalid}`
+                              : ''
+                          }`
                         : ''}
                       {job.status === 'failed' && job.error ? ` · ${job.error.slice(0, 60)}` : ''}
                     </div>
