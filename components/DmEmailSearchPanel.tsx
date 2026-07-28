@@ -68,11 +68,19 @@ export const DmEmailSearchPanel: React.FC = () => {
                     <div className={`text-[10px] font-black mt-1 ${ui.tone}`}>
                       {ui.label}
                       {job.status === 'completed' && job.stats
-                        ? ` · 更新${job.stats.upgraded} / 验证${job.stats.verified}${
-                            job.stats.reFoundAfterInvalid
-                              ? ` / 无效重查${job.stats.reFoundAfterInvalid}`
-                              : ''
-                          }`
+                        ? (() => {
+                            const upgraded = job.stats?.upgraded || 0;
+                            const added = job.stats?.added || 0;
+                            const verified = job.stats?.verified || 0;
+                            if (upgraded + added + verified === 0) {
+                              return ' · 本次无新增邮箱';
+                            }
+                            return ` · 新增${added} / 更新${upgraded} / 验证${verified}${
+                              job.stats.reFoundAfterInvalid
+                                ? ` / 无效重查${job.stats.reFoundAfterInvalid}`
+                                : ''
+                            }`;
+                          })()
                         : ''}
                       {job.status === 'failed' && job.error ? ` · ${job.error.slice(0, 60)}` : ''}
                     </div>

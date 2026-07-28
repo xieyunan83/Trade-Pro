@@ -27,6 +27,8 @@ export interface DmEmailSearchJob {
   resultDecisionMakers?: DecisionMaker[];
   searchedAt?: number;
   searchHistoryAppend?: number;
+  /** true 表示用户触发了「再次深挖」 */
+  deepDig?: boolean;
 }
 
 type Listener = (jobs: DmEmailSearchJob[]) => void;
@@ -111,6 +113,8 @@ export type EnqueueDmEmailSearchInput = {
   companyLinkedin?: string;
   historyId?: string | null;
   existingDecisionMakers?: DecisionMaker[];
+  /** true: 再次深挖，允许补充按域名角色挖掘 */
+  deepDig?: boolean;
   /** 调用方已校验 feature.dm_email_search；false 时拒绝入队 */
   authorized?: boolean;
   /** 任务真正开始前再取一次最新联系人（避免浏览其它报告时覆盖错） */
@@ -154,6 +158,7 @@ const pump = async () => {
             existing,
             companyName: job.companyName,
             reverifyNonAnymail: true,
+            deepDig: !!job.deepDig,
           });
 
           job.status = 'completed';
@@ -245,6 +250,7 @@ export const enqueueDmEmailSearch = (
     status: 'queued',
     createdAt: Date.now(),
     existingSnapshot: [...(input.existingDecisionMakers || [])],
+    deepDig: !!input.deepDig,
   };
 
   jobs.unshift(job);

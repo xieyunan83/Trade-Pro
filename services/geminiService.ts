@@ -576,11 +576,14 @@ export const researchDecisionMakerEmails = async (opts: {
   companyName?: string;
   /** 对非 Anymail 来源邮箱做 verify（默认 true） */
   reverifyNonAnymail?: boolean;
+  /** 深挖模式：在按人名搜索后，再按域名角色补充联系人 */
+  deepDig?: boolean;
 }): Promise<DecisionMakerResearchResult> => {
   const searchedAt = Date.now();
   const domain = cleanDomain(opts.domain || '');
   const companyName = (opts.companyName || '').trim();
   const reverifyNonAnymail = opts.reverifyNonAnymail !== false;
+  const deepDig = !!opts.deepDig;
 
   const stats: DecisionMakerResearchStats = {
     added: 0,
@@ -686,6 +689,30 @@ export const researchDecisionMakerEmails = async (opts: {
       stats.upgraded += 1;
       stats.anymailFound += 1;
       if (hadBadEmail) stats.reFoundAfterInvalid += 1;
+    }
+
+    // 二次深挖：当用户点击「再次深挖」时，补充按域名角色挖掘（buyer/logistics/operations/ceo）
+    if (deepDig && domain) {
+      const seenKeys = new Set(
+        merged.map((dm) => {
+          const email = (dm.emailGuess || '').toLowerCase();
+          if (email) return `e:${email}`;
+          return `n:${(dm.name || '').toLowerCase()}|t:${(dm.title || '').toLowerCase()}`;
+        })
+      );
+
+      const roleCandidates = await fetchAnymailDecisionMakers(domain);
+      for (const candidate of roleCandidates) {
+        const email = (candidate.emailGuess || '').toLowerCase();
+        const key = email
+          ? `e:${email}`
+          : `n:${(candidate.name || '').toLowerCase()}|t:${(candidate.title || '').toLowerCase()}`;
+        if (seenKeys.has(key)) continue;
+        seenKeys.add(key);
+        merged.push(stampChecked(candidate, searchedAt));
+        stats.added += 1;
+        stats.anymailFound += 1;
+      }
     }
   } catch (e) {
     console.error('researchDecisionMakerEmails failed', e);

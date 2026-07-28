@@ -85,7 +85,14 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
       if (job.searchedAt) {
         setSearchHistory((prev) => [...prev, job.searchedAt!].slice(-30));
       }
-      setQueueMsg(`邮箱搜索已完成，已更新 ${job.resultDecisionMakers.length} 位联系人`);
+      const upgraded = job.stats?.upgraded || 0;
+      const added = job.stats?.added || 0;
+      const verified = job.stats?.verified || 0;
+      if (upgraded + added + verified === 0) {
+        setQueueMsg('邮箱搜索已完成：本次未发现新增可验证邮箱，可稍后再深挖或补充真实姓名后重试。');
+      } else {
+        setQueueMsg(`邮箱搜索已完成：新增 ${added}，更新 ${upgraded}，验证 ${verified}`);
+      }
       // 持久化由 App enqueue onComplete 负责；此处仅刷新 UI
     });
   }, [data.companyInfo?.website, data.decisionMakerEmailSearchAt]);
