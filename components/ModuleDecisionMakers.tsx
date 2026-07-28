@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { AnalysisResult, DecisionMaker } from '../types';
-import { Users, Linkedin, Mail, Phone, ExternalLink, UserCheck, AlertTriangle, Download, Briefcase, ShieldCheck, ShieldAlert, RefreshCw, Loader2, Clock } from 'lucide-react';
+import { Users, Linkedin, Mail, Phone, ExternalLink, UserCheck, AlertTriangle, Download, Briefcase, ShieldCheck, ShieldAlert, RefreshCw, Loader2, Clock, Plus, Trash2, Save } from 'lucide-react';
 import { exportContactsToExcel } from '../services/exportService';
 import {
   getActiveDmJobForDomain,
@@ -38,6 +38,25 @@ const formatSearchTime = (ts?: number) => {
     return '';
   }
 };
+
+const emptyDecisionMaker = (): DecisionMaker => ({
+  name: '',
+  firstName: '',
+  lastName: '',
+  title: '',
+  department: '',
+  yearsActive: '',
+  emailGuess: '',
+  phone: '',
+  linkedin: '',
+  type: 'Buyer',
+  source: 'Manual',
+  emailSource: 'Manual',
+  emailStatus: 'unverified',
+  isVerified: false,
+  confidence: undefined,
+  influenceScore: 3,
+});
 
 export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
   data,
@@ -102,16 +121,34 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
     onUpdate?.(next);
   };
 
-  const handleEmailChange = (index: number, newEmail: string) => {
+  const handleDecisionMakerChange = (
+    index: number,
+    patch: Partial<DecisionMaker>,
+    options?: { resetEmailVerification?: boolean }
+  ) => {
     const next = [...decisionMakers];
     next[index] = {
       ...next[index],
-      emailGuess: newEmail,
+      ...patch,
       source: 'Manual',
-      emailSource: 'Manual',
-      emailStatus: 'unverified',
-      isVerified: false,
+      ...(options?.resetEmailVerification
+        ? {
+            emailSource: 'Manual',
+            emailStatus: 'unverified',
+            isVerified: false,
+          }
+        : {}),
     };
+    commit(next);
+  };
+
+  const handleAddDecisionMaker = () => {
+    const next = [emptyDecisionMaker(), ...decisionMakers];
+    commit(next);
+  };
+
+  const handleDeleteDecisionMaker = (index: number) => {
+    const next = decisionMakers.filter((_, i) => i !== index);
     commit(next);
   };
 
@@ -160,6 +197,13 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
             )}
           </div>
           <div className="flex flex-col sm:flex-row gap-2 flex-shrink-0">
+            <button
+              type="button"
+              onClick={handleAddDecisionMaker}
+              className="inline-flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl text-sm font-bold touch-manipulation"
+            >
+              <Plus size={16} /> 手动新增决策人
+            </button>
             {canDmEmailSearch && (
               <button
                 type="button"
@@ -218,10 +262,16 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
           {decisionMakers.length === 0 ? (
             <div className="col-span-full py-12 text-center text-slate-400 font-bold">
-              暂无决策人线索。可先点「后台搜索决策人邮箱」，或确认公司网站有效。
+              暂无决策人线索。你可以先手动新增，或点「后台搜索决策人邮箱」补充。
             </div>
           ) : decisionMakers.map((dm, i) => (
-            <DecisionMakerCard key={`${dm.emailGuess || dm.name}-${i}`} dm={dm} index={i} onEmailChange={handleEmailChange} />
+            <DecisionMakerCard
+              key={`${dm.emailGuess || dm.name || 'manual'}-${i}`}
+              dm={dm}
+              index={i}
+              onChange={handleDecisionMakerChange}
+              onDelete={handleDeleteDecisionMaker}
+            />
           ))}
         </div>
       </div>
@@ -244,13 +294,59 @@ const statusLabel = (dm: DecisionMaker) => {
   return { text: '未验证', ok: false };
 };
 
-const DecisionMakerCard: React.FC<{ dm: DecisionMaker; index: number; onEmailChange: (i: number, e: string) => void }> = ({ dm, index, onEmailChange }) => {
+const Field: React.FC<{ label: string; children: React.ReactNode; className?: string }> = ({
+  label,
+  children,
+  className = '',
+}) => (
+  <label className={`block ${className}`}>
+    <span className="mb-1 block text-[10px] font-black uppercase tracking-widest text-slate-400">
+      {label}
+    </span>
+    {children}
+  </label>
+);
+
+const DecisionMakerCard: React.FC<{
+  dm: DecisionMaker;
+  index: number;
+  onChange: (index: number, patch: Partial<DecisionMaker>, options?: { resetEmailVerification?: boolean }) => void;
+  onDelete: (index: number) => void;
+}> = ({ dm, index, onChange, onDelete }) => {
   const [isEditing, setIsEditing] = useState(false);
-  const [email, setEmail] = useState(dm.emailGuess || '');
+  const [draft, setDraft] = useState<DecisionMaker>(dm);
   const emailPlatform = dm.emailSource || dm.source || '未知';
   const verify = statusLabel(dm);
 
-  useEffect(() => { setEmail(dm.emailGuess || ''); }, [dm.emailGuess]);
+  useEffect(() => { setDraft(dm); }, [dm]);
+
+  const updateDraft = <K extends keyof DecisionMaker>(key: K, value: DecisionMaker[K]) => {
+    setDraft((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const saveDraft = () => {
+    const trimmedName = (draft.name || '').trim();
+    const normalized: Partial<DecisionMaker> = {
+      ...draft,
+      name: trimmedName || '手动联系人',
+      firstName: (draft.firstName || '').trim() || undefined,
+      lastName: (draft.lastName || '').trim() || undefined,
+      title: (draft.title || '').trim() || '待补充',
+      department: (draft.department || '').trim() || undefined,
+      yearsActive: (draft.yearsActive || '').trim() || undefined,
+      emailGuess: (draft.emailGuess || '').trim() || undefined,
+      phone: (draft.phone || '').trim() || undefined,
+      linkedin: (draft.linkedin || '').trim() || undefined,
+      source: 'Manual',
+      emailSource: draft.emailGuess?.trim() ? 'Manual' : undefined,
+      emailStatus: draft.emailGuess?.trim() ? (draft.emailStatus || 'unverified') : undefined,
+      isVerified: !!draft.isVerified && !!draft.emailGuess?.trim(),
+      confidence: typeof draft.confidence === 'number' ? draft.confidence : undefined,
+      influenceScore: draft.influenceScore || undefined,
+    };
+    onChange(index, normalized, { resetEmailVerification: draft.emailGuess !== dm.emailGuess });
+    setIsEditing(false);
+  };
 
   return (
     <div className="bg-slate-50 p-5 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-100 hover:border-blue-200 transition-all group">
@@ -260,8 +356,8 @@ const DecisionMakerCard: React.FC<{ dm: DecisionMaker; index: number; onEmailCha
             {(dm.name || '?').charAt(0)}
           </div>
           <div className="min-w-0">
-            <h4 className="text-base sm:text-lg font-black text-slate-800 group-hover:text-blue-600 transition-colors truncate">{dm.name}</h4>
-            <div className="text-xs font-bold text-slate-500 truncate">{dm.title}</div>
+            <h4 className="text-base sm:text-lg font-black text-slate-800 group-hover:text-blue-600 transition-colors truncate">{dm.name || '未命名联系人'}</h4>
+            <div className="text-xs font-bold text-slate-500 truncate">{dm.title || '待补充职位'}</div>
             {dm.department && <div className="text-[10px] font-bold text-slate-400 mt-0.5">{dm.department}</div>}
           </div>
         </div>
@@ -276,45 +372,107 @@ const DecisionMakerCard: React.FC<{ dm: DecisionMaker; index: number; onEmailCha
       </div>
       
       <div className="space-y-2.5 mt-4">
-        <div className="flex items-center justify-between p-3 bg-white rounded-xl border border-slate-100 gap-2">
-          <div className="flex items-center gap-2 overflow-hidden min-w-0">
-            <Mail size={14} className="text-slate-400 shrink-0" />
-            {isEditing ? (
-              <input 
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                onBlur={() => { setIsEditing(false); onEmailChange(index, email); }}
-                className="text-xs font-bold text-slate-600 w-full border-none focus:ring-0 p-0"
-                autoFocus
-              />
-            ) : (
-              <span className="text-xs font-bold text-slate-600 truncate">{email || '待补充（需后台搜索）'}</span>
-            )}
+        {!isEditing ? (
+          <div className="flex items-center justify-between p-3 bg-white rounded-xl border border-slate-100 gap-2">
+            <div className="flex items-center gap-2 overflow-hidden min-w-0">
+              <Mail size={14} className="text-slate-400 shrink-0" />
+              <span className="text-xs font-bold text-slate-600 truncate">{dm.emailGuess || '待补充（可手动填写）'}</span>
+            </div>
+            <div className="flex gap-2 flex-shrink-0">
+              <button onClick={() => setIsEditing(true)} className="text-[10px] font-black text-slate-400 hover:text-blue-600">编辑全部</button>
+              <button 
+                onClick={() => { navigator.clipboard.writeText(dm.emailGuess || ''); alert('已复制'); }}
+                className="text-[10px] font-black text-blue-600 hover:underline"
+              >
+                复制
+              </button>
+            </div>
           </div>
-          <div className="flex gap-2 flex-shrink-0">
-            <button onClick={() => setIsEditing(true)} className="text-[10px] font-black text-slate-400 hover:text-blue-600">编辑</button>
-            <button 
-              onClick={() => { navigator.clipboard.writeText(email || ''); alert('已复制'); }}
-              className="text-[10px] font-black text-blue-600 hover:underline"
-            >
-              复制
-            </button>
+        ) : (
+          <div className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Field label="姓名">
+                <input value={draft.name || ''} onChange={(e) => updateDraft('name', e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium" />
+              </Field>
+              <Field label="职位">
+                <input value={draft.title || ''} onChange={(e) => updateDraft('title', e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium" />
+              </Field>
+              <Field label="First Name">
+                <input value={draft.firstName || ''} onChange={(e) => updateDraft('firstName', e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium" />
+              </Field>
+              <Field label="Last Name">
+                <input value={draft.lastName || ''} onChange={(e) => updateDraft('lastName', e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium" />
+              </Field>
+              <Field label="部门">
+                <input value={draft.department || ''} onChange={(e) => updateDraft('department', e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium" />
+              </Field>
+              <Field label="任职/活跃时间">
+                <input value={draft.yearsActive || ''} onChange={(e) => updateDraft('yearsActive', e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium" />
+              </Field>
+              <Field label="邮箱" className="sm:col-span-2">
+                <input value={draft.emailGuess || ''} onChange={(e) => updateDraft('emailGuess', e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium" />
+              </Field>
+              <Field label="电话">
+                <input value={draft.phone || ''} onChange={(e) => updateDraft('phone', e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium" />
+              </Field>
+              <Field label="LinkedIn">
+                <input value={draft.linkedin || ''} onChange={(e) => updateDraft('linkedin', e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium" />
+              </Field>
+              <Field label="角色类型">
+                <select value={draft.type} onChange={(e) => updateDraft('type', e.target.value as DecisionMaker['type'])} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium bg-white">
+                  <option value="Buyer">Buyer</option>
+                  <option value="CEO">CEO</option>
+                  <option value="Other">Other</option>
+                </select>
+              </Field>
+              <Field label="影响力 1-5">
+                <select value={String(draft.influenceScore || 3)} onChange={(e) => updateDraft('influenceScore', Number(e.target.value))} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium bg-white">
+                  <option value="1">1</option>
+                  <option value="2">2</option>
+                  <option value="3">3</option>
+                  <option value="4">4</option>
+                  <option value="5">5</option>
+                </select>
+              </Field>
+            </div>
+
+            <div className="flex flex-wrap justify-between gap-2 pt-2">
+              <button type="button" onClick={() => onDelete(index)} className="inline-flex items-center gap-2 rounded-xl bg-red-50 px-3 py-2 text-sm font-bold text-red-600 hover:bg-red-100">
+                <Trash2 size={14} /> 删除
+              </button>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => { setDraft(dm); setIsEditing(false); }}
+                  className="rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={saveDraft}
+                  className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-sm font-bold text-white hover:bg-blue-700"
+                >
+                  <Save size={14} /> 保存
+                </button>
+              </div>
+            </div>
           </div>
-        </div>
+        )}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-violet-50 border border-violet-100">
             <Mail size={12} className="text-violet-500 flex-shrink-0" />
             <div className="min-w-0">
               <div className="text-[9px] font-black text-violet-400 uppercase">邮箱来源平台</div>
-              <div className="text-[11px] font-black text-violet-800 truncate">{email ? emailPlatform : '—'}</div>
+              <div className="text-[11px] font-black text-violet-800 truncate">{dm.emailGuess ? emailPlatform : '—'}</div>
             </div>
           </div>
           <div className={`flex items-center gap-2 px-3 py-2 rounded-xl border ${verify.ok ? 'bg-emerald-50 border-emerald-100' : 'bg-amber-50 border-amber-100'}`}>
             {verify.ok ? <ShieldCheck size={12} className="text-emerald-600 flex-shrink-0" /> : <ShieldAlert size={12} className="text-amber-600 flex-shrink-0" />}
             <div className="min-w-0">
               <div className={`text-[9px] font-black uppercase ${verify.ok ? 'text-emerald-500' : 'text-amber-500'}`}>验证状态</div>
-              <div className={`text-[11px] font-black truncate ${verify.ok ? 'text-emerald-800' : 'text-amber-800'}`}>{email ? verify.text : '—'}</div>
+              <div className={`text-[11px] font-black truncate ${verify.ok ? 'text-emerald-800' : 'text-amber-800'}`}>{dm.emailGuess ? verify.text : '—'}</div>
             </div>
           </div>
         </div>
