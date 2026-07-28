@@ -116,7 +116,6 @@ const pump = async () => {
             domain: job.domain,
             existing,
             companyName: job.companyName,
-            companyLinkedin: job.companyLinkedin,
             reverifyNonAnymail: true,
           });
 

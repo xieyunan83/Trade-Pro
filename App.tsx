@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { analyzeCompany, hasApiKeyConfigured, checkApiKeyAvailability, hydrateApiConfigsFromCloud, searchPotentialClients, generateMailGroupStrategy } from './services/geminiService';
+import { analyzeCompany, hasApiKeyConfigured, checkApiKeyAvailability, hydrateApiConfigsFromCloud, searchPotentialClients } from './services/geminiService';
 import { exportToPPT, exportAutomationReportToPPT, exportBatchAutomationReportsToPPT } from './services/exportService';
 import { saveHistory, getHistory, getAllFilesFromDB, saveAutomationTask, getAutomationQueue, deleteAutomationTask, saveFileToDB, clearAutomationQueue, clearCompletedAutomationTasks, saveDiscoveryArchive, getDiscoveryArchives, deleteDiscoveryArchive, deleteHistoryItem } from './services/db';
 import { fetchGlobalConfig, fetchDocumentsFromRepo, backupUserHistory, fetchCRMFromCloud, saveCRMToCloud, fetchUserHistoryFromCloud, checkGitHubStatus, fetchApiConfigsFromCloud, setManualGitHubConfig } from './services/githubService';
@@ -522,7 +522,7 @@ const App: React.FC = () => {
   const performSingleAnalysis = async (domain: string) => {
     setLoading(true); setErrorMsg(null); setActiveModule(ModuleType.BACKGROUND); setMobileMenuOpen(false);
     try {
-      const result = await analyzeCompany(domain, 'detailed');
+      const result = await analyzeCompany(domain, 'economy');
       setAnalysisData(result);
       incrementUsage('analysis');
       const saved = await saveAnalysisToHistory(result, 'single');
@@ -633,14 +633,11 @@ const App: React.FC = () => {
     if (!src) return { ok: false, message: '当前没有打开的背调报告' };
     const domain = src.companyInfo?.website || '';
     const companyName = src.companyInfo?.name || domain;
-    const companyLinkedin =
-      src.tradeIntelligence?.companyLinkedin || src.socials?.linkedin || '';
     const hid = historyIdOverride ?? viewingHistoryIdRef.current;
 
     const res = enqueueDmEmailSearch({
       domain,
       companyName,
-      companyLinkedin,
       historyId: hid,
       existingDecisionMakers: src.decisionMakers || [],
       resolveExisting: () => {
@@ -889,17 +886,9 @@ const App: React.FC = () => {
 
           try {
               // 1. Analyze
-              const result = await analyzeCompany(task.website, task.mode || 'detailed');
-              
-              // 2. Generate Email (Only if detailed)
-              let mailGroup;
-              if (task.mode === 'detailed') {
-                  setAutomationResults(prev => prev.map(t => t.id === task.id ? { ...t, status: 'generating_email' } : t));
-                  const kbFiles = await getAllFilesFromDB();
-                  mailGroup = await generateMailGroupStrategy(result, task.productImages || [], kbFiles);
-              }
+              const result = await analyzeCompany(task.website, task.mode || 'economy');
 
-              // 3. Complete — 立刻落盘任务 + 写入历史，避免额度白花
+              // 2. Complete — 立刻落盘任务 + 写入历史（开发信请稍后在策略模块手动生成）
               const completedTask: AutomationResult = { 
                   ...task,
                   clientName: result.companyInfo?.name || task.clientName,
@@ -907,7 +896,7 @@ const App: React.FC = () => {
                   country: result.companyInfo?.headquarters?.split(',').pop()?.trim() || task.country,
                   status: 'completed', 
                   analysis: result, 
-                  mailGroup: mailGroup,
+                  mailGroup: undefined,
                   keyword: task.keyword || discoveryState.product,
               };
               
@@ -1427,20 +1416,19 @@ const App: React.FC = () => {
                   </div>
                   <div className="p-8 grid grid-cols-1 md:grid-cols-2 gap-6">
                       <button onClick={() => confirmBatchStart('detailed')} className="p-6 border-2 border-slate-200 rounded-2xl hover:border-purple-500 hover:bg-purple-50 group text-left transition-all">
-                          <div className="font-bold text-slate-800 text-lg mb-2 group-hover:text-purple-700">详细模式 (高消耗)</div>
+                          <div className="font-bold text-slate-800 text-lg mb-2 group-hover:text-purple-700">详细模式</div>
                           <ul className="text-xs text-slate-500 space-y-2">
                               <li>✅ 逐个进行背景调查</li>
-                              <li>✅ 逐个生成定制开发信策略</li>
                               <li>✅ 每个客户单独生成 PPT</li>
-                              <li>⚠️ 消耗更多 AI 配额</li>
+                              <li>ℹ️ 开发信请在策略模块手动生成</li>
                           </ul>
                       </button>
                       <button onClick={() => confirmBatchStart('economy')} className="p-6 border-2 border-slate-200 rounded-2xl hover:border-green-500 hover:bg-green-50 group text-left transition-all">
                           <div className="font-bold text-slate-800 text-lg mb-2 group-hover:text-green-700">经济模式 (省流)</div>
                           <ul className="text-xs text-slate-500 space-y-2">
                               <li>✅ 逐个进行背景调查</li>
-                              <li>❌ 不生成单独开发信</li>
-                              <li>✅ 1 份合并 PPT + 通用策略</li>
+                              <li>✅ 1 份合并 PPT</li>
+                              <li>ℹ️ 开发信请在策略模块手动生成</li>
                               <li>⚡️ 快速高效</li>
                           </ul>
                       </button>
