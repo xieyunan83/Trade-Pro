@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
-import { Building2, Plus, Save, Shield, Trash2, UserCog } from 'lucide-react';
-import type { Department, PermissionKey, User, UserRole } from '../types';
+import { Building2, Plus, Save, Shield, Trash2, UserCog, Cpu, Clock } from 'lucide-react';
+import type { AccessSchedule, Department, PermissionKey, User, UserRole } from '../types';
 import {
   ALL_PERMISSION_KEYS,
   PERMISSION_CATALOG,
@@ -10,6 +10,11 @@ import {
 } from '../services/permissions';
 import { createDepartment } from '../services/orgStore';
 import { findUserByName, hashPassword, persistDepartments, persistUsers } from '../services/auth';
+import {
+  clearUserDeviceBindings,
+  defaultAccessSchedule,
+  describeSchedule,
+} from '../services/deviceBind';
 
 interface OrgPermissionPanelProps {
   currentUser: User;
@@ -20,6 +25,16 @@ interface OrgPermissionPanelProps {
   /** manager 模式：只能改本部门下属 */
   mode?: 'admin' | 'manager';
 }
+
+const WEEK_OPTIONS = [
+  { v: 1, label: '一' },
+  { v: 2, label: '二' },
+  { v: 3, label: '三' },
+  { v: 4, label: '四' },
+  { v: 5, label: '五' },
+  { v: 6, label: '六' },
+  { v: 0, label: '日' },
+];
 
 export const OrgPermissionPanel: React.FC<OrgPermissionPanelProps> = ({
   currentUser,
@@ -35,6 +50,8 @@ export const OrgPermissionPanel: React.FC<OrgPermissionPanelProps> = ({
   const [draftRole, setDraftRole] = useState<UserRole>('user');
   const [draftDeptId, setDraftDeptId] = useState('');
   const [draftDisabled, setDraftDisabled] = useState(false);
+  const [draftDeviceBindRequired, setDraftDeviceBindRequired] = useState(true);
+  const [draftSchedule, setDraftSchedule] = useState<AccessSchedule>(defaultAccessSchedule());
   const [msg, setMsg] = useState('');
 
   const manageableUsers = useMemo(() => {
@@ -63,12 +80,22 @@ export const OrgPermissionPanel: React.FC<OrgPermissionPanelProps> = ({
         ? u.permissions
         : defaultPermissionsForRole(u.role)
     );
+    setDraftDeviceBindRequired(u.role === 'user' ? u.deviceBindRequired !== false : false);
+    setDraftSchedule(u.accessSchedule ? { ...defaultAccessSchedule(), ...u.accessSchedule } : defaultAccessSchedule());
     setMsg('');
   };
 
   const togglePerm = (key: PermissionKey) => {
     if (!isAdmin && key === 'feature.manage_team_users') return;
     setDraftPerms((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
+  };
+
+  const toggleDay = (day: number) => {
+    setDraftSchedule((prev) => {
+      const cur = prev.daysOfWeek || [];
+      const next = cur.includes(day) ? cur.filter((d) => d !== day) : [...cur, day].sort();
+      return { ...prev, daysOfWeek: next };
+    });
   };
 
   const handleSaveUser = async () => {
@@ -85,22 +112,39 @@ export const OrgPermissionPanel: React.FC<OrgPermissionPanelProps> = ({
     const next = users.map((u) => {
       if (u.username !== selected.username) return u;
       if (isAdmin) {
+        const role = draftRole;
         return {
           ...u,
-          role: draftRole,
+          role,
           departmentId: draftDeptId || undefined,
           disabled: draftDisabled,
           permissions: nextPerms,
+          deviceBindRequired: role === 'user' ? draftDeviceBindRequired : false,
+          accessSchedule: role === 'user' ? draftSchedule : undefined,
+          boundDevices: role === 'user' ? u.boundDevices || [] : [],
         };
       }
       return {
         ...u,
         permissions: nextPerms,
+        deviceBindRequired: draftDeviceBindRequired,
+        accessSchedule: draftSchedule,
       };
     });
     setUsers(next);
     await persistUsers(next, Date.now(), departments);
-    setMsg(`已保存「${selected.username}」的权限设置`);
+    setMsg(`已保存「${selected.username}」的权限与设备/时段设置`);
+  };
+
+  const handleResetDeviceBind = async () => {
+    if (!selected) return;
+    if (!confirm(`确认清除「${selected.username}」的设备绑定？下次登录需重新登记 MAC 并绑定本机。`)) return;
+    const next = users.map((u) =>
+      u.username === selected.username ? clearUserDeviceBindings(u) : u
+    );
+    setUsers(next);
+    await persistUsers(next, Date.now(), departments);
+    setMsg(`已清除「${selected.username}」的设备绑定`);
   };
 
   const handleAddDepartment = async () => {
@@ -191,6 +235,9 @@ export const OrgPermissionPanel: React.FC<OrgPermissionPanelProps> = ({
       createdAt: Date.now(),
       departmentId: deptName?.trim() || undefined,
       permissions: defaultPermissionsForRole(role),
+      deviceBindRequired: role === 'user',
+      boundDevices: [],
+      accessSchedule: role === 'user' ? defaultAccessSchedule() : undefined,
     };
     const next = [...users, newUser];
     setUsers(next);
@@ -423,6 +470,112 @@ export const OrgPermissionPanel: React.FC<OrgPermissionPanelProps> = ({
                     </button>
                   </div>
                 </div>
+
+                {(draftRole === 'user' || selected.role === 'user') && (
+                  <div className="space-y-4 rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                    <div className="flex items-center gap-2">
+                      <Cpu size={14} className="text-emerald-600" />
+                      <span className="text-xs font-black text-slate-600 uppercase tracking-widest">设备绑定（仅普通员工）</span>
+                    </div>
+                    <p className="text-[11px] font-bold text-slate-500 leading-relaxed">
+                      浏览器无法直接读取网卡 MAC。员工首次登录须登记 MAC，并锁定本机设备指纹；换电脑或换浏览器将无法使用。管理员/主管不受限。
+                    </p>
+                    <label className="flex items-center gap-2 text-sm font-bold text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={draftDeviceBindRequired}
+                        onChange={(e) => setDraftDeviceBindRequired(e.target.checked)}
+                      />
+                      启用本机设备绑定
+                    </label>
+                    <div className="text-[11px] font-bold text-slate-600 space-y-1">
+                      {(selected.boundDevices || []).length === 0 ? (
+                        <div className="text-amber-600">尚未绑定设备</div>
+                      ) : (
+                        selected.boundDevices!.map((d) => (
+                          <div key={d.deviceId} className="bg-white rounded-xl border border-slate-100 px-3 py-2">
+                            <div>MAC：{d.macAddress || '—'}</div>
+                            <div className="truncate">指纹：{d.deviceId.slice(0, 16)}…</div>
+                            <div className="text-slate-400">
+                              {d.label || '本机'} · {new Date(d.boundAt).toLocaleString('zh-CN')}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleResetDeviceBind}
+                      className="text-[11px] font-black text-red-600 hover:underline"
+                    >
+                      清除设备绑定（允许换机重绑）
+                    </button>
+
+                    <div className="border-t border-slate-200 pt-4 space-y-3">
+                      <div className="flex items-center gap-2">
+                        <Clock size={14} className="text-blue-600" />
+                        <span className="text-xs font-black text-slate-600 uppercase tracking-widest">可用时段</span>
+                      </div>
+                      <label className="flex items-center gap-2 text-sm font-bold text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={!!draftSchedule.enabled}
+                          onChange={(e) => setDraftSchedule((s) => ({ ...s, enabled: e.target.checked }))}
+                        />
+                        启用可用时段限制
+                      </label>
+                      <div className="text-[11px] font-bold text-slate-500">当前：{describeSchedule(draftSchedule)}</div>
+                      <div className="flex flex-wrap gap-2">
+                        {WEEK_OPTIONS.map((d) => (
+                          <button
+                            key={d.v}
+                            type="button"
+                            onClick={() => toggleDay(d.v)}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-black border ${
+                              (draftSchedule.daysOfWeek || []).includes(d.v)
+                                ? 'bg-blue-600 text-white border-blue-600'
+                                : 'bg-white text-slate-500 border-slate-200'
+                            }`}
+                          >
+                            周{d.label}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <label className="text-[10px] font-black text-slate-400 uppercase">
+                          开始
+                          <input
+                            type="time"
+                            value={draftSchedule.startTime || '09:00'}
+                            onChange={(e) => setDraftSchedule((s) => ({ ...s, startTime: e.target.value }))}
+                            className="mt-1 w-full border rounded-xl px-3 py-2 text-sm font-bold bg-white"
+                          />
+                        </label>
+                        <label className="text-[10px] font-black text-slate-400 uppercase">
+                          结束
+                          <input
+                            type="time"
+                            value={draftSchedule.endTime || '18:00'}
+                            onChange={(e) => setDraftSchedule((s) => ({ ...s, endTime: e.target.value }))}
+                            className="mt-1 w-full border rounded-xl px-3 py-2 text-sm font-bold bg-white"
+                          />
+                        </label>
+                      </div>
+                      <label className="text-[10px] font-black text-slate-400 uppercase block">
+                        时区
+                        <select
+                          value={draftSchedule.timezone || 'Asia/Shanghai'}
+                          onChange={(e) => setDraftSchedule((s) => ({ ...s, timezone: e.target.value }))}
+                          className="mt-1 w-full border rounded-xl px-3 py-2 text-sm font-bold bg-white"
+                        >
+                          <option value="Asia/Shanghai">Asia/Shanghai（中国）</option>
+                          <option value="Asia/Hong_Kong">Asia/Hong_Kong</option>
+                          <option value="UTC">UTC</option>
+                        </select>
+                      </label>
+                    </div>
+                  </div>
+                )}
 
                 <button
                   type="button"

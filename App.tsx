@@ -32,6 +32,7 @@ import { ModuleImageGenerator } from './components/ModuleImageGenerator';
 import { ClientFinder } from './components/ClientFinder';
 import { RecordsPanel, archiveToDiscoveryState } from './components/RecordsPanel';
 import { Login } from './components/Login';
+import { AccessGate } from './components/AccessGate';
 import { loadUsersWithMigration, loadUsersFromStorage, saveUsersToStorage, getUsersUpdatedAt } from './services/auth';
 import { AdminDashboard } from './components/AdminDashboard';
 import { 
@@ -522,6 +523,22 @@ const App: React.FC = () => {
       cancelled = true;
     };
   }, [currentUser?.username]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    const fresh = users.find(
+      (u) => u.username.trim().toLowerCase() === currentUser.username.trim().toLowerCase()
+    );
+    if (!fresh) return;
+    // 管理员改了设备/时段后，让当前会话立即生效
+    const sameBind =
+      JSON.stringify(fresh.boundDevices || []) === JSON.stringify(currentUser.boundDevices || []) &&
+      JSON.stringify(fresh.accessSchedule || null) === JSON.stringify(currentUser.accessSchedule || null) &&
+      fresh.deviceBindRequired === currentUser.deviceBindRequired &&
+      fresh.disabled === currentUser.disabled &&
+      JSON.stringify(fresh.permissions || []) === JSON.stringify(currentUser.permissions || []);
+    if (!sameBind) setCurrentUser(fresh);
+  }, [users, currentUser]);
 
   useEffect(() => {
       if (!currentUser || !userDataReadyRef.current) return;
@@ -1164,7 +1181,12 @@ const App: React.FC = () => {
 
   if (!currentUser) {
     if (!authReady) return <div className="h-screen flex items-center justify-center bg-slate-50"><Loader2 className="animate-spin text-blue-600" size={40} /></div>;
-    return <Login onLogin={setCurrentUser} />;
+    return (
+      <Login
+        onLogin={setCurrentUser}
+        onUsersChange={(next) => setUsers(next)}
+      />
+    );
   }
 
   if (currentUser.role === 'admin') {
@@ -1206,6 +1228,7 @@ const App: React.FC = () => {
           ].filter((item) => canAccessModule(currentUser, item.id));
 
   return (
+    <AccessGate user={currentUser} onLogout={handleLogout}>
     <div className="flex min-h-screen min-h-[100dvh] bg-slate-100 overflow-hidden">
       {/* Mobile sidebar backdrop */}
       {mobileMenuOpen && (
@@ -1656,6 +1679,7 @@ const App: React.FC = () => {
       )}
 
     </div>
+    </AccessGate>
   );
 };
 export default App;

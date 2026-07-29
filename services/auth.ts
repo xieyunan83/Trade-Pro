@@ -50,6 +50,9 @@ export function normalizeUser(u: User): User {
         : defaultPermissionsForRole(role),
     departmentId: u.departmentId || undefined,
     disabled: !!u.disabled,
+    deviceBindRequired: role === 'user' ? u.deviceBindRequired !== false : false,
+    boundDevices: Array.isArray(u.boundDevices) ? u.boundDevices : [],
+    accessSchedule: u.accessSchedule || undefined,
   };
 }
 

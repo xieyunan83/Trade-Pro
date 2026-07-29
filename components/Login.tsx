@@ -1,23 +1,41 @@
 
 import React, { useState } from 'react';
 import { User } from '../types';
-import { User as UserIcon, Lock, Loader2, AlertTriangle } from 'lucide-react';
+import { User as UserIcon, Lock, Loader2, AlertTriangle, Cpu } from 'lucide-react';
 import { authenticateUser } from '../services/auth';
+import {
+  bindCurrentDevice,
+  confirmLocalMacForBoundDevice,
+  evaluateEmployeeAccess,
+  formatMacInputHint,
+  isEmployeeRole,
+} from '../services/deviceBind';
 
 interface LoginProps {
   onLogin: (user: User) => void;
+  onUsersChange?: (users: User[]) => void;
 }
 
-export const Login: React.FC<LoginProps> = ({ onLogin }) => {
+export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [pendingUser, setPendingUser] = useState<User | null>(null);
+  const [bindMode, setBindMode] = useState<'first' | 'remac'>('first');
+  const [macInput, setMacInput] = useState('');
+
+  const finishLogin = (user: User) => {
+    setPendingUser(null);
+    setMacInput('');
+    onLogin(user);
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError('');
+    setPendingUser(null);
 
     try {
       const user = await authenticateUser(username, password);
@@ -25,10 +43,81 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
         setError('用户名或密码错误');
         return;
       }
-      onLogin(user);
+      if (user.disabled) {
+        setError('该账号已被停用，请联系管理员');
+        return;
+      }
+
+      if (!isEmployeeRole(user)) {
+        finishLogin(user);
+        return;
+      }
+
+      const access = await evaluateEmployeeAccess(user);
+      if (access.ok) {
+        finishLogin(user);
+        return;
+      }
+
+      if (access.needBind || access.reason === 'device_unbound_need_bind') {
+        setPendingUser(user);
+        setBindMode('first');
+        setError('');
+        return;
+      }
+
+      if (access.reason === 'mac_mismatch') {
+        setPendingUser(user);
+        setBindMode('remac');
+        setError(access.message);
+        return;
+      }
+
+      setError(access.message);
     } catch (err) {
       console.error('Login failed', err);
       setError('登录失败，请稍后重试');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleBindDevice = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pendingUser) return;
+    setLoading(true);
+    setError('');
+    try {
+      if (bindMode === 'remac') {
+        const conf = await confirmLocalMacForBoundDevice(pendingUser, macInput);
+        if (conf.ok === false) {
+          setError(conf.message);
+          return;
+        }
+        const access = await evaluateEmployeeAccess(pendingUser);
+        if (!access.ok) {
+          setError(access.message);
+          return;
+        }
+        finishLogin(pendingUser);
+        return;
+      }
+
+      const res = await bindCurrentDevice(pendingUser.username, macInput, '首次绑定本机');
+      if (res.ok === false) {
+        setError(res.message);
+        return;
+      }
+      onUsersChange?.(res.users);
+      const access = await evaluateEmployeeAccess(res.user);
+      if (!access.ok) {
+        setError(access.message);
+        return;
+      }
+      finishLogin(res.user);
+    } catch (err) {
+      console.error('device bind failed', err);
+      setError('设备绑定失败，请稍后重试');
     } finally {
       setLoading(false);
     }
@@ -46,9 +135,11 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
       <div className="bg-white p-6 sm:p-8 md:p-12 rounded-3xl sm:rounded-[40px] shadow-[0_20px_50px_rgba(0,0,0,0.05)] w-full max-w-lg border border-white">
         <div className="flex items-center gap-3 mb-8 sm:mb-10">
           <div className="text-blue-600">
-            <UserIcon size={28} strokeWidth={2.5} className="sm:w-8 sm:h-8" />
+            {pendingUser ? <Cpu size={28} strokeWidth={2.5} /> : <UserIcon size={28} strokeWidth={2.5} className="sm:w-8 sm:h-8" />}
           </div>
-          <h2 className="text-2xl sm:text-3xl font-black text-slate-800">登录系统</h2>
+          <h2 className="text-2xl sm:text-3xl font-black text-slate-800">
+            {pendingUser ? (bindMode === 'remac' ? '确认网卡地址' : '绑定本机设备') : '登录系统'}
+          </h2>
         </div>
 
         {error && (
@@ -57,50 +148,99 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
             {error}
           </div>
         )}
-        
-        <form onSubmit={handleLogin} className="space-y-6 sm:space-y-8">
-          <div>
-            <label className="block text-xs sm:text-sm font-black text-slate-400 uppercase tracking-widest mb-2 sm:mb-3">用户名</label>
-            <div className="relative">
-              <div className="absolute left-4 sm:left-5 top-1/2 -translate-y-1/2 text-slate-300">
-                <UserIcon size={20} className="sm:w-[22px] sm:h-[22px]" />
-              </div>
-              <input 
-                type="text" 
-                value={username} 
-                onChange={e => setUsername(e.target.value)} 
-                className="w-full pl-12 sm:pl-14 pr-4 sm:pr-6 py-4 sm:py-5 rounded-2xl border-2 border-slate-100 focus:border-blue-500 focus:ring-0 focus:outline-none font-bold text-base sm:text-lg transition-all placeholder:text-slate-300"
-                placeholder="输入用户名"
+
+        {pendingUser ? (
+          <form onSubmit={handleBindDevice} className="space-y-6">
+            <p className="text-sm font-medium text-slate-600 leading-relaxed">
+              {bindMode === 'remac' ? (
+                <>
+                  账号 <span className="font-black text-slate-900">{pendingUser.username}</span> 已绑定本机，请再次输入登记过的网卡物理地址以确认。
+                </>
+              ) : (
+                <>
+                  账号 <span className="font-black text-slate-900">{pendingUser.username}</span> 为普通员工，首次登录需绑定本机。
+                  请填写本机网卡物理地址（MAC）；系统会同时锁定当前浏览器设备指纹，其它电脑将无法使用。
+                </>
+              )}
+            </p>
+            <div>
+              <label className="block text-xs sm:text-sm font-black text-slate-400 uppercase tracking-widest mb-2">
+                网卡物理地址 (MAC)
+              </label>
+              <input
+                type="text"
+                value={macInput}
+                onChange={(e) => setMacInput(e.target.value)}
+                className="w-full px-4 py-4 rounded-2xl border-2 border-slate-100 focus:border-blue-500 focus:outline-none font-bold text-base"
+                placeholder="A1:B2:C3:D4:E5:F6"
                 required
-                autoComplete="username"
               />
+              <p className="mt-2 text-[11px] font-bold text-slate-400">{formatMacInputHint()}</p>
             </div>
-          </div>
-          <div>
-            <label className="block text-xs sm:text-sm font-black text-slate-400 uppercase tracking-widest mb-2 sm:mb-3">密码</label>
-            <div className="relative">
-              <div className="absolute left-4 sm:left-5 top-1/2 -translate-y-1/2 text-slate-300">
-                <Lock size={20} className="sm:w-[22px] sm:h-[22px]" />
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-2xl font-black text-lg shadow-lg disabled:opacity-70"
+            >
+              {loading ? <Loader2 className="animate-spin mx-auto" size={22} /> : bindMode === 'remac' ? '确认并进入' : '绑定并进入'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setPendingUser(null);
+                setMacInput('');
+                setError('');
+              }}
+              className="w-full text-sm font-bold text-slate-500 hover:text-slate-700"
+            >
+              返回登录
+            </button>
+          </form>
+        ) : (
+          <form onSubmit={handleLogin} className="space-y-6 sm:space-y-8">
+            <div>
+              <label className="block text-xs sm:text-sm font-black text-slate-400 uppercase tracking-widest mb-2 sm:mb-3">用户名</label>
+              <div className="relative">
+                <div className="absolute left-4 sm:left-5 top-1/2 -translate-y-1/2 text-slate-300">
+                  <UserIcon size={20} className="sm:w-[22px] sm:h-[22px]" />
+                </div>
+                <input
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  className="w-full pl-12 sm:pl-14 pr-4 sm:pr-6 py-4 sm:py-5 rounded-2xl border-2 border-slate-100 focus:border-blue-500 focus:ring-0 focus:outline-none font-bold text-base sm:text-lg transition-all placeholder:text-slate-300"
+                  placeholder="输入用户名"
+                  required
+                  autoComplete="username"
+                />
               </div>
-              <input 
-                type="password" 
-                value={password} 
-                onChange={e => setPassword(e.target.value)} 
-                className="w-full pl-12 sm:pl-14 pr-4 sm:pr-6 py-4 sm:py-5 rounded-2xl border-2 border-slate-100 focus:border-blue-500 focus:ring-0 focus:outline-none font-bold text-base sm:text-lg transition-all placeholder:text-slate-300"
-                placeholder="••••••••"
-                required
-                autoComplete="current-password"
-              />
             </div>
-          </div>
-          <button 
-            type="submit" 
-            disabled={loading}
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white py-4 sm:py-6 rounded-2xl font-black text-lg sm:text-xl shadow-[0_10px_30px_rgba(37,99,235,0.3)] transition-all flex items-center justify-center gap-3 disabled:opacity-70 touch-manipulation"
-          >
-            {loading ? <Loader2 className="animate-spin" size={24} /> : '进入平台'}
-          </button>
-        </form>
+            <div>
+              <label className="block text-xs sm:text-sm font-black text-slate-400 uppercase tracking-widest mb-2 sm:mb-3">密码</label>
+              <div className="relative">
+                <div className="absolute left-4 sm:left-5 top-1/2 -translate-y-1/2 text-slate-300">
+                  <Lock size={20} className="sm:w-[22px] sm:h-[22px]" />
+                </div>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full pl-12 sm:pl-14 pr-4 sm:pr-6 py-4 sm:py-5 rounded-2xl border-2 border-slate-100 focus:border-blue-500 focus:ring-0 focus:outline-none font-bold text-base sm:text-lg transition-all placeholder:text-slate-300"
+                  placeholder="••••••••"
+                  required
+                  autoComplete="current-password"
+                />
+              </div>
+            </div>
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white py-4 sm:py-6 rounded-2xl font-black text-lg sm:text-xl shadow-[0_10px_30px_rgba(37,99,235,0.3)] transition-all flex items-center justify-center gap-3 disabled:opacity-70 touch-manipulation"
+            >
+              {loading ? <Loader2 className="animate-spin" size={24} /> : '进入平台'}
+            </button>
+          </form>
+        )}
       </div>
     </div>
   );

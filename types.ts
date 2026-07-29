@@ -58,8 +58,41 @@ export interface User {
   permissions?: PermissionKey[];
   /** 停用后无法登录 */
   disabled?: boolean;
+  /**
+   * 普通员工是否必须绑定本机设备（管理员/主管不受限）。
+   * 未设置时：员工默认 true。
+   */
+  deviceBindRequired?: boolean;
+  /** 已绑定的设备列表（指纹 + 可选 MAC） */
+  boundDevices?: BoundDevice[];
+  /** 可用时段；未启用则不限时间 */
+  accessSchedule?: AccessSchedule;
   isFirstLogin: boolean;
   createdAt: number;
+}
+
+/** 员工本机设备绑定记录 */
+export interface BoundDevice {
+  /** 浏览器侧稳定设备指纹 */
+  deviceId: string;
+  /** 登记的网卡物理地址（MAC），规范化为大写冒号分隔 */
+  macAddress?: string;
+  /** 备注，如「公司办公电脑」 */
+  label?: string;
+  boundAt: number;
+}
+
+/** 可用时段（按本地/指定时区） */
+export interface AccessSchedule {
+  enabled: boolean;
+  /** IANA 时区，默认 Asia/Shanghai */
+  timezone?: string;
+  /** 0=周日 … 6=周六；空表示每天 */
+  daysOfWeek?: number[];
+  /** HH:mm 24h */
+  startTime?: string;
+  /** HH:mm 24h */
+  endTime?: string;
 }
 
 // NEW: Global Configuration stored in GitHub
