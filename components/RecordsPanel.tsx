@@ -66,7 +66,8 @@ const discoveryCountries = (d: DiscoveryArchiveItem): string[] => {
   return normalized.length ? normalized : [UNCATEGORIZED];
 };
 
-const historyKeyword = (h: HistoryItem) => (h.keyword || '').trim() || UNCATEGORIZED;
+const historyKeyword = (h: HistoryItem) =>
+  (h.keyword || h.data?.searchKeyword || '').trim() || UNCATEGORIZED;
 
 const historyCountry = (h: HistoryItem) =>
   normalizeCountryZh(h.country || h.data?.companyInfo?.headquarters || h.data?.companyInfo?.city || '');
@@ -441,6 +442,14 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                                 <span className="text-[9px] font-black bg-sky-50 text-sky-700 px-1.5 py-0.5 rounded">
                                   {historyCountry(row.item)}
                                 </span>
+                                {(row.item.data?.searchTags || [])
+                                  .filter((t) => !t.startsWith('关键词:') && !t.startsWith('国家:'))
+                                  .slice(0, 3)
+                                  .map((t) => (
+                                    <span key={t} className="text-[9px] font-black bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded">
+                                      {t}
+                                    </span>
+                                  ))}
                               </div>
                               {/* 单条改关键词/国家 */}
                               {onPatchHistory && (
@@ -507,6 +516,17 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                             <div className="min-w-0 flex-1">
                               <div className="text-xs font-black truncate">{row.item.product || '搜索'}</div>
                               <div className="text-[10px] text-slate-400">{row.item.results?.length || 0} 家客户</div>
+                              <div className="flex flex-wrap gap-1 mt-1.5">
+                                <span className="text-[9px] font-black bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded">客户搜索</span>
+                                <span className="text-[9px] font-black bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded">
+                                  关键词:{discoveryKeyword(row.item)}
+                                </span>
+                                {(row.item.countries || []).slice(0, 2).map((c) => (
+                                  <span key={c} className="text-[9px] font-black bg-sky-50 text-sky-700 px-1.5 py-0.5 rounded">
+                                    国家:{c}
+                                  </span>
+                                ))}
+                              </div>
                             </div>
                           </div>
                           {onDeleteDiscovery && (

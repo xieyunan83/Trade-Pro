@@ -259,6 +259,8 @@ export interface ProductAnalysis {
   packaging?: string;
   imageUrl?: string;
   competitorLink?: string;
+  /** 是否与搜索关键词强相关（产品分析优先展示） */
+  keywordMatch?: boolean;
 }
 
 export interface WebsiteCategory {
@@ -332,6 +334,12 @@ export interface AnalysisResult {
   decisionMakerEmailSearchAt?: number;
   /** 历次决策人邮箱搜索时间（保留，不清除） */
   decisionMakerEmailSearchHistory?: number[];
+  /** 客户搜索来源关键词（用于历史归类与产品聚焦） */
+  searchKeyword?: string;
+  /** 搜索来源标签，如 关键词:xxx / 国家:xxx */
+  searchTags?: string[];
+  /** 搜索目标国家 */
+  searchCountry?: string;
   strategy: {
     buyingOfficeLocation: string;
     actionPlan: string[];

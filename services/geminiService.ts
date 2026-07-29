@@ -1419,10 +1419,34 @@ export const generateConsolidatedEmailStrategy = async (clients: AnalysisResult[
     };
 };
 
-export const analyzeCompany = async (domainOrName: string, mode: 'detailed' | 'economy' = 'detailed'): Promise<AnalysisResult> => {
+export const analyzeCompany = async (
+  domainOrName: string,
+  mode: 'detailed' | 'economy' = 'detailed',
+  opts?: { searchKeyword?: string; searchTags?: string[]; searchCountry?: string }
+): Promise<AnalysisResult> => {
+  const searchKeyword = (opts?.searchKeyword || '').trim();
+  const searchCountry = (opts?.searchCountry || '').trim();
+  const productFocusBlock = searchKeyword
+    ? `
+  PRODUCT FOCUS (CRITICAL — user found this client via keyword search "${searchKeyword}"):
+  - Prioritize products related to "${searchKeyword}" across website, catalogs, and trade clues.
+  - In products[]: put keyword-related items FIRST (aim for 4–8 matched SKUs if they exist).
+  - Set keywordMatch=true for products clearly related to "${searchKeyword}"; false otherwise.
+  - productSummary.recommendedProducts / marketPreference / featureAnalysis MUST center on "${searchKeyword}" opportunity for Chinese exporters.
+  - businessScope.relevantProducts should list SKUs or categories matching "${searchKeyword}".
+  - If the company barely sells this keyword category, still analyze adjacent/related lines and say so clearly.
+  ${searchCountry ? `- Search target market context: ${searchCountry}.` : ''}
+`
+    : `
+  PRODUCT FOCUS:
+  - Analyze the company's main sellable / importable product lines for Chinese exporters.
+  - Set keywordMatch=false (no active search keyword).
+`;
+
   const prompt = `
   Target: "${domainOrName}".
   Task: DEEP B2B FOREIGN-TRADE DUE DILIGENCE for Chinese exporters selling to this buyer/importer.
+${searchKeyword ? `  Discovery source keyword: "${searchKeyword}". Tag this report with that search source.` : ''}
 
   You MUST use web search. Prefer official website, LinkedIn company page, trade directories, exhibition pages,
   ImportYeti / Bill of Lading public indexes, news, certification pages. If a fact is unknown, write "公开信息未找到" — NEVER invent customs shipment IDs.
@@ -1453,6 +1477,7 @@ export const analyzeCompany = async (domainOrName: string, mode: 'detailed' | 'e
      - System will NOT search Anymail during due diligence. Leave emailGuess empty unless a real public email is known.
        User will trigger decision-maker email search later after confirming the lead.
   5. Products, pricing, SWOT, traffic estimates, competitors, action plan for Chinese suppliers.
+${productFocusBlock}
   6. Financial trends last 5 years — estimate if needed, never all zeros.
 
   IMPORTANT: All descriptive text in Simplified Chinese.
@@ -1488,7 +1513,7 @@ export const analyzeCompany = async (domainOrName: string, mode: 'detailed' | 'e
     "financials": { "revenueEstimate": "", "paymentTerms": "", "ipInfo": "" },
     "productSummary": { "marketPreference": "", "recommendedProducts": "", "packagingAnalysis": "", "colorPreference": "", "featureAnalysis": "" },
     "socials": { "linkedin": "", "facebook": "", "instagram": "", "youtube": "" },
-    "products": [{ "name": "", "retailPrice": "", "retailPriceCNY": 0, "estimatedFOBPriceCNY": 0, "imageUrl": "", "competitorLink": "", "pricingStrategy": "", "pitchPoint": "", "techSpecs": "", "features": "", "colors": "", "packaging": "" }],
+    "products": [{ "name": "", "retailPrice": "", "retailPriceCNY": 0, "estimatedFOBPriceCNY": 0, "imageUrl": "", "competitorLink": "", "pricingStrategy": "", "pitchPoint": "", "techSpecs": "", "features": "", "colors": "", "packaging": "", "keywordMatch": false }],
     "marketTrends": "",
     "decisionMakers": [{ "firstName": "", "lastName": "", "name": "", "title": "", "department": "", "emailGuess": "", "phone": "", "linkedin": "", "yearsActive": "", "type": "Buyer", "source": "AI", "isVerified": false, "influenceScore": 4 }],
     "strategy": { "buyingOfficeLocation": "", "actionPlan": [] },
@@ -1577,7 +1602,8 @@ export const analyzeCompany = async (domainOrName: string, mode: 'detailed' | 'e
         ...p,
         features: p.features || "N/A",
         colors: p.colors || "N/A",
-        packaging: p.packaging || "N/A"
+        packaging: p.packaging || "N/A",
+        keywordMatch: !!p.keywordMatch,
     })),
     marketTrends: aiResult.marketTrends || "N/A",
     decisionMakers: (aiResult.decisionMakers || []).map((dm: any) => {
@@ -1607,8 +1633,28 @@ export const analyzeCompany = async (domainOrName: string, mode: 'detailed' | 'e
       buyingOfficeLocation: aiResult.strategy?.buyingOfficeLocation || "N/A",
       actionPlan: aiResult.strategy?.actionPlan || []
     },
-    similarCompanies: Array.isArray(aiResult.similarCompanies) ? aiResult.similarCompanies : []
+    similarCompanies: Array.isArray(aiResult.similarCompanies) ? aiResult.similarCompanies : [],
+    searchKeyword: searchKeyword || undefined,
+    searchTags: opts?.searchTags?.length ? opts.searchTags : undefined,
+    searchCountry: searchCountry || undefined,
   };
+
+  // 若模型未标 keywordMatch，按关键词启发式补标并排序
+  if (searchKeyword) {
+    const tokens = searchKeyword
+      .toLowerCase()
+      .split(/[\s,/|+\-，、]+/)
+      .map((t) => t.trim())
+      .filter((t) => t.length >= 2);
+    result.products = result.products
+      .map((p) => {
+        if (p.keywordMatch) return p;
+        const blob = `${p.name || ''} ${p.features || ''} ${p.pitchPoint || ''}`.toLowerCase();
+        const hit = tokens.some((t) => blob.includes(t));
+        return hit ? { ...p, keywordMatch: true } : p;
+      })
+      .sort((a, b) => Number(!!b.keywordMatch) - Number(!!a.keywordMatch));
+  }
 
   // 2. 背调阶段不调用 Anymail、不自动生成开发信（开发信由用户在策略模块按需手动生成）
   result.decisionMakers = rankDecisionMakers(result.decisionMakers);
@@ -1676,6 +1722,8 @@ export const searchPotentialClients = async (productKeyword: string, country: st
     contactHint: r.contactHint || '',
     fitScore: typeof r.fitScore === 'number' ? r.fitScore : undefined,
     fitReason: r.fitReason || '',
+    searchKeyword: productKeyword || undefined,
+    searchCountry: countries[0] || country || undefined,
   })).sort((a: ClientSearchResult, b: ClientSearchResult) => (b.fitScore || 0) - (a.fitScore || 0));
 };
 

@@ -7,6 +7,7 @@ import { fetchGlobalConfig, fetchDocumentsFromRepo, backupUserHistory, fetchCRMF
 import { isSupabaseConfigured, getKnowledgeFiles, getInvestigationHistory, saveInvestigationHistory, getLatestDiscoverySearch, saveDiscoverySearch, getCrmClients, syncCrmClients, getDiscoverySearchArchives, deleteInvestigationHistory, deleteDiscoverySearchFromCloud, deleteDiscoverySearchesByMeta } from './services/supabase';
 import { addCustomKeyword, addCustomCountry } from './services/taxonomyStore';
 import { normalizeCountryZh } from './utils/countryNormalize';
+import { buildSearchTags, stampSearchResults } from './utils/searchTags';
 import { checkLimit, incrementUsage, updateLocalConfig, resetDailyUsage, getDailyUsagePublic } from './services/limitService';
 import { ModuleType, AnalysisResult, DiscoveryState, Client, User, HistoryItem, AutomationResult, ClientSearchResult, DiscoveryArchiveItem, DecisionMaker, Department } from './types';
 import { ModuleBackground } from './components/ModuleBackground';
@@ -167,6 +168,11 @@ const App: React.FC = () => {
   /** 可靠归档：每次按国搜索完成后立刻写入本地 + 云端 */
   const handleSearchArchived = (archive: DiscoveryArchiveItem) => {
     const stamped = stampOwnership(archive);
+    if (stamped.product?.trim()) addCustomKeyword(stamped.product.trim());
+    (stamped.countries || []).forEach((c) => {
+      const zh = normalizeCountryZh(c);
+      if (zh && zh !== '未分类') addCustomCountry(zh);
+    });
     saveDiscoveryArchive(stamped).catch((e) => console.error('local discovery archive failed', e));
     setDiscoveryArchives((list) => {
       const without = list.filter((x) => x.id !== stamped.id);
@@ -295,8 +301,7 @@ const App: React.FC = () => {
               console.warn('discovery archives load failed', e);
             }
 
-            // 背调归类修复：无关键词的历史一律归入 Car toy，并规范化国家为中文
-            addCustomKeyword('Car toy');
+            // 背调归类修复：尽量从报告 searchKeyword 回填关键词；规范化国家为中文（不再强制 Car toy）
             addCustomCountry('波兰');
             addCustomCountry('荷兰');
             addCustomCountry('英国');
@@ -306,13 +311,24 @@ const App: React.FC = () => {
               for (const item of h) {
                 const hq = item.data?.companyInfo?.headquarters || item.data?.companyInfo?.city || '';
                 const normCountry = normalizeCountryZh(item.country || hq);
-                const needKeyword = !item.keyword?.trim();
+                const recoveredKw =
+                  item.keyword?.trim() ||
+                  item.data?.searchKeyword?.trim() ||
+                  '';
+                if (recoveredKw) addCustomKeyword(recoveredKw);
+                const needKeyword = !item.keyword?.trim() && !!recoveredKw;
                 const needCountry = normCountry !== '未分类' && item.country !== normCountry;
                 if (needKeyword || needCountry) {
                   const next: HistoryItem = {
                     ...item,
-                    keyword: item.keyword?.trim() || 'Car toy',
+                    keyword: item.keyword?.trim() || recoveredKw || undefined,
                     country: normCountry !== '未分类' ? normCountry : item.country,
+                    data: item.data
+                      ? {
+                          ...item.data,
+                          searchKeyword: item.data.searchKeyword || recoveredKw || undefined,
+                        }
+                      : item.data,
                   };
                   try {
                     await persistHistoryItem(next);
@@ -342,13 +358,18 @@ const App: React.FC = () => {
               ).toLowerCase();
               if (!domain || knownDomains.has(domain)) continue;
               const hq = task.analysis.companyInfo?.headquarters || '';
+              const kw = task.keyword || task.analysis.searchKeyword || '';
+              if (kw) addCustomKeyword(kw);
               const item: HistoryItem = stampOwnership({
                 id: `recover_${task.id}`,
                 type: ModuleType.BACKGROUND,
-                data: task.analysis,
+                data: {
+                  ...task.analysis,
+                  searchKeyword: task.analysis.searchKeyword || kw || undefined,
+                },
                 timestamp: Date.now() - recovered.length,
                 domain: task.analysis.companyInfo?.website || task.website || task.clientName,
-                keyword: task.keyword || 'Car toy',
+                keyword: kw || undefined,
                 country: normalizeCountryZh(task.country || hq),
                 source: 'recover',
               });
@@ -559,10 +580,19 @@ const App: React.FC = () => {
   const performSingleAnalysis = async (domain: string) => {
     setLoading(true); setErrorMsg(null); setActiveModule(ModuleType.BACKGROUND); setMobileMenuOpen(false);
     try {
-      const result = await analyzeCompany(domain, 'economy');
+      const keyword = (discoveryState.product || '').trim();
+      if (keyword) addCustomKeyword(keyword);
+      const tags = keyword
+        ? buildSearchTags(keyword, discoveryState.countries?.[0] || discoveryState.country || '')
+        : undefined;
+      const result = await analyzeCompany(domain, 'economy', {
+        searchKeyword: keyword || undefined,
+        searchTags: tags,
+        searchCountry: discoveryState.countries?.[0] || discoveryState.country || undefined,
+      });
       setAnalysisData(result);
       incrementUsage('analysis');
-      const saved = await saveAnalysisToHistory(result, 'single');
+      const saved = await saveAnalysisToHistory(result, keyword ? 'discovery' : 'single');
       setViewingHistoryId(saved.id);
       updateCrmStatus(result);
     } catch (e: any) { setErrorMsg(`Error: ${e.message}`); } finally { setLoading(false); }
@@ -818,15 +848,24 @@ const App: React.FC = () => {
   const saveAnalysisToHistory = async (result: AnalysisResult, source = 'batch'): Promise<HistoryItem> => {
       const domain = result.companyInfo?.website || result.companyInfo?.name || 'unknown';
       const country = normalizeCountryZh(
-        result.companyInfo?.headquarters || result.companyInfo?.city || ''
+        result.searchCountry || result.companyInfo?.headquarters || result.companyInfo?.city || ''
       );
+      const keyword =
+        (result.searchKeyword || discoveryState.product || '').trim() || undefined;
+      if (keyword) addCustomKeyword(keyword);
       const historyItem: HistoryItem = stampOwnership({
           id: `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
           type: ModuleType.BACKGROUND,
-          data: result,
+          data: {
+            ...result,
+            searchKeyword: result.searchKeyword || keyword,
+            searchTags:
+              result.searchTags ||
+              (keyword ? buildSearchTags(keyword, country !== '未分类' ? country : '') : undefined),
+          },
           timestamp: Date.now(),
           domain,
-          keyword: discoveryState.product || undefined,
+          keyword,
           country: country !== '未分类' ? country : undefined,
           source: source as HistoryItem['source'],
       });
@@ -837,7 +876,7 @@ const App: React.FC = () => {
           );
           return [historyItem, ...filtered];
       });
-      console.log(`[History] saved (${source}):`, domain);
+      console.log(`[History] saved (${source}):`, domain, 'keyword=', keyword);
       return historyItem;
   };
 
@@ -893,13 +932,24 @@ const App: React.FC = () => {
       setBatchModalOpen(false); 
       setIsAutomating(true);
       const newTasks: AutomationResult[] = [];
+      const kw = (keyword || '').trim();
+      if (kw) {
+        addCustomKeyword(kw);
+        setDiscoveryState((prev) => ({ ...prev, product: kw }));
+      }
       
       for (const country of countries) {
           try {
               // Quick search (limit 5 per country for automation demo)
-              const results = await searchPotentialClients(keyword, country, '', clientType, 5);
+              const raw = await searchPotentialClients(keyword, country, '', clientType, 5);
+              const results = stampSearchResults(raw, {
+                keyword: kw,
+                targetCountry: country,
+                clientTypes: clientType ? [clientType] : [],
+                searchId: `auto_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+              });
               for (const res of results) {
-                  newTasks.push({
+                  newTasks.push(stampOwnership({
                       id: Math.random().toString(36).substr(2, 9),
                       clientName: res.name,
                       website: res.website,
@@ -907,8 +957,10 @@ const App: React.FC = () => {
                       status: 'pending',
                       productContext: productContext,
                       productImages: productImages,
-                      mode: 'economy' // Default to economy for generated lists
-                  });
+                      mode: 'economy',
+                      keyword: res.searchKeyword || kw || undefined,
+                      createdAt: Date.now(),
+                  }));
               }
           } catch(e) { console.error(e); }
       }
@@ -939,8 +991,14 @@ const App: React.FC = () => {
           setAutomationResults(prev => prev.map(t => t.id === task.id ? { ...t, status: 'analyzing' } : t));
 
           try {
-              // 1. Analyze
-              const result = await analyzeCompany(task.website, task.mode || 'economy');
+              // 1. Analyze — 带上搜索关键词，产品分析聚焦该关键词
+              const kw = (task.keyword || discoveryState.product || '').trim();
+              if (kw) addCustomKeyword(kw);
+              const result = await analyzeCompany(task.website, task.mode || 'economy', {
+                searchKeyword: kw || undefined,
+                searchTags: kw ? buildSearchTags(kw, task.country || '') : undefined,
+                searchCountry: task.country || undefined,
+              });
 
               // 2. Complete — 立刻落盘任务 + 写入历史（开发信请稍后在策略模块手动生成）
               const completedTask: AutomationResult = { 
@@ -951,7 +1009,7 @@ const App: React.FC = () => {
                   status: 'completed', 
                   analysis: result, 
                   mailGroup: undefined,
-                  keyword: task.keyword || discoveryState.product,
+                  keyword: kw || task.keyword || discoveryState.product,
               };
               
               await saveAutomationTask(completedTask);
@@ -1019,8 +1077,13 @@ const App: React.FC = () => {
   const handleBatchAnalyzeFromCRM = async (clients: Client[]) => { 
       if (!clients || clients.length === 0) return;
       const targets = clients.map(c => c.website || c.name); 
+      const kw = clients.find((c) => c.searchKeyword)?.searchKeyword || discoveryState.product || 'CRM Batch';
       setPendingBatch(targets); 
-      setPendingBatchContext('CRM Batch'); 
+      setPendingBatchContext(kw); 
+      if (kw && kw !== 'CRM Batch') {
+        setDiscoveryState((prev) => ({ ...prev, product: kw }));
+        addCustomKeyword(kw);
+      }
       setBatchModalOpen(true); 
   };
 
@@ -1032,6 +1095,10 @@ const App: React.FC = () => {
       setBatchModalOpen(false); 
       setActiveModule(ModuleType.PROMO_GENERATOR); 
       
+      const kw = (discoveryState.product || pendingBatchContext || '').trim();
+      if (kw && kw !== 'Manual Input' && kw !== 'CRM Batch' && kw !== 'Discovery Batch') {
+        addCustomKeyword(kw);
+      }
       const newTasks: AutomationResult[] = pendingBatch.map(target => stampOwnership({ 
           id: Math.random().toString(36).substr(2, 9), 
           clientName: target, 
@@ -1041,7 +1108,7 @@ const App: React.FC = () => {
           productContext: pendingBatchContext, 
           productImages: [], 
           mode: mode,
-          keyword: discoveryState.product || pendingBatchContext,
+          keyword: kw || undefined,
           createdAt: Date.now(),
       })); 
       
@@ -1440,6 +1507,20 @@ const App: React.FC = () => {
                         <div className="min-w-0">
                             <h2 className="text-2xl sm:text-3xl md:text-4xl font-black text-slate-900 tracking-tight break-words">{analysisData.companyInfo?.name}</h2>
                             <a href={analysisData.companyInfo?.website.startsWith('http') ? analysisData.companyInfo.website : `https://${analysisData.companyInfo?.website}`} target="_blank" rel="noreferrer" className="text-blue-600 font-bold mt-2 hover:underline text-sm sm:text-base break-all">{analysisData.companyInfo?.website}</a>
+                            {(analysisData.searchKeyword || analysisData.searchTags?.length) && (
+                              <div className="flex flex-wrap gap-1.5 mt-3">
+                                {analysisData.searchKeyword && (
+                                  <span className="text-[10px] font-black bg-amber-50 text-amber-700 px-2 py-1 rounded-lg">
+                                    搜索来源: {analysisData.searchKeyword}
+                                  </span>
+                                )}
+                                {(analysisData.searchTags || []).slice(0, 4).map((t) => (
+                                  <span key={t} className="text-[10px] font-black bg-slate-100 text-slate-600 px-2 py-1 rounded-lg">
+                                    {t}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
                         </div>
                         <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto flex-shrink-0">
                           {hasPermission(currentUser, 'feature.dm_email_search') && (
