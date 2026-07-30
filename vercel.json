@@ -6,7 +6,7 @@
       "memory": 1024
     },
     "api/anymail.ts": {
-      "maxDuration": 60,
+      "maxDuration": 180,
       "memory": 512
     }
   },

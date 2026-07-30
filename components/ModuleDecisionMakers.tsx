@@ -178,7 +178,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
               <Users className="text-blue-600" /> 关键决策人挖掘
             </h3>
             <p className="text-sm text-slate-500 font-medium mt-1">
-              背调不会自动扣 Anymail 积分。确认客户后点「后台搜索」：仅将报告中的公司名称 + 决策人姓名交给 Anymail Finder 查找邮箱；已有邮箱会先验证，无效则重新查找。
+              背调不会自动扣 Anymail 积分。点「后台搜索」时优先走官网同款「公司域名搜索」：约 1 积分拿到最多 20 个已验证邮箱，再用联网搜索补职位/领英；「再次深挖」才会额外按采购等角色补充（成功约 2 积分/人）。
             </p>
             {lastSearchAt ? (
               <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-bold text-slate-500">
@@ -229,7 +229,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
 
         {jobActive && canDmEmailSearch && (
           <div className="mb-4 rounded-2xl border border-violet-100 bg-violet-50 px-4 py-3 text-xs font-bold text-violet-800">
-            已在后台搜索，可切换到其它客户继续浏览；完成后可再次点击「深挖邮箱」查找更多联系人。
+            已在后台按「公司域名 → 补职位/领英」搜索，可切换其它客户继续浏览；完成后可点「再次深挖」按角色补充更多决策人。
           </div>
         )}
 
@@ -262,7 +262,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
           {decisionMakers.length === 0 ? (
             <div className="col-span-full py-12 text-center text-slate-400 font-bold">
-              暂无决策人线索。你可以先手动新增，或点「后台搜索决策人邮箱」补充。
+              暂无决策人线索。点「后台搜索决策人邮箱」会先按公司域名拉取最多 20 个已验证邮箱（约 1 积分），也可手动新增。
             </div>
           ) : decisionMakers.map((dm, i) => (
             <DecisionMakerCard

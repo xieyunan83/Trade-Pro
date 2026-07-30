@@ -366,7 +366,7 @@ const findEmailWithAnymail = async (
     if (opts?.lastName) body.last_name = opts.lastName;
     if (name && !isPlaceholderPersonName(name)) body.full_name = name;
 
-    const response = await anymailFetch('/v5.1/find-email/person', apiKey, body);
+    const response = await anymailFetch('/v5.1/find-email/person', apiKey, body, 180_000);
     if (!response.ok) {
       const errText = await response.text().catch(() => '');
       console.warn('Anymail person find failed', response.status, errText.slice(0, 200));
@@ -396,134 +396,245 @@ const findEmailWithAnymail = async (
   }
 };
 
+/** 从邮箱本地部分推断姓名 */
+const nameFromEmailLocal = (email: string): { name: string; firstName?: string; lastName?: string } => {
+  const local = String(email).split('@')[0] || 'Contact';
+  // 过滤纯职能邮箱
+  if (/^(info|sales|contact|support|admin|office|hello|mail|hr|jobs|press|media|enquiry|inquiry|service)$/i.test(local)) {
+    return { name: local };
+  }
+  const parts = local
+    .replace(/\d+/g, ' ')
+    .replace(/[._+\-]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  const cap = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : '');
+  const firstName = parts[0] ? cap(parts[0]) : undefined;
+  const lastName = parts.length > 1 ? cap(parts[parts.length - 1]) : undefined;
+  const name = firstName && lastName ? `${firstName} ${lastName}` : firstName || local;
+  return { name, firstName, lastName };
+};
+
+const isGenericRoleEmail = (email: string): boolean => {
+  const local = String(email).split('@')[0] || '';
+  return /^(info|sales|contact|support|admin|office|hello|mail|hr|jobs|press|media|enquiry|inquiry|service|noreply|no-reply)$/i.test(
+    local
+  );
+};
+
 /**
- * 按角色挖决策人邮箱（每次类别仅返回 1 人）。
- * 外贸优先多次拉采购相关类别；查找已含校验，禁止再调 verify-email。
+ * 官网/域名批量找邮箱（Anymail company）
+ * 官方定价：找到 valid 邮箱时扣 1 积分，一次最多返回 20 个（与官网页「复制 20 个」一致）。
+ * 勿对同一域名连打 personal + any（会扣两次）。
  */
-const fetchAnymailDecisionMakers = async (domain: string): Promise<DecisionMaker[]> => {
+const fetchAnymailCompanyEmails = async (
+  domain: string,
+  opts?: {
+    companyName?: string;
+    /** 默认 any：与官网 Company search 一致，个人+职能邮箱都可能返回 */
+    emailType?: 'any' | 'personal' | 'generic';
+    timeoutMs?: number;
+  }
+): Promise<{ people: DecisionMaker[]; creditsCharged: number; emailStatus: string }> => {
+  const apiKey = getEmailSearchKeys().anymailFinder;
+  const clean = cleanDomain(domain);
+  const companyName = (opts?.companyName || '').trim();
+  if (!apiKey || (!clean && !companyName)) {
+    return { people: [], creditsCharged: 0, emailStatus: 'not_found' };
+  }
+  const emailType = opts?.emailType || 'any';
+  try {
+    const body: Record<string, string> = { email_type: emailType };
+    if (clean) body.domain = clean;
+    if (companyName) body.company_name = companyName;
+
+    // 官方建议超时最长 180s；公司搜索走实时校验，短超时会空结果
+    const response = await anymailFetch(
+      '/v5.1/find-email/company',
+      apiKey,
+      body,
+      opts?.timeoutMs ?? 180_000
+    );
+    if (!response.ok) {
+      const errText = await response.text().catch(() => '');
+      console.warn('Anymail company find HTTP', response.status, errText.slice(0, 200));
+      return { people: [], creditsCharged: 0, emailStatus: 'error' };
+    }
+    const data = await response.json();
+    const creditsCharged = Number(data.credits_charged || 0);
+    const emailStatus = String(data.email_status || 'not_found').toLowerCase();
+    if (creditsCharged > 0) {
+      console.info(`[Anymail] company search charged ${creditsCharged} (status=${emailStatus})`);
+    }
+
+    // valid_emails 优先；否则在 valid 状态下用 emails；risky 免费也可展示但标记 risky
+    let list: string[] = [];
+    if (Array.isArray(data.valid_emails) && data.valid_emails.length) {
+      list = data.valid_emails;
+    } else if (emailStatus === 'valid' && Array.isArray(data.emails)) {
+      list = data.emails;
+    } else if (emailStatus === 'risky' && Array.isArray(data.emails)) {
+      list = data.emails;
+    } else if (typeof data.valid_email === 'string' && data.valid_email) {
+      list = [data.valid_email];
+    }
+
+    const isVerified = emailStatus === 'valid';
+    const people = list.slice(0, 20).map((email: string) => {
+      const parsed = nameFromEmailLocal(email);
+      const generic = isGenericRoleEmail(email);
+      const title = generic
+        ? `Company Contact (${parsed.name}@)`
+        : 'Company Contact (Domain Search)';
+      return {
+        name: generic ? parsed.name : parsed.name,
+        firstName: generic ? undefined : parsed.firstName,
+        lastName: generic ? undefined : parsed.lastName,
+        title,
+        emailGuess: email,
+        type: classifyDecisionMakerType(title),
+        source: 'AnymailFinder' as const,
+        emailSource: 'AnymailFinder',
+        emailStatus: isVerified ? 'valid' : emailStatus,
+        isVerified,
+        confidence: isVerified ? 0.92 : 0.55,
+        influenceScore: generic ? 1 : 2,
+      } satisfies DecisionMaker;
+    });
+
+    return { people, creditsCharged, emailStatus };
+  } catch (e) {
+    console.error('Anymail company find error', e);
+    return { people: [], creditsCharged: 0, emailStatus: 'error' };
+  }
+};
+
+/**
+ * 按角色挖决策人（每成功 1 人约 2 积分）。
+ * 仅作深挖补充，默认搜索不要并行打多个类别。
+ */
+const fetchAnymailDecisionMakers = async (
+  domain: string,
+  categories: Array<{ categories: string[]; title: string; score: number }> = [
+    { categories: ['buyer'], title: 'Procurement / Buyer', score: 5 },
+  ]
+): Promise<DecisionMaker[]> => {
   const apiKey = getEmailSearchKeys().anymailFinder;
   if (!domain || !apiKey) return [];
-  // buyer 优先；补充 logistics/operations（常含供应链采购）+ ceo
-  const roleCalls: Array<{ categories: string[]; title: string; score: number }> = [
-    { categories: ['buyer'], title: 'Procurement / Buyer', score: 5 },
-    { categories: ['logistics'], title: 'Logistics / Supply Chain', score: 4 },
-    { categories: ['operations'], title: 'Operations', score: 3 },
-    { categories: ['ceo'], title: 'CEO / Owner', score: 4 },
-  ];
   const people: DecisionMaker[] = [];
   const seenEmails = new Set<string>();
 
-  const results = await Promise.all(
-    roleCalls.map(async (role) => {
-      try {
-        const response = await anymailFetch('/v5.1/find-email/decision-maker', apiKey, {
+  // 串行：按优先级找，找到足够采购相关即可停，避免一次扣 8 分
+  for (const role of categories) {
+    try {
+      const response = await anymailFetch(
+        '/v5.1/find-email/decision-maker',
+        apiKey,
+        {
           domain: cleanDomain(domain),
           decision_maker_category: role.categories,
-        });
-        if (!response.ok) {
-          console.warn('Anymail decision-maker HTTP', response.status, role.categories.join(','));
-          return null;
-        }
-        const data = await response.json();
-        return mapAnymailPersonPayload(data, role.title, role.score);
-      } catch (e) {
-        console.warn('Anymail decision-maker error', role.categories, e);
-        return null;
+        },
+        180_000
+      );
+      if (!response.ok) {
+        console.warn('Anymail decision-maker HTTP', response.status, role.categories.join(','));
+        continue;
       }
-    })
-  );
-
-  for (const person of results) {
-    if (!person?.emailGuess) continue;
-    const key = person.emailGuess.toLowerCase();
-    if (seenEmails.has(key)) continue;
-    seenEmails.add(key);
-    people.push(person);
+      const data = await response.json();
+      const person = mapAnymailPersonPayload(data, role.title, role.score);
+      if (!person?.emailGuess) continue;
+      const key = person.emailGuess.toLowerCase();
+      if (seenEmails.has(key)) continue;
+      seenEmails.add(key);
+      people.push(person);
+      if (people.length >= 2) break;
+    } catch (e) {
+      console.warn('Anymail decision-maker error', role.categories, e);
+    }
   }
   return people;
 };
 
-/** 官网/域名批量找邮箱（Anymail company，最多 20 个 valid） */
-const fetchAnymailCompanyEmails = async (
+/**
+ * 用联网 AI 为「域名搜出的邮箱联系人」补职位 / LinkedIn（不额外烧 Anymail 积分）
+ */
+const enrichCompanyContactsWithWebIntel = async (
   domain: string,
-  emailType: 'any' | 'personal' | 'generic' = 'personal'
+  companyName: string,
+  contacts: DecisionMaker[]
 ): Promise<DecisionMaker[]> => {
-  const apiKey = getEmailSearchKeys().anymailFinder;
-  if (!domain || !apiKey) return [];
+  const targets = contacts
+    .filter((c) => c.emailGuess && !isGenericRoleEmail(c.emailGuess))
+    .slice(0, 20);
+  if (!targets.length) return contacts;
+
+  const roster = targets
+    .map(
+      (c, i) =>
+        `${i + 1}. name=${c.name}; email=${c.emailGuess}; first=${c.firstName || ''}; last=${c.lastName || ''}`
+    )
+    .join('\n');
+
+  const prompt = `你是外贸 B2B 情报分析师。公司：${companyName || domain}，官网域名：${domain}。
+下面是从 Anymail Finder「公司域名搜索」得到的邮箱联系人（最多 20 个）。请用联网搜索（LinkedIn、官网 about/team、新闻）为每人补充职位与领英主页。
+
+联系人：
+${roster}
+
+严格返回 JSON 数组（与输入顺序一致，长度相同），每项：
+{"email":"...","fullName":"真实姓名或空","title":"职位英文或中文","linkedin":"领英URL或空","type":"CEO|Buyer|Other","influenceScore":1-5}
+规则：
+- 查不到就 title 留空字符串，不要编造邮箱
+- 采购/买手/供应链标 Buyer；CEO/Founder/Owner 标 CEO
+- 只输出 JSON 数组，不要 markdown`;
+
   try {
-    const response = await anymailFetch('/v5.1/find-email/company', apiKey, {
-      domain: cleanDomain(domain),
-      email_type: emailType,
+    const text = await callQwen(prompt, {
+      jsonMode: true,
+      enableSearch: true,
+      task: 'email',
+      timeoutMs: 90_000,
     });
-    if (!response.ok) return [];
-    const data = await response.json();
-    const credits = Number(data.credits_charged || 0);
-    if (credits > 0) console.info(`[Anymail] company(${emailType}) charged ${credits}`);
-    const list: string[] = Array.isArray(data.valid_emails)
-      ? data.valid_emails
-      : data.valid_email
-        ? [data.valid_email]
-        : [];
-    return list.slice(0, 20).map((email: string) => {
-      const local = String(email).split('@')[0] || 'Contact';
-      const parts = local.replace(/[._-]+/g, ' ').trim().split(/\s+/).filter(Boolean);
-      const firstName = parts[0] ? parts[0].charAt(0).toUpperCase() + parts[0].slice(1).toLowerCase() : undefined;
-      const lastName =
-        parts.length > 1
-          ? parts[parts.length - 1].charAt(0).toUpperCase() + parts[parts.length - 1].slice(1).toLowerCase()
-          : undefined;
-      const name =
-        firstName && lastName ? `${firstName} ${lastName}` : firstName || local;
+    const parsed = JSON.parse(text.replace(/^```json\s*|\s*```$/g, '').trim());
+    if (!Array.isArray(parsed)) return contacts;
+
+    const byEmail = new Map<string, any>();
+    for (const row of parsed) {
+      const em = String(row?.email || '').toLowerCase().trim();
+      if (em) byEmail.set(em, row);
+    }
+
+    return contacts.map((c) => {
+      const row = byEmail.get((c.emailGuess || '').toLowerCase());
+      if (!row) return c;
+      const title = String(row.title || '').trim();
+      const fullName = String(row.fullName || '').trim();
+      const linkedin = String(row.linkedin || '').trim();
+      const typeRaw = String(row.type || '').trim();
+      const type: DecisionMaker['type'] =
+        typeRaw === 'CEO' || typeRaw === 'Buyer'
+          ? typeRaw
+          : title
+            ? classifyDecisionMakerType(title)
+            : c.type;
+      const influenceScore = Math.min(
+        5,
+        Math.max(1, Number(row.influenceScore) || (type === 'Buyer' ? 5 : type === 'CEO' ? 4 : c.influenceScore || 2))
+      );
       return {
-        name,
-        firstName,
-        lastName,
-        title: emailType === 'personal' ? 'Company Contact (Website)' : 'Company Contact',
-        emailGuess: email,
-        type: 'Other' as const,
-        source: 'AnymailFinder' as const,
-        emailSource: 'AnymailFinder',
-        emailStatus: 'valid',
-        isVerified: true,
-        confidence: 0.9,
-        influenceScore: 2,
+        ...c,
+        name: fullName && !isPlaceholderPersonName(fullName) ? fullName : c.name,
+        title: title || c.title,
+        linkedin: linkedin && /linkedin\.com/i.test(linkedin) ? linkedin : c.linkedin,
+        type,
+        influenceScore,
       };
     });
   } catch (e) {
-    console.error('Anymail company find error', e);
-    return [];
+    console.warn('enrichCompanyContactsWithWebIntel failed', e);
+    return contacts;
   }
-};
-
-/**
- * Anymail 多通道并行：
- * 1) 官网域名 company（personal + any）
- * 2) 决策人角色 buyer/logistics/operations/ceo（每类 1 人）
- */
-const fetchAnymailFinder = async (domain: string): Promise<DecisionMaker[]> => {
-  const apiKey = getEmailSearchKeys().anymailFinder;
-  if (!domain || !apiKey) return [];
-  try {
-    // 官网域名搜索 + 角色搜索并行；company 先 personal，不足再 any（各最多 1 分）
-    const [byRole, personal] = await Promise.all([
-      fetchAnymailDecisionMakers(domain),
-      fetchAnymailCompanyEmails(domain, 'personal'),
-    ]);
-    const anyEmails =
-      personal.length >= 8 ? [] : await fetchAnymailCompanyEmails(domain, 'any');
-    const merged: DecisionMaker[] = [];
-    const seen = new Set<string>();
-    for (const p of [...byRole, ...personal, ...anyEmails]) {
-      const key = (p.emailGuess || '').toLowerCase();
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      merged.push(p);
-    }
-    return merged;
-  } catch (e) {
-    console.error('Anymail Finder Error', e);
-  }
-  return [];
 };
 
 /** 验证邮箱（仅用于非 Anymail 来源的二次确认；每次约 0.2 分） */
@@ -575,9 +686,13 @@ export type DecisionMakerResearchResult = {
 };
 
 /**
- * 决策人邮箱搜索：仅把「公司名称 + 人员姓名」交给 Anymail Finder。
- * - 不跑 AI 挖人、不调 Hunter/Findy、不做官网批量搜索
- * - 已有非 Anymail 邮箱先 verify；无效或无邮箱则按人重查
+ * 决策人邮箱搜索（对齐 Anymail Finder 官网逻辑）：
+ * 1) 优先「公司域名搜索」find-email/company：1 积分最多 20 个已验证邮箱（等同官网可复制预览）
+ * 2) 再用联网 AI 为这些邮箱补职位 / LinkedIn（不额外扣 Anymail 积分）
+ * 3) 对已有真实姓名但仍无邮箱的人，按需 find-email/person（每人成功约 1 分）
+ * 4) deepDig：再补少量 decision-maker 角色搜索（成功约 2 分/人），不并行狂扫多类别
+ *
+ * 不再「先 LinkedIn/AI 挖职位再去 Anymail」——那样会漏掉域名库里大量联系人。
  */
 export const researchDecisionMakerEmails = async (opts: {
   domain: string;
@@ -585,7 +700,7 @@ export const researchDecisionMakerEmails = async (opts: {
   companyName?: string;
   /** 对非 Anymail 来源邮箱做 verify（默认 true） */
   reverifyNonAnymail?: boolean;
-  /** 深挖模式：在按人名搜索后，再按域名角色补充联系人 */
+  /** 深挖：在公司域名搜索后，再按角色补充少量决策人 */
   deepDig?: boolean;
 }): Promise<DecisionMakerResearchResult> => {
   const searchedAt = Date.now();
@@ -620,14 +735,68 @@ export const researchDecisionMakerEmails = async (opts: {
   const personLabel = (dm: DecisionMaker) =>
     dm.name || [dm.firstName, dm.lastName].filter(Boolean).join(' ');
 
+  const emailKey = (dm: DecisionMaker) => (dm.emailGuess || '').toLowerCase().trim();
+  const seenEmails = new Set(merged.map(emailKey).filter(Boolean));
+
+  const pushOrMergeCompanyContact = (candidate: DecisionMaker) => {
+    const em = emailKey(candidate);
+    if (!em) return;
+    const idx = merged.findIndex((d) => emailKey(d) === em);
+    if (idx >= 0) {
+      const cur = merged[idx];
+      if (isAnymailVerified(cur)) return;
+      merged[idx] = stampChecked(
+        {
+          ...cur,
+          ...candidate,
+          name: !isPlaceholderPersonName(cur.name) ? cur.name : candidate.name,
+          title: cur.title && !/Company Contact/i.test(cur.title) ? cur.title : candidate.title,
+          linkedin: cur.linkedin || candidate.linkedin,
+          type: cur.type !== 'Other' ? cur.type : candidate.type,
+          influenceScore: Math.max(cur.influenceScore || 0, candidate.influenceScore || 0) || candidate.influenceScore,
+        },
+        searchedAt
+      );
+      stats.upgraded += 1;
+      stats.anymailFound += 1;
+      return;
+    }
+    seenEmails.add(em);
+    merged.push(stampChecked(candidate, searchedAt));
+    stats.added += 1;
+    stats.anymailFound += 1;
+  };
+
   try {
+    // ——— 1) 公司域名搜索（核心，1 积分 ≈ 官网预览 20 人）———
+    if (domain || companyName) {
+      const companyHit = await fetchAnymailCompanyEmails(domain, {
+        companyName: companyName || undefined,
+        emailType: 'any',
+      });
+      let companyPeople = companyHit.people;
+      if (companyPeople.length) {
+        companyPeople = await enrichCompanyContactsWithWebIntel(
+          domain || companyName,
+          companyName || domain,
+          companyPeople
+        );
+        for (const p of companyPeople) {
+          if (p.linkedin) stats.linkedinDiscovered += 1;
+          pushOrMergeCompanyContact(p);
+        }
+      }
+    }
+
+    // ——— 2) 已有真实姓名：补邮箱 / 校验非 Anymail 邮箱 ———
     for (let i = 0; i < merged.length; i++) {
       const dm = merged[i];
       const name = personLabel(dm);
       if (isPlaceholderPersonName(name) && !(dm.firstName && dm.lastName)) continue;
       if (isAnymailVerified(dm)) continue;
+      // 已由公司域名搜索拿到的邮箱不再按人扣分重查
+      if (dm.emailSource === 'AnymailFinder' && dm.emailGuess) continue;
 
-      // 已有邮箱（非 Anymail）：先验证
       if (
         reverifyNonAnymail &&
         dm.emailGuess?.includes('@') &&
@@ -658,15 +827,16 @@ export const researchDecisionMakerEmails = async (opts: {
       const statusNow = (cur.emailStatus || '').toLowerCase();
       const needsFind =
         !cur.emailGuess ||
-        !isAnymailVerified(cur) &&
+        (!isAnymailVerified(cur) &&
           (statusNow === 'invalid' ||
             statusNow === 'not_found' ||
             statusNow === 'blacklisted' ||
             statusNow === 'risky' ||
             statusNow === 'unverified' ||
-            !cur.isVerified);
+            !cur.isVerified));
 
       if (!needsFind) continue;
+      if (!isLikelyRealPerson(cur)) continue;
 
       const hadBadEmail = !!cur.emailGuess && !isAnymailVerified(cur);
       const found = await findEmailWithAnymail(name, {
@@ -677,6 +847,12 @@ export const researchDecisionMakerEmails = async (opts: {
       });
 
       if (!found?.email) continue;
+      const em = found.email.toLowerCase();
+      if (seenEmails.has(em) && emailKey(cur) !== em) {
+        // 邮箱已在列表中，跳过重复扣分结果
+        continue;
+      }
+      seenEmails.add(em);
 
       merged[i] = stampChecked(
         {
@@ -691,6 +867,7 @@ export const researchDecisionMakerEmails = async (opts: {
           firstName: cur.firstName || found.firstName,
           lastName: cur.lastName || found.lastName,
           title: found.title || cur.title,
+          linkedin: cur.linkedin || found.linkedin,
           type: found.title ? classifyDecisionMakerType(found.title) : cur.type,
         },
         searchedAt
@@ -700,27 +877,21 @@ export const researchDecisionMakerEmails = async (opts: {
       if (hadBadEmail) stats.reFoundAfterInvalid += 1;
     }
 
-    // 二次深挖：当用户点击「再次深挖」时，补充按域名角色挖掘（buyer/logistics/operations/ceo）
+    // ——— 3) 深挖：少量角色补充（buyer → logistics → ceo），串行且最多 2 人 ———
     if (deepDig && domain) {
-      const seenKeys = new Set(
-        merged.map((dm) => {
-          const email = (dm.emailGuess || '').toLowerCase();
-          if (email) return `e:${email}`;
-          return `n:${(dm.name || '').toLowerCase()}|t:${(dm.title || '').toLowerCase()}`;
-        })
-      );
-
-      const roleCandidates = await fetchAnymailDecisionMakers(domain);
+      const roleCandidates = await fetchAnymailDecisionMakers(domain, [
+        { categories: ['buyer'], title: 'Procurement / Buyer', score: 5 },
+        { categories: ['logistics'], title: 'Logistics / Supply Chain', score: 4 },
+        { categories: ['ceo'], title: 'CEO / Owner', score: 4 },
+      ]);
       for (const candidate of roleCandidates) {
-        const email = (candidate.emailGuess || '').toLowerCase();
-        const key = email
-          ? `e:${email}`
-          : `n:${(candidate.name || '').toLowerCase()}|t:${(candidate.title || '').toLowerCase()}`;
-        if (seenKeys.has(key)) continue;
-        seenKeys.add(key);
+        const em = emailKey(candidate);
+        if (em && seenEmails.has(em)) continue;
+        if (em) seenEmails.add(em);
         merged.push(stampChecked(candidate, searchedAt));
         stats.added += 1;
         stats.anymailFound += 1;
+        if (candidate.linkedin) stats.linkedinDiscovered += 1;
       }
     }
   } catch (e) {

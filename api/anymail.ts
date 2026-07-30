@@ -4,7 +4,7 @@
  */
 export const config = {
   runtime: 'nodejs',
-  maxDuration: 60,
+  maxDuration: 180,
   regions: ['hkg1', 'sin1'],
   api: {
     bodyParser: {
@@ -14,8 +14,8 @@ export const config = {
 };
 
 const ORIGIN = 'https://api.anymailfinder.com';
-/** 上游超时，避免函数挂死导致前端「没反应」 */
-const UPSTREAM_TIMEOUT_MS = 25_000;
+/** 公司域名搜索官方建议最长约 180s；过短会导致前端拿到空结果 */
+const UPSTREAM_TIMEOUT_MS = 170_000;
 
 const applyCors = (res: { setHeader: (k: string, v: string) => void }) => {
   res.setHeader('Access-Control-Allow-Origin', '*');

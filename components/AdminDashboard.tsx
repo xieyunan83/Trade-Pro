@@ -908,7 +908,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     <Mail size={16} /> 第三方邮箱搜索 API
                   </div>
                   <p className="text-[10px] text-slate-400 font-bold">
-                    决策人邮箱默认优先使用 <span className="text-violet-700">AnymailFinder</span> 查找（查找已含校验，不再二次 verify 扣分）；Hunter / Findymail 仅作补充。结果页会标注邮箱来源与是否已验证。
+                    决策人邮箱优先用 AnymailFinder「公司域名搜索」（1 积分最多 20 个已验证邮箱，与官网预览一致）；再联网补职位/领英。Hunter / Findymail 仅作补充。结果会标注来源与是否已验证。
                   </p>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="md:col-span-2">
