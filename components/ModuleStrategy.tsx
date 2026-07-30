@@ -25,7 +25,7 @@ export const ModuleStrategy: React.FC<Props> = ({ data, onSaveGeneratedEmails })
         return [{
             id: 'init',
             role: 'model',
-            text: `**Strategy Context Loaded** ✅\n\nI have fully analyzed **${data.companyInfo.name}**. \n\n**Data Points Available:**\n- Revenue & Trends: ${data.financials.revenueEstimate}\n- Decision Makers: ${data.decisionMakers.length} contacts\n- Core Products: ${data.businessScope.coreProducts.join(', ')}\n\n**How I will write your Development Email:**\n1. I will read your request.\n2. I will scan your uploaded Knowledge Base (Catalog/Price List) found in the History/System.\n3. I will cross-reference the ${data.companyInfo.name} deep investigation report.\n4. I will generate a highly personalized email/proposal.\n\nPlease tell me your goal (e.g., "Write a cold email pitching our new plush toys").`,
+            text: `**Strategy Context Loaded** ✅\n\nI have fully analyzed **${data.companyInfo?.name || '该公司'}**. \n\n**Data Points Available:**\n- Revenue & Trends: ${data.financials?.revenueEstimate || '—'}\n- Decision Makers: ${(data.decisionMakers || []).length} contacts\n- Core Products: ${(data.businessScope?.coreProducts || []).join(', ') || '—'}\n\n**How I will write your Development Email:**\n1. I will read your request.\n2. I will scan your uploaded Knowledge Base (Catalog/Price List) found in the History/System.\n3. I will cross-reference the ${data.companyInfo?.name || '该公司'} deep investigation report.\n4. I will generate a highly personalized email/proposal.\n\nPlease tell me your goal (e.g., "Write a cold email pitching our new plush toys").`,
             timestamp: Date.now()
         }];
       } else {
@@ -281,7 +281,7 @@ export const ModuleStrategy: React.FC<Props> = ({ data, onSaveGeneratedEmails })
                     </div>
                     <div>
                         <h3 className="font-black text-slate-800">Strategy Assistant</h3>
-                        <p className="text-xs text-slate-500">Context: {data ? data.companyInfo.name : "General Mode"}</p>
+                        <p className="text-xs text-slate-500">Context: {data ? data.companyInfo?.name || '当前报告' : "General Mode"}</p>
                     </div>
                 </div>
                 <div className="flex items-center gap-2">

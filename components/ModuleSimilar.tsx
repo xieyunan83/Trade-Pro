@@ -18,7 +18,10 @@ export const ModuleSimilar: React.FC<ModuleSimilarProps> = ({ data, onAnalyze })
         <p className="text-slate-500 font-medium mb-8">基于当前公司的业务模式、产品线和市场定位，为您推荐以下相似的目标客户。</p>
         
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {data.similarCompanies.map((comp, i) => (
+          {(data.similarCompanies || []).length === 0 && (
+            <div className="col-span-full py-12 text-center text-slate-400 font-bold">暂无同类公司推荐</div>
+          )}
+          {(data.similarCompanies || []).map((comp, i) => (
             <div key={i} className="bg-slate-50 p-6 rounded-3xl border border-slate-100 hover:border-blue-200 transition-all group">
               <div className="flex justify-between items-start mb-4">
                 <div className="bg-white p-3 rounded-2xl text-blue-600 shadow-sm">

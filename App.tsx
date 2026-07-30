@@ -25,6 +25,8 @@ import {
 } from './services/permissions';
 import { ModuleStrategy } from './components/ModuleStrategy';
 import { ReportEnrichmentPanel } from './components/ReportEnrichmentPanel';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { extractHistoryAnalysis, websiteHref } from './services/analysisNormalize';
 import { ModuleSimilar } from './components/ModuleSimilar';
 import { ModulePromoGenerator } from './components/ModulePromoGenerator';
 import { ModuleClientCRM } from './components/ModuleClientCRM';
@@ -617,12 +619,25 @@ const App: React.FC = () => {
   };
 
   const loadFromHistory = (item: HistoryItem) => {
-    setAnalysisData(item.data);
-    setViewingHistoryId(item.id);
-    setDomainInput(item.domain);
-    setActiveModule(ModuleType.BACKGROUND);
-    setHistoryOpen(false);
-    setErrorMsg(null);
+    try {
+      const data = extractHistoryAnalysis(item);
+      if (!data) {
+        setErrorMsg('该历史记录缺少有效背调数据，无法打开。可重新对该域名做一次深度调查。');
+        setHistoryOpen(false);
+        return;
+      }
+      setAnalysisData(data);
+      setViewingHistoryId(item.id);
+      setDomainInput(data.companyInfo.website !== 'N/A' ? data.companyInfo.website : item.domain || '');
+      setActiveModule(ModuleType.BACKGROUND);
+      setHistoryOpen(false);
+      setMobileMenuOpen(false);
+      setErrorMsg(null);
+    } catch (e: any) {
+      console.error('loadFromHistory failed', e);
+      setErrorMsg(`打开历史记录失败: ${e?.message || String(e)}`);
+      setHistoryOpen(false);
+    }
   };
 
   /** 合并局部更新到当前背调报告并持久化到历史 */
@@ -1315,7 +1330,7 @@ const App: React.FC = () => {
             </button>
             <button onClick={handleLogout} className="w-full flex items-center gap-2 px-4 py-3 text-red-500 hover:bg-red-50 rounded-xl text-sm font-bold transition-colors"><LogOut size={18} /> 退出登录</button>
             <div className="px-4 pt-1 text-[9px] font-bold text-slate-300 text-center select-all">
-              版本 v20260730d · 决策人筛选/岗位群发/挖掘状态
+              版本 v20260730e · 修复打开历史空白
             </div>
         </div>
       </aside>
@@ -1529,11 +1544,12 @@ const App: React.FC = () => {
                     </div>
                 )}
                 {analysisData && !alwaysActiveModules.includes(activeModule) && (
+                    <ErrorBoundary label="背调报告">
                     <div className="animate-fade-in max-w-7xl mx-auto pb-10">
                     <div className="mb-6 sm:mb-8 flex flex-col md:flex-row md:items-end justify-between gap-4 bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
                         <div className="min-w-0">
-                            <h2 className="text-2xl sm:text-3xl md:text-4xl font-black text-slate-900 tracking-tight break-words">{analysisData.companyInfo?.name}</h2>
-                            <a href={analysisData.companyInfo?.website.startsWith('http') ? analysisData.companyInfo.website : `https://${analysisData.companyInfo?.website}`} target="_blank" rel="noreferrer" className="text-blue-600 font-bold mt-2 hover:underline text-sm sm:text-base break-all">{analysisData.companyInfo?.website}</a>
+                            <h2 className="text-2xl sm:text-3xl md:text-4xl font-black text-slate-900 tracking-tight break-words">{analysisData.companyInfo?.name || '未知公司'}</h2>
+                            <a href={websiteHref(analysisData.companyInfo?.website)} target="_blank" rel="noreferrer" className="text-blue-600 font-bold mt-2 hover:underline text-sm sm:text-base break-all">{analysisData.companyInfo?.website || '—'}</a>
                             {(analysisData.searchKeyword || analysisData.searchTags?.length) && (
                               <div className="flex flex-wrap gap-1.5 mt-3">
                                 {analysisData.searchKeyword && (
@@ -1628,6 +1644,7 @@ const App: React.FC = () => {
                     )}
                     {activeModule === ModuleType.SIMILAR && <ModuleSimilar data={analysisData} onAnalyze={handleAnalyzeInput} />}
                     </div>
+                    </ErrorBoundary>
                 )}
             </>
           )}

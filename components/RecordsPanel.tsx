@@ -460,7 +460,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                                   {historyCountry(row.item)}
                                 </span>
                                 {(row.item.data?.searchTags || [])
-                                  .filter((t) => !t.startsWith('关键词:') && !t.startsWith('国家:'))
+                                  .filter((t) => typeof t === 'string' && !t.startsWith('关键词:') && !t.startsWith('国家:'))
                                   .slice(0, 3)
                                   .map((t) => (
                                     <span key={t} className="text-[9px] font-black bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded">

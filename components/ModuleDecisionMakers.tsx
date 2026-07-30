@@ -343,7 +343,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
                           ...d,
                           emailGuess: d.emailGuess ? maskEmailAddress(d.emailGuess) : d.emailGuess,
                         })),
-                    data.companyInfo.name
+                    data.companyInfo?.name || 'contacts'
                   )
                 }
                 className="inline-flex items-center justify-center gap-2 bg-slate-900 hover:bg-blue-600 text-white px-4 py-2.5 rounded-xl text-sm font-bold touch-manipulation"
