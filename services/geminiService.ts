@@ -732,6 +732,19 @@ export const researchDecisionMakerEmails = async (opts: {
     return { decisionMakers: rankDecisionMakers(merged), searchedAt, stats };
   }
 
+  // 清理背调 AI 占位人（无真实姓名、无邮箱）——避免干扰公司域名搜索结果与「再次搜索」
+  for (let i = merged.length - 1; i >= 0; i--) {
+    const dm = merged[i];
+    const name = dm.name || [dm.firstName, dm.lastName].filter(Boolean).join(' ');
+    const isJunkPlaceholder =
+      !dm.emailGuess &&
+      (dm.source === 'AI' || dm.source === 'AI (Pattern Guess)') &&
+      (isPlaceholderPersonName(name) || /待补充|Company Contact/i.test(dm.title || ''));
+    if (isJunkPlaceholder) {
+      merged.splice(i, 1);
+    }
+  }
+
   const personLabel = (dm: DecisionMaker) =>
     dm.name || [dm.firstName, dm.lastName].filter(Boolean).join(' ');
 
@@ -744,7 +757,24 @@ export const researchDecisionMakerEmails = async (opts: {
     const idx = merged.findIndex((d) => emailKey(d) === em);
     if (idx >= 0) {
       const cur = merged[idx];
-      if (isAnymailVerified(cur)) return;
+      // 已是 Anymail 已验证：仍刷新时间戳，计为「已覆盖确认」，避免用户误以为搜索失败
+      if (isAnymailVerified(cur)) {
+        merged[idx] = stampChecked(
+          {
+            ...cur,
+            title:
+              cur.title && !/Company Contact/i.test(cur.title)
+                ? cur.title
+                : candidate.title || cur.title,
+            linkedin: cur.linkedin || candidate.linkedin,
+            name: !isPlaceholderPersonName(cur.name) ? cur.name : candidate.name,
+          },
+          searchedAt
+        );
+        stats.upgraded += 1;
+        stats.anymailFound += 1;
+        return;
+      }
       merged[idx] = stampChecked(
         {
           ...cur,

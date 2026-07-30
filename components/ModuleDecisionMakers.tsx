@@ -108,7 +108,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
       const added = job.stats?.added || 0;
       const verified = job.stats?.verified || 0;
       if (upgraded + added + verified === 0) {
-        setQueueMsg('邮箱搜索已完成：本次未发现新增可验证邮箱，可稍后再深挖或补充真实姓名后重试。');
+        setQueueMsg('邮箱搜索已完成：未新增联系人（可能是重复搜索或暂无结果）。可先「清空全部」后重试，或点「再次深挖」。');
       } else {
         setQueueMsg(`邮箱搜索已完成：新增 ${added}，更新 ${upgraded}，验证 ${verified}`);
       }
@@ -148,8 +148,27 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
   };
 
   const handleDeleteDecisionMaker = (index: number) => {
+    const target = decisionMakers[index];
+    const label = target?.name || target?.emailGuess || `第 ${index + 1} 位联系人`;
+    if (!window.confirm(`确定删除决策人「${label}」吗？删除后不可恢复（可再搜索或手动新增）。`)) {
+      return;
+    }
     const next = decisionMakers.filter((_, i) => i !== index);
     commit(next);
+    setQueueMsg(`已删除：${label}`);
+  };
+
+  const handleClearAllDecisionMakers = () => {
+    if (!decisionMakers.length) return;
+    if (
+      !window.confirm(
+        `确定清空当前全部 ${decisionMakers.length} 位决策人吗？\n清空后可重新点「后台搜索」按公司域名拉取邮箱，避免旧的无用信息干扰。`
+      )
+    ) {
+      return;
+    }
+    commit([]);
+    setQueueMsg('已清空全部决策人，可重新发起后台搜索。');
   };
 
   const handleEnqueueSearch = () => {
@@ -157,6 +176,22 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
     if (!canDmEmailSearch) {
       setQueueMsg('你没有「决策人邮箱搜索」权限，请联系管理员或部门主管开通。');
       return;
+    }
+    if (decisionMakers.length > 0) {
+      const junk = decisionMakers.filter(
+        (d) =>
+          !d.emailGuess &&
+          (d.source === 'AI' || d.source === 'AI (Pattern Guess)' || /Company Contact|公开信息未找到|待补充/i.test(`${d.name} ${d.title}`))
+      ).length;
+      if (junk > 0 || decisionMakers.length > 8) {
+        const ok = window.confirm(
+          `当前已有 ${decisionMakers.length} 位决策人（其中约 ${junk} 位疑似无用占位）。\n建议先「清空全部」再搜索，避免旧数据干扰。\n\n仍要在现有列表上继续搜索吗？`
+        );
+        if (!ok) {
+          setQueueMsg('已取消搜索。可先删除或清空无用决策人后再试。');
+          return;
+        }
+      }
     }
     if (onEnqueueEmailSearch) {
       const res = onEnqueueEmailSearch();
@@ -204,6 +239,15 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
             >
               <Plus size={16} /> 手动新增决策人
             </button>
+            {decisionMakers.length > 0 && (
+              <button
+                type="button"
+                onClick={handleClearAllDecisionMakers}
+                className="inline-flex items-center justify-center gap-2 bg-white border border-red-200 hover:bg-red-50 text-red-600 px-4 py-2.5 rounded-xl text-sm font-bold touch-manipulation"
+              >
+                <Trash2 size={16} /> 清空全部
+              </button>
+            )}
             {canDmEmailSearch && (
               <button
                 type="button"
@@ -363,11 +407,21 @@ const DecisionMakerCard: React.FC<{
         </div>
         <div className="flex flex-col items-end gap-2 flex-shrink-0">
           <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black ${typeBadge(dm.type)}`}>{dm.type}</span>
-          {verify.ok ? (
-            <div className="bg-green-100 text-green-600 p-1.5 rounded-lg" title="已验证"><UserCheck size={16} /></div>
-          ) : (
-            <div className="bg-yellow-100 text-yellow-600 p-1.5 rounded-lg" title="待验证"><AlertTriangle size={16} /></div>
-          )}
+          <div className="flex items-center gap-1.5">
+            {verify.ok ? (
+              <div className="bg-green-100 text-green-600 p-1.5 rounded-lg" title="已验证"><UserCheck size={16} /></div>
+            ) : (
+              <div className="bg-yellow-100 text-yellow-600 p-1.5 rounded-lg" title="待验证"><AlertTriangle size={16} /></div>
+            )}
+            <button
+              type="button"
+              onClick={() => onDelete(index)}
+              className="inline-flex items-center gap-1 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 px-2 py-1.5 text-[10px] font-black"
+              title="删除此人"
+            >
+              <Trash2 size={14} /> 删除
+            </button>
+          </div>
         </div>
       </div>
       
@@ -437,8 +491,12 @@ const DecisionMakerCard: React.FC<{
             </div>
 
             <div className="flex flex-wrap justify-between gap-2 pt-2">
-              <button type="button" onClick={() => onDelete(index)} className="inline-flex items-center gap-2 rounded-xl bg-red-50 px-3 py-2 text-sm font-bold text-red-600 hover:bg-red-100">
-                <Trash2 size={14} /> 删除
+              <button
+                type="button"
+                onClick={() => onDelete(index)}
+                className="inline-flex items-center gap-2 rounded-xl bg-red-50 px-3 py-2 text-sm font-bold text-red-600 hover:bg-red-100"
+              >
+                <Trash2 size={14} /> 删除此人
               </button>
               <div className="flex gap-2">
                 <button
