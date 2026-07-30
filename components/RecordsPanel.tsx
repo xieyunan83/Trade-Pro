@@ -29,7 +29,7 @@ import {
 } from '../services/taxonomyStore';
 
 type RecordTab = 'search' | 'background' | 'all';
-type GroupBy = 'keyword' | 'country' | 'time';
+type GroupBy = 'keyword' | 'country' | 'time' | 'dmMined';
 
 interface RecordsPanelProps {
   history: HistoryItem[];
@@ -71,6 +71,11 @@ const historyKeyword = (h: HistoryItem) =>
 
 const historyCountry = (h: HistoryItem) =>
   normalizeCountryZh(h.country || h.data?.companyInfo?.headquarters || h.data?.companyInfo?.city || '');
+
+const historyDmMined = (h: HistoryItem) =>
+  h.data?.decisionMakerEmailSearchAt ? '已挖掘决策人' : '未挖掘决策人';
+
+const discoveryDmMined = () => '搜索记录（无决策人挖掘）';
 
 export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   history,
@@ -151,6 +156,8 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
       } else if (groupBy === 'country') {
         if (row.kind === 'history') push(historyCountry(row.item), row);
         else discoveryCountries(row.item).forEach((c) => push(c, row));
+      } else if (groupBy === 'dmMined') {
+        push(row.kind === 'history' ? historyDmMined(row.item) : discoveryDmMined(), row);
       } else {
         push(timeKey(row.kind === 'history' ? row.item.timestamp : row.item.timestamp), row);
       }
@@ -159,6 +166,10 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
       .map(([key, items]) => ({ key, items }))
       .sort((a, b) => {
         if (groupBy === 'time') return b.key.localeCompare(a.key);
+        if (groupBy === 'dmMined') {
+          const order = ['未挖掘决策人', '已挖掘决策人', '搜索记录（无决策人挖掘）'];
+          return order.indexOf(a.key) - order.indexOf(b.key);
+        }
         if (a.key === UNCATEGORIZED) return 1;
         if (b.key === UNCATEGORIZED) return -1;
         return a.key.localeCompare(b.key, 'zh');
@@ -180,7 +191,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   };
 
   const handleRenameGroup = (from: string) => {
-    if (from === UNCATEGORIZED || groupBy === 'time') return;
+    if (from === UNCATEGORIZED || groupBy === 'time' || groupBy === 'dmMined') return;
     const to = prompt(groupBy === 'country' ? `重命名国家「${from}」为：` : `重命名关键词「${from}」为：`, from);
     if (!to?.trim() || to.trim() === from) return;
     const next = to.trim();
@@ -202,7 +213,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   };
 
   const handleDeleteGroup = (name: string) => {
-    if (name === UNCATEGORIZED || groupBy === 'time') return;
+    if (name === UNCATEGORIZED || groupBy === 'time' || groupBy === 'dmMined') return;
     if (!confirm(`删除分类「${name}」？该分类下的背调记录将变为「未分类」。`)) return;
     const ids = groups
       .find((g) => g.key === name)
@@ -218,7 +229,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   };
 
   const handleAssignGroup = (fromKey: string) => {
-    if (groupBy === 'time') return;
+    if (groupBy === 'time' || groupBy === 'dmMined') return;
     const list = groupBy === 'keyword' ? keywords : countries;
     const options = list.filter((x) => x !== fromKey);
     const hint =
@@ -282,11 +293,12 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
         ))}
       </div>
 
-      <div className="px-2 py-2 border-b border-slate-100 flex gap-1">
+      <div className="px-2 py-2 border-b border-slate-100 flex flex-wrap gap-1">
         {(
           [
             { id: 'keyword' as const, label: '关键词' },
             { id: 'country' as const, label: '国家' },
+            { id: 'dmMined' as const, label: '决策人挖掘' },
             { id: 'time' as const, label: '时间' },
           ] as const
         ).map((g) => (
@@ -294,7 +306,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
             key={g.id}
             type="button"
             onClick={() => setGroupBy(g.id)}
-            className={`flex-1 px-2 py-2 rounded-lg text-[10px] font-black touch-manipulation ${
+            className={`flex-1 min-w-[4.5rem] px-2 py-2 rounded-lg text-[10px] font-black touch-manipulation ${
               groupBy === g.id ? 'bg-blue-50 text-blue-700 border border-blue-100' : 'text-slate-500'
             }`}
           >
@@ -302,6 +314,11 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
           </button>
         ))}
       </div>
+      {groupBy === 'dmMined' && (
+        <div className="px-3 py-2 border-b border-slate-100 bg-violet-50/80 text-[10px] font-bold text-violet-700">
+          「已挖掘」= 已点过决策人邮箱搜索；「未挖掘」= 背调后尚未搜索决策人，避免重复操作。
+        </div>
+      )}
 
       {/* 自定义分类管理 */}
       {(groupBy === 'keyword' || groupBy === 'country') && (

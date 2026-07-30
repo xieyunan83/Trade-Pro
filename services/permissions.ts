@@ -160,3 +160,21 @@ export const roleLabel = (role: UserRole): string => {
   if (role === 'manager') return '部门主管';
   return '部门员工';
 };
+
+/** 仅管理员 / 部门主管可查看完整决策人邮箱；普通员工显示脱敏 */
+export const canViewFullDecisionMakerEmails = (user: User | null | undefined): boolean => {
+  if (!user || user.disabled) return false;
+  return user.role === 'admin' || user.role === 'manager';
+};
+
+/** 邮箱脱敏：a***@***.com */
+export const maskEmailAddress = (email?: string): string => {
+  const raw = (email || '').trim();
+  if (!raw) return '';
+  if (!raw.includes('@')) return '***';
+  const [local, domain] = raw.split('@');
+  const localMask = local.length <= 1 ? '*' : `${local[0]}***`;
+  const domainParts = domain.split('.');
+  const tld = domainParts.length > 1 ? domainParts[domainParts.length - 1] : 'com';
+  return `${localMask}@***.${tld}`;
+};

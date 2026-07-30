@@ -6,12 +6,15 @@ import {
   getActiveDmJobForDomain,
   subscribeDmEmailSearchJobs,
 } from '../services/dmEmailSearchQueue';
+import { maskEmailAddress } from '../services/permissions';
 
 interface ModuleDecisionMakersProps {
   data: AnalysisResult;
   historyId?: string | null;
   canDmEmailSearch?: boolean;
   canExportExcel?: boolean;
+  /** 是否可查看完整邮箱（管理员/主管）；普通员工显示 * */
+  canViewEmails?: boolean;
   /** 邮箱手工编辑 / 后台搜索完成写回 */
   onUpdate?: (
     decisionMakers: DecisionMaker[],
@@ -63,6 +66,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
   historyId,
   canDmEmailSearch = false,
   canExportExcel = false,
+  canViewEmails = true,
   onUpdate,
   onEnqueueEmailSearch,
 }) => {
@@ -74,6 +78,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
   const [queueMsg, setQueueMsg] = useState('');
   const [jobActive, setJobActive] = useState(false);
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
+  const [listFilter, setListFilter] = useState<'all' | 'buyer' | 'verified'>('all');
   const lastAppliedJobIdRef = React.useRef<string | null>(null);
 
   useEffect(() => {
@@ -131,14 +136,6 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
       else next.add(index);
       return next;
     });
-  };
-
-  const toggleSelectAll = () => {
-    if (selectedIndices.size === decisionMakers.length) {
-      setSelectedIndices(new Set());
-    } else {
-      setSelectedIndices(new Set(decisionMakers.map((_, i) => i)));
-    }
   };
 
   const handleDecisionMakerChange = (
@@ -238,6 +235,39 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
   const buyers = decisionMakers.filter(d => d.type === 'Buyer').length;
   const verified = decisionMakers.filter(d => d.isVerified).length;
 
+  const matchesFilter = (dm: DecisionMaker) => {
+    if (listFilter === 'buyer') return dm.type === 'Buyer';
+    if (listFilter === 'verified') return !!dm.isVerified && !!dm.emailGuess;
+    return true;
+  };
+
+  const filteredEntries = decisionMakers
+    .map((dm, index) => ({ dm, index }))
+    .filter(({ dm }) => matchesFilter(dm));
+
+  const filteredIndices = filteredEntries.map((e) => e.index);
+  const allFilteredSelected =
+    filteredIndices.length > 0 && filteredIndices.every((i) => selectedIndices.has(i));
+
+  const toggleSelectAllFiltered = () => {
+    if (allFilteredSelected) {
+      setSelectedIndices((prev) => {
+        const next = new Set(prev);
+        filteredIndices.forEach((i) => next.delete(i));
+        return next;
+      });
+    } else {
+      setSelectedIndices((prev) => {
+        const next = new Set(prev);
+        filteredIndices.forEach((i) => next.add(i));
+        return next;
+      });
+    }
+  };
+
+  const filterLabel =
+    listFilter === 'buyer' ? '采购相关' : listFilter === 'verified' ? '已验证邮箱' : '全部联系人';
+
   return (
     <div className="space-y-4 sm:space-y-6 animate-fade-in">
       <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
@@ -305,7 +335,17 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
             {canExportExcel && (
               <button
                 type="button"
-                onClick={() => exportContactsToExcel(decisionMakers, data.companyInfo.name)}
+                onClick={() =>
+                  exportContactsToExcel(
+                    canViewEmails
+                      ? decisionMakers
+                      : decisionMakers.map((d) => ({
+                          ...d,
+                          emailGuess: d.emailGuess ? maskEmailAddress(d.emailGuess) : d.emailGuess,
+                        })),
+                    data.companyInfo.name
+                  )
+                }
                 className="inline-flex items-center justify-center gap-2 bg-slate-900 hover:bg-blue-600 text-white px-4 py-2.5 rounded-xl text-sm font-bold touch-manipulation"
               >
                 <Download size={16} /> 导出 Excel
@@ -321,33 +361,62 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
         )}
 
         <div className="grid grid-cols-3 gap-3 mb-4">
-          <div className="bg-slate-50 rounded-2xl p-3 border border-slate-100 text-center">
-            <div className="text-xl font-black text-slate-900">{decisionMakers.length}</div>
-            <div className="text-[10px] font-black text-slate-400 uppercase">联系人</div>
-          </div>
-          <div className="bg-blue-50 rounded-2xl p-3 border border-blue-100 text-center">
-            <div className="text-xl font-black text-blue-700">{buyers}</div>
-            <div className="text-[10px] font-black text-blue-400 uppercase">采购相关</div>
-          </div>
-          <div className="bg-emerald-50 rounded-2xl p-3 border border-emerald-100 text-center">
-            <div className="text-xl font-black text-emerald-700">{verified}</div>
-            <div className="text-[10px] font-black text-emerald-500 uppercase">已验证邮箱</div>
-          </div>
+          <button
+            type="button"
+            onClick={() => { setListFilter('all'); setSelectedIndices(new Set()); }}
+            className={`rounded-2xl p-3 border text-center transition-all touch-manipulation ${
+              listFilter === 'all'
+                ? 'bg-slate-900 text-white border-slate-900 ring-2 ring-slate-300'
+                : 'bg-slate-50 border-slate-100 hover:border-slate-300'
+            }`}
+          >
+            <div className={`text-xl font-black ${listFilter === 'all' ? 'text-white' : 'text-slate-900'}`}>{decisionMakers.length}</div>
+            <div className={`text-[10px] font-black uppercase ${listFilter === 'all' ? 'text-slate-300' : 'text-slate-400'}`}>联系人</div>
+          </button>
+          <button
+            type="button"
+            onClick={() => { setListFilter('buyer'); setSelectedIndices(new Set()); }}
+            className={`rounded-2xl p-3 border text-center transition-all touch-manipulation ${
+              listFilter === 'buyer'
+                ? 'bg-blue-600 text-white border-blue-600 ring-2 ring-blue-200'
+                : 'bg-blue-50 border-blue-100 hover:border-blue-300'
+            }`}
+          >
+            <div className={`text-xl font-black ${listFilter === 'buyer' ? 'text-white' : 'text-blue-700'}`}>{buyers}</div>
+            <div className={`text-[10px] font-black uppercase ${listFilter === 'buyer' ? 'text-blue-100' : 'text-blue-400'}`}>采购相关</div>
+          </button>
+          <button
+            type="button"
+            onClick={() => { setListFilter('verified'); setSelectedIndices(new Set()); }}
+            className={`rounded-2xl p-3 border text-center transition-all touch-manipulation ${
+              listFilter === 'verified'
+                ? 'bg-emerald-600 text-white border-emerald-600 ring-2 ring-emerald-200'
+                : 'bg-emerald-50 border-emerald-100 hover:border-emerald-300'
+            }`}
+          >
+            <div className={`text-xl font-black ${listFilter === 'verified' ? 'text-white' : 'text-emerald-700'}`}>{verified}</div>
+            <div className={`text-[10px] font-black uppercase ${listFilter === 'verified' ? 'text-emerald-100' : 'text-emerald-500'}`}>已验证邮箱</div>
+          </button>
         </div>
+        {listFilter !== 'all' && (
+          <p className="mb-3 text-[11px] font-bold text-slate-500">
+            当前筛选：{filterLabel}（{filteredEntries.length} 人）· 可勾选后批量删除
+          </p>
+        )}
 
-        {decisionMakers.length > 0 && (
+        {filteredEntries.length > 0 && (
           <div className="mb-4 flex flex-wrap items-center gap-3 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
             <label className="inline-flex items-center gap-2 text-xs font-black text-slate-700 cursor-pointer">
               <input
                 type="checkbox"
-                checked={selectedIndices.size === decisionMakers.length && decisionMakers.length > 0}
-                onChange={toggleSelectAll}
+                checked={allFilteredSelected}
+                onChange={toggleSelectAllFiltered}
                 className="w-4 h-4 rounded border-slate-300"
               />
-              全选
+              全选当前筛选
             </label>
             <span className="text-[11px] font-bold text-slate-500">
-              已选 {selectedIndices.size} / {decisionMakers.length}
+              已选 {selectedIndices.size} / 当前 {filteredEntries.length}
             </span>
             <button
               type="button"
@@ -372,16 +441,19 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
         )}
         
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
-          {decisionMakers.length === 0 ? (
+          {filteredEntries.length === 0 ? (
             <div className="col-span-full py-12 text-center text-slate-400 font-bold">
-              暂无决策人线索。点「后台搜索决策人邮箱」会先按公司域名拉取最多 20 个已验证邮箱（约 1 积分），也可手动新增。
+              {decisionMakers.length === 0
+                ? '暂无决策人线索。点「后台搜索决策人邮箱」会先按公司域名拉取最多 20 个已验证邮箱（约 1 积分），也可手动新增。'
+                : `当前筛选「${filterLabel}」下没有联系人，可点上方方块切换。`}
             </div>
-          ) : decisionMakers.map((dm, i) => (
+          ) : filteredEntries.map(({ dm, index: i }) => (
             <DecisionMakerCard
               key={`${dm.emailGuess || dm.name || 'manual'}-${i}`}
               dm={dm}
               index={i}
               selected={selectedIndices.has(i)}
+              canViewEmails={canViewEmails}
               onToggleSelect={toggleSelect}
               onChange={handleDecisionMakerChange}
               onDelete={handleDeleteDecisionMaker}
@@ -425,10 +497,11 @@ const DecisionMakerCard: React.FC<{
   dm: DecisionMaker;
   index: number;
   selected: boolean;
+  canViewEmails: boolean;
   onToggleSelect: (index: number) => void;
   onChange: (index: number, patch: Partial<DecisionMaker>, options?: { resetEmailVerification?: boolean }) => void;
   onDelete: (index: number) => void;
-}> = ({ dm, index, selected, onToggleSelect, onChange, onDelete }) => {
+}> = ({ dm, index, selected, canViewEmails, onToggleSelect, onChange, onDelete }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState<DecisionMaker>(dm);
   const emailPlatform = dm.emailSource || dm.source || '未知';
@@ -499,16 +572,24 @@ const DecisionMakerCard: React.FC<{
           <div className="flex items-center justify-between p-3 bg-white rounded-xl border border-slate-100 gap-2">
             <div className="flex items-center gap-2 overflow-hidden min-w-0">
               <Mail size={14} className="text-slate-400 shrink-0" />
-              <span className="text-xs font-bold text-slate-600 truncate">{dm.emailGuess || '待补充（可手动填写）'}</span>
+              <span className="text-xs font-bold text-slate-600 truncate">
+                {dm.emailGuess
+                  ? canViewEmails
+                    ? dm.emailGuess
+                    : maskEmailAddress(dm.emailGuess)
+                  : '待补充（可手动填写）'}
+              </span>
             </div>
             <div className="flex gap-2 flex-shrink-0">
               <button onClick={() => setIsEditing(true)} className="text-[10px] font-black text-slate-400 hover:text-blue-600">编辑全部</button>
-              <button 
-                onClick={() => { navigator.clipboard.writeText(dm.emailGuess || ''); alert('已复制'); }}
-                className="text-[10px] font-black text-blue-600 hover:underline"
-              >
-                复制
-              </button>
+              {canViewEmails && dm.emailGuess && (
+                <button 
+                  onClick={() => { navigator.clipboard.writeText(dm.emailGuess || ''); alert('已复制'); }}
+                  className="text-[10px] font-black text-blue-600 hover:underline"
+                >
+                  复制
+                </button>
+              )}
             </div>
           </div>
         ) : (
@@ -533,7 +614,13 @@ const DecisionMakerCard: React.FC<{
                 <input value={draft.yearsActive || ''} onChange={(e) => updateDraft('yearsActive', e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium" />
               </Field>
               <Field label="邮箱" className="sm:col-span-2">
-                <input value={draft.emailGuess || ''} onChange={(e) => updateDraft('emailGuess', e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium" />
+                <input
+                  value={draft.emailGuess || ''}
+                  onChange={(e) => updateDraft('emailGuess', e.target.value)}
+                  disabled={!canViewEmails}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium disabled:bg-slate-100 disabled:text-slate-400"
+                  placeholder={canViewEmails ? '' : '普通员工不可查看/编辑完整邮箱'}
+                />
               </Field>
               <Field label="电话">
                 <input value={draft.phone || ''} onChange={(e) => updateDraft('phone', e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium" />

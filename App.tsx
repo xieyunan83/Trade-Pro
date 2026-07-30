@@ -19,6 +19,7 @@ import { OrgPermissionPanel } from './components/OrgPermissionPanel';
 import { loadDepartmentsFromStorage } from './services/orgStore';
 import {
   canAccessModule,
+  canViewFullDecisionMakerEmails,
   filterOwnedRecords,
   hasPermission,
 } from './services/permissions';
@@ -1314,7 +1315,7 @@ const App: React.FC = () => {
             </button>
             <button onClick={handleLogout} className="w-full flex items-center gap-2 px-4 py-3 text-red-500 hover:bg-red-50 rounded-xl text-sm font-bold transition-colors"><LogOut size={18} /> 退出登录</button>
             <div className="px-4 pt-1 text-[9px] font-bold text-slate-300 text-center select-all">
-              版本 v20260730c · 若无「删除此人/大洲国家」，请 Cmd+Shift+R 强制刷新
+              版本 v20260730d · 决策人筛选/岗位群发/挖掘状态
             </div>
         </div>
       </aside>
@@ -1569,7 +1570,11 @@ const App: React.FC = () => {
                         {(analysisData.decisionMakers?.some((d) => d.emailGuess) ||
                           analysisData.generatedEmails) && (
                           <div className="mb-4">
-                            <ReportEnrichmentPanel data={analysisData} />
+                            <ReportEnrichmentPanel
+                              data={analysisData}
+                              showDecisionMakers={canViewFullDecisionMakerEmails(currentUser)}
+                              canViewEmails={canViewFullDecisionMakerEmails(currentUser)}
+                            />
                           </div>
                         )}
                     </div>
@@ -1600,6 +1605,7 @@ const App: React.FC = () => {
                         historyId={viewingHistoryId}
                         canDmEmailSearch={hasPermission(currentUser, 'feature.dm_email_search')}
                         canExportExcel={hasPermission(currentUser, 'feature.export_report')}
+                        canViewEmails={canViewFullDecisionMakerEmails(currentUser)}
                         onUpdate={(dms, meta) => {
                           const next = {
                             ...analysisData,

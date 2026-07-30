@@ -3,7 +3,7 @@ import React, { useState, useRef } from 'react';
 import ReactQuill from 'react-quill';
 import 'react-quill/dist/quill.snow.css';
 import { Client, EmailTask, EmailTemplate, AliyunConfig } from '../types';
-import { Mail, Send, Plus, Trash2, Edit2, CheckCircle2, AlertTriangle, Loader2, Settings, FileText, Layout, Users, Clock, X } from 'lucide-react';
+import { Mail, Send, Plus, Trash2, Edit2, CheckCircle2, AlertTriangle, Loader2, Settings, FileText, Layout, Users, Clock, X, Briefcase } from 'lucide-react';
 
 interface ModuleEmailCampaignProps {
   crmClients: Client[];
@@ -20,11 +20,66 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
   const [activeTab, setActiveTab] = useState<'tasks' | 'templates' | 'config'>('tasks');
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
+  const [roleFilter, setRoleFilter] = useState<'all' | 'Buyer' | 'CEO' | 'Other'>('all');
   const [isCreatingTemplate, setIsCreatingTemplate] = useState(false);
   const [newTemplate, setNewTemplate] = useState<EmailTemplate>({ id: '', name: '', subject: '', body: '', lastUpdated: Date.now() });
   const quillRef = useRef<ReactQuill>(null);
 
   const macros = ['{{company_name}}', '{{contact_name}}'];
+
+  const contactMatchesRole = (contact: { type?: string; title?: string; emailGuess?: string }) => {
+    if (!contact.emailGuess?.includes('@')) return false;
+    if (roleFilter === 'all') return true;
+    if (roleFilter === 'Buyer') {
+      return (
+        contact.type === 'Buyer' ||
+        /buyer|procurement|purchasing|sourcing|category|merchandis|采购|买手|供应链/i.test(contact.title || '')
+      );
+    }
+    if (roleFilter === 'CEO') {
+      return contact.type === 'CEO' || /ceo|founder|owner|president|总经理|创始/i.test(contact.title || '');
+    }
+    return contact.type === 'Other' || (!contact.type && !/buyer|ceo|procurement|purchasing/i.test(contact.title || ''));
+  };
+
+  const importableContacts = React.useMemo(() => {
+    const rows: Array<{ client: Client; contact: NonNullable<Client['contacts']>[number] }> = [];
+    for (const client of crmClients) {
+      for (const contact of client.contacts || []) {
+        if (contactMatchesRole(contact)) rows.push({ client, contact });
+      }
+    }
+    return rows;
+  }, [crmClients, roleFilter]);
+
+  const importFromCrmByRole = () => {
+    if (!importableContacts.length) {
+      alert('当前岗位筛选下没有带邮箱的联系人，请先在决策人挖掘中搜索并保存到 CRM。');
+      return;
+    }
+    const existing = new Set(tasks.map((t) => t.recipientEmail.toLowerCase()));
+    const newTasks: EmailTask[] = [];
+    for (const { client, contact } of importableContacts) {
+      const email = (contact.emailGuess || '').trim();
+      if (!email || existing.has(email.toLowerCase())) continue;
+      existing.add(email.toLowerCase());
+      newTasks.push({
+        id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        recipientName: contact.name || [contact.firstName, contact.lastName].filter(Boolean).join(' ') || '',
+        recipientEmail: email,
+        recipientTitle: contact.title || contact.type || '',
+        companyName: client.name || '',
+        status: 'pending',
+        sentAt: undefined,
+      });
+    }
+    if (!newTasks.length) {
+      alert('没有新增收件人（可能已全部在列表中）');
+      return;
+    }
+    setTasks((prev) => [...prev, ...newTasks]);
+    alert(`已按岗位导入 ${newTasks.length} 位收件人`);
+  };
 
   const insertMacroToSubject = (macro: string) => {
       setNewTemplate(prev => ({ ...prev, subject: prev.subject + macro }));
@@ -165,25 +220,55 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
 
       {activeTab === 'tasks' && (
         <div className="space-y-4 sm:space-y-6">
-          <div className="bg-white p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm flex flex-col lg:flex-row lg:justify-between lg:items-center gap-4">
-            <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 w-full lg:w-auto">
-              <h3 className="text-base sm:text-lg font-black text-slate-800">待发送列表 ({tasks.length})</h3>
-              <select 
-                value={selectedTemplateId} 
-                onChange={e => setSelectedTemplateId(e.target.value)}
-                className="w-full sm:w-auto px-4 py-2 rounded-xl border border-slate-200 text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none"
+          <div className="bg-white p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm space-y-4">
+            <div className="flex flex-col lg:flex-row lg:justify-between lg:items-center gap-4">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 w-full lg:w-auto">
+                <h3 className="text-base sm:text-lg font-black text-slate-800">待发送列表 ({tasks.length})</h3>
+                <select 
+                  value={selectedTemplateId} 
+                  onChange={e => setSelectedTemplateId(e.target.value)}
+                  className="w-full sm:w-auto px-4 py-2 rounded-xl border border-slate-200 text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none"
+                >
+                  <option value="">选择发送模板...</option>
+                  {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </div>
+              <button 
+                disabled={selectedTaskIds.size === 0 || !selectedTemplateId || !config}
+                onClick={() => onSendBatch(Array.from(selectedTaskIds), selectedTemplateId)}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-6 sm:px-8 py-3 rounded-xl font-black shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 w-full lg:w-auto touch-manipulation"
               >
-                <option value="">选择发送模板...</option>
-                {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-              </select>
+                <Send size={18} /> 立即群发 ({selectedTaskIds.size})
+              </button>
             </div>
-            <button 
-              disabled={selectedTaskIds.size === 0 || !selectedTemplateId || !config}
-              onClick={() => onSendBatch(Array.from(selectedTaskIds), selectedTemplateId)}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-6 sm:px-8 py-3 rounded-xl font-black shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 w-full lg:w-auto touch-manipulation"
-            >
-              <Send size={18} /> 立即群发 ({selectedTaskIds.size})
-            </button>
+
+            <div className="rounded-2xl border border-violet-100 bg-violet-50/60 p-4 space-y-3">
+              <div className="flex items-center gap-2 text-sm font-black text-violet-800">
+                <Briefcase size={16} /> 按岗位从 CRM 导入收件人
+              </div>
+              <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
+                <select
+                  value={roleFilter}
+                  onChange={(e) => setRoleFilter(e.target.value as typeof roleFilter)}
+                  className="w-full sm:w-56 px-4 py-2.5 rounded-xl border border-violet-200 bg-white text-sm font-bold"
+                >
+                  <option value="all">全部岗位（有邮箱）</option>
+                  <option value="Buyer">采购相关</option>
+                  <option value="CEO">CEO / 老板</option>
+                  <option value="Other">其他岗位</option>
+                </select>
+                <span className="text-xs font-bold text-violet-600">
+                  可导入 {importableContacts.length} 人
+                </span>
+                <button
+                  type="button"
+                  onClick={importFromCrmByRole}
+                  className="sm:ml-auto inline-flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 text-white px-5 py-2.5 rounded-xl text-sm font-black"
+                >
+                  <Plus size={16} /> 按岗位导入
+                </button>
+              </div>
+            </div>
           </div>
 
           <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm overflow-x-auto">
@@ -201,6 +286,7 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
                     />
                   </th>
                   <th className="px-6 py-4">收件人信息</th>
+                  <th className="px-6 py-4">岗位</th>
                   <th className="px-6 py-4">所属公司</th>
                   <th className="px-6 py-4">状态</th>
                   <th className="px-6 py-4">发送时间</th>
@@ -209,7 +295,7 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
               <tbody className="divide-y divide-slate-50">
                 {tasks.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="px-6 py-12 text-center text-slate-400 font-bold">暂无发送任务</td>
+                    <td colSpan={6} className="px-6 py-12 text-center text-slate-400 font-bold">暂无发送任务，请先按岗位从 CRM 导入</td>
                   </tr>
                 ) : (
                   tasks.map(task => (
@@ -225,6 +311,9 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
                       <td className="px-6 py-4">
                         <div className="font-bold text-slate-800">{task.recipientName}</div>
                         <div className="text-[10px] text-slate-400 font-bold">{task.recipientEmail}</div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="text-xs font-bold text-slate-600">{task.recipientTitle || '—'}</div>
                       </td>
                       <td className="px-6 py-4">
                         <div className="text-sm font-bold text-slate-600">{task.companyName}</div>

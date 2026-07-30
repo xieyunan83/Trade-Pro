@@ -1,19 +1,27 @@
 import React from 'react';
 import { AnalysisResult } from '../types';
 import { Mail, Users, ShieldCheck, PenTool } from 'lucide-react';
+import { maskEmailAddress } from '../services/permissions';
 
 /** 背调报告内展示：决策人邮箱 + 已保存的开发信（随 data 更新） */
-export const ReportEnrichmentPanel: React.FC<{ data: AnalysisResult }> = ({ data }) => {
+export const ReportEnrichmentPanel: React.FC<{
+  data: AnalysisResult;
+  /** 非管理员/主管时隐藏整块决策人邮箱结果 */
+  showDecisionMakers?: boolean;
+  /** 是否显示完整邮箱 */
+  canViewEmails?: boolean;
+}> = ({ data, showDecisionMakers = true, canViewEmails = true }) => {
   const dms = data.decisionMakers || [];
   const withEmail = dms.filter((d) => d.emailGuess?.includes('@'));
   const verified = dms.filter((d) => d.isVerified && d.emailGuess);
   const emails = data.generatedEmails;
 
-  if (!dms.length && !emails) return null;
+  const showDmBlock = showDecisionMakers && dms.length > 0;
+  if (!showDmBlock && !emails) return null;
 
   return (
     <div className="space-y-4 sm:space-y-6">
-      {dms.length > 0 && (
+      {showDmBlock && (
         <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-violet-200 shadow-sm">
           <h3 className="text-lg sm:text-xl font-black text-slate-800 mb-4 flex items-center gap-2">
             <Users className="text-violet-600" /> 决策人与邮箱
@@ -42,7 +50,11 @@ export const ReportEnrichmentPanel: React.FC<{ data: AnalysisResult }> = ({ data
                     <td className="py-2.5 pr-3 font-bold text-slate-800">{dm.name}</td>
                     <td className="py-2.5 pr-3 text-slate-600">{dm.title || '—'}</td>
                     <td className="py-2.5 pr-3 font-mono text-[11px] text-blue-700 break-all">
-                      {dm.emailGuess || '待搜索'}
+                      {dm.emailGuess
+                        ? canViewEmails
+                          ? dm.emailGuess
+                          : maskEmailAddress(dm.emailGuess)
+                        : '待搜索'}
                     </td>
                     <td className="py-2.5">
                       {dm.isVerified ? (

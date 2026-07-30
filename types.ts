@@ -515,6 +515,8 @@ export interface EmailTask {
     id: string;
     recipientEmail: string;
     recipientName: string;
+    /** 收件人岗位/职位 */
+    recipientTitle?: string;
     companyName: string;
     status: 'pending' | 'sending' | 'success' | 'failed';
     error?: string;
