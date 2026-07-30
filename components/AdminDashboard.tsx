@@ -90,6 +90,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const [isTestingQwen, setIsTestingQwen] = useState(false);
   const [isTestingWan, setIsTestingWan] = useState(false);
   const [isTestingAnymail, setIsTestingAnymail] = useState(false);
+  const [qwenTestMsg, setQwenTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [anymailTestMsg, setAnymailTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [wanTestMsg, setWanTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [ytLink, setYtLink] = useState('');
   const [isUploading, setIsUploading] = useState(false);
 
@@ -322,7 +325,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
 
   const handleTestQwen = async (testSearch = false) => {
     if (!qwenApiKey.trim()) {
-      alert('请先填写 Qwen API Key');
+      const msg = '请先填写 Qwen API Key';
+      setQwenTestMsg({ ok: false, text: msg });
+      alert(msg);
       return;
     }
     // 测试前先写入 localStorage，保证请求用的是当前表单里的 Token Plan 配置
@@ -331,9 +336,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     if (qwenModelId.trim()) localStorage.setItem('trade_scout_qwen_model_id', qwenModelId.trim());
 
     setIsTestingQwen(true);
+    setQwenTestMsg({ ok: true, text: testSearch ? '正在测试联网搜索（最长约 25 秒）…' : '正在测试连接（最长约 25 秒）…' });
     try {
       const result = await testQwenApiKey(qwenApiKey, qwenBaseUrl, qwenModelId, testSearch);
+      setQwenTestMsg({ ok: result.success, text: result.message });
       alert(result.message);
+    } catch (e: any) {
+      const text = `Qwen 测试异常: ${e?.message || String(e)}`;
+      setQwenTestMsg({ ok: false, text });
+      alert(text);
     } finally {
       setIsTestingQwen(false);
     }
@@ -342,16 +353,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const handleTestWan = async () => {
     const key = wanApiKey.trim() || qwenApiKey.trim();
     if (!key) {
-      alert('请先填写万相 API Key（可与千问 Token Plan 共用）');
+      const msg = '请先填写万相 API Key（可与千问 Token Plan 共用）';
+      setWanTestMsg({ ok: false, text: msg });
+      alert(msg);
       return;
     }
     localStorage.setItem('trade_scout_wan_api_key', key);
     localStorage.setItem('trade_scout_wan_base_url', (wanBaseUrl.trim() || qwenBaseUrl.trim() || 'https://token-plan.cn-beijing.maas.aliyuncs.com'));
     localStorage.setItem('trade_scout_wan_model_id', wanModelId.trim() || 'wan2.7-image');
     setIsTestingWan(true);
+    setWanTestMsg({ ok: true, text: '正在测试万相连接…' });
     try {
       const result = await testWanImageApi();
+      setWanTestMsg({ ok: result.success, text: result.message });
       alert(result.message);
+    } catch (e: any) {
+      const text = `万相测试异常: ${e?.message || String(e)}`;
+      setWanTestMsg({ ok: false, text });
+      alert(text);
     } finally {
       setIsTestingWan(false);
     }
@@ -359,14 +378,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
 
   const handleTestAnymail = async () => {
     if (!anymailFinderApiKey.trim()) {
-      alert('请先填写 AnymailFinder API Key');
+      const msg = '请先填写 AnymailFinder API Key';
+      setAnymailTestMsg({ ok: false, text: msg });
+      alert(msg);
       return;
     }
     localStorage.setItem('trade_scout_anymail_finder_api_key', anymailFinderApiKey.trim());
     setIsTestingAnymail(true);
+    setAnymailTestMsg({ ok: true, text: '正在测试 AnymailFinder（最长约 20 秒）…' });
     try {
       const result = await testAnymailFinderApiKey(anymailFinderApiKey.trim());
+      setAnymailTestMsg({ ok: result.success, text: result.message });
       alert(result.message);
+    } catch (e: any) {
+      const text = `AnymailFinder 测试异常: ${e?.message || String(e)}`;
+      setAnymailTestMsg({ ok: false, text });
+      alert(text);
     } finally {
       setIsTestingAnymail(false);
     }
@@ -382,6 +409,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
       const baseUrl = api.baseUrl?.includes('generativelanguage.googleapis.com') ? 'native' : api.baseUrl;
       const result = await testApiKey(api.apiKey, baseUrl, api.modelId);
       alert(result.message);
+    } catch (e: any) {
+      alert(`API 测试异常: ${e?.message || String(e)}`);
     } finally {
       setTestingApiId(null);
     }
@@ -790,6 +819,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
 
                   <div className="flex flex-col sm:flex-row justify-end gap-3 mt-4">
                     <button
+                      type="button"
                       onClick={() => handleTestQwen(false)}
                       disabled={isTestingQwen}
                       className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-3 rounded-xl font-black flex items-center justify-center gap-2 disabled:opacity-50"
@@ -798,6 +828,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                       测试连接
                     </button>
                     <button
+                      type="button"
                       onClick={() => handleTestQwen(true)}
                       disabled={isTestingQwen}
                       className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-black flex items-center justify-center gap-2 disabled:opacity-50"
@@ -806,6 +837,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                       测试联网搜索
                     </button>
                   </div>
+                  {qwenTestMsg && (
+                    <p className={`text-xs font-bold mt-3 ${qwenTestMsg.ok ? 'text-emerald-700' : 'text-rose-600'}`}>
+                      {qwenTestMsg.text}
+                    </p>
+                  )}
                 </div>
 
                 {/* 万相图片生成 */}
@@ -849,6 +885,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     </div>
                     <div className="flex items-end">
                       <button
+                        type="button"
                         onClick={handleTestWan}
                         disabled={isTestingWan}
                         className="w-full bg-pink-600 hover:bg-pink-700 text-white px-6 py-3 rounded-xl font-black flex items-center justify-center gap-2 disabled:opacity-50"
@@ -858,6 +895,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                       </button>
                     </div>
                   </div>
+                  {wanTestMsg && (
+                    <p className={`text-xs font-bold mt-3 ${wanTestMsg.ok ? 'text-pink-700' : 'text-rose-600'}`}>
+                      {wanTestMsg.text}
+                    </p>
+                  )}
                 </div>
 
                 {/* 第三方邮箱搜索 API */}
@@ -911,6 +953,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                       测试 AnymailFinder
                     </button>
                   </div>
+                  {anymailTestMsg && (
+                    <p className={`text-xs font-bold mt-3 ${anymailTestMsg.ok ? 'text-violet-700' : 'text-rose-600'}`}>
+                      {anymailTestMsg.text}
+                    </p>
+                  )}
                 </div>
 
                 {/* Recommended Sources */}

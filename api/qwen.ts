@@ -1,10 +1,12 @@
 /**
  * Vercel Serverless：同域转发阿里云（单文件，避免 [...path] 多段 404）
  * 用法：/api/qwen?__upstream=/compatible-mode/v1/chat/completions
+ * 部署在香港/新加坡，缩短到阿里云北京的链路。
  */
 export const config = {
   runtime: 'nodejs',
   maxDuration: 300,
+  regions: ['hkg1', 'sin1'],
   api: {
     bodyParser: {
       sizeLimit: '8mb',
@@ -13,6 +15,8 @@ export const config = {
 };
 
 const FALLBACK = 'https://token-plan.cn-beijing.maas.aliyuncs.com';
+/** 上游默认超时；连接测试由前端更短超时先行中止 */
+const UPSTREAM_TIMEOUT_MS = 90_000;
 
 const applyCors = (res: { setHeader: (k: string, v: string) => void }) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -68,6 +72,9 @@ export default async function handler(req: any, res: any) {
     return;
   }
 
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+
   try {
     let origin = FALLBACK;
     const hdr = req.headers['x-qwen-origin'];
@@ -79,12 +86,7 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    let path = resolveUpstreamPath(req);
-    // 若 OpenAI 客户端把 /chat/completions 拼进了 query 值，已包含在 path 中
-    if (!path.includes('/chat/completions') && !path.includes('/services/') && req.method === 'POST') {
-      // keep as-is for models list etc.
-    }
-
+    const path = resolveUpstreamPath(req);
     const target = new URL(path, origin + '/');
 
     const headers: Record<string, string> = {};
@@ -100,6 +102,7 @@ export default async function handler(req: any, res: any) {
       method: req.method || 'POST',
       headers,
       body: readBody(req),
+      signal: controller.signal,
     });
 
     const text = await upstream.text();
@@ -112,6 +115,13 @@ export default async function handler(req: any, res: any) {
     res.send(text);
   } catch (e: any) {
     applyCors(res);
-    res.status(502).json({ error: e?.message || String(e) });
+    const aborted = e?.name === 'AbortError' || /aborted|timeout/i.test(String(e?.message || e));
+    res.status(aborted ? 504 : 502).json({
+      error: aborted
+        ? `阿里云上游超时（${UPSTREAM_TIMEOUT_MS / 1000}s）。请确认 Key/域名，或配置国内中转。`
+        : e?.message || String(e),
+    });
+  } finally {
+    clearTimeout(timer);
   }
 }

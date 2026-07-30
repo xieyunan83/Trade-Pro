@@ -200,6 +200,7 @@ export function resolveAnymailUrl(path: string): { url: string; via: QwenProxyVi
 }
 
 export function buildAnymailFetchHeaders(apiKey: string, targetUrl: string): Record<string, string> {
+  // 官方文档：Authorization 值为 API Key 本身（也可兼容 Bearer）
   const rawKey = apiKey.replace(/^Bearer\s+/i, '').trim();
   if (isSupabaseQwenProxyUrl(targetUrl)) {
     const { key } = getSupabaseConfig();

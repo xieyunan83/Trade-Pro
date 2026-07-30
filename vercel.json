@@ -1,4 +1,5 @@
 {
+  "regions": ["hkg1", "sin1"],
   "functions": {
     "api/qwen.ts": {
       "maxDuration": 300,

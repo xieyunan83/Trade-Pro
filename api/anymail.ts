@@ -1,10 +1,11 @@
 /**
  * Vercel Serverless：同域转发 Anymail Finder（单文件）
- * 用法：/api/anymail?__upstream=/v0.2/search/person.json
+ * 用法：/api/anymail?__upstream=/v5.1/verify-email
  */
 export const config = {
   runtime: 'nodejs',
   maxDuration: 60,
+  regions: ['hkg1', 'sin1'],
   api: {
     bodyParser: {
       sizeLimit: '2mb',
@@ -13,6 +14,8 @@ export const config = {
 };
 
 const ORIGIN = 'https://api.anymailfinder.com';
+/** 上游超时，避免函数挂死导致前端「没反应」 */
+const UPSTREAM_TIMEOUT_MS = 25_000;
 
 const applyCors = (res: { setHeader: (k: string, v: string) => void }) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -60,12 +63,19 @@ const resolveUpstreamPath = (req: any): string => {
   return '/';
 };
 
+/** 官方要求 Authorization 值为 API Key；兼容客户端误带 Bearer */
+const normalizeAnymailAuth = (auth: string): string =>
+  String(auth).replace(/^Bearer\s+/i, '').trim();
+
 export default async function handler(req: any, res: any) {
   applyCors(res);
   if (req.method === 'OPTIONS') {
     res.status(204).end();
     return;
   }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
 
   try {
     const path = resolveUpstreamPath(req);
@@ -78,12 +88,13 @@ export default async function handler(req: any, res: any) {
       headers['Content-Type'] = 'application/json';
     }
     const auth = req.headers.authorization || req.headers['x-upstream-authorization'];
-    if (auth) headers.Authorization = String(auth).replace(/^Bearer\s+/i, '').trim();
+    if (auth) headers.Authorization = normalizeAnymailAuth(String(auth));
 
     const upstream = await fetch(target.toString(), {
       method: req.method || 'POST',
       headers,
       body: readBody(req),
+      signal: controller.signal,
     });
 
     const text = await upstream.text();
@@ -96,6 +107,13 @@ export default async function handler(req: any, res: any) {
     res.send(text);
   } catch (e: any) {
     applyCors(res);
-    res.status(502).json({ error: e?.message || String(e) });
+    const aborted = e?.name === 'AbortError' || /aborted|timeout/i.test(String(e?.message || e));
+    res.status(aborted ? 504 : 502).json({
+      error: aborted
+        ? `Anymail 上游超时（${UPSTREAM_TIMEOUT_MS / 1000}s）`
+        : e?.message || String(e),
+    });
+  } finally {
+    clearTimeout(timer);
   }
 }

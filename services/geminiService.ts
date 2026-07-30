@@ -270,13 +270,22 @@ const rankDecisionMakers = (list: DecisionMaker[]): DecisionMaker[] => {
   });
 };
 
-const anymailFetch = async (path: string, apiKey: string, body: unknown): Promise<Response> => {
+const anymailFetch = async (
+  path: string,
+  apiKey: string,
+  body: unknown,
+  timeoutMs = 45_000
+): Promise<Response> => {
   const { url } = resolveAnymailUrl(path);
-  return fetch(url, {
-    method: 'POST',
-    headers: buildAnymailFetchHeaders(apiKey, url),
-    body: JSON.stringify(body),
-  });
+  return fetchWithTimeout(
+    url,
+    {
+      method: 'POST',
+      headers: buildAnymailFetchHeaders(apiKey, url),
+      body: JSON.stringify(body),
+    },
+    timeoutMs
+  );
 };
 
 type AnymailFindResult = {
@@ -725,16 +734,19 @@ export const researchDecisionMakerEmails = async (opts: {
   };
 };
 
-/** 后台测试 Anymail Finder Key 是否可用 */
+/** 后台测试 Anymail Finder Key 是否可用（短超时，避免云端长时间无反馈） */
 export const testAnymailFinderApiKey = async (
   apiKey: string
 ): Promise<{ success: boolean; message: string }> => {
   const key = (apiKey || '').replace(/^Bearer\s+/i, '').trim();
   if (!key) return { success: false, message: '请先填写 AnymailFinder API Key' };
   try {
-    const response = await anymailFetch('/v5.1/verify-email', key, {
-      email: 'connection-test@example.com',
-    });
+    const response = await anymailFetch(
+      '/v5.1/verify-email',
+      key,
+      { email: 'connection-test@example.com' },
+      20_000
+    );
     const text = await response.text();
     let data: any = {};
     try {
@@ -761,10 +773,10 @@ export const testAnymailFinderApiKey = async (
     };
   } catch (e: any) {
     const msg = String(e?.message || e);
-    const hint = /Failed to fetch|NetworkError/i.test(msg)
+    const hint = /Failed to fetch|NetworkError|超时|timeout|AbortError/i.test(msg)
       ? isLocalDevHost()
         ? ' 请重启 npm run dev（需要 /anymail-api 代理），然后强制刷新页面再测。'
-        : ' 线上需已部署 qwen-proxy Edge Function（Anymail 复用该代理）。'
+        : ' 请确认线上已部署 /api/anymail，或稍后再试。'
       : '';
     return {
       success: false,
@@ -1976,6 +1988,7 @@ export const callQwen = async (
     override?: Partial<QwenRuntimeConfig>;
     enableSearch?: boolean;
     task?: TaskType;
+    timeoutMs?: number;
   } = {}
 ): Promise<string> => {
   try {
@@ -1990,6 +2003,7 @@ export const callQwen = async (
         enableSearch: options.enableSearch,
         task: options.task,
         override: options.override,
+        timeoutMs: options.timeoutMs,
       }
     );
   } catch (error) {
@@ -1997,6 +2011,9 @@ export const callQwen = async (
     throw error;
   }
 };
+
+/** 连接测试专用短超时，避免云端后台长时间转圈无反馈 */
+const CONNECTION_TEST_TIMEOUT_MS = 25_000;
 
 export const testQwenApiKey = async (
   apiKey: string,
@@ -2028,6 +2045,7 @@ export const testQwenApiKey = async (
         },
         enableSearch: true,
         task: 'email',
+        timeoutMs: CONNECTION_TEST_TIMEOUT_MS,
       });
       return { success: true, message: `千问联网搜索成功 ✅ ${text.slice(0, 80)}` };
     }
@@ -2037,6 +2055,7 @@ export const testQwenApiKey = async (
         baseUrl: cleanBase,
         modelId: modelId?.trim(),
       },
+      timeoutMs: CONNECTION_TEST_TIMEOUT_MS,
     });
     return { success: true, message: `Qwen 连接成功 ✅ 回复: ${text.slice(0, 50)}` };
   } catch (e: any) {
