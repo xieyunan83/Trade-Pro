@@ -1693,7 +1693,12 @@ ${searchKeyword ? `  Discovery source keyword: "${searchKeyword}". Tag this repo
 ${productFocusBlock}
   6. Financial trends last 5 years — estimate if needed, never all zeros.
 
-  IMPORTANT: All descriptive text in Simplified Chinese.
+  IMPORTANT: All descriptive text in Simplified Chinese (简体中文).
+  CRITICAL LANGUAGE RULE for productSummary:
+  - marketPreference / recommendedProducts / packagingAnalysis / colorPreference / featureAnalysis
+    MUST be written entirely in Simplified Chinese. Do NOT output English paragraphs.
+  - Product names inside those fields may keep common English trade terms in parentheses, e.g. 回力车（pull-back）.
+  - Example tone: "终端市场极度看重价格，产品需低成本制造、外观吸引儿童、组装尽量简单。"
 
   Output JSON only (no markdown) matching:
   {
@@ -1873,6 +1878,53 @@ ${productFocusBlock}
   result.decisionMakers = rankDecisionMakers(result.decisionMakers);
 
   return result;
+};
+
+/** 检测文本是否主要为英文（用于已有报告译成中文） */
+export const looksLikeEnglishParagraph = (text?: string): boolean => {
+  const t = (text || '').trim();
+  if (!t || t === 'N/A') return false;
+  const latin = (t.match(/[A-Za-z]/g) || []).length;
+  const cjk = (t.match(/[\u4e00-\u9fff]/g) || []).length;
+  return latin >= 40 && cjk < latin * 0.25;
+};
+
+export type ProductSummaryFields = {
+  marketPreference: string;
+  recommendedProducts: string;
+  packagingAnalysis: string;
+  colorPreference: string;
+  featureAnalysis: string;
+};
+
+/** 将市场喜好与产品策略字段准确译为简体中文 */
+export const translateProductSummaryToZh = async (
+  summary: ProductSummaryFields,
+  keyword?: string
+): Promise<ProductSummaryFields> => {
+  const prompt = `请将以下外贸「市场喜好与产品策略」字段准确翻译成简体中文。
+要求：
+1. 专业外贸用语，自然通顺，不要逐词生硬直译
+2. 常见产品名可保留英文原词于括号内，如 回力车（pull-back）
+3. 只输出 JSON，键名保持不变
+${keyword ? `4. 语境关键词：${keyword}` : ''}
+
+原文 JSON：
+${JSON.stringify(summary, null, 2)}`;
+
+  const text = await callQwen(prompt, {
+    jsonMode: true,
+    task: 'email',
+    timeoutMs: 60_000,
+  });
+  const parsed = JSON.parse(text.replace(/^```json\s*|\s*```$/g, '').trim());
+  return {
+    marketPreference: String(parsed.marketPreference || summary.marketPreference),
+    recommendedProducts: String(parsed.recommendedProducts || summary.recommendedProducts),
+    packagingAnalysis: String(parsed.packagingAnalysis || summary.packagingAnalysis),
+    colorPreference: String(parsed.colorPreference || summary.colorPreference),
+    featureAnalysis: String(parsed.featureAnalysis || summary.featureAnalysis),
+  };
 };
 
 // Add this function to export

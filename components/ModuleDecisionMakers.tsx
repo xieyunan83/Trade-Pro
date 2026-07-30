@@ -73,6 +73,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
   );
   const [queueMsg, setQueueMsg] = useState('');
   const [jobActive, setJobActive] = useState(false);
+  const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
   const lastAppliedJobIdRef = React.useRef<string | null>(null);
 
   useEffect(() => {
@@ -82,6 +83,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
       data.decisionMakerEmailSearchHistory ||
         (data.decisionMakerEmailSearchAt ? [data.decisionMakerEmailSearchAt] : [])
     );
+    setSelectedIndices(new Set());
   }, [data.decisionMakers, data.decisionMakerEmailSearchAt, data.decisionMakerEmailSearchHistory]);
 
   useEffect(() => {
@@ -118,7 +120,25 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
 
   const commit = (next: DecisionMaker[]) => {
     setDecisionMakers(next);
+    setSelectedIndices(new Set());
     onUpdate?.(next);
+  };
+
+  const toggleSelect = (index: number) => {
+    setSelectedIndices((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIndices.size === decisionMakers.length) {
+      setSelectedIndices(new Set());
+    } else {
+      setSelectedIndices(new Set(decisionMakers.map((_, i) => i)));
+    }
   };
 
   const handleDecisionMakerChange = (
@@ -169,6 +189,20 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
     }
     commit([]);
     setQueueMsg('已清空全部决策人，可重新发起后台搜索。');
+  };
+
+  const handleBatchDelete = () => {
+    const count = selectedIndices.size;
+    if (!count) {
+      alert('请先勾选要删除的决策人');
+      return;
+    }
+    if (!window.confirm(`确定删除已选中的 ${count} 位决策人吗？删除后不可恢复。`)) {
+      return;
+    }
+    const next = decisionMakers.filter((_, i) => !selectedIndices.has(i));
+    commit(next);
+    setQueueMsg(`已批量删除 ${count} 位决策人`);
   };
 
   const handleEnqueueSearch = () => {
@@ -243,9 +277,18 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
               <button
                 type="button"
                 onClick={handleClearAllDecisionMakers}
-                className="inline-flex items-center justify-center gap-2 bg-white border border-red-200 hover:bg-red-50 text-red-600 px-4 py-2.5 rounded-xl text-sm font-bold touch-manipulation"
+                className="inline-flex items-center justify-center gap-2 bg-white border-2 border-red-300 hover:bg-red-50 text-red-600 px-4 py-2.5 rounded-xl text-sm font-black touch-manipulation"
               >
                 <Trash2 size={16} /> 清空全部
+              </button>
+            )}
+            {selectedIndices.size > 0 && (
+              <button
+                type="button"
+                onClick={handleBatchDelete}
+                className="inline-flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 text-white px-4 py-2.5 rounded-xl text-sm font-black touch-manipulation"
+              >
+                <Trash2 size={16} /> 批量删除 ({selectedIndices.size})
               </button>
             )}
             {canDmEmailSearch && (
@@ -277,7 +320,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
           </div>
         )}
 
-        <div className="grid grid-cols-3 gap-3 mb-6">
+        <div className="grid grid-cols-3 gap-3 mb-4">
           <div className="bg-slate-50 rounded-2xl p-3 border border-slate-100 text-center">
             <div className="text-xl font-black text-slate-900">{decisionMakers.length}</div>
             <div className="text-[10px] font-black text-slate-400 uppercase">联系人</div>
@@ -291,6 +334,31 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
             <div className="text-[10px] font-black text-emerald-500 uppercase">已验证邮箱</div>
           </div>
         </div>
+
+        {decisionMakers.length > 0 && (
+          <div className="mb-4 flex flex-wrap items-center gap-3 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
+            <label className="inline-flex items-center gap-2 text-xs font-black text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={selectedIndices.size === decisionMakers.length && decisionMakers.length > 0}
+                onChange={toggleSelectAll}
+                className="w-4 h-4 rounded border-slate-300"
+              />
+              全选
+            </label>
+            <span className="text-[11px] font-bold text-slate-500">
+              已选 {selectedIndices.size} / {decisionMakers.length}
+            </span>
+            <button
+              type="button"
+              onClick={handleBatchDelete}
+              disabled={!selectedIndices.size}
+              className="ml-auto inline-flex items-center gap-1.5 rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-40 text-white px-3 py-2 text-xs font-black"
+            >
+              <Trash2 size={14} /> 批量删除选中
+            </button>
+          </div>
+        )}
 
         {searchHistory.length > 1 && (
           <details className="mb-4 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
@@ -313,6 +381,8 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
               key={`${dm.emailGuess || dm.name || 'manual'}-${i}`}
               dm={dm}
               index={i}
+              selected={selectedIndices.has(i)}
+              onToggleSelect={toggleSelect}
               onChange={handleDecisionMakerChange}
               onDelete={handleDeleteDecisionMaker}
             />
@@ -354,9 +424,11 @@ const Field: React.FC<{ label: string; children: React.ReactNode; className?: st
 const DecisionMakerCard: React.FC<{
   dm: DecisionMaker;
   index: number;
+  selected: boolean;
+  onToggleSelect: (index: number) => void;
   onChange: (index: number, patch: Partial<DecisionMaker>, options?: { resetEmailVerification?: boolean }) => void;
   onDelete: (index: number) => void;
-}> = ({ dm, index, onChange, onDelete }) => {
+}> = ({ dm, index, selected, onToggleSelect, onChange, onDelete }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState<DecisionMaker>(dm);
   const emailPlatform = dm.emailSource || dm.source || '未知';
@@ -393,9 +465,16 @@ const DecisionMakerCard: React.FC<{
   };
 
   return (
-    <div className="bg-slate-50 p-5 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-100 hover:border-blue-200 transition-all group">
+    <div className={`bg-slate-50 p-5 sm:p-6 rounded-2xl sm:rounded-3xl border transition-all group ${selected ? 'border-red-300 ring-2 ring-red-100' : 'border-slate-100 hover:border-blue-200'}`}>
       <div className="flex justify-between items-start mb-4 gap-3">
         <div className="flex items-center gap-3 min-w-0">
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={() => onToggleSelect(index)}
+            className="w-5 h-5 rounded border-slate-300 flex-shrink-0 cursor-pointer"
+            title="勾选以便批量删除"
+          />
           <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center text-white font-black text-xl shadow-lg flex-shrink-0">
             {(dm.name || '?').charAt(0)}
           </div>
@@ -407,21 +486,11 @@ const DecisionMakerCard: React.FC<{
         </div>
         <div className="flex flex-col items-end gap-2 flex-shrink-0">
           <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black ${typeBadge(dm.type)}`}>{dm.type}</span>
-          <div className="flex items-center gap-1.5">
-            {verify.ok ? (
-              <div className="bg-green-100 text-green-600 p-1.5 rounded-lg" title="已验证"><UserCheck size={16} /></div>
-            ) : (
-              <div className="bg-yellow-100 text-yellow-600 p-1.5 rounded-lg" title="待验证"><AlertTriangle size={16} /></div>
-            )}
-            <button
-              type="button"
-              onClick={() => onDelete(index)}
-              className="inline-flex items-center gap-1 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 px-2 py-1.5 text-[10px] font-black"
-              title="删除此人"
-            >
-              <Trash2 size={14} /> 删除
-            </button>
-          </div>
+          {verify.ok ? (
+            <div className="bg-green-100 text-green-600 p-1.5 rounded-lg" title="已验证"><UserCheck size={16} /></div>
+          ) : (
+            <div className="bg-yellow-100 text-yellow-600 p-1.5 rounded-lg" title="待验证"><AlertTriangle size={16} /></div>
+          )}
         </div>
       </div>
       
@@ -581,6 +650,14 @@ const DecisionMakerCard: React.FC<{
           </div>
         )}
       </div>
+
+      <button
+        type="button"
+        onClick={() => onDelete(index)}
+        className="mt-4 w-full inline-flex items-center justify-center gap-2 rounded-xl border-2 border-red-200 bg-red-50 hover:bg-red-100 text-red-600 py-2.5 text-sm font-black"
+      >
+        <Trash2 size={16} /> 删除此人
+      </button>
     </div>
   );
 };

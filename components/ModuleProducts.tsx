@@ -1,10 +1,14 @@
-
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { AnalysisResult, ProductAnalysis } from '../types';
-import { PackageSearch, Tag, Info, ShoppingCart, BarChart3, PieChart, Sparkles } from 'lucide-react';
+import { PackageSearch, Tag, Info, ShoppingCart, BarChart3, PieChart, Sparkles, Languages, Loader2 } from 'lucide-react';
+import {
+  looksLikeEnglishParagraph,
+  translateProductSummaryToZh,
+} from '../services/geminiService';
 
 interface ModuleProductsProps {
   data: AnalysisResult;
+  onUpdateProductSummary?: (summary: NonNullable<AnalysisResult['productSummary']>) => void;
 }
 
 const productMatchesKeyword = (p: ProductAnalysis, keyword?: string): boolean => {
@@ -16,8 +20,26 @@ const productMatchesKeyword = (p: ProductAnalysis, keyword?: string): boolean =>
   return tokens.some((t) => blob.includes(t));
 };
 
-export const ModuleProducts: React.FC<ModuleProductsProps> = ({ data }) => {
+export const ModuleProducts: React.FC<ModuleProductsProps> = ({ data, onUpdateProductSummary }) => {
   const keyword = (data.searchKeyword || '').trim();
+  const [summary, setSummary] = useState(data.productSummary);
+  const [translating, setTranslating] = useState(false);
+  const [translateMsg, setTranslateMsg] = useState('');
+
+  React.useEffect(() => {
+    setSummary(data.productSummary);
+  }, [data.productSummary]);
+
+  const needsZh = useMemo(() => {
+    if (!summary) return false;
+    return (
+      looksLikeEnglishParagraph(summary.marketPreference) ||
+      looksLikeEnglishParagraph(summary.recommendedProducts) ||
+      looksLikeEnglishParagraph(summary.packagingAnalysis) ||
+      looksLikeEnglishParagraph(summary.colorPreference) ||
+      looksLikeEnglishParagraph(summary.featureAnalysis)
+    );
+  }, [summary]);
 
   const { focused, others } = useMemo(() => {
     const list = data.products || [];
@@ -30,6 +52,22 @@ export const ModuleProducts: React.FC<ModuleProductsProps> = ({ data }) => {
     }
     return { focused: f.length ? f : list, others: f.length ? o : [] };
   }, [data.products, keyword]);
+
+  const handleTranslate = async () => {
+    if (!summary) return;
+    setTranslating(true);
+    setTranslateMsg('正在译成简体中文…');
+    try {
+      const zh = await translateProductSummaryToZh(summary, keyword);
+      setSummary(zh);
+      onUpdateProductSummary?.(zh);
+      setTranslateMsg('已译成中文并保存');
+    } catch (e: any) {
+      setTranslateMsg(`翻译失败：${e?.message || String(e)}`);
+    } finally {
+      setTranslating(false);
+    }
+  };
 
   return (
     <div className="space-y-8 animate-fade-in">
@@ -47,21 +85,39 @@ export const ModuleProducts: React.FC<ModuleProductsProps> = ({ data }) => {
         </div>
       )}
 
-      {data.productSummary && (
+      {summary && (
         <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
-          <h3 className="text-2xl font-black text-slate-800 mb-6 flex items-center gap-2">
-            <PieChart className="text-blue-600" /> 市场喜好与产品策略 (Product Strategy)
-            {keyword ? <span className="text-sm font-bold text-violet-600">· {keyword}</span> : null}
-          </h3>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
+            <h3 className="text-2xl font-black text-slate-800 flex items-center gap-2 flex-wrap">
+              <PieChart className="text-blue-600" /> 市场喜好与产品策略
+              {keyword ? <span className="text-sm font-bold text-violet-600">· {keyword}</span> : null}
+            </h3>
+            {needsZh && (
+              <button
+                type="button"
+                onClick={handleTranslate}
+                disabled={translating}
+                className="inline-flex items-center justify-center gap-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-60 text-white px-4 py-2.5 rounded-xl text-sm font-black"
+              >
+                {translating ? <Loader2 size={16} className="animate-spin" /> : <Languages size={16} />}
+                一键译成中文
+              </button>
+            )}
+          </div>
+          {translateMsg && (
+            <p className={`text-xs font-bold mb-4 ${translateMsg.includes('失败') ? 'text-rose-600' : 'text-emerald-700'}`}>
+              {translateMsg}
+            </p>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
             <div className="space-y-6">
               <div className="bg-blue-50 p-6 rounded-2xl border border-blue-100">
-                <div className="text-[10px] font-black text-blue-700 uppercase tracking-widest mb-2 flex items-center gap-1"><ShoppingCart size={12}/> 终端市场喜好 (Market Preference)</div>
-                <p className="text-sm font-bold text-blue-900 leading-relaxed">{data.productSummary.marketPreference}</p>
+                <div className="text-[10px] font-black text-blue-700 uppercase tracking-widest mb-2 flex items-center gap-1"><ShoppingCart size={12}/> 终端市场喜好</div>
+                <p className="text-sm font-bold text-blue-900 leading-relaxed">{summary.marketPreference}</p>
               </div>
               <div className="bg-purple-50 p-6 rounded-2xl border border-purple-100">
-                <div className="text-[10px] font-black text-purple-700 uppercase tracking-widest mb-2 flex items-center gap-1"><Tag size={12}/> 推荐开发产品 (Recommended Products)</div>
-                <p className="text-sm font-bold text-purple-900 leading-relaxed">{data.productSummary.recommendedProducts}</p>
+                <div className="text-[10px] font-black text-purple-700 uppercase tracking-widest mb-2 flex items-center gap-1"><Tag size={12}/> 推荐开发产品</div>
+                <p className="text-sm font-bold text-purple-900 leading-relaxed">{summary.recommendedProducts}</p>
               </div>
             </div>
             <div className="space-y-4">
@@ -69,21 +125,21 @@ export const ModuleProducts: React.FC<ModuleProductsProps> = ({ data }) => {
                 <div className="bg-white p-3 rounded-xl text-blue-600 shadow-sm"><PackageSearch size={20}/></div>
                 <div>
                   <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">包装偏好分析</div>
-                  <div className="text-sm font-bold text-slate-800 mt-1">{data.productSummary.packagingAnalysis}</div>
+                  <div className="text-sm font-bold text-slate-800 mt-1">{summary.packagingAnalysis}</div>
                 </div>
               </div>
               <div className="flex items-start gap-4 p-4 bg-slate-50 rounded-2xl border border-slate-100">
                 <div className="bg-white p-3 rounded-xl text-pink-600 shadow-sm"><Tag size={20}/></div>
                 <div>
                   <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">颜色偏好分析</div>
-                  <div className="text-sm font-bold text-slate-800 mt-1">{data.productSummary.colorPreference}</div>
+                  <div className="text-sm font-bold text-slate-800 mt-1">{summary.colorPreference}</div>
                 </div>
               </div>
               <div className="flex items-start gap-4 p-4 bg-slate-50 rounded-2xl border border-slate-100">
                 <div className="bg-white p-3 rounded-xl text-green-600 shadow-sm"><BarChart3 size={20}/></div>
                 <div>
                   <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">功能点/卖点分析</div>
-                  <div className="text-sm font-bold text-slate-800 mt-1">{data.productSummary.featureAnalysis}</div>
+                  <div className="text-sm font-bold text-slate-800 mt-1">{summary.featureAnalysis}</div>
                 </div>
               </div>
             </div>
@@ -94,7 +150,7 @@ export const ModuleProducts: React.FC<ModuleProductsProps> = ({ data }) => {
       <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
         <h3 className="text-2xl font-black text-slate-800 mb-2 flex items-center gap-2">
           <PackageSearch className="text-blue-600" />
-          {keyword ? `与「${keyword}」相关的产品` : '核心产品线分析 (Core Product Lines)'}
+          {keyword ? `与「${keyword}」相关的产品` : '核心产品线分析'}
         </h3>
         {keyword && (
           <p className="text-sm font-medium text-slate-500 mb-6">

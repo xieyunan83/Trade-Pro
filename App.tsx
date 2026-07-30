@@ -1582,7 +1582,15 @@ const App: React.FC = () => {
                         hasPriorDmSearch={!!analysisData.decisionMakerEmailSearchAt}
                       />
                     )}
-                    {activeModule === ModuleType.PRODUCTS && <ModuleProducts data={analysisData} />}
+                    {activeModule === ModuleType.PRODUCTS && (
+                      <ModuleProducts
+                        data={analysisData}
+                        onUpdateProductSummary={(summary) => {
+                          const next = { ...analysisData, productSummary: summary };
+                          persistCurrentAnalysis(next).catch(console.error);
+                        }}
+                      />
+                    )}
                     {activeModule === ModuleType.DECISION_MAKERS && (
                       <ModuleDecisionMakers
                         data={analysisData}

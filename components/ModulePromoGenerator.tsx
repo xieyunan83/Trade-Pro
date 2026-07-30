@@ -1,7 +1,7 @@
-
 import React, { useState } from 'react';
 import { AutomationResult } from '../types';
 import { Ruler, PlayCircle, Trash2, CheckCircle2, Loader2, AlertTriangle, Clock, Hourglass, FileText, Download } from 'lucide-react';
+import { ContinentCountryMultiSelect } from './ContinentCountryMultiSelect';
 
 interface ModulePromoGeneratorProps {
   onStartAutomation: (keyword: string, productContext: string, countries: string[], productImages: string[], clientType: string) => void;
@@ -34,14 +34,17 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
 }) => {
   const [keyword, setKeyword] = useState('');
   const [productContext, setProductContext] = useState('');
-  const [countries, setCountries] = useState('USA, UK, Germany');
+  const [selectedCountries, setSelectedCountries] = useState<string[]>(['United States', 'United Kingdom', 'Germany']);
   const [clientType, setClientType] = useState('Importer');
 
   const completedCount = automationResults.filter((r) => r.status === 'completed' && r.analysis).length;
 
   const handleStart = () => {
-    const countryList = countries.split(',').map(c => c.trim()).filter(c => c.length > 0);
-    onStartAutomation(keyword, productContext, countryList, [], clientType);
+    if (!selectedCountries.length) {
+      alert('请先选择至少一个目标国家');
+      return;
+    }
+    onStartAutomation(keyword, productContext, selectedCountries, [], clientType);
   };
 
   return (
@@ -63,24 +66,19 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                 placeholder="例如: Silicone Baby Products"
               />
             </div>
-            <div>
-              <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">目标国家 (逗号分隔)</label>
-              <input 
-                type="text" 
-                value={countries} 
-                onChange={e => setCountries(e.target.value)}
-                className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold"
-                placeholder="USA, UK, Canada"
-              />
-            </div>
+            <ContinentCountryMultiSelect
+              value={selectedCountries}
+              onChange={setSelectedCountries}
+              label="目标国家（一级大洲 / 二级国家，可多选）"
+            />
           </div>
           <div className="space-y-4">
             <div>
-              <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">产品背景/卖点 (Context)</label>
+              <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">产品背景/卖点</label>
               <textarea 
                 value={productContext} 
                 onChange={e => setProductContext(e.target.value)}
-                className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold h-[116px] resize-none"
+                className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold h-[160px] resize-none"
                 placeholder="描述您的产品优势，用于生成开发信..."
               />
             </div>
@@ -89,11 +87,11 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
         
         <button 
           onClick={handleStart}
-          disabled={isAutomating || !keyword}
-          className="w-full mt-6 bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-xl font-black shadow-lg transition-all flex items-center justify-center gap-2"
+          disabled={isAutomating || !keyword || selectedCountries.length === 0}
+          className="w-full mt-6 bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-xl font-black shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50"
         >
           {isAutomating ? <Loader2 className="animate-spin" size={20} /> : <PlayCircle size={20} />}
-          开始自动化任务 (Start Automation Task)
+          开始自动化任务
         </button>
       </div>
 
