@@ -54,34 +54,31 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
           <Ruler className="text-blue-600" /> 自动化获客工作流
         </h2>
         
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-8">
-          <div className="space-y-4">
-            <div>
-              <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">搜索关键词</label>
-              <input 
-                type="text" 
-                value={keyword} 
-                onChange={e => setKeyword(e.target.value)}
-                className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold"
-                placeholder="例如: Silicone Baby Products"
-              />
-            </div>
-            <ContinentCountryMultiSelect
-              value={selectedCountries}
-              onChange={setSelectedCountries}
-              label="目标国家（一级大洲 / 二级国家，可多选）"
+        <div className="grid grid-cols-1 gap-4 sm:gap-6">
+          <div>
+            <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">搜索关键词</label>
+            <input 
+              type="text" 
+              value={keyword} 
+              onChange={e => setKeyword(e.target.value)}
+              className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold"
+              placeholder="例如: Silicone Baby Products"
             />
           </div>
-          <div className="space-y-4">
-            <div>
-              <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">产品背景/卖点</label>
-              <textarea 
-                value={productContext} 
-                onChange={e => setProductContext(e.target.value)}
-                className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold h-[160px] resize-none"
-                placeholder="描述您的产品优势，用于生成开发信..."
-              />
-            </div>
+          <ContinentCountryMultiSelect
+            value={selectedCountries}
+            onChange={setSelectedCountries}
+            label="目标国家（一级大洲 / 二级国家多选）"
+            defaultOpen
+          />
+          <div>
+            <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">产品背景/卖点</label>
+            <textarea 
+              value={productContext} 
+              onChange={e => setProductContext(e.target.value)}
+              className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold h-[120px] resize-none"
+              placeholder="描述您的产品优势，用于生成开发信..."
+            />
           </div>
         </div>
         

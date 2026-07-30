@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { MapPin, ChevronDown, X, Check } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { MapPin, X, Check } from 'lucide-react';
 import {
   CONTINENTS,
   countryLabel,
@@ -12,22 +12,25 @@ interface ContinentCountryMultiSelectProps {
   value: string[];
   onChange: (countriesEn: string[]) => void;
   label?: string;
-  placeholder?: string;
   className?: string;
+  /** 默认展开二级菜单（营销工具等场景） */
+  defaultOpen?: boolean;
 }
 
-/** 一级大洲 / 二级国家 多选（外贸场景复用） */
+/**
+ * 一级大洲 → 二级国家 多选
+ * 常显面板，避免被误认为「逗号输入框」
+ */
 export const ContinentCountryMultiSelect: React.FC<ContinentCountryMultiSelectProps> = ({
   value,
   onChange,
   label = '目标国家（可多选）',
-  placeholder = '先选大洲，再勾选国家',
   className = '',
+  defaultOpen = true,
 }) => {
-  const [open, setOpen] = useState(false);
   const [activeContinentId, setActiveContinentId] = useState(CONTINENTS[0].id);
   const [filter, setFilter] = useState('');
-  const panelRef = useRef<HTMLDivElement>(null);
+  const [collapsed, setCollapsed] = useState(!defaultOpen);
 
   const activeContinent: ContinentGroup =
     CONTINENTS.find((c) => c.id === activeContinentId) || CONTINENTS[0];
@@ -42,14 +45,6 @@ export const ContinentCountryMultiSelect: React.FC<ContinentCountryMultiSelectPr
         c.code.toLowerCase().includes(q)
     );
   }, [activeContinent, filter]);
-
-  useEffect(() => {
-    const onDocClick = (e: MouseEvent) => {
-      if (!panelRef.current?.contains(e.target as Node)) setOpen(false);
-    };
-    if (open) document.addEventListener('mousedown', onDocClick);
-    return () => document.removeEventListener('mousedown', onDocClick);
-  }, [open]);
 
   const toggleCountry = (en: string) => {
     onChange(value.includes(en) ? value.filter((c) => c !== en) : [...value, en]);
@@ -69,21 +64,28 @@ export const ContinentCountryMultiSelect: React.FC<ContinentCountryMultiSelectPr
     continent.countries.filter((c) => value.includes(countrySearchValue(c))).length;
 
   return (
-    <div className={className} ref={panelRef}>
+    <div className={className}>
       {label && (
-        <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
-          {label}
-        </label>
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <label className="block text-xs font-black text-slate-400 uppercase tracking-widest">
+            {label}
+          </label>
+          <button
+            type="button"
+            onClick={() => setCollapsed((v) => !v)}
+            className="text-[11px] font-black text-blue-600 hover:underline"
+          >
+            {collapsed ? '展开选择' : '收起'}
+          </button>
+        </div>
       )}
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="w-full min-h-[52px] px-4 py-3 rounded-xl border border-slate-200 bg-white text-left flex items-start gap-3 hover:border-blue-300 focus:ring-2 focus:ring-blue-500 transition-colors"
-      >
-        <MapPin className="text-slate-400 mt-0.5 flex-shrink-0" size={18} />
+
+      {/* 已选标签 */}
+      <div className="mb-2 min-h-[44px] px-3 py-2 rounded-xl border border-slate-200 bg-white flex items-start gap-2">
+        <MapPin className="text-slate-400 mt-0.5 flex-shrink-0" size={16} />
         <div className="flex-1 min-w-0">
           {value.length === 0 ? (
-            <span className="text-slate-400 font-bold">{placeholder}</span>
+            <span className="text-slate-400 text-sm font-bold">尚未选择国家（先点大洲，再勾选国家）</span>
           ) : (
             <div className="flex flex-wrap gap-1.5">
               {value.map((en) => {
@@ -92,28 +94,40 @@ export const ContinentCountryMultiSelect: React.FC<ContinentCountryMultiSelectPr
                   <span
                     key={en}
                     className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 px-2 py-0.5 rounded-lg text-xs font-black"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleCountry(en);
-                    }}
                   >
                     {item ? item.zh : en}
-                    <X size={12} />
+                    <button
+                      type="button"
+                      onClick={() => toggleCountry(en)}
+                      className="hover:text-red-600"
+                      aria-label={`移除 ${item?.zh || en}`}
+                    >
+                      <X size={12} />
+                    </button>
                   </span>
                 );
               })}
             </div>
           )}
         </div>
-        <ChevronDown
-          className={`text-slate-400 flex-shrink-0 mt-0.5 transition-transform ${open ? 'rotate-180' : ''}`}
-          size={18}
-        />
-      </button>
+        {value.length > 0 && (
+          <button
+            type="button"
+            onClick={() => onChange([])}
+            className="text-[11px] font-black text-red-500 hover:underline flex-shrink-0"
+          >
+            清空
+          </button>
+        )}
+      </div>
 
-      {open && (
-        <div className="mt-2 border border-slate-200 rounded-2xl bg-white shadow-xl overflow-hidden z-20 relative">
-          <div className="flex flex-wrap gap-1 p-2 bg-slate-50 border-b border-slate-100">
+      {!collapsed && (
+        <div className="border-2 border-blue-100 rounded-2xl bg-white overflow-hidden shadow-sm">
+          {/* 一级：大洲 */}
+          <div className="flex flex-wrap gap-1.5 p-3 bg-slate-50 border-b border-slate-100">
+            <span className="w-full text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">
+              一级 · 选择大洲
+            </span>
             {CONTINENTS.map((continent) => {
               const count = continentSelectedCount(continent);
               const active = continent.id === activeContinentId;
@@ -143,36 +157,29 @@ export const ContinentCountryMultiSelect: React.FC<ContinentCountryMultiSelectPr
           </div>
 
           <div className="p-3 border-b border-slate-100 flex flex-col sm:flex-row gap-2 sm:items-center">
+            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest sm:mr-2">
+              二级 · {activeContinent.zh}国家
+            </span>
             <input
               type="text"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
-              placeholder={`在${activeContinent.zh}内搜索国家…`}
+              placeholder={`在${activeContinent.zh}内搜索…`}
               className="flex-1 px-3 py-2 rounded-lg border border-slate-200 text-sm font-bold focus:ring-2 focus:ring-blue-500"
             />
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={toggleContinentAll}
-                className="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 text-xs font-black hover:bg-slate-200"
-              >
-                {activeContinent.countries.every((c) => value.includes(countrySearchValue(c)))
-                  ? '取消本洲'
-                  : '全选本洲'}
-              </button>
-              {value.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => onChange([])}
-                  className="px-3 py-2 rounded-lg text-red-600 text-xs font-black hover:bg-red-50"
-                >
-                  清空全部
-                </button>
-              )}
-            </div>
+            <button
+              type="button"
+              onClick={toggleContinentAll}
+              className="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 text-xs font-black hover:bg-slate-200"
+            >
+              {activeContinent.countries.every((c) => value.includes(countrySearchValue(c)))
+                ? '取消本洲'
+                : '全选本洲'}
+            </button>
           </div>
 
-          <div className="max-h-56 overflow-y-auto p-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1">
+          {/* 二级：国家勾选 */}
+          <div className="max-h-64 overflow-y-auto p-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1">
             {filteredCountries.map((c) => {
               const en = countrySearchValue(c);
               const checked = value.includes(en);

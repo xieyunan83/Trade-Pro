@@ -6,7 +6,6 @@
 export const config = {
   runtime: 'nodejs',
   maxDuration: 300,
-  regions: ['hkg1', 'sin1'],
   api: {
     bodyParser: {
       sizeLimit: '8mb',
