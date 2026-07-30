@@ -1313,6 +1313,9 @@ const App: React.FC = () => {
                 <span className="flex items-center gap-2"><History size={18} /> 记录中心</span><ChevronRight size={16} className={`transition-transform ${historyOpen ? 'rotate-90' : ''}`} />
             </button>
             <button onClick={handleLogout} className="w-full flex items-center gap-2 px-4 py-3 text-red-500 hover:bg-red-50 rounded-xl text-sm font-bold transition-colors"><LogOut size={18} /> 退出登录</button>
+            <div className="px-4 pt-1 text-[9px] font-bold text-slate-300 text-center select-all">
+              版本 v20260730c · 若无「删除此人/大洲国家」，请 Cmd+Shift+R 强制刷新
+            </div>
         </div>
       </aside>
       

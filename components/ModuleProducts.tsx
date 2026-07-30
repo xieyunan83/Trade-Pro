@@ -92,17 +92,16 @@ export const ModuleProducts: React.FC<ModuleProductsProps> = ({ data, onUpdatePr
               <PieChart className="text-blue-600" /> 市场喜好与产品策略
               {keyword ? <span className="text-sm font-bold text-violet-600">· {keyword}</span> : null}
             </h3>
-            {needsZh && (
-              <button
-                type="button"
-                onClick={handleTranslate}
-                disabled={translating}
-                className="inline-flex items-center justify-center gap-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-60 text-white px-4 py-2.5 rounded-xl text-sm font-black"
-              >
-                {translating ? <Loader2 size={16} className="animate-spin" /> : <Languages size={16} />}
-                一键译成中文
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={handleTranslate}
+              disabled={translating}
+              className="inline-flex items-center justify-center gap-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-60 text-white px-4 py-2.5 rounded-xl text-sm font-black"
+              title={needsZh ? '检测到英文内容，建议译成中文' : '再次用中文润色/翻译本段'}
+            >
+              {translating ? <Loader2 size={16} className="animate-spin" /> : <Languages size={16} />}
+              {needsZh ? '一键译成中文' : '重新译成中文'}
+            </button>
           </div>
           {translateMsg && (
             <p className={`text-xs font-bold mb-4 ${translateMsg.includes('失败') ? 'text-rose-600' : 'text-emerald-700'}`}>
