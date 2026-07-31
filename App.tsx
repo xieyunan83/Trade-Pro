@@ -2,9 +2,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { analyzeCompany, hasApiKeyConfigured, checkApiKeyAvailability, hydrateApiConfigsFromCloud, searchPotentialClients } from './services/geminiService';
 import { exportToPPT, exportAutomationReportToPPT, exportBatchAutomationReportsToPPT } from './services/exportService';
-import { saveHistory, getHistory, getAllFilesFromDB, saveAutomationTask, getAutomationQueue, deleteAutomationTask, saveFileToDB, clearAutomationQueue, clearCompletedAutomationTasks, saveDiscoveryArchive, getDiscoveryArchives, deleteDiscoveryArchive, deleteHistoryItem } from './services/db';
+import { saveHistory, getHistory, getAllFilesFromDB, saveAutomationTask, getAutomationQueue, deleteAutomationTask, saveFileToDB, saveDiscoveryArchive, getDiscoveryArchives, deleteDiscoveryArchive, deleteHistoryItem } from './services/db';
 import { fetchGlobalConfig, fetchDocumentsFromRepo, backupUserHistory, fetchCRMFromCloud, saveCRMToCloud, fetchUserHistoryFromCloud, checkGitHubStatus, fetchApiConfigsFromCloud, setManualGitHubConfig } from './services/githubService';
-import { isSupabaseConfigured, getKnowledgeFiles, getInvestigationHistory, saveInvestigationHistory, getLatestDiscoverySearch, saveDiscoverySearch, getCrmClients, syncCrmClients, getDiscoverySearchArchives, deleteInvestigationHistory, deleteDiscoverySearchFromCloud, deleteDiscoverySearchesByMeta } from './services/supabase';
+import { isSupabaseConfigured, getKnowledgeFiles, getInvestigationHistory, saveInvestigationHistory, saveDiscoverySearch, getCrmClients, syncCrmClients, getDiscoverySearchArchives, deleteInvestigationHistory, deleteDiscoverySearchFromCloud, deleteDiscoverySearchesByMeta } from './services/supabase';
 import { addCustomKeyword, addCustomCountry } from './services/taxonomyStore';
 import { normalizeCountryZh } from './utils/countryNormalize';
 import { buildSearchTags, stampSearchResults } from './utils/searchTags';
@@ -23,6 +23,13 @@ import {
   filterOwnedRecords,
   hasPermission,
 } from './services/permissions';
+import {
+  emptyDiscoveryState,
+  loadAllCrmClients,
+  loadUserDiscoveryState,
+  mergeSaveCrmClients,
+  saveUserDiscoveryState,
+} from './utils/workspaceScope';
 import { ModuleStrategy } from './components/ModuleStrategy';
 import { ReportEnrichmentPanel } from './components/ReportEnrichmentPanel';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -80,16 +87,7 @@ const App: React.FC = () => {
   const [isKBSyncing, setIsKBSyncing] = useState(false); 
   const [isGitHubConnected, setIsGitHubConnected] = useState(false);
   
-  const [discoveryState, setDiscoveryState] = useState<DiscoveryState>({
-    product: '',
-    country: '',
-    countries: [],
-    industry: '',
-    clientType: '',
-    clientTypes: [],
-    results: [],
-    hasSearched: false,
-  });
+  const [discoveryState, setDiscoveryState] = useState<DiscoveryState>(emptyDiscoveryState);
   const [discoveryArchives, setDiscoveryArchives] = useState<DiscoveryArchiveItem[]>([]);
 
   const [automationResults, setAutomationResults] = useState<AutomationResult[]>([]);
@@ -164,13 +162,30 @@ const App: React.FC = () => {
     };
   };
 
-  const scopeHistory = (items: HistoryItem[]) =>
-    currentUser ? filterOwnedRecords(currentUser, items, users, departments) : [];
-  const scopeDiscovery = (items: DiscoveryArchiveItem[]) =>
-    currentUser ? filterOwnedRecords(currentUser, items, users, departments) : [];
-  const scopeClients = (items: Client[]) =>
-    currentUser ? filterOwnedRecords(currentUser, items, users, departments) : [];
+  const scopeForUser = <T extends { ownerUsername?: string; departmentId?: string }>(
+    items: T[],
+    viewer: User | null = currentUser
+  ): T[] => (viewer ? filterOwnedRecords(viewer, items, users, departments) : []);
 
+  const scopeHistory = (items: HistoryItem[]) => scopeForUser(items);
+  const scopeDiscovery = (items: DiscoveryArchiveItem[]) => scopeForUser(items);
+  const scopeClients = (items: Client[]) => scopeForUser(items);
+  const scopeAutomation = (items: AutomationResult[]) => scopeForUser(items);
+
+  const resetWorkspaceForUserSwitch = () => {
+    userDataReadyRef.current = false;
+    setAnalysisData(null);
+    setViewingHistoryId(null);
+    setDomainInput('');
+    setDiscoveryState(emptyDiscoveryState());
+    setDiscoveryArchives([]);
+    setHistory([]);
+    setAutomationResults([]);
+    setCrmClients([]);
+    setActiveModule(ModuleType.DISCOVERY);
+    setHistoryOpen(false);
+    setErrorMsg(null);
+  };
   const handleDiscoveryStateChange = (state: DiscoveryState) => {
     setDiscoveryState(state);
   };
@@ -262,34 +277,39 @@ const App: React.FC = () => {
     checkKey();
   }, [currentUser]);
 
+  const lastWorkspaceUserRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (!currentUser) {
       userDataReadyRef.current = false;
+      lastWorkspaceUserRef.current = null;
       return;
     }
 
-    let cancelled = false;
-    userDataReadyRef.current = false;
-    const loadData = async () => {
-        let nextCrm: Client[] = [];
-        try {
-            const savedClients = localStorage.getItem('tradeScoutClients');
-            if (savedClients) {
-              try {
-                nextCrm = JSON.parse(savedClients);
-              } catch {
-                nextCrm = [];
-              }
-            }
+    // 切换账号时清空工作区；同账号 StrictMode 二次挂载仍会重新拉取
+    if (lastWorkspaceUserRef.current !== currentUser.username) {
+      lastWorkspaceUserRef.current = currentUser.username;
+      resetWorkspaceForUserSwitch();
+    }
 
+    let cancelled = false;
+
+    const depts = () => (departments.length ? departments : loadDepartmentsFromStorage());
+    const scope = <T extends { ownerUsername?: string; departmentId?: string }>(items: T[]) =>
+      filterOwnedRecords(currentUser, items, users, depts());
+
+    const loadData = async () => {
+        try {
             // 1. Load Local DB Data First
             const h = await getHistory();
             const q = await getAutomationQueue();
-            if (!cancelled) setAutomationResults(q);
+            const scopedQueue = scope(q);
+            if (!cancelled) setAutomationResults(scopedQueue);
             const files = await getAllFilesFromDB();
             if (!cancelled) setKbCount(files.length);
 
-            // 搜索归档：本地 + 云端合并（排除已删除墓碑）
+            // 搜索归档：本地 + 云端合并（排除已删除墓碑）→ 再按归属过滤
+            let ownedArchives: DiscoveryArchiveItem[] = [];
             try {
               const tombs = readDiscoveryTombstones();
               const localDisc = await getDiscoveryArchives();
@@ -302,13 +322,22 @@ const App: React.FC = () => {
                 .filter((i) => !isDiscoveryTombstoned(i, tombs))
                 .forEach((i) => map.set(i.id, i));
               const discAll = Array.from(map.values()).sort((a, b) => b.timestamp - a.timestamp);
-              if (!cancelled) {
-                setDiscoveryArchives(
-                  currentUser ? filterOwnedRecords(currentUser, discAll, users, loadDepartmentsFromStorage()) : discAll
-                );
-              }
+              ownedArchives = scope(discAll);
+              if (!cancelled) setDiscoveryArchives(ownedArchives);
             } catch (e) {
               console.warn('discovery archives load failed', e);
+            }
+
+            // 恢复「当前用户自己的」搜索界面（禁止拉取全局 latest，避免串号）
+            if (!cancelled) {
+              const savedState = loadUserDiscoveryState(currentUser.username);
+              if (savedState?.hasSearched && (savedState.results?.length || 0) > 0) {
+                setDiscoveryState(savedState);
+              } else if (ownedArchives[0]) {
+                setDiscoveryState(archiveToDiscoveryState(ownedArchives[0]));
+              } else {
+                setDiscoveryState(emptyDiscoveryState());
+              }
             }
 
             // 背调归类修复：尽量从报告 searchKeyword 回填关键词；规范化国家为中文（不再强制 Car toy）
@@ -358,7 +387,8 @@ const App: React.FC = () => {
               historyForRecover.map((i) => (i.domain || i.data?.companyInfo?.website || '').toLowerCase()).filter(Boolean)
             );
             const recovered: HistoryItem[] = [];
-            for (const task of q) {
+            // 只从「当前用户可见」的任务队列回收历史，避免把别人的背调盖上自己名字
+            for (const task of scopedQueue) {
               if (task.status !== 'completed' || !task.analysis) continue;
               const domain = (
                 task.analysis.companyInfo?.website ||
@@ -393,13 +423,13 @@ const App: React.FC = () => {
             }
             const recoveredAll = [...recovered, ...historyForRecover];
             if (!cancelled) {
-              setHistory(
-                currentUser ? filterOwnedRecords(currentUser, recoveredAll, users, loadDepartmentsFromStorage()) : recoveredAll
-              );
+              setHistory(scope(recoveredAll));
             }
 
             const ghStatus = checkGitHubStatus();
             if (!cancelled) setIsGitHubConnected(ghStatus.ok);
+
+            let nextCrm: Client[] = loadAllCrmClients();
 
             if (currentUser && isSupabaseConfigured()) {
                 if (currentUser.role !== 'admin') {
@@ -434,25 +464,23 @@ const App: React.FC = () => {
                         for (const item of newItems) { await saveHistory(item); }
                         const merged = [...newItems, ...h].sort((a, b) => b.timestamp - a.timestamp);
                         if (!cancelled) {
-                          setHistory(
-                            currentUser ? filterOwnedRecords(currentUser, merged, users, loadDepartmentsFromStorage()) : merged
-                          );
+                          setHistory(scope(merged));
                         }
                     }
                 } catch (e) {
                     console.error("Supabase history sync failed", e);
                 }
 
-                try {
-                    const latestSearch = await getLatestDiscoverySearch();
-                    if (!cancelled && latestSearch) setDiscoveryState(latestSearch);
-                } catch (e) {
-                    console.error("Supabase discovery sync failed", e);
-                }
+                // 注意：不再调用 getLatestDiscoverySearch()——那是全局最新一条，会造成跨用户串数据
 
                 try {
                     const cloudCrm = await getCrmClients();
-                    if (cloudCrm.length > 0) nextCrm = cloudCrm;
+                    if (cloudCrm.length > 0) {
+                      // 云端全量与本地合并（按 id），展示时再过滤
+                      const byId = new Map<string, Client>();
+                      [...nextCrm, ...cloudCrm].forEach((c) => byId.set(c.id, c));
+                      nextCrm = Array.from(byId.values());
+                    }
                 } catch (e) {
                     console.error("Supabase CRM sync failed", e);
                 }
@@ -487,7 +515,11 @@ const App: React.FC = () => {
 
                 try {
                   const cloudCRM = await fetchCRMFromCloud();
-                  if (cloudCRM.length > 0) nextCrm = cloudCRM;
+                  if (cloudCRM.length > 0) {
+                    const byId = new Map<string, Client>();
+                    [...nextCrm, ...cloudCRM].forEach((c) => byId.set(c.id, c));
+                    nextCrm = Array.from(byId.values());
+                  }
                 } catch (e) {
                   console.warn('GitHub CRM sync failed', e);
                 }
@@ -499,7 +531,7 @@ const App: React.FC = () => {
                       const newItems = cloudHistory.filter(i => !existingIds.has(i.id));
                       if (newItems.length > 0) {
                           for(const item of newItems) await persistHistoryItem(item);
-                          if (!cancelled) setHistory(prev => [...newItems, ...prev]);
+                          if (!cancelled) setHistory(prev => scope([...newItems, ...prev]));
                       }
                   }
                 } catch (e) {
@@ -518,11 +550,9 @@ const App: React.FC = () => {
             }
 
             if (!cancelled) {
-              const filteredCrm = currentUser
-                ? filterOwnedRecords(currentUser, nextCrm, users, loadDepartmentsFromStorage())
-                : nextCrm;
+              const filteredCrm = scope(nextCrm);
               setCrmClients(filteredCrm);
-              localStorage.setItem('tradeScoutClients', JSON.stringify(filteredCrm));
+              mergeSaveCrmClients(currentUser, filteredCrm, users, depts());
               userDataReadyRef.current = true;
             }
         } catch (e) {
@@ -535,7 +565,18 @@ const App: React.FC = () => {
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅账号切换时全量加载；users/depts 由下方重过滤
   }, [currentUser?.username]);
+
+  // 组织架构变化后，按最新权限重过滤内存中的业务数据（不重新拉库，避免闪屏）
+  useEffect(() => {
+    if (!currentUser || !userDataReadyRef.current) return;
+    const depts = departments.length ? departments : loadDepartmentsFromStorage();
+    setHistory((prev) => filterOwnedRecords(currentUser, prev, users, depts));
+    setAutomationResults((prev) => filterOwnedRecords(currentUser, prev, users, depts));
+    setDiscoveryArchives((prev) => filterOwnedRecords(currentUser, prev, users, depts));
+    setCrmClients((prev) => filterOwnedRecords(currentUser, prev, users, depts));
+  }, [users, departments, currentUser]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -562,13 +603,19 @@ const App: React.FC = () => {
 
   useEffect(() => {
       if (!currentUser || !userDataReadyRef.current) return;
-      localStorage.setItem('tradeScoutClients', JSON.stringify(crmClients));
+      mergeSaveCrmClients(currentUser, crmClients, users, departments);
       if (isSupabaseConfigured()) {
           syncCrmClients(crmClients).catch(e => console.error("Supabase CRM sync failed", e));
       } else if (isGitHubConnected && crmClients.length > 0) {
           saveCRMToCloud(crmClients).catch(e => console.error("Auto CRM sync failed", e));
       }
-  }, [crmClients, isGitHubConnected, currentUser]);
+  }, [crmClients, isGitHubConnected, currentUser, users, departments]);
+
+  // 按用户隔离保存当前搜索界面，避免换账号串结果
+  useEffect(() => {
+    if (!currentUser || !userDataReadyRef.current) return;
+    saveUserDiscoveryState(currentUser.username, discoveryState);
+  }, [discoveryState, currentUser]);
 
   useEffect(() => {
       if (users.length > 0) {
@@ -1047,6 +1094,10 @@ const App: React.FC = () => {
   };
 
   const handleViewAutomationResult = (task: AutomationResult) => {
+      if (!currentUser || !filterOwnedRecords(currentUser, [task], users, departments).length) {
+        alert('无权查看该任务（不属于你或你的部门）。');
+        return;
+      }
       if (!task.analysis) {
           alert('该任务尚无完整分析数据，请重新运行。');
           return;
@@ -1329,25 +1380,27 @@ const App: React.FC = () => {
 
   const handleClearCompletedTasks = async () => {
       if (!confirm('清除所有已完成的任务？（背调历史仍会保留在记录中心）')) return;
-      const n = await clearCompletedAutomationTasks();
-      setAutomationResults(prev => prev.filter(t => t.status !== 'completed'));
-      alert(`已清除 ${n} 条已完成任务`);
+      const done = automationResults.filter((t) => t.status === 'completed');
+      for (const t of done) {
+        await deleteAutomationTask(t.id);
+      }
+      setAutomationResults((prev) => prev.filter((t) => t.status !== 'completed'));
+      alert(`已清除 ${done.length} 条已完成任务`);
   };
 
   const handleClearAllTasks = async () => {
-      if (!confirm('清空整个任务队列？此操作不可恢复（背调历史仍保留在记录中心）。')) return;
-      await clearAutomationQueue();
+      if (!confirm('清空自己的任务队列？此操作不可恢复（背调历史仍保留在记录中心）。不会删除其他用户的任务。')) return;
+      for (const t of automationResults) {
+        await deleteAutomationTask(t.id);
+      }
       setAutomationResults([]);
       alert('任务队列已清空');
   };
 
   const handleLogout = () => {
-    userDataReadyRef.current = false;
+    resetWorkspaceForUserSwitch();
+    lastWorkspaceUserRef.current = null;
     setCurrentUser(null);
-    setAnalysisData(null);
-    setViewingHistoryId(null);
-    setDomainInput('');
-    setActiveModule(ModuleType.DISCOVERY);
   };
   const handleSyncToGitHub = async () => { if(!currentUser) return; setIsSyncing(true); try { await backupUserHistory(currentUser.username, history); await saveCRMToCloud(crmClients); alert("数据同步成功!"); } catch (e: any) { alert("同步失败: " + e.message); } finally { setIsSyncing(false); } };
   const handleAddClients = (newClients: Client[]) => { setCrmClients(prev => [...prev, ...newClients.map(stampOwnership)]); alert(`已成功导入 ${newClients.length} 个客户资料！`); };
@@ -1495,7 +1548,7 @@ const App: React.FC = () => {
             </button>
             <button onClick={handleLogout} className="w-full flex items-center gap-2 px-4 py-3 text-rose-300 hover:bg-rose-500/10 rounded-xl text-sm font-semibold transition-colors"><LogOut size={18} /> 退出登录</button>
             <div className="px-4 pt-1 text-[9px] font-semibold text-slate-600 text-center select-all tracking-wide">
-              版本 v20260731e · 部门隔离/总管/防火墙
+              版本 v20260731f · 用户数据隔离修复
             </div>
         </div>
       </aside>
