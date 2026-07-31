@@ -61,6 +61,17 @@ export const saveEmailSearchKeys = (keys: { hunter?: string; findymail?: string;
   if (keys.anymailFinder !== undefined) localStorage.setItem('trade_scout_anymail_finder_api_key', keys.anymailFinder.trim());
 };
 
+const LS_ANYSEARCH = 'trade_scout_anysearch_api_key';
+
+/** AnySearch Key：localStorage（云端同步后）→ 环境变量兜底 */
+export const getAnysearchApiKey = (): string =>
+  ls(LS_ANYSEARCH) || read('ANYSEARCH_API_KEY') || '';
+
+export const saveAnysearchApiKey = (key: string): void => {
+  if (typeof localStorage === 'undefined') return;
+  localStorage.setItem(LS_ANYSEARCH, (key || '').trim());
+};
+
 export const env = {
   apiKey: read('API_KEY') || read('REACT_APP_GEMINI_API_KEY'),
   qwenApiKey: read('REACT_APP_QWEN_API_KEY'),
@@ -73,6 +84,7 @@ export const env = {
   hunterApiKey: read('HUNTER_API_KEY') || read('REACT_APP_HUNTER_API_KEY'),
   findymailApiKey: read('FINDYMAIL_API_KEY'),
   anymailFinderApiKey: read('ANYMAIL_FINDER_API_KEY'),
+  anysearchApiKey: read('ANYSEARCH_API_KEY'),
   get supabaseUrl() { return getSupabaseConfig().url; },
   get supabaseAnonKey() { return getSupabaseConfig().key; },
   githubToken: read('VITE_GITHUB_TOKEN'),

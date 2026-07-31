@@ -11,7 +11,7 @@ import { getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/d
 import { testApiKey, testQwenApiKey, testAnymailFinderApiKey, testHunterApiKey, testAnysearchApiKey } from '../services/geminiService';
 import { testWanImageApi } from '../services/wanImageService';
 import { saveApiConfig, getApiConfig, isSupabaseConfigured, saveKnowledgeFile, getKnowledgeFiles, deleteKnowledgeFile, resetSupabaseClient, testSupabaseConnection } from '../services/supabase';
-import { getSupabaseConfig, saveSupabaseConfig, clearSupabaseOverride, saveEmailSearchKeys, getEmailSearchKeys, env } from '../services/env';
+import { getSupabaseConfig, saveSupabaseConfig, clearSupabaseOverride, saveEmailSearchKeys, getEmailSearchKeys, getAnysearchApiKey, saveAnysearchApiKey, env } from '../services/env';
 import { hashPassword, persistUsers, findUserByName, updateUserPassword } from '../services/auth';
 import { loadDepartmentsFromStorage } from '../services/orgStore';
 import { roleLabel } from '../services/permissions';
@@ -84,6 +84,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const [hunterApiKey, setHunterApiKey] = useState('');
   const [findymailApiKey, setFindymailApiKey] = useState('');
   const [anymailFinderApiKey, setAnymailFinderApiKey] = useState('');
+  const [anysearchApiKey, setAnysearchApiKey] = useState('');
   const [aliyunProxyMode, setAliyunProxyModeState] = useState<AliyunProxyMode>('auto');
   const [aliyunProxyBase, setAliyunProxyBaseState] = useState('');
   const [testingApiId, setTestingApiId] = useState<string | null>(null);
@@ -175,17 +176,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     setHunterApiKey(emailKeys.hunter);
     setFindymailApiKey(emailKeys.findymail);
     setAnymailFinderApiKey(emailKeys.anymailFinder);
+    setAnysearchApiKey(getAnysearchApiKey());
 
     const loadEmailKeysFromCloud = async () => {
       if (!isSupabaseConfigured()) return;
-      const [hunter, findymail, anymail] = await Promise.all([
+      const [hunter, findymail, anymail, anysearch] = await Promise.all([
         getApiConfig('hunter'),
         getApiConfig('findymail'),
         getApiConfig('anymailfinder'),
+        getApiConfig('anysearch'),
       ]);
       if (hunter?.apiKey) setHunterApiKey(hunter.apiKey);
       if (findymail?.apiKey) setFindymailApiKey(findymail.apiKey);
       if (anymail?.apiKey) setAnymailFinderApiKey(anymail.apiKey);
+      if (anysearch?.apiKey) {
+        setAnysearchApiKey(anysearch.apiKey);
+        saveAnysearchApiKey(anysearch.apiKey);
+      }
     };
     loadEmailKeysFromCloud();
 
@@ -299,11 +306,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
         findymail: findymailApiKey,
         anymailFinder: anymailFinderApiKey,
       });
+      saveAnysearchApiKey(anysearchApiKey);
 
       const emailLocal = [
         anymailFinderApiKey.trim() ? 'Anymail✓' : 'Anymail✗',
         hunterApiKey.trim() ? 'Hunter✓' : 'Hunter✗',
         findymailApiKey.trim() ? 'Findymail✓' : 'Findymail✗',
+        anysearchApiKey.trim() ? 'AnySearch✓' : 'AnySearch✗',
       ].join(' · ');
 
       const cloudParts: string[] = [];
@@ -351,15 +360,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
           );
           cloudParts.push(`${r.label}${r.ok ? '✓' : '✗'}`);
         }
+        if (anysearchApiKey.trim()) {
+          const r = await cloudWithTimeout('AnySearch', () =>
+            saveApiConfig({ provider: 'anysearch', apiKey: anysearchApiKey.trim() })
+          );
+          cloudParts.push(`${r.label}${r.ok ? '✓' : '✗'}`);
+        }
       }
 
       const cloudLine = isSupabaseConfigured()
         ? cloudParts.length
           ? `云端：${cloudParts.join(' · ')}`
-          : '云端：无新增邮箱 Key 可同步（请确认已填写）'
+          : '云端：无新增 Key 可同步（请确认已填写）'
         : '云端：Supabase 未配置（仅本机生效）';
 
-      const text = `配置已保存\n本机邮箱 Key：${emailLocal}\n${cloudLine}\n\n普通用户请刷新页面后再搜决策人（会自动拉取云端 Key）`;
+      const text = `配置已保存\n本机 Key：${emailLocal}\n${cloudLine}\n\n普通用户请刷新页面后再使用（会自动拉取云端 Key）`;
       setSaveConfigMsg({ ok: true, text: text.replace(/\n/g, ' · ') });
       alert(text);
     } catch (e: any) {
@@ -482,6 +497,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   };
 
   const handleTestAnysearch = async () => {
+    if (!anysearchApiKey.trim()) {
+      const msg = '请先填写 AnySearch API Key';
+      setAnysearchTestMsg({ ok: false, text: msg });
+      alert(msg);
+      return;
+    }
+    saveAnysearchApiKey(anysearchApiKey.trim());
     setIsTestingAnysearch(true);
     setAnysearchTestMsg({ ok: true, text: '正在测试 AnySearch（最长约 40 秒）…' });
     try {
@@ -1087,9 +1109,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     <Globe size={16} /> AnySearch 背调身份补全
                   </div>
                   <p className="text-[10px] text-slate-500 font-bold leading-relaxed">
-                    背调前自动用 AnySearch 抽取官网页面（extract）并并行检索总部线索（batch_search），降低同名品牌错国风险。
-                    Key 放在环境变量 <code className="bg-white px-1 rounded">ANYSEARCH_API_KEY</code>（本地 .env.local / Vercel Env），不会进浏览器包。
+                    背调前自动抽取官网（extract）并并行检索总部线索（batch_search）。Key 与 Hunter/千问一样：本机缓存 + Supabase 加密存储，登录时自动同步，线上全员可用。请求经同域代理转发，勿把 Key 提交到 Git。
                   </p>
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">
+                      AnySearch API Key（as_sk_...）
+                    </label>
+                    <input
+                      type="password"
+                      autoComplete="off"
+                      value={anysearchApiKey}
+                      onChange={(e) => setAnysearchApiKey(e.target.value)}
+                      placeholder="https://anysearch.com/console/api-keys"
+                      className="w-full bg-white border border-cyan-100 rounded-xl px-4 py-3 font-bold text-sm text-slate-950"
+                    />
+                  </div>
                   <div className="flex flex-wrap justify-end gap-2">
                     <button
                       type="button"

@@ -1,8 +1,11 @@
 /**
  * AnySearch — 背调身份补全（search / batch_search / extract）
- * Key 优先由服务端代理注入（ANYSEARCH_API_KEY）；失败时软降级，不阻断背调。
+ * Key：管理后台 → Supabase 加密存储 → 启动时 hydrate 到 localStorage；
+ * 请求经同域代理转发，Authorization 仅发往代理/上游，不落日志。
  */
+import { getAnysearchApiKey, saveAnysearchApiKey } from './env';
 import { isLocalDevHost } from './qwenProxy';
+import { getApiConfig, isSupabaseConfigured } from './supabase';
 
 const CLIENT_HEADER = 'trade-pro/1.0';
 const TIMEOUT_MS = 40_000;
@@ -38,6 +41,12 @@ const parseToolText = (json: any): string => {
   return '';
 };
 
+const buildAuthHeader = (): Record<string, string> => {
+  const key = getAnysearchApiKey().replace(/^Bearer\s+/i, '').trim();
+  if (!key) return {};
+  return { Authorization: `Bearer ${key}` };
+};
+
 /** JSON-RPC tools/call */
 export const anysearchToolsCall = async (
   toolName: string,
@@ -52,6 +61,7 @@ export const anysearchToolsCall = async (
       headers: {
         'Content-Type': 'application/json',
         'X-Anysearch-Client': CLIENT_HEADER,
+        ...buildAuthHeader(),
       },
       body: JSON.stringify({
         jsonrpc: '2.0',
@@ -116,6 +126,20 @@ export const gatherIdentityEvidence = async (
   domain: string,
   opts?: { companyHint?: string; searchCountry?: string }
 ): Promise<string> => {
+  // 确保云端 Key 已同步（线上用户本机可能尚无缓存）
+  if (!getAnysearchApiKey().trim() && isSupabaseConfigured()) {
+    try {
+      const cfg = await getApiConfig('anysearch');
+      if (cfg?.apiKey?.trim()) saveAnysearchApiKey(cfg.apiKey.trim());
+    } catch (e) {
+      console.warn('[AnySearch] cloud key hydrate failed', e);
+    }
+  }
+  if (!getAnysearchApiKey().trim()) {
+    console.info('[AnySearch] skip identity evidence: no API key (configure in Admin → cloud)');
+    return '';
+  }
+
   const clean = (domain || '')
     .replace(/^https?:\/\//i, '')
     .replace(/^www\./i, '')
@@ -186,16 +210,22 @@ export const gatherIdentityEvidence = async (
   return clip(evidence, MAX_EVIDENCE_CHARS);
 };
 
-/** 管理后台连通性探测 */
+/** 管理后台连通性探测（调用前请已把 Key 写入 localStorage / getAnysearchApiKey） */
 export const testAnysearchConnection = async (): Promise<{ ok: boolean; message: string }> => {
   try {
+    if (!getAnysearchApiKey().trim()) {
+      return {
+        ok: false,
+        message: '未配置 AnySearch API Key。请在管理后台填写并保存到云端。',
+      };
+    }
     const text = await anysearchSearch('hello world', { maxResults: 1 });
     if (!text.trim()) return { ok: false, message: 'AnySearch 返回空结果' };
     return { ok: true, message: `AnySearch 连通成功 ✅ ${text.slice(0, 80)}` };
   } catch (e: any) {
     return {
       ok: false,
-      message: `AnySearch 失败: ${e?.message || String(e)}（请确认 ANYSEARCH_API_KEY 与 /api/anysearch 代理）`,
+      message: `AnySearch 失败: ${e?.message || String(e)}`,
     };
   }
 };

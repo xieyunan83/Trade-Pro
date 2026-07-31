@@ -1204,6 +1204,9 @@ export const hydrateApiConfigsFromCloud = async (): Promise<boolean> => {
             if (c.provider === 'anymailfinder' && c.apiKey?.trim()) {
                 localStorage.setItem('trade_scout_anymail_finder_api_key', c.apiKey.trim());
             }
+            if (c.provider === 'anysearch' && c.apiKey?.trim()) {
+                localStorage.setItem('trade_scout_anysearch_api_key', c.apiKey.trim());
+            }
             if (c.provider === 'wan' && c.apiKey?.trim()) {
                 localStorage.setItem('trade_scout_wan_api_key', c.apiKey.trim());
                 if (c.baseUrl?.trim()) localStorage.setItem('trade_scout_wan_base_url', c.baseUrl.trim());

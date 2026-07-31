@@ -1,5 +1,6 @@
 /**
- * Vercel Serverless：同域转发 AnySearch MCP（规避浏览器 CORS，Key 仅服务端注入）
+ * Vercel Serverless：同域转发 AnySearch MCP（规避浏览器 CORS）
+ * Auth：优先使用客户端 Authorization（云端同步的 Key）；否则回退 process.env.ANYSEARCH_API_KEY
  * 用法：POST /api/anysearch  →  https://api.anysearch.com/mcp
  */
 export const config = {
@@ -55,16 +56,23 @@ export default async function handler(req: any, res: any) {
   const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
 
   try {
-    const serverKey = String(process.env.ANYSEARCH_API_KEY || '').trim();
+    // Prefer client Authorization (cloud-synced key); fall back to server env
     const clientAuth = req.headers.authorization || req.headers['x-upstream-authorization'];
-    const auth =
-      serverKey
-        ? `Bearer ${serverKey.replace(/^Bearer\s+/i, '')}`
-        : clientAuth
-          ? String(clientAuth).startsWith('Bearer ')
-            ? String(clientAuth)
-            : `Bearer ${String(clientAuth).trim()}`
-          : '';
+    const serverKey = String(process.env.ANYSEARCH_API_KEY || '').trim();
+    let auth = '';
+    if (clientAuth) {
+      const raw = String(clientAuth).replace(/^Bearer\s+/i, '').trim();
+      auth = raw ? `Bearer ${raw}` : '';
+    } else if (serverKey) {
+      auth = `Bearer ${serverKey.replace(/^Bearer\s+/i, '')}`;
+    }
+
+    if (!auth) {
+      res.status(401).json({
+        error: '未配置 AnySearch API Key。请在管理后台保存到云端，或设置服务端 ANYSEARCH_API_KEY。',
+      });
+      return;
+    }
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -72,8 +80,8 @@ export default async function handler(req: any, res: any) {
         (typeof req.headers['x-anysearch-client'] === 'string' &&
           req.headers['x-anysearch-client']) ||
         CLIENT_HEADER,
+      Authorization: auth,
     };
-    if (auth) headers.Authorization = auth;
 
     const upstream = await fetch(`${ORIGIN}${MCP_PATH}`, {
       method: 'POST',
