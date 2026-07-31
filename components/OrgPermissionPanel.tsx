@@ -80,7 +80,13 @@ export const OrgPermissionPanel: React.FC<OrgPermissionPanelProps> = ({
         ? u.permissions
         : defaultPermissionsForRole(u.role)
     );
-    setDraftDeviceBindRequired(u.role === 'user' ? u.deviceBindRequired !== false : false);
+    setDraftDeviceBindRequired(
+      u.deviceBindRequired === true
+        ? true
+        : u.deviceBindRequired === false
+          ? false
+          : u.role === 'user'
+    );
     setDraftSchedule(u.accessSchedule ? { ...defaultAccessSchedule(), ...u.accessSchedule } : defaultAccessSchedule());
     setMsg('');
   };
@@ -119,9 +125,9 @@ export const OrgPermissionPanel: React.FC<OrgPermissionPanelProps> = ({
           departmentId: draftDeptId || undefined,
           disabled: draftDisabled,
           permissions: nextPerms,
-          deviceBindRequired: role === 'user' ? draftDeviceBindRequired : false,
-          accessSchedule: role === 'user' ? draftSchedule : undefined,
-          boundDevices: role === 'user' ? u.boundDevices || [] : [],
+          deviceBindRequired: draftDeviceBindRequired,
+          accessSchedule: draftSchedule,
+          boundDevices: u.boundDevices || [],
         };
       }
       return {
@@ -222,10 +228,20 @@ export const OrgPermissionPanel: React.FC<OrgPermissionPanelProps> = ({
       alert('密码至少需要 6 位');
       return;
     }
-    const roleRaw = prompt('角色：user（员工） / manager（主管），默认 user：', 'user') || 'user';
-    const role: UserRole = roleRaw.trim() === 'manager' ? 'manager' : 'user';
+    const roleRaw =
+      prompt(
+        '角色：user（员工） / manager（主管） / director（总管），默认 user：',
+        'user'
+      ) || 'user';
+    const trimmedRole = roleRaw.trim().toLowerCase();
+    const role: UserRole =
+      trimmedRole === 'manager'
+        ? 'manager'
+        : trimmedRole === 'director'
+          ? 'director'
+          : 'user';
     const deptName = departments.length
-      ? prompt(`分配部门 ID（可选）:\n${departments.map((d) => `${d.id} = ${d.name}`).join('\n')}`)
+      ? prompt(`分配部门 ID（可选；总管可不分配）:\n${departments.map((d) => `${d.id} = ${d.name}`).join('\n')}`)
       : '';
     const newUser: User = {
       username: trimmed,
@@ -237,7 +253,7 @@ export const OrgPermissionPanel: React.FC<OrgPermissionPanelProps> = ({
       permissions: defaultPermissionsForRole(role),
       deviceBindRequired: role === 'user',
       boundDevices: [],
-      accessSchedule: role === 'user' ? defaultAccessSchedule() : undefined,
+      accessSchedule: defaultAccessSchedule(),
     };
     const next = [...users, newUser];
     setUsers(next);
@@ -326,8 +342,8 @@ export const OrgPermissionPanel: React.FC<OrgPermissionPanelProps> = ({
 
         <p className="text-[11px] font-bold text-slate-500 leading-relaxed">
           {isAdmin
-            ? '可为每个用户勾选模块与功能权限；部门主管可查看本部门员工的背调/决策人等记录，员工看不到主管自己的操作记录。'
-            : '你只能调整本部门普通员工的功能权限，不能查看或修改其它部门与主管账号。'}
+            ? '各部门搜索/背调/CRM 数据互不共享。部门主管仅看本部门；总管可浏览全部部门；系统管理员可配置组织与密钥。可为任意账户单独开关网卡绑定。'
+            : '你只能调整本部门普通员工的功能权限与设备绑定，不能查看或修改其它部门与主管账号。'}
         </p>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -382,6 +398,7 @@ export const OrgPermissionPanel: React.FC<OrgPermissionPanelProps> = ({
                       >
                         <option value="user">部门员工</option>
                         <option value="manager">部门主管</option>
+                        <option value="director">总管（全部门数据）</option>
                         <option value="admin">系统管理员</option>
                       </select>
                     </div>
@@ -471,14 +488,15 @@ export const OrgPermissionPanel: React.FC<OrgPermissionPanelProps> = ({
                   </div>
                 </div>
 
-                {(draftRole === 'user' || selected.role === 'user') && (
-                  <div className="space-y-4 rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                <div className="space-y-4 rounded-2xl border border-slate-100 bg-slate-50 p-4">
                     <div className="flex items-center gap-2">
                       <Cpu size={14} className="text-emerald-600" />
-                      <span className="text-xs font-black text-slate-600 uppercase tracking-widest">设备绑定（仅普通员工）</span>
+                      <span className="text-xs font-black text-slate-600 uppercase tracking-widest">
+                        设备 / 网卡绑定
+                      </span>
                     </div>
                     <p className="text-[11px] font-bold text-slate-500 leading-relaxed">
-                      浏览器无法直接读取网卡 MAC。员工首次登录须登记 MAC，并锁定本机设备指纹；换电脑或换浏览器将无法使用。管理员/主管不受限。
+                      可为任意账户单独开关。浏览器无法直接读取网卡 MAC：开启后须登记 MAC 并锁定本机设备指纹，换电脑/浏览器将无法登录，除非管理员清除绑定。
                     </p>
                     <label className="flex items-center gap-2 text-sm font-bold text-slate-700">
                       <input
@@ -486,7 +504,7 @@ export const OrgPermissionPanel: React.FC<OrgPermissionPanelProps> = ({
                         checked={draftDeviceBindRequired}
                         onChange={(e) => setDraftDeviceBindRequired(e.target.checked)}
                       />
-                      启用本机设备绑定
+                      启用本机设备绑定（网卡 MAC）
                     </label>
                     <div className="text-[11px] font-bold text-slate-600 space-y-1">
                       {(selected.boundDevices || []).length === 0 ? (
@@ -575,7 +593,6 @@ export const OrgPermissionPanel: React.FC<OrgPermissionPanelProps> = ({
                       </label>
                     </div>
                   </div>
-                )}
 
                 <button
                   type="button"

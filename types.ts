@@ -12,8 +12,8 @@ export enum ModuleType {
   IMAGE_GENERATOR = 'image_generator',
 }
 
-/** 系统角色：管理员 / 部门主管 / 部门员工 */
-export type UserRole = 'admin' | 'manager' | 'user';
+/** 系统角色：管理员 / 总管 / 部门主管 / 部门员工 */
+export type UserRole = 'admin' | 'director' | 'manager' | 'user';
 
 /** 细粒度权限（模块 + 功能） */
 export type PermissionKey =
@@ -59,8 +59,8 @@ export interface User {
   /** 停用后无法登录 */
   disabled?: boolean;
   /**
-   * 普通员工是否必须绑定本机设备（管理员/主管不受限）。
-   * 未设置时：员工默认 true。
+   * 该账号是否必须绑定本机设备（含网卡 MAC 登记）。
+   * 可按账户单独开关；未设置时：员工默认 true，其它角色默认 false。
    */
   deviceBindRequired?: boolean;
   /** 已绑定的设备列表（指纹 + 可选 MAC） */

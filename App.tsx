@@ -549,6 +549,8 @@ const App: React.FC = () => {
       JSON.stringify(fresh.accessSchedule || null) === JSON.stringify(currentUser.accessSchedule || null) &&
       fresh.deviceBindRequired === currentUser.deviceBindRequired &&
       fresh.disabled === currentUser.disabled &&
+      fresh.role === currentUser.role &&
+      fresh.departmentId === currentUser.departmentId &&
       JSON.stringify(fresh.permissions || []) === JSON.stringify(currentUser.permissions || []);
     if (!sameBind) setCurrentUser(fresh);
   }, [users, currentUser]);
@@ -1407,7 +1409,12 @@ const App: React.FC = () => {
                 <h1 className="text-lg font-extrabold text-white tracking-tight leading-tight">楠哥的小助理 <span className="text-signal-400">Pro</span></h1>
                 <div className="text-[10px] text-slate-400 font-semibold uppercase tracking-[0.14em] mt-1 flex items-center gap-1.5">
                   <span className="tp-live-dot w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                  {currentUser.username}{currentUser.role === 'manager' ? ' · 主管' : ''}
+                  {currentUser.username}
+                  {currentUser.role === 'director'
+                    ? ' · 总管'
+                    : currentUser.role === 'manager'
+                      ? ' · 主管'
+                      : ''}
                 </div>
             </div>
         </div>
@@ -1483,7 +1490,7 @@ const App: React.FC = () => {
             </button>
             <button onClick={handleLogout} className="w-full flex items-center gap-2 px-4 py-3 text-rose-300 hover:bg-rose-500/10 rounded-xl text-sm font-semibold transition-colors"><LogOut size={18} /> 退出登录</button>
             <div className="px-4 pt-1 text-[9px] font-semibold text-slate-600 text-center select-all tracking-wide">
-              版本 v20260731d · 千问搜索超时修复
+              版本 v20260731e · 部门隔离/总管/防火墙
             </div>
         </div>
       </aside>
@@ -1900,7 +1907,7 @@ const App: React.FC = () => {
             <div className="sticky top-0 z-10 bg-white border-b px-4 py-3 flex items-center justify-between">
               <div>
                 <div className="text-base font-black text-slate-800">团队权限管理</div>
-                <div className="text-[11px] font-bold text-slate-400">仅可管理本部门普通员工；看不到其它主管记录</div>
+                <div className="text-[11px] font-bold text-slate-400">仅可管理本部门普通员工；各部门数据互不共享</div>
               </div>
               <button type="button" onClick={() => setTeamManageOpen(false)} className="text-slate-400 hover:text-slate-700 font-black px-3 py-2">关闭</button>
             </div>

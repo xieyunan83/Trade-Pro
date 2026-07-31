@@ -62,9 +62,14 @@ const USER_BASELINE: PermissionKey[] = [
 
 export const ALL_PERMISSION_KEYS: PermissionKey[] = PERMISSION_CATALOG.map((p) => p.key);
 
+/** 可浏览全部部门业务数据（系统管理员 / 总管） */
+export const canBrowseAllDepartments = (user: User | null | undefined): boolean => {
+  if (!user || user.disabled) return false;
+  return user.role === 'admin' || user.role === 'director';
+};
+
 export const defaultPermissionsForRole = (role: UserRole): PermissionKey[] => {
-  if (role === 'admin') return [...ALL_PERMISSION_KEYS];
-  if (role === 'manager') return [...ALL_PERMISSION_KEYS];
+  if (role === 'admin' || role === 'director' || role === 'manager') return [...ALL_PERMISSION_KEYS];
   return [...USER_BASELINE];
 };
 
@@ -92,6 +97,20 @@ export type OwnedRecordMeta = {
   departmentId?: string;
 };
 
+const sameUser = (a?: string, b?: string) =>
+  !!a && !!b && a.trim().toLowerCase() === b.trim().toLowerCase();
+
+/** 同部门用户名列表（含主管，不含停用账号与跨部门） */
+export const getDepartmentMemberUsernames = (
+  departmentId: string | undefined,
+  allUsers: User[]
+): string[] => {
+  if (!departmentId) return [];
+  return allUsers
+    .filter((u) => !u.disabled && u.departmentId === departmentId)
+    .map((u) => u.username);
+};
+
 /** 部门下属（仅普通员工，不含主管本人与其它主管） */
 export const getSubordinateUsernames = (
   manager: User,
@@ -103,28 +122,28 @@ export const getSubordinateUsernames = (
   // 必须以该主管为部门主管，或同部门员工
   const isDeptManager =
     !dept?.managerUsername ||
-    dept.managerUsername.trim().toLowerCase() === manager.username.trim().toLowerCase();
+    sameUser(dept.managerUsername, manager.username);
   if (!isDeptManager && dept?.managerUsername) {
     // 若部门指定了其它主管，当前人不能管人
   }
   return allUsers
     .filter((u) => {
       if (u.disabled) return false;
-      if (u.username.trim().toLowerCase() === manager.username.trim().toLowerCase()) return false;
+      if (sameUser(u.username, manager.username)) return false;
       if (u.departmentId !== manager.departmentId) return false;
-      if (u.role !== 'user') return false; // 员工看不到/管不到主管；主管也不互看
+      if (u.role !== 'user') return false; // 员工看不到/管不到主管；主管也不互管
       return true;
     })
     .map((u) => u.username);
 };
 
 /**
- * 记录可见性：
- * - admin：全部
- * - 本人：可见
- * - 部门主管：可见本部门普通员工记录（不可见其它主管/管理员记录）
- * - 普通员工：仅本人（不可见主管操作记录）
- * - 无归属的旧数据：仅 admin 可见（避免串部门）
+ * 记录可见性（部门数据互不共享）：
+ * - admin / director（总管）：全部部门
+ * - 本人：可见自己的记录
+ * - 部门主管：可见本部门全部记录（按 departmentId 或同部门成员归属）
+ * - 普通员工：仅本人
+ * - 无归属的旧数据：仅 admin / director 可见（避免串部门）
  */
 export const canViewOwnedRecord = (
   viewer: User,
@@ -133,14 +152,20 @@ export const canViewOwnedRecord = (
   departments: Department[] = []
 ): boolean => {
   if (!viewer || viewer.disabled) return false;
-  if (viewer.role === 'admin') return true;
+  if (canBrowseAllDepartments(viewer)) return true;
 
   const owner = (record.ownerUsername || '').trim();
   if (!owner) return false;
 
-  if (owner.toLowerCase() === viewer.username.trim().toLowerCase()) return true;
+  if (sameUser(owner, viewer.username)) return true;
 
   if (viewer.role === 'manager' && viewer.departmentId) {
+    if (record.departmentId && record.departmentId === viewer.departmentId) return true;
+    const members = getDepartmentMemberUsernames(viewer.departmentId, allUsers).map((s) =>
+      s.toLowerCase()
+    );
+    if (members.includes(owner.toLowerCase())) return true;
+    // 兼容旧逻辑：下属名单
     const subs = getSubordinateUsernames(viewer, allUsers, departments).map((s) => s.toLowerCase());
     return subs.includes(owner.toLowerCase());
   }
@@ -157,14 +182,15 @@ export const filterOwnedRecords = <T extends OwnedRecordMeta>(
 
 export const roleLabel = (role: UserRole): string => {
   if (role === 'admin') return '系统管理员';
+  if (role === 'director') return '总管';
   if (role === 'manager') return '部门主管';
   return '部门员工';
 };
 
-/** 仅管理员 / 部门主管可查看完整决策人邮箱；普通员工显示脱敏 */
+/** 管理员 / 总管 / 部门主管可查看完整决策人邮箱；普通员工显示脱敏 */
 export const canViewFullDecisionMakerEmails = (user: User | null | undefined): boolean => {
   if (!user || user.disabled) return false;
-  return user.role === 'admin' || user.role === 'manager';
+  return user.role === 'admin' || user.role === 'director' || user.role === 'manager';
 };
 
 /** 邮箱脱敏：a***@***.com */

@@ -30,10 +30,16 @@ const WEEKDAY_LABELS = ['日', '一', '二', '三', '四', '五', '六'];
 export const isEmployeeRole = (user: User | null | undefined): boolean =>
   !!user && user.role === 'user';
 
+/** 该账号是否强制设备/网卡绑定（按账户设置；员工默认开启） */
 export const isDeviceBindRequired = (user: User): boolean => {
-  if (!isEmployeeRole(user)) return false;
-  return user.deviceBindRequired !== false;
+  if (user.deviceBindRequired === true) return true;
+  if (user.deviceBindRequired === false) return false;
+  return user.role === 'user';
 };
+
+/** 需要持续门禁校验（绑定或可用时段） */
+export const needsAccessControl = (user: User): boolean =>
+  isDeviceBindRequired(user) || !!user.accessSchedule?.enabled;
 
 export const normalizeMacAddress = (raw: string): string | null => {
   const hex = (raw || '').toUpperCase().replace(/[^0-9A-F]/g, '');
@@ -246,16 +252,17 @@ export const checkDeviceAccess = async (user: User): Promise<AccessCheckResult> 
 };
 
 export const evaluateEmployeeAccess = async (user: User): Promise<AccessCheckResult> => {
-  if (!isEmployeeRole(user)) {
-    return { ok: true, reason: 'ok', message: '' };
+  if (isDeviceBindRequired(user)) {
+    const device = await checkDeviceAccess(user);
+    if (!device.ok) return device;
   }
-  const device = await checkDeviceAccess(user);
-  if (!device.ok) return device;
-  const schedule = checkAccessSchedule(user.accessSchedule);
-  if (!schedule.ok) {
-    return { ok: false, reason: 'schedule_blocked', message: schedule.message };
+  if (user.accessSchedule?.enabled) {
+    const schedule = checkAccessSchedule(user.accessSchedule);
+    if (!schedule.ok) {
+      return { ok: false, reason: 'schedule_blocked', message: schedule.message };
+    }
   }
-  return { ok: true, reason: 'ok', message: '', deviceId: device.deviceId };
+  return { ok: true, reason: 'ok', message: '' };
 };
 
 export const bindCurrentDevice = async (
@@ -271,9 +278,6 @@ export const bindCurrentDevice = async (
   const users = loadUsersFromStorage();
   const target = findUserByName(users, username);
   if (!target) return { ok: false, message: '用户不存在' };
-  if (!isEmployeeRole(target)) {
-    return { ok: false, message: '管理员与部门主管无需绑定设备' };
-  }
 
   const device: BoundDevice = {
     deviceId,

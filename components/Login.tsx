@@ -8,8 +8,14 @@ import {
   confirmLocalMacForBoundDevice,
   evaluateEmployeeAccess,
   formatMacInputHint,
-  isEmployeeRole,
+  needsAccessControl,
 } from '../services/deviceBind';
+import {
+  checkLoginAllowed,
+  clearLoginFailures,
+  recordLoginFailure,
+  sanitizeUsernameInput,
+} from '../services/appFirewall';
 
 interface LoginProps {
   onLogin: (user: User) => void;
@@ -38,8 +44,20 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
     setPendingUser(null);
 
     try {
-      const user = await authenticateUser(username, password);
+      const nameCheck = sanitizeUsernameInput(username);
+      if (!nameCheck.ok) {
+        setError(nameCheck.message || '用户名无效');
+        return;
+      }
+      const gate = checkLoginAllowed(nameCheck.value);
+      if (!gate.ok) {
+        setError(gate.message || '登录暂时受限');
+        return;
+      }
+
+      const user = await authenticateUser(nameCheck.value, password);
       if (!user) {
+        recordLoginFailure(nameCheck.value);
         setError('用户名或密码错误');
         return;
       }
@@ -48,7 +66,9 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
         return;
       }
 
-      if (!isEmployeeRole(user)) {
+      clearLoginFailures(nameCheck.value);
+
+      if (!needsAccessControl(user)) {
         finishLogin(user);
         return;
       }

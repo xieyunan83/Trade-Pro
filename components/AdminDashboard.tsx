@@ -1272,7 +1272,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     <div key={user.username} className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
                       <div className="flex items-center justify-between gap-3 mb-3">
                         <div className="font-black text-slate-800">{user.username}</div>
-                        <span className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest ${user.role === 'admin' ? 'bg-purple-100 text-purple-700' : user.role === 'manager' ? 'bg-violet-100 text-violet-700' : 'bg-slate-100 text-slate-600'}`}>
+                        <span className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest ${user.role === 'admin' ? 'bg-purple-100 text-purple-700' : user.role === 'director' ? 'bg-cyan-100 text-cyan-700' : user.role === 'manager' ? 'bg-violet-100 text-violet-700' : 'bg-slate-100 text-slate-600'}`}>
                           {roleLabel(user.role)}
                         </span>
                       </div>
@@ -1304,7 +1304,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                         <tr key={user.username} className="border-b border-slate-50 last:border-none hover:bg-slate-50/30 transition-all">
                           <td className="px-4 lg:px-8 py-4 lg:py-6 font-black text-slate-800">{user.username}</td>
                           <td className="px-4 lg:px-8 py-4 lg:py-6">
-                            <span className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest ${user.role === 'admin' ? 'bg-purple-100 text-purple-700' : user.role === 'manager' ? 'bg-violet-100 text-violet-700' : 'bg-slate-100 text-slate-600'}`}>
+                            <span className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest ${user.role === 'admin' ? 'bg-purple-100 text-purple-700' : user.role === 'director' ? 'bg-cyan-100 text-cyan-700' : user.role === 'manager' ? 'bg-violet-100 text-violet-700' : 'bg-slate-100 text-slate-600'}`}>
                               {roleLabel(user.role)}
                             </span>
                           </td>

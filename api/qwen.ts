@@ -74,6 +74,9 @@ export default async function handler(req: any, res: any) {
     return;
   }
 
+  const { guardApiRequest } = await import('./_firewall');
+  if (!guardApiRequest(req, res, 'qwen')) return;
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
 

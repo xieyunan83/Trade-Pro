@@ -47,6 +47,9 @@ export default async function handler(req: any, res: any) {
     return;
   }
 
+  const { guardApiRequest } = await import('./_firewall');
+  if (!guardApiRequest(req, res, 'anysearch')) return;
+
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'AnySearch proxy only accepts POST' });
     return;

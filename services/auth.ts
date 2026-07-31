@@ -40,7 +40,14 @@ export function saveUsersToStorage(users: User[], updatedAt: number = Date.now()
 
 /** 规范化旧用户结构 */
 export function normalizeUser(u: User): User {
-  const role = u.role === 'admin' || u.role === 'manager' ? u.role : 'user';
+  const role: User['role'] =
+    u.role === 'admin' || u.role === 'director' || u.role === 'manager' ? u.role : 'user';
+  const deviceBindRequired =
+    u.deviceBindRequired === true
+      ? true
+      : u.deviceBindRequired === false
+        ? false
+        : role === 'user';
   return {
     ...u,
     role,
@@ -50,7 +57,7 @@ export function normalizeUser(u: User): User {
         : defaultPermissionsForRole(role),
     departmentId: u.departmentId || undefined,
     disabled: !!u.disabled,
-    deviceBindRequired: role === 'user' ? u.deviceBindRequired !== false : false,
+    deviceBindRequired,
     boundDevices: Array.isArray(u.boundDevices) ? u.boundDevices : [],
     accessSchedule: u.accessSchedule || undefined,
   };
