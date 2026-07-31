@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="build-stamp" content="2026-07-31-v6b-input-contrast">
+    <meta name="build-stamp" content="2026-07-31-v7-main-vibe">
     <title>楠哥的小助理 - AI 智能客户开发</title>
     
     <script>
@@ -95,9 +95,9 @@
           --tp-ink-soft: #121a2b;
           --tp-signal: #06b6d4;
           --tp-signal-soft: rgba(6, 182, 212, 0.14);
-          --tp-canvas: #e9eef5;
-          --tp-card: rgba(255, 255, 255, 0.82);
-          --tp-line: rgba(15, 23, 42, 0.08);
+          --tp-canvas: #e8f0f7;
+          --tp-card: rgba(255, 255, 255, 0.88);
+          --tp-line: rgba(15, 23, 42, 0.07);
           --tp-text: #0f172a;
           --tp-muted: #64748b;
         }
@@ -111,14 +111,14 @@
           text-rendering: optimizeLegibility;
         }
 
-        /* ——— App shell atmosphere ——— */
+        /* ——— App shell: cool tech canvas (echo sidebar signal, keep readable) ——— */
         .tp-app {
           position: relative;
           background:
-            radial-gradient(1100px 520px at 12% -10%, rgba(6, 182, 212, 0.16), transparent 55%),
-            radial-gradient(900px 480px at 92% 0%, rgba(14, 165, 233, 0.12), transparent 50%),
-            radial-gradient(700px 400px at 70% 100%, rgba(16, 185, 129, 0.08), transparent 45%),
-            linear-gradient(165deg, #eef3f9 0%, #e4ebf4 45%, #dde6f2 100%);
+            radial-gradient(920px 420px at 18% -8%, rgba(6, 182, 212, 0.20), transparent 58%),
+            radial-gradient(780px 380px at 96% 4%, rgba(14, 165, 233, 0.12), transparent 52%),
+            radial-gradient(640px 360px at 78% 108%, rgba(8, 145, 178, 0.10), transparent 48%),
+            linear-gradient(168deg, #f2f7fb 0%, #e7eef6 42%, #dde8f2 100%);
         }
         .tp-app::before {
           content: '';
@@ -126,14 +126,31 @@
           inset: 0;
           pointer-events: none;
           z-index: 0;
-          opacity: 0.35;
+          opacity: 0.28;
           background-image:
-            linear-gradient(rgba(15, 23, 42, 0.035) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(15, 23, 42, 0.035) 1px, transparent 1px);
-          background-size: 48px 48px;
-          mask-image: radial-gradient(ellipse at 50% 20%, black 20%, transparent 75%);
+            linear-gradient(rgba(6, 182, 212, 0.045) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(6, 182, 212, 0.045) 1px, transparent 1px);
+          background-size: 56px 56px;
+          mask-image: radial-gradient(ellipse at 55% 18%, black 15%, transparent 72%);
         }
         .tp-app > * { position: relative; z-index: 1; }
+
+        /* Main stage: subtle vignette so white cards pop without grey flatness */
+        .tp-main-stage {
+          background:
+            linear-gradient(180deg, rgba(255,255,255,0.28) 0%, transparent 120px),
+            transparent;
+        }
+        .tp-main-stage::before {
+          content: '';
+          position: absolute;
+          inset: 0;
+          pointer-events: none;
+          background:
+            radial-gradient(600px 280px at 50% 0%, rgba(6, 182, 212, 0.07), transparent 70%);
+          z-index: 0;
+        }
+        .tp-main-stage > * { position: relative; z-index: 1; }
 
         /* ——— Sidebar ——— */
         .tp-sidebar {
@@ -177,15 +194,15 @@
 
         /* ——— Header / scan bar ——— */
         .tp-header {
-          background: rgba(255, 255, 255, 0.72) !important;
-          border-bottom: 1px solid rgba(15, 23, 42, 0.06) !important;
-          backdrop-filter: blur(18px) saturate(1.2);
-          box-shadow: 0 10px 30px -24px rgba(15, 23, 42, 0.35);
+          background: rgba(255, 255, 255, 0.78) !important;
+          border-bottom: 1px solid rgba(6, 182, 212, 0.10) !important;
+          backdrop-filter: blur(18px) saturate(1.25);
+          box-shadow: 0 10px 30px -24px rgba(15, 23, 42, 0.28);
         }
         .tp-scan-input {
-          background: rgba(248, 250, 252, 0.9) !important;
+          background: rgba(255, 255, 255, 0.92) !important;
           border: 1px solid rgba(15, 23, 42, 0.08) !important;
-          box-shadow: 0 1px 0 rgba(255,255,255,0.8) inset !important;
+          box-shadow: 0 1px 0 rgba(255,255,255,0.85) inset, 0 8px 20px -16px rgba(15, 23, 42, 0.2) !important;
           letter-spacing: -0.01em;
           color: #020617 !important;
           -webkit-text-fill-color: #020617;
@@ -194,7 +211,7 @@
         .tp-scan-input:focus {
           background: #fff !important;
           border-color: rgba(6, 182, 212, 0.55) !important;
-          box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.15) !important;
+          box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.14) !important;
           color: #020617 !important;
           -webkit-text-fill-color: #020617;
         }
@@ -257,20 +274,83 @@
         /* ——— Elevate common white cards across modules (no structure change) ——— */
         .tp-app main .bg-white {
           background: var(--tp-card) !important;
-          backdrop-filter: blur(14px);
-          box-shadow: 0 1px 0 rgba(255,255,255,0.7) inset, 0 14px 36px -22px rgba(15, 23, 42, 0.28);
+          backdrop-filter: blur(16px) saturate(1.15);
+          box-shadow:
+            0 0 0 1px rgba(6, 182, 212, 0.06),
+            0 1px 0 rgba(255,255,255,0.75) inset,
+            0 16px 40px -24px rgba(15, 23, 42, 0.22);
         }
         .tp-app main .border-slate-200,
         .tp-app main .border-slate-100 {
-          border-color: rgba(15, 23, 42, 0.08) !important;
+          border-color: rgba(15, 23, 42, 0.07) !important;
+        }
+        /* Soften dead grey wells → cool mist panels */
+        .tp-app main .bg-slate-50,
+        .tp-app main .bg-slate-50\/50,
+        .tp-app main .bg-slate-50\/80 {
+          background: rgba(241, 248, 252, 0.92) !important;
+        }
+        .tp-app main .hover\:bg-slate-50:hover,
+        .tp-app main .hover\:bg-slate-50\/50:hover {
+          background: rgba(236, 246, 251, 0.95) !important;
         }
         .tp-app main .rounded-3xl,
         .tp-app main .rounded-2xl {
-          border-radius: 1.15rem !important;
+          border-radius: 1.1rem !important;
         }
         .tp-app main h2.font-black,
         .tp-app main h3.font-black {
           letter-spacing: -0.03em;
+          color: #0b1220;
+        }
+        .tp-app main label.text-slate-400,
+        .tp-app main .text-xs.font-black.text-slate-400 {
+          color: #64748b !important;
+          letter-spacing: 0.08em;
+        }
+        /* Form controls: crisp, quiet focus */
+        .tp-app main input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+        .tp-app main textarea,
+        .tp-app main select {
+          background: rgba(255, 255, 255, 0.95) !important;
+          border-color: rgba(15, 23, 42, 0.09) !important;
+          transition: border-color 0.15s ease, box-shadow 0.15s ease;
+        }
+        .tp-app main input:not([type="checkbox"]):not([type="radio"]):focus,
+        .tp-app main textarea:focus,
+        .tp-app main select:focus {
+          border-color: rgba(6, 182, 212, 0.5) !important;
+          box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.12);
+          outline: none;
+        }
+        /* Primary dark CTAs → ink + cyan edge (less flat black) */
+        .tp-app main button.bg-slate-900,
+        .tp-app main .bg-slate-900 {
+          background: linear-gradient(135deg, #0f172a 0%, #134e5e 100%) !important;
+          box-shadow: 0 10px 24px -12px rgba(8, 145, 178, 0.45), 0 1px 0 rgba(255,255,255,0.08) inset;
+        }
+        .tp-app main button.bg-slate-900:hover,
+        .tp-app main .hover\:bg-blue-600:hover {
+          filter: brightness(1.06);
+        }
+
+        /* Module panel title strip */
+        .tp-panel-title {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+        }
+        .tp-panel-title-icon {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 2.5rem;
+          height: 2.5rem;
+          border-radius: 0.85rem;
+          background: linear-gradient(135deg, rgba(6,182,212,0.16), rgba(14,165,233,0.08));
+          color: #0891b2;
+          border: 1px solid rgba(6, 182, 212, 0.18);
+          flex-shrink: 0;
         }
 
         /* Unify loud accent buttons into signal system */

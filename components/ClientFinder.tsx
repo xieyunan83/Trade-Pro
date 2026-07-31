@@ -186,25 +186,30 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({ state, onStateChange
     continent.countries.filter((c) => selectedCountries.includes(countrySearchValue(c))).length;
 
   return (
-    <div className="max-w-7xl mx-auto space-y-4 sm:space-y-8 animate-fade-in px-0">
+    <div className="max-w-7xl mx-auto space-y-4 sm:space-y-6 animate-fade-in px-0">
       <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
-        <h2 className="text-xl sm:text-2xl font-black text-slate-800 mb-2 flex items-center gap-2">
-          <Globe className="text-blue-600 flex-shrink-0" /> 全球客户精准搜索
-        </h2>
-        <p className="text-sm text-slate-500 font-medium mb-4 sm:mb-6">
-          支持多选客户类型与多国市场；先选大洲，再勾选国家。建议填写行业以提升命中率。
-        </p>
+        <div className="tp-panel-title mb-2">
+          <div className="tp-panel-title-icon">
+            <Globe size={20} />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-xl sm:text-2xl font-black text-slate-800 tracking-tight">全球客户精准搜索</h2>
+            <p className="text-sm text-slate-500 font-medium mt-0.5">
+              多选客户类型与国家；建议填写行业以提高命中率。
+            </p>
+          </div>
+        </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 mt-5 sm:mt-6">
           <div>
             <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">产品关键词</label>
             <div className="relative">
-              <Search className="absolute left-4 top-3.5 text-slate-400" size={18} />
+              <Search className="absolute left-4 top-3.5 text-signal-500/70" size={18} />
               <input
                 type="text"
                 value={state.product}
                 onChange={(e) => patchState({ product: e.target.value })}
-                className="w-full pl-12 pr-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold"
+                className="w-full pl-12 pr-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-cyan-500/30 font-bold"
                 placeholder="例如: Silicone Baby Bibs"
               />
             </div>
@@ -212,12 +217,12 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({ state, onStateChange
           <div>
             <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">行业</label>
             <div className="relative">
-              <Building2 className="absolute left-4 top-3.5 text-slate-400" size={18} />
+              <Building2 className="absolute left-4 top-3.5 text-signal-500/70" size={18} />
               <input
                 type="text"
                 value={state.industry}
                 onChange={(e) => patchState({ industry: e.target.value })}
-                className="w-full pl-12 pr-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold"
+                className="w-full pl-12 pr-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-cyan-500/30 font-bold"
                 placeholder="例如: Baby Products / Home Decor"
               />
             </div>
@@ -231,9 +236,9 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({ state, onStateChange
             <button
               type="button"
               onClick={() => setCountryOpen((v) => !v)}
-              className="w-full min-h-[52px] px-4 py-3 rounded-xl border border-slate-200 bg-white text-left flex items-start gap-3 hover:border-blue-300 focus:ring-2 focus:ring-blue-500 transition-colors"
+              className="w-full min-h-[52px] px-4 py-3 rounded-xl border border-slate-200 bg-white text-left flex items-start gap-3 hover:border-cyan-300/70 focus:ring-2 focus:ring-cyan-500/30 transition-colors"
             >
-              <MapPin className="text-slate-400 mt-0.5 flex-shrink-0" size={18} />
+              <MapPin className="text-signal-500/70 mt-0.5 flex-shrink-0" size={18} />
               <div className="flex-1 min-w-0">
                 {selectedCountries.length === 0 ? (
                   <span className="text-slate-400 font-bold">先选大洲，再勾选国家</span>
@@ -244,7 +249,7 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({ state, onStateChange
                       return (
                         <span
                           key={en}
-                          className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 px-2 py-0.5 rounded-lg text-xs font-black"
+                          className="inline-flex items-center gap-1 bg-cyan-50 text-cyan-800 px-2 py-0.5 rounded-lg text-xs font-black"
                           onClick={(e) => {
                             e.stopPropagation();
                             toggleCountry(en);
@@ -414,7 +419,7 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({ state, onStateChange
         <button
           onClick={handleSearch}
           disabled={loading || !state.product}
-          className="w-full mt-4 sm:mt-6 bg-slate-900 hover:bg-blue-600 text-white py-3 sm:py-4 rounded-xl font-black shadow-lg transition-all flex items-center justify-center gap-2 touch-manipulation"
+          className="w-full mt-4 sm:mt-6 tp-btn-primary text-white py-3 sm:py-4 rounded-xl font-black transition-all flex items-center justify-center gap-2 touch-manipulation disabled:opacity-50"
         >
           {loading ? (
             <>
@@ -437,7 +442,10 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({ state, onStateChange
       {state.hasSearched && (
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
-            <h3 className="text-base sm:text-lg font-black text-slate-800">搜索结果 ({state.results.length})</h3>
+            <h3 className="text-base sm:text-lg font-black text-slate-800 tracking-tight flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-signal-500 shadow-[0_0_0_3px_rgba(6,182,212,0.2)]" />
+              搜索结果 ({state.results.length})
+            </h3>
             <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
               <button
                 disabled={selectedIndices.size === 0}
@@ -460,7 +468,7 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({ state, onStateChange
             {state.results.map((res, idx) => (
               <div
                 key={idx}
-                className={`bg-white p-4 sm:p-6 rounded-2xl sm:rounded-3xl border transition-all cursor-pointer touch-manipulation ${selectedIndices.has(idx) ? 'border-blue-500 ring-2 ring-blue-100' : 'border-slate-200 hover:border-slate-300'}`}
+                className={`bg-white p-4 sm:p-6 rounded-2xl sm:rounded-3xl border transition-all cursor-pointer touch-manipulation ${selectedIndices.has(idx) ? 'border-cyan-500 ring-2 ring-cyan-100/80' : 'border-slate-200 hover:border-cyan-200/80'}`}
                 onClick={() => toggleSelect(idx)}
               >
                 <div className="flex justify-between items-start mb-3 gap-3">

@@ -1548,7 +1548,7 @@ const App: React.FC = () => {
             </button>
             <button onClick={handleLogout} className="w-full flex items-center gap-2 px-4 py-3 text-rose-300 hover:bg-rose-500/10 rounded-xl text-sm font-semibold transition-colors"><LogOut size={18} /> 退出登录</button>
             <div className="px-4 pt-1 text-[9px] font-semibold text-slate-600 text-center select-all tracking-wide">
-              版本 v20260731f · 用户数据隔离修复
+              版本 v20260731g · 主区视觉升级
             </div>
         </div>
       </aside>
@@ -1664,7 +1664,7 @@ const App: React.FC = () => {
           </button>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 relative custom-scrollbar">
+        <div className="tp-main-stage flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 relative custom-scrollbar">
           {cooldownTime > 0 && (
               <div className="absolute inset-0 bg-mist-50/85 z-50 flex flex-col items-center justify-center backdrop-blur-md animate-fade-in cursor-wait">
                   <div className="relative"><Hourglass size={64} className="text-signal-500 animate-pulse" /><div className="absolute -top-2 -right-2 bg-rose-500 text-white w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs">{cooldownTime}</div></div>
