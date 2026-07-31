@@ -217,3 +217,43 @@ export function buildAnymailFetchHeaders(apiKey: string, targetUrl: string): Rec
     Authorization: rawKey,
   };
 }
+
+/** Hunter 走同域代理，避免浏览器 CORS；path 如 /v2/account，params 含 api_key */
+export function resolveHunterUrl(
+  path: string,
+  params: Record<string, string | number | undefined>
+): { url: string; via: QwenProxyVia } {
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v == null || v === '') continue;
+    qs.set(k, String(v));
+  }
+  const query = qs.toString();
+
+  if (isLocalDevHost()) {
+    return { url: `/hunter-api${cleanPath}${query ? `?${query}` : ''}`, via: 'vite' };
+  }
+
+  const mode = getAliyunProxyMode();
+  const customBase = getAliyunProxyBase();
+  if (mode === 'custom' && customBase) {
+    return {
+      url: `${customBase}/hunter-api${cleanPath}${query ? `?${query}` : ''}`,
+      via: 'custom',
+    };
+  }
+
+  const upstream = encodeURIComponent(cleanPath);
+  return {
+    url: `/api/hunter?__upstream=${upstream}${query ? `&${query}` : ''}`,
+    via: 'vercel',
+  };
+}
+
+export function hunterProxyHint(): string {
+  if (isLocalDevHost()) {
+    return ' 请重启 npm run dev（需要 /hunter-api 代理），然后强制刷新再测。';
+  }
+  return ' 请确认线上已部署 /api/hunter，或稍后再试。';
+}

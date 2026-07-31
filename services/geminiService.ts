@@ -6,12 +6,14 @@ import { getApiConfig as getSupabaseApiConfig, getAllApiConfigs, isSupabaseConfi
 import {
   buildAliyunFetchHeaders,
   buildAnymailFetchHeaders,
+  hunterProxyHint,
   isAppHostedQwenProxy,
   isDomesticAliyunUrl,
   isLocalDevHost,
   isSupabaseQwenProxyUrl,
   qwenCorsHint,
   resolveAnymailUrl,
+  resolveHunterUrl,
   resolveQwenRequestTarget,
   DEFAULT_TOKEN_PLAN_ORIGIN,
 } from './qwenProxy';
@@ -126,44 +128,95 @@ const extractJson = (text: string, isArray: boolean = false): any => {
 const cleanDomain = (domain: string) => domain.replace(/^(?:https?:\/\/)?(?:www\.)?/i, "").split('/')[0];
 
 // --- External APIs ---
+
+/** Hunter 额度用尽 / 限流等：静默跳过，不抛错给用户 */
+const isHunterQuotaOrSoftFail = (status: number, data: any): boolean => {
+  if (status === 429 || status === 402 || status === 403) return true;
+  const errs = Array.isArray(data?.errors) ? data.errors : [];
+  const blob = JSON.stringify(errs).toLowerCase();
+  return /quota|credit|limit|exceed|usage|rate.?limit|insufficient|payment/.test(blob);
+};
+
+const hunterGet = async (
+  path: string,
+  params: Record<string, string | number | undefined>,
+  timeoutMs = 25_000
+): Promise<{ ok: boolean; status: number; data: any; softFail: boolean }> => {
+  const { url } = resolveHunterUrl(path, params);
+  try {
+    const response = await fetchWithTimeout(url, { method: 'GET' }, timeoutMs);
+    const text = await response.text();
+    let data: any = {};
+    try {
+      data = JSON.parse(text);
+    } catch {
+      /* ignore */
+    }
+    const softFail = isHunterQuotaOrSoftFail(response.status, data);
+    if (!response.ok) {
+      if (softFail) {
+        console.info('[Hunter] soft-fail (quota/limit)', response.status, String(text).slice(0, 160));
+      } else {
+        console.warn('[Hunter] HTTP', response.status, String(text).slice(0, 160));
+      }
+      return { ok: false, status: response.status, data, softFail };
+    }
+    return { ok: true, status: response.status, data, softFail: false };
+  } catch (e) {
+    // 网络/超时：同样不打断决策人流程
+    console.warn('[Hunter] request failed (ignored)', e);
+    return { ok: false, status: 0, data: {}, softFail: true };
+  }
+};
+
 const fetchHunterEmails = async (domain: string): Promise<{ people: DecisionMaker[], pattern: string | null }> => {
     const HUNTER_API_KEY = getEmailSearchKeys().hunter;
     if (!domain || !HUNTER_API_KEY) return { people: [], pattern: null };
-    try {
-        const url = `https://api.hunter.io/v2/domain-search?domain=${cleanDomain(domain)}&api_key=${HUNTER_API_KEY}&limit=20`;
-        const response = await fetch(url);
-        const data = await response.json();
-        const pattern = data.data?.pattern || null;
-        if (data.data && data.data.emails) {
-            const people = data.data.emails.map((e: any) => ({
-                name: `${e.first_name || ''} ${e.last_name || ''}`.trim() || 'Professional',
-                firstName: e.first_name,
-                lastName: e.last_name,
-                title: e.position || 'Employee',
-                emailGuess: e.value,
-                linkedin: e.linkedin,
-                type: (e.position?.toLowerCase().match(/ceo|founder|owner|president/) ? 'CEO' : e.position?.toLowerCase().match(/buyer|procurement|purchasing|sourcing|manager/) ? 'Buyer' : 'Other'),
-                source: 'Hunter.io',
-                isVerified: e.confidence > 85, // More strict
-                confidence: e.confidence / 100
-            }));
-            return { people, pattern };
-        }
-    } catch (error) { console.error("Hunter API Error", error); }
+    const res = await hunterGet('/v2/domain-search', {
+      domain: cleanDomain(domain),
+      api_key: HUNTER_API_KEY,
+      limit: 20,
+    });
+    if (!res.ok) return { people: [], pattern: null };
+    const data = res.data;
+    const pattern = data.data?.pattern || null;
+    if (data.data && Array.isArray(data.data.emails)) {
+      const people: DecisionMaker[] = data.data.emails.map((e: any) => {
+        const title = e.position || 'Employee';
+        return {
+          name: `${e.first_name || ''} ${e.last_name || ''}`.trim() || 'Professional',
+          firstName: e.first_name,
+          lastName: e.last_name,
+          title,
+          emailGuess: e.value,
+          linkedin: e.linkedin,
+          type: classifyDecisionMakerType(title),
+          source: 'Hunter.io' as const,
+          emailSource: 'Hunter.io' as const,
+          emailStatus: e.verification?.status || (e.confidence > 85 ? 'valid' : 'unverified'),
+          isVerified: e.confidence > 85,
+          confidence: typeof e.confidence === 'number' ? e.confidence / 100 : undefined,
+          influenceScore: classifyDecisionMakerType(title) === 'Buyer' ? 5 : classifyDecisionMakerType(title) === 'CEO' ? 4 : 2,
+        };
+      });
+      return { people, pattern };
+    }
     return { people: [], pattern: null };
 };
 
 const findEmailWithHunter = async (firstName: string, lastName: string, domain: string): Promise<{ email: string, confidence: number } | null> => {
     const HUNTER_API_KEY = getEmailSearchKeys().hunter;
     if (!HUNTER_API_KEY || !domain || !firstName) return null;
-    try {
-        const url = `https://api.hunter.io/v2/email-finder?domain=${cleanDomain(domain)}&first_name=${encodeURIComponent(firstName)}&last_name=${encodeURIComponent(lastName || '')}&api_key=${HUNTER_API_KEY}`;
-        const response = await fetch(url);
-        const data = await response.json();
-        if (data.data && data.data.email) {
-            return { email: data.data.email, confidence: data.data.score / 100 };
-        }
-    } catch (e) { console.error("Hunter Email Finder Error", e); }
+    const res = await hunterGet('/v2/email-finder', {
+      domain: cleanDomain(domain),
+      first_name: firstName,
+      last_name: lastName || '',
+      api_key: HUNTER_API_KEY,
+    });
+    if (!res.ok) return null;
+    if (res.data?.data?.email) {
+      return { email: res.data.data.email, confidence: (res.data.data.score || 0) / 100 };
+    }
     return null;
 };
 
@@ -686,13 +739,10 @@ export type DecisionMakerResearchResult = {
 };
 
 /**
- * 决策人邮箱搜索（对齐 Anymail Finder 官网逻辑）：
- * 1) 优先「公司域名搜索」find-email/company：1 积分最多 20 个已验证邮箱（等同官网可复制预览）
- * 2) 再用联网 AI 为这些邮箱补职位 / LinkedIn（不额外扣 Anymail 积分）
- * 3) 对已有真实姓名但仍无邮箱的人，按需 find-email/person（每人成功约 1 分）
- * 4) deepDig：再补少量 decision-maker 角色搜索（成功约 2 分/人），不并行狂扫多类别
- *
- * 不再「先 LinkedIn/AI 挖职位再去 Anymail」——那样会漏掉域名库里大量联系人。
+ * 决策人邮箱搜索：
+ * 1) 优先 AnymailFinder「公司域名搜索」→ 联网补职位/领英 → 按人补邮箱 → deepDig 角色补充
+ * 2) 若 Anymail 未找到任何带邮箱的联系人，再回退 Hunter.io domain-search
+ * 3) Hunter 额度用尽 / 限流时静默跳过，不向用户报错，直接返回已有结果
  */
 export const researchDecisionMakerEmails = async (opts: {
   domain: string;
@@ -728,9 +778,7 @@ export const researchDecisionMakerEmails = async (opts: {
 
   const merged: DecisionMaker[] = (opts.existing || []).map((d) => ({ ...d }));
   const hasAnymail = !!getEmailSearchKeys().anymailFinder;
-  if (!hasAnymail) {
-    return { decisionMakers: rankDecisionMakers(merged), searchedAt, stats };
-  }
+  const hasHunter = !!getEmailSearchKeys().hunter;
 
   // 清理背调 AI 占位人（无真实姓名、无邮箱）——避免干扰公司域名搜索结果与「再次搜索」
   for (let i = merged.length - 1; i >= 0; i--) {
@@ -788,140 +836,174 @@ export const researchDecisionMakerEmails = async (opts: {
         searchedAt
       );
       stats.upgraded += 1;
-      stats.anymailFound += 1;
+      if (candidate.emailSource === 'Hunter.io' || candidate.source === 'Hunter.io') {
+        /* hunter merge counted below via caller */
+      } else {
+        stats.anymailFound += 1;
+      }
       return;
     }
     seenEmails.add(em);
     merged.push(stampChecked(candidate, searchedAt));
     stats.added += 1;
-    stats.anymailFound += 1;
+    if (candidate.emailSource === 'Hunter.io' || candidate.source === 'Hunter.io') {
+      /* counted by hunter fallback */
+    } else {
+      stats.anymailFound += 1;
+    }
   };
 
+  const countWithEmail = () => merged.filter((d) => !!d.emailGuess?.includes('@')).length;
+  const emailsBeforeAnymail = countWithEmail();
+
   try {
-    // ——— 1) 公司域名搜索（核心，1 积分 ≈ 官网预览 20 人）———
-    if (domain || companyName) {
-      const companyHit = await fetchAnymailCompanyEmails(domain, {
-        companyName: companyName || undefined,
-        emailType: 'any',
-      });
-      let companyPeople = companyHit.people;
-      if (companyPeople.length) {
-        companyPeople = await enrichCompanyContactsWithWebIntel(
-          domain || companyName,
-          companyName || domain,
-          companyPeople
-        );
-        for (const p of companyPeople) {
-          if (p.linkedin) stats.linkedinDiscovered += 1;
-          pushOrMergeCompanyContact(p);
+    if (hasAnymail) {
+      // ——— 1) 公司域名搜索（核心，1 积分 ≈ 官网预览 20 人）———
+      if (domain || companyName) {
+        const companyHit = await fetchAnymailCompanyEmails(domain, {
+          companyName: companyName || undefined,
+          emailType: 'any',
+        });
+        let companyPeople = companyHit.people;
+        if (companyPeople.length) {
+          companyPeople = await enrichCompanyContactsWithWebIntel(
+            domain || companyName,
+            companyName || domain,
+            companyPeople
+          );
+          for (const p of companyPeople) {
+            if (p.linkedin) stats.linkedinDiscovered += 1;
+            pushOrMergeCompanyContact(p);
+          }
         }
       }
-    }
 
-    // ——— 2) 已有真实姓名：补邮箱 / 校验非 Anymail 邮箱 ———
-    for (let i = 0; i < merged.length; i++) {
-      const dm = merged[i];
-      const name = personLabel(dm);
-      if (isPlaceholderPersonName(name) && !(dm.firstName && dm.lastName)) continue;
-      if (isAnymailVerified(dm)) continue;
-      // 已由公司域名搜索拿到的邮箱不再按人扣分重查
-      if (dm.emailSource === 'AnymailFinder' && dm.emailGuess) continue;
+      // ——— 2) 已有真实姓名：补邮箱 / 校验非 Anymail 邮箱 ———
+      for (let i = 0; i < merged.length; i++) {
+        const dm = merged[i];
+        const name = personLabel(dm);
+        if (isPlaceholderPersonName(name) && !(dm.firstName && dm.lastName)) continue;
+        if (isAnymailVerified(dm)) continue;
+        // 已由公司域名搜索拿到的邮箱不再按人扣分重查
+        if (dm.emailSource === 'AnymailFinder' && dm.emailGuess) continue;
 
-      if (
-        reverifyNonAnymail &&
-        dm.emailGuess?.includes('@') &&
-        dm.emailSource !== 'AnymailFinder' &&
-        dm.source !== 'AnymailFinder'
-      ) {
-        const status = (dm.emailStatus || '').toLowerCase();
-        if (!(dm.isVerified && status === 'valid')) {
-          const verified = await verifyEmailWithAnymail(dm.emailGuess);
-          if (verified) {
-            stats.verified += 1;
-            merged[i] = stampChecked(
-              {
-                ...dm,
-                emailStatus: verified.emailStatus,
-                isVerified: verified.isVerified,
-              },
-              searchedAt
-            );
-            if (verified.isVerified) continue;
+        if (
+          reverifyNonAnymail &&
+          dm.emailGuess?.includes('@') &&
+          dm.emailSource !== 'AnymailFinder' &&
+          dm.source !== 'AnymailFinder'
+        ) {
+          const status = (dm.emailStatus || '').toLowerCase();
+          if (!(dm.isVerified && status === 'valid')) {
+            const verified = await verifyEmailWithAnymail(dm.emailGuess);
+            if (verified) {
+              stats.verified += 1;
+              merged[i] = stampChecked(
+                {
+                  ...dm,
+                  emailStatus: verified.emailStatus,
+                  isVerified: verified.isVerified,
+                },
+                searchedAt
+              );
+              if (verified.isVerified) continue;
+            }
+          } else {
+            continue;
           }
-        } else {
+        }
+
+        const cur = merged[i];
+        const statusNow = (cur.emailStatus || '').toLowerCase();
+        const needsFind =
+          !cur.emailGuess ||
+          (!isAnymailVerified(cur) &&
+            (statusNow === 'invalid' ||
+              statusNow === 'not_found' ||
+              statusNow === 'blacklisted' ||
+              statusNow === 'risky' ||
+              statusNow === 'unverified' ||
+              !cur.isVerified));
+
+        if (!needsFind) continue;
+        if (!isLikelyRealPerson(cur)) continue;
+
+        const hadBadEmail = !!cur.emailGuess && !isAnymailVerified(cur);
+        const found = await findEmailWithAnymail(name, {
+          firstName: cur.firstName,
+          lastName: cur.lastName,
+          domain: domain || undefined,
+          companyName: companyName || undefined,
+        });
+
+        if (!found?.email) continue;
+        const em = found.email.toLowerCase();
+        if (seenEmails.has(em) && emailKey(cur) !== em) {
           continue;
         }
+        seenEmails.add(em);
+
+        merged[i] = stampChecked(
+          {
+            ...cur,
+            emailGuess: found.email,
+            emailSource: 'AnymailFinder',
+            source: 'AnymailFinder',
+            emailStatus: 'valid',
+            isVerified: true,
+            confidence: found.confidence,
+            name: found.fullName && isPlaceholderPersonName(cur.name) ? found.fullName : cur.name,
+            firstName: cur.firstName || found.firstName,
+            lastName: cur.lastName || found.lastName,
+            title: found.title || cur.title,
+            linkedin: cur.linkedin || found.linkedin,
+            type: found.title ? classifyDecisionMakerType(found.title) : cur.type,
+          },
+          searchedAt
+        );
+        stats.upgraded += 1;
+        stats.anymailFound += 1;
+        if (hadBadEmail) stats.reFoundAfterInvalid += 1;
       }
 
-      const cur = merged[i];
-      const statusNow = (cur.emailStatus || '').toLowerCase();
-      const needsFind =
-        !cur.emailGuess ||
-        (!isAnymailVerified(cur) &&
-          (statusNow === 'invalid' ||
-            statusNow === 'not_found' ||
-            statusNow === 'blacklisted' ||
-            statusNow === 'risky' ||
-            statusNow === 'unverified' ||
-            !cur.isVerified));
-
-      if (!needsFind) continue;
-      if (!isLikelyRealPerson(cur)) continue;
-
-      const hadBadEmail = !!cur.emailGuess && !isAnymailVerified(cur);
-      const found = await findEmailWithAnymail(name, {
-        firstName: cur.firstName,
-        lastName: cur.lastName,
-        domain: domain || undefined,
-        companyName: companyName || undefined,
-      });
-
-      if (!found?.email) continue;
-      const em = found.email.toLowerCase();
-      if (seenEmails.has(em) && emailKey(cur) !== em) {
-        // 邮箱已在列表中，跳过重复扣分结果
-        continue;
+      // ——— 3) 深挖：少量角色补充（buyer → logistics → ceo），串行且最多 2 人 ———
+      if (deepDig && domain) {
+        const roleCandidates = await fetchAnymailDecisionMakers(domain, [
+          { categories: ['buyer'], title: 'Procurement / Buyer', score: 5 },
+          { categories: ['logistics'], title: 'Logistics / Supply Chain', score: 4 },
+          { categories: ['ceo'], title: 'CEO / Owner', score: 4 },
+        ]);
+        for (const candidate of roleCandidates) {
+          const em = emailKey(candidate);
+          if (em && seenEmails.has(em)) continue;
+          if (em) seenEmails.add(em);
+          merged.push(stampChecked(candidate, searchedAt));
+          stats.added += 1;
+          stats.anymailFound += 1;
+          if (candidate.linkedin) stats.linkedinDiscovered += 1;
+        }
       }
-      seenEmails.add(em);
-
-      merged[i] = stampChecked(
-        {
-          ...cur,
-          emailGuess: found.email,
-          emailSource: 'AnymailFinder',
-          source: 'AnymailFinder',
-          emailStatus: 'valid',
-          isVerified: true,
-          confidence: found.confidence,
-          name: found.fullName && isPlaceholderPersonName(cur.name) ? found.fullName : cur.name,
-          firstName: cur.firstName || found.firstName,
-          lastName: cur.lastName || found.lastName,
-          title: found.title || cur.title,
-          linkedin: cur.linkedin || found.linkedin,
-          type: found.title ? classifyDecisionMakerType(found.title) : cur.type,
-        },
-        searchedAt
-      );
-      stats.upgraded += 1;
-      stats.anymailFound += 1;
-      if (hadBadEmail) stats.reFoundAfterInvalid += 1;
     }
 
-    // ——— 3) 深挖：少量角色补充（buyer → logistics → ceo），串行且最多 2 人 ———
-    if (deepDig && domain) {
-      const roleCandidates = await fetchAnymailDecisionMakers(domain, [
-        { categories: ['buyer'], title: 'Procurement / Buyer', score: 5 },
-        { categories: ['logistics'], title: 'Logistics / Supply Chain', score: 4 },
-        { categories: ['ceo'], title: 'CEO / Owner', score: 4 },
-      ]);
-      for (const candidate of roleCandidates) {
-        const em = emailKey(candidate);
-        if (em && seenEmails.has(em)) continue;
-        if (em) seenEmails.add(em);
-        merged.push(stampChecked(candidate, searchedAt));
-        stats.added += 1;
-        stats.anymailFound += 1;
-        if (candidate.linkedin) stats.linkedinDiscovered += 1;
+    // ——— 4) Anymail 未找到任何带邮箱联系人 → 回退 Hunter.io（额度用尽不报错）———
+    const anymailFoundContacts = stats.anymailFound > 0 || countWithEmail() > emailsBeforeAnymail;
+    const needHunterFallback = hasHunter && domain && domain.includes('.') && !anymailFoundContacts;
+
+    if (needHunterFallback) {
+      console.info('[DM] Anymail 无邮箱结果，回退 Hunter.io domain-search');
+      try {
+        const hunterHit = await fetchHunterEmails(domain);
+        for (const p of hunterHit.people) {
+          const em = emailKey(p);
+          if (!em || seenEmails.has(em)) continue;
+          seenEmails.add(em);
+          merged.push(stampChecked(p, searchedAt));
+          stats.added += 1;
+          if (p.linkedin) stats.linkedinDiscovered += 1;
+        }
+      } catch (hunterErr) {
+        // 额度/网络问题：静默，保留已有结果
+        console.info('[DM] Hunter fallback skipped (no user-facing error)', hunterErr);
       }
     }
   } catch (e) {
@@ -982,6 +1064,66 @@ export const testAnymailFinderApiKey = async (
     return {
       success: false,
       message: `AnymailFinder 测试失败: ${msg}.${hint}`,
+    };
+  }
+};
+
+/** 后台测试 Hunter.io Key（读账户额度，短超时） */
+export const testHunterApiKey = async (
+  apiKey: string
+): Promise<{ success: boolean; message: string }> => {
+  const key = (apiKey || '').trim();
+  if (!key) return { success: false, message: '请先填写 Hunter.io API Key' };
+  try {
+    const { url } = resolveHunterUrl('/v2/account', { api_key: key });
+    const response = await fetchWithTimeout(url, { method: 'GET' }, 20_000);
+    const text = await response.text();
+    let data: any = {};
+    try {
+      data = JSON.parse(text);
+    } catch {
+      /* ignore */
+    }
+    if (response.status === 401 || response.status === 403) {
+      return { success: false, message: `鉴权失败 (${response.status})：Hunter Key 无效或权限不足` };
+    }
+    if (response.status === 429 || response.status === 402) {
+      return {
+        success: true,
+        message: 'Hunter.io Key 有效 ✅（当前额度不足或限流，但鉴权已通过；决策人挖掘时会静默跳过）',
+      };
+    }
+    if (!response.ok) {
+      const detail =
+        data?.errors?.[0]?.details ||
+        data?.errors?.[0]?.id ||
+        data?.message ||
+        text;
+      return {
+        success: false,
+        message: `测试失败 HTTP ${response.status}: ${String(detail).slice(0, 160)}`,
+      };
+    }
+    const searches = data?.data?.requests?.searches;
+    const email = data?.data?.email || data?.data?.first_name || '';
+    const used = searches?.used;
+    const available = searches?.available;
+    const quota =
+      typeof used === 'number' && typeof available === 'number'
+        ? `搜索额度 ${used}/${available}`
+        : '账户可读';
+    return {
+      success: true,
+      message: `Hunter.io 连接成功 ✅${email ? `（${email}）` : ''} · ${quota}`,
+    };
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    const hint = /Failed to fetch|NetworkError|超时|timeout|AbortError/i.test(msg)
+      ? hunterProxyHint()
+      : '';
+    return {
+      success: false,
+      message: `Hunter.io 测试失败: ${msg}.${hint}`,
     };
   }
 };

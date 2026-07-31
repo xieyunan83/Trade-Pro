@@ -278,7 +278,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
               <Users className="text-cyan-600" /> 关键决策人挖掘
             </h3>
             <p className="text-sm text-slate-500 font-medium mt-1 leading-relaxed">
-              背调不会自动扣 Anymail 积分。点「后台搜索」时优先走官网同款「公司域名搜索」：约 1 积分拿到最多 20 个已验证邮箱，再用联网搜索补职位/领英；「再次深挖」才会额外按采购等角色补充（成功约 2 积分/人）。
+              背调不会自动扣 Anymail 积分。点「后台搜索」优先 Anymail 公司域名搜索；若 Anymail 未找到任何联系人，再自动用 Hunter.io。Hunter 额度用尽时静默跳过不报错。「再次深挖」才会额外按采购等角色补充（Anymail，成功约 2 积分/人）。
             </p>
             {lastSearchAt ? (
               <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-semibold text-slate-500">

@@ -8,7 +8,7 @@ import {
   Youtube, Music, Video, FileSpreadsheet, FilePieChart, FileCode, Image, Mail, Building2
 } from 'lucide-react';
 import { getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/db';
-import { testApiKey, testQwenApiKey, testAnymailFinderApiKey } from '../services/geminiService';
+import { testApiKey, testQwenApiKey, testAnymailFinderApiKey, testHunterApiKey } from '../services/geminiService';
 import { testWanImageApi } from '../services/wanImageService';
 import { saveApiConfig, getApiConfig, isSupabaseConfigured, saveKnowledgeFile, getKnowledgeFiles, deleteKnowledgeFile, resetSupabaseClient, testSupabaseConnection } from '../services/supabase';
 import { getSupabaseConfig, saveSupabaseConfig, clearSupabaseOverride, saveEmailSearchKeys, getEmailSearchKeys, env } from '../services/env';
@@ -90,8 +90,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const [isTestingQwen, setIsTestingQwen] = useState(false);
   const [isTestingWan, setIsTestingWan] = useState(false);
   const [isTestingAnymail, setIsTestingAnymail] = useState(false);
+  const [isTestingHunter, setIsTestingHunter] = useState(false);
   const [qwenTestMsg, setQwenTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [anymailTestMsg, setAnymailTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [hunterTestMsg, setHunterTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [wanTestMsg, setWanTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [ytLink, setYtLink] = useState('');
   const [isUploading, setIsUploading] = useState(false);
@@ -396,6 +398,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
       alert(text);
     } finally {
       setIsTestingAnymail(false);
+    }
+  };
+
+  const handleTestHunter = async () => {
+    if (!hunterApiKey.trim()) {
+      const msg = '请先填写 Hunter.io API Key';
+      setHunterTestMsg({ ok: false, text: msg });
+      alert(msg);
+      return;
+    }
+    localStorage.setItem('trade_scout_hunter_api_key', hunterApiKey.trim());
+    setIsTestingHunter(true);
+    setHunterTestMsg({ ok: true, text: '正在测试 Hunter.io（最长约 20 秒）…' });
+    try {
+      const result = await testHunterApiKey(hunterApiKey.trim());
+      setHunterTestMsg({ ok: result.success, text: result.message });
+      alert(result.message);
+    } catch (e: any) {
+      const text = `Hunter.io 测试异常: ${e?.message || String(e)}`;
+      setHunterTestMsg({ ok: false, text });
+      alert(text);
+    } finally {
+      setIsTestingHunter(false);
     }
   };
 
@@ -907,18 +932,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                   <div className="flex items-center gap-2 text-violet-800 font-black text-sm">
                     <Mail size={16} /> 第三方邮箱搜索 API
                   </div>
-                  <p className="text-[10px] text-slate-400 font-bold">
-                    决策人邮箱优先用 AnymailFinder「公司域名搜索」（1 积分最多 20 个已验证邮箱，与官网预览一致）；再联网补职位/领英。Hunter / Findymail 仅作补充。结果会标注来源与是否已验证。
+                  <p className="text-[10px] text-slate-500 font-bold leading-relaxed">
+                    决策人邮箱优先用 AnymailFinder「公司域名搜索」（1 积分最多 20 个已验证邮箱）；若 Anymail 未找到任何联系人，再自动回退 Hunter.io。Hunter 额度用尽时静默跳过、不报错。Findymail 仅作可选补充。结果会标注来源与是否已验证。
                   </p>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="md:col-span-2">
-                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Hunter.io API Key（可选补充）</label>
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Hunter.io API Key（Anymail 无结果时回退）</label>
                       <input
                         type="password"
                         value={hunterApiKey}
                         onChange={e => setHunterApiKey(e.target.value)}
                         placeholder="hunter.io 控制台获取"
-                        className="w-full bg-white border border-violet-100 rounded-xl px-4 py-3 font-bold text-sm"
+                        className="w-full bg-white border border-violet-100 rounded-xl px-4 py-3 font-bold text-sm text-slate-950"
                       />
                     </div>
                     <div>
@@ -928,7 +953,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                         value={findymailApiKey}
                         onChange={e => setFindymailApiKey(e.target.value)}
                         placeholder="app.findymail.com"
-                        className="w-full bg-white border border-violet-100 rounded-xl px-4 py-3 font-bold text-sm"
+                        className="w-full bg-white border border-violet-100 rounded-xl px-4 py-3 font-bold text-sm text-slate-950"
                       />
                     </div>
                     <div>
@@ -938,23 +963,37 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                         value={anymailFinderApiKey}
                         onChange={e => setAnymailFinderApiKey(e.target.value)}
                         placeholder="anymailfinder.com"
-                        className="w-full bg-white border border-violet-100 rounded-xl px-4 py-3 font-bold text-sm"
+                        className="w-full bg-white border border-violet-100 rounded-xl px-4 py-3 font-bold text-sm text-slate-950"
                       />
                     </div>
                   </div>
-                  <div className="flex justify-end">
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={handleTestHunter}
+                      disabled={isTestingHunter}
+                      className="bg-slate-800 hover:bg-slate-900 text-white px-5 py-3 rounded-xl font-black flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      {isTestingHunter ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} fill="currentColor" />}
+                      测试 Hunter.io
+                    </button>
                     <button
                       type="button"
                       onClick={handleTestAnymail}
                       disabled={isTestingAnymail}
-                      className="bg-violet-600 hover:bg-violet-700 text-white px-6 py-3 rounded-xl font-black flex items-center justify-center gap-2 disabled:opacity-50"
+                      className="bg-violet-600 hover:bg-violet-700 text-white px-5 py-3 rounded-xl font-black flex items-center justify-center gap-2 disabled:opacity-50"
                     >
                       {isTestingAnymail ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} fill="currentColor" />}
                       测试 AnymailFinder
                     </button>
                   </div>
+                  {hunterTestMsg && (
+                    <p className={`text-xs font-bold mt-2 ${hunterTestMsg.ok ? 'text-slate-700' : 'text-rose-600'}`}>
+                      {hunterTestMsg.text}
+                    </p>
+                  )}
                   {anymailTestMsg && (
-                    <p className={`text-xs font-bold mt-3 ${anymailTestMsg.ok ? 'text-violet-700' : 'text-rose-600'}`}>
+                    <p className={`text-xs font-bold mt-2 ${anymailTestMsg.ok ? 'text-violet-700' : 'text-rose-600'}`}>
                       {anymailTestMsg.text}
                     </p>
                   )}

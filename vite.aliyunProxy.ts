@@ -181,6 +181,7 @@ export function aliyunDevProxyPlugin(fallbackOrigin = 'https://dashscope.aliyunc
       });
 
       mountOriginProxy(server, '/anymail-api', () => 'https://api.anymailfinder.com');
+      mountOriginProxy(server, '/hunter-api', () => 'https://api.hunter.io');
     },
   };
 }
