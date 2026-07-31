@@ -39,7 +39,7 @@ import { AccessGate } from './components/AccessGate';
 import { loadUsersWithMigration, loadUsersFromStorage, saveUsersToStorage, getUsersUpdatedAt } from './services/auth';
 import { AdminDashboard } from './components/AdminDashboard';
 import { 
-  LayoutDashboard, PackageSearch, Users, PenTool, Network, Search, Loader2, Menu, Globe, Zap, FileSpreadsheet, History, Clock, ChevronRight, AlertTriangle, RefreshCw, LogOut, Briefcase, Ruler, CheckCircle2, Hourglass, StopCircle, PlayCircle, Layers, Mail, Cloud, Download, Info, Link2, X, Database, Github, Image, Trash2
+  LayoutDashboard, PackageSearch, Users, PenTool, Network, Search, Loader2, Menu, Globe, Zap, FileSpreadsheet, History, Clock, ChevronRight, AlertTriangle, RefreshCw, LogOut, Briefcase, Ruler, CheckCircle2, Hourglass, StopCircle, PlayCircle, Layers, Mail, Cloud, Download, Info, Link2, X, Database, Github, Image, Trash2, Ban
 } from 'lucide-react';
 import {
   addExcludedCompany,
@@ -759,14 +759,14 @@ const App: React.FC = () => {
     });
   };
 
-  /** 标记为非目标客户：排除名单 + 删除当前历史报告 */
+  /** 仅排除：下次搜索跳过，不删除当前报告 */
   const handleExcludeCurrentCompany = async () => {
     const data = analysisDataRef.current;
     if (!data?.companyInfo) return;
     const name = data.companyInfo.name || '';
     const website = data.companyInfo.website || domainInput || '';
     const ok = window.confirm(
-      `确认排除「${name || website}」？\n\n之后客户搜索将自动跳过该域名/公司名，避免浪费 Token。\n当前背调报告也会从历史中移除。`
+      `确认排除「${name || website}」？\n\n之后客户搜索会自动跳过该公司/域名，避免浪费 Token。\n当前背调报告仍保留，可自行再点「删除」。`
     );
     if (!ok) return;
     try {
@@ -775,6 +775,23 @@ const App: React.FC = () => {
         name,
         reason: '非目标客户（背调页手动排除）',
       });
+      alert('已加入排除名单。下次搜索将自动过滤；如需移除本页报告，请再点「删除」。');
+    } catch (e: any) {
+      alert(`排除失败: ${e?.message || String(e)}`);
+    }
+  };
+
+  /** 仅删除当前背调报告（不加入排除名单） */
+  const handleDeleteCurrentReport = async () => {
+    const data = analysisDataRef.current;
+    if (!data?.companyInfo) return;
+    const name = data.companyInfo.name || data.companyInfo.website || '当前报告';
+    const website = data.companyInfo.website || domainInput || '';
+    const ok = window.confirm(
+      `确认删除「${name}」的背调报告？\n\n不会加入排除名单，以后搜索仍可能再次出现。`
+    );
+    if (!ok) return;
+    try {
       const hid = viewingHistoryIdRef.current;
       if (hid) {
         await deleteHistoryItem(hid);
@@ -785,9 +802,16 @@ const App: React.FC = () => {
         }
         setHistory((prev) => prev.filter((h) => h.id !== hid));
       } else {
-        const domainKey = (website || '').toLowerCase().replace(/^(?:https?:\/\/)?(?:www\.)?/i, '').split('/')[0];
+        const domainKey = (website || '')
+          .toLowerCase()
+          .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
+          .split('/')[0];
         const match = historyRef.current.find(
-          (h) => (h.domain || '').toLowerCase().replace(/^(?:https?:\/\/)?(?:www\.)?/i, '').split('/')[0] === domainKey
+          (h) =>
+            (h.domain || '')
+              .toLowerCase()
+              .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
+              .split('/')[0] === domainKey
         );
         if (match) {
           await deleteHistoryItem(match.id);
@@ -803,9 +827,9 @@ const App: React.FC = () => {
       setViewingHistoryId(null);
       setDomainInput('');
       setActiveModule(ModuleType.DISCOVERY);
-      alert('已排除该客户。下次搜索将自动过滤，不再浪费 Token。');
+      alert('已删除该背调报告。');
     } catch (e: any) {
-      alert(`排除失败: ${e?.message || String(e)}`);
+      alert(`删除失败: ${e?.message || String(e)}`);
     }
   };
 
@@ -1686,14 +1710,24 @@ const App: React.FC = () => {
                               <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-slate-900 tracking-tight break-words min-w-0">
                                 {analysisData.companyInfo?.name || '未知公司'}
                               </h2>
-                              <button
-                                type="button"
-                                onClick={() => void handleExcludeCurrentCompany()}
-                                title="排除非目标客户（下次搜索自动跳过）"
-                                className="mt-1 sm:mt-2 inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-600 px-3 py-1.5 text-xs font-black flex-shrink-0 touch-manipulation"
-                              >
-                                <Trash2 size={14} /> 排除客户
-                              </button>
+                              <div className="mt-1 sm:mt-2 flex items-center gap-2 flex-shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => void handleExcludeCurrentCompany()}
+                                  title="仅排除：下次搜索跳过，报告仍保留"
+                                  className="inline-flex items-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800 px-3 py-1.5 text-xs font-black touch-manipulation"
+                                >
+                                  <Ban size={14} /> 排除
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleDeleteCurrentReport()}
+                                  title="仅删除本报告：不加入排除名单"
+                                  className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-600 px-3 py-1.5 text-xs font-black touch-manipulation"
+                                >
+                                  <Trash2 size={14} /> 删除
+                                </button>
+                              </div>
                             </div>
                             <a href={websiteHref(analysisData.companyInfo?.website)} target="_blank" rel="noreferrer" className="text-cyan-600 font-semibold mt-2 hover:underline text-sm sm:text-base break-all">{analysisData.companyInfo?.website || '—'}</a>
                             {(analysisData.searchKeyword || analysisData.searchTags?.length) && (
