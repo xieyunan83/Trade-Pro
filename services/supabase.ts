@@ -140,6 +140,8 @@ export const getApiConfig = async (provider: string): Promise<ApiConfig | null> 
 
 /** 内部用：账号密码云端同步（勿当普通 API 展示） */
 export const APP_USERS_PROVIDER = '__app_users__'
+/** 内部用：已排除客户名单 */
+export const EXCLUDED_COMPANIES_PROVIDER = '__excluded_companies__'
 
 export const getAllApiConfigs = async (): Promise<ApiConfig[]> => {
   if (!isSupabaseConfigured()) return []
@@ -151,7 +153,7 @@ export const getAllApiConfigs = async (): Promise<ApiConfig[]> => {
     if (error || !data) return []
     
     return data
-      .filter((d) => d.provider !== APP_USERS_PROVIDER)
+      .filter((d) => d.provider !== APP_USERS_PROVIDER && d.provider !== EXCLUDED_COMPANIES_PROVIDER)
       .map(d => ({
         provider: d.provider,
         apiKey: decrypt(d.encrypted_key),

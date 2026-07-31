@@ -183,6 +183,8 @@ export interface DecisionMaker {
   yearsActive?: string;
   emailGuess?: string;
   phone?: string;
+  /** WhatsApp / 移动端联系方式（公开信息） */
+  whatsapp?: string;
   linkedin?: string;
   type: 'CEO' | 'Buyer' | 'Other';
   /** 联系人发现来源（AI / 平台域名搜索等） */

@@ -51,6 +51,7 @@ const emptyDecisionMaker = (): DecisionMaker => ({
   yearsActive: '',
   emailGuess: '',
   phone: '',
+  whatsapp: '',
   linkedin: '',
   type: 'Buyer',
   source: 'Manual',
@@ -70,7 +71,11 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
   onUpdate,
   onEnqueueEmailSearch,
 }) => {
-  const [decisionMakers, setDecisionMakers] = useState(data.decisionMakers || []);
+  const [decisionMakers, setDecisionMakers] = useState(() =>
+    (data.decisionMakers || []).filter(
+      (d) => !!(d.phone || '').trim() || !!(d.whatsapp || '').trim() || !!(d.emailGuess || '').includes('@')
+    )
+  );
   const [lastSearchAt, setLastSearchAt] = useState(data.decisionMakerEmailSearchAt);
   const [searchHistory, setSearchHistory] = useState<number[]>(
     data.decisionMakerEmailSearchHistory || (data.decisionMakerEmailSearchAt ? [data.decisionMakerEmailSearchAt] : [])
@@ -82,7 +87,14 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
   const lastAppliedJobIdRef = React.useRef<string | null>(null);
 
   useEffect(() => {
-    setDecisionMakers(data.decisionMakers || []);
+    setDecisionMakers(
+      (data.decisionMakers || []).filter(
+        (d) =>
+          !!(d.phone || '').trim() ||
+          !!(d.whatsapp || '').trim() ||
+          !!(d.emailGuess || '').includes('@')
+      )
+    );
     setLastSearchAt(data.decisionMakerEmailSearchAt);
     setSearchHistory(
       data.decisionMakerEmailSearchHistory ||
@@ -526,6 +538,7 @@ const DecisionMakerCard: React.FC<{
       yearsActive: (draft.yearsActive || '').trim() || undefined,
       emailGuess: (draft.emailGuess || '').trim() || undefined,
       phone: (draft.phone || '').trim() || undefined,
+      whatsapp: (draft.whatsapp || '').trim() || undefined,
       linkedin: (draft.linkedin || '').trim() || undefined,
       source: 'Manual',
       emailSource: draft.emailGuess?.trim() ? 'Manual' : undefined,
@@ -560,16 +573,19 @@ const DecisionMakerCard: React.FC<{
         </div>
         <div className="flex flex-col items-end gap-2 flex-shrink-0">
           <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black ${typeBadge(dm.type)}`}>{dm.type}</span>
-          {verify.ok ? (
-            <div className="bg-green-100 text-green-600 p-1.5 rounded-lg" title="已验证"><UserCheck size={16} /></div>
-          ) : (
-            <div className="bg-yellow-100 text-yellow-600 p-1.5 rounded-lg" title="待验证"><AlertTriangle size={16} /></div>
-          )}
+          {dm.emailGuess ? (
+            verify.ok ? (
+              <div className="bg-green-100 text-green-600 p-1.5 rounded-lg" title="已验证"><UserCheck size={16} /></div>
+            ) : (
+              <div className="bg-yellow-100 text-yellow-600 p-1.5 rounded-lg" title="待验证"><AlertTriangle size={16} /></div>
+            )
+          ) : null}
         </div>
       </div>
       
       <div className="space-y-2.5 mt-4">
         {!isEditing ? (
+          dm.emailGuess || canViewEmails ? (
           <div className="flex items-center justify-between p-3 bg-white rounded-xl border border-slate-100 gap-2">
             <div className="flex items-center gap-2 overflow-hidden min-w-0">
               <Mail size={14} className="text-slate-400 shrink-0" />
@@ -593,6 +609,11 @@ const DecisionMakerCard: React.FC<{
               )}
             </div>
           </div>
+          ) : (
+            <div className="flex justify-end">
+              <button onClick={() => setIsEditing(true)} className="text-[10px] font-black text-slate-400 hover:text-blue-600">编辑全部</button>
+            </div>
+          )
         ) : (
           <div className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -625,6 +646,9 @@ const DecisionMakerCard: React.FC<{
               </Field>
               <Field label="电话">
                 <input value={draft.phone || ''} onChange={(e) => updateDraft('phone', e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium" />
+              </Field>
+              <Field label="WhatsApp">
+                <input value={draft.whatsapp || ''} onChange={(e) => updateDraft('whatsapp', e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium" placeholder="+49... 或号码" />
               </Field>
               <Field label="LinkedIn">
                 <input value={draft.linkedin || ''} onChange={(e) => updateDraft('linkedin', e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium" />
@@ -675,22 +699,24 @@ const DecisionMakerCard: React.FC<{
           </div>
         )}
 
+        {dm.emailGuess ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-violet-50 border border-violet-100">
             <Mail size={12} className="text-violet-500 flex-shrink-0" />
             <div className="min-w-0">
               <div className="text-[9px] font-black text-violet-400 uppercase">邮箱来源平台</div>
-              <div className="text-[11px] font-black text-violet-800 truncate">{dm.emailGuess ? emailPlatform : '—'}</div>
+              <div className="text-[11px] font-black text-violet-800 truncate">{emailPlatform}</div>
             </div>
           </div>
           <div className={`flex items-center gap-2 px-3 py-2 rounded-xl border ${verify.ok ? 'bg-emerald-50 border-emerald-100' : 'bg-amber-50 border-amber-100'}`}>
             {verify.ok ? <ShieldCheck size={12} className="text-emerald-600 flex-shrink-0" /> : <ShieldAlert size={12} className="text-amber-600 flex-shrink-0" />}
             <div className="min-w-0">
               <div className={`text-[9px] font-black uppercase ${verify.ok ? 'text-emerald-500' : 'text-amber-500'}`}>验证状态</div>
-              <div className={`text-[11px] font-black truncate ${verify.ok ? 'text-emerald-800' : 'text-amber-800'}`}>{dm.emailGuess ? verify.text : '—'}</div>
+              <div className={`text-[11px] font-black truncate ${verify.ok ? 'text-emerald-800' : 'text-amber-800'}`}>{verify.text}</div>
             </div>
           </div>
         </div>
+        ) : null}
 
         {dm.lastEmailCheckedAt ? (
           <div className="text-[10px] font-bold text-slate-400 px-1">
@@ -701,6 +727,12 @@ const DecisionMakerCard: React.FC<{
         {dm.phone && (
           <div className="flex items-center gap-2 p-3 bg-white rounded-xl border border-slate-100 text-xs font-bold text-slate-600">
             <Phone size={14} className="text-slate-400" /> {dm.phone}
+          </div>
+        )}
+
+        {dm.whatsapp && (
+          <div className="flex items-center gap-2 p-3 bg-emerald-50 rounded-xl border border-emerald-100 text-xs font-bold text-emerald-800">
+            <Phone size={14} className="text-emerald-600" /> WhatsApp: {dm.whatsapp}
           </div>
         )}
 
@@ -717,11 +749,7 @@ const DecisionMakerCard: React.FC<{
             </div>
             <ExternalLink size={12} className="text-blue-400 flex-shrink-0" />
           </a>
-        ) : (
-          <div className="flex items-center gap-2 p-3 bg-white rounded-xl border border-dashed border-slate-200 text-xs font-bold text-slate-400">
-            <Briefcase size={14} /> 未找到可靠 LinkedIn（已避免编造）
-          </div>
-        )}
+        ) : null}
       </div>
       
       <div className="mt-4 flex items-center justify-between gap-2">

@@ -101,7 +101,12 @@ export const normalizeAnalysisResult = (raw: unknown): AnalysisResult => {
     socials: ai.socials && typeof ai.socials === 'object' ? ai.socials : {},
     products: asArray(ai.products),
     marketTrends: asStr(ai.marketTrends, 'N/A'),
-    decisionMakers: asArray<DecisionMaker>(ai.decisionMakers),
+    decisionMakers: asArray<DecisionMaker>(ai.decisionMakers).filter(
+      (d) =>
+        !!(d.phone || '').trim() ||
+        !!(d.whatsapp || '').trim() ||
+        !!(d.emailGuess || '').includes('@')
+    ),
     decisionMakerEmailSearchAt: ai.decisionMakerEmailSearchAt,
     decisionMakerEmailSearchHistory: asArray<number>(ai.decisionMakerEmailSearchHistory),
     searchKeyword: ai.searchKeyword,

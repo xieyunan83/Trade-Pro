@@ -39,8 +39,12 @@ import { AccessGate } from './components/AccessGate';
 import { loadUsersWithMigration, loadUsersFromStorage, saveUsersToStorage, getUsersUpdatedAt } from './services/auth';
 import { AdminDashboard } from './components/AdminDashboard';
 import { 
-  LayoutDashboard, PackageSearch, Users, PenTool, Network, Search, Loader2, Menu, Globe, Zap, FileSpreadsheet, History, Clock, ChevronRight, AlertTriangle, RefreshCw, LogOut, Briefcase, Ruler, CheckCircle2, Hourglass, StopCircle, PlayCircle, Layers, Mail, Cloud, Download, Info, Link2, X, Database, Github, Image
+  LayoutDashboard, PackageSearch, Users, PenTool, Network, Search, Loader2, Menu, Globe, Zap, FileSpreadsheet, History, Clock, ChevronRight, AlertTriangle, RefreshCw, LogOut, Briefcase, Ruler, CheckCircle2, Hourglass, StopCircle, PlayCircle, Layers, Mail, Cloud, Download, Info, Link2, X, Database, Github, Image, Trash2
 } from 'lucide-react';
+import {
+  addExcludedCompany,
+  hydrateExcludedCompaniesFromCloud,
+} from './services/excludedCompanies';
 
 declare global {
   interface AIStudio {
@@ -402,6 +406,10 @@ const App: React.FC = () => {
                     const apiReady = await hydrateApiConfigsFromCloud();
                     if (!cancelled && apiReady) setHasKey(true);
                 }
+                // 排除名单：管理员与普通用户都同步，搜索时跳过非目标客户
+                hydrateExcludedCompaniesFromCloud().catch((e) =>
+                  console.warn('excluded companies hydrate failed', e)
+                );
 
                 if (!cancelled) setIsKBSyncing(true);
                 try {
@@ -749,6 +757,56 @@ const App: React.FC = () => {
       }
       return next;
     });
+  };
+
+  /** 标记为非目标客户：排除名单 + 删除当前历史报告 */
+  const handleExcludeCurrentCompany = async () => {
+    const data = analysisDataRef.current;
+    if (!data?.companyInfo) return;
+    const name = data.companyInfo.name || '';
+    const website = data.companyInfo.website || domainInput || '';
+    const ok = window.confirm(
+      `确认排除「${name || website}」？\n\n之后客户搜索将自动跳过该域名/公司名，避免浪费 Token。\n当前背调报告也会从历史中移除。`
+    );
+    if (!ok) return;
+    try {
+      await addExcludedCompany({
+        domain: website,
+        name,
+        reason: '非目标客户（背调页手动排除）',
+      });
+      const hid = viewingHistoryIdRef.current;
+      if (hid) {
+        await deleteHistoryItem(hid);
+        try {
+          await deleteInvestigationHistory(hid);
+        } catch {
+          /* cloud optional */
+        }
+        setHistory((prev) => prev.filter((h) => h.id !== hid));
+      } else {
+        const domainKey = (website || '').toLowerCase().replace(/^(?:https?:\/\/)?(?:www\.)?/i, '').split('/')[0];
+        const match = historyRef.current.find(
+          (h) => (h.domain || '').toLowerCase().replace(/^(?:https?:\/\/)?(?:www\.)?/i, '').split('/')[0] === domainKey
+        );
+        if (match) {
+          await deleteHistoryItem(match.id);
+          try {
+            await deleteInvestigationHistory(match.id);
+          } catch {
+            /* ignore */
+          }
+          setHistory((prev) => prev.filter((h) => h.id !== match.id));
+        }
+      }
+      setAnalysisData(null);
+      setViewingHistoryId(null);
+      setDomainInput('');
+      setActiveModule(ModuleType.DISCOVERY);
+      alert('已排除该客户。下次搜索将自动过滤，不再浪费 Token。');
+    } catch (e: any) {
+      alert(`排除失败: ${e?.message || String(e)}`);
+    }
   };
 
   /** 将当前报告的决策人邮箱搜索加入后台队列（可并行、不挡浏览） */
@@ -1624,7 +1682,19 @@ const App: React.FC = () => {
                     <div className="mb-6 sm:mb-8 flex flex-col md:flex-row md:items-end justify-between gap-4 bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-panel">
                         <div className="min-w-0">
                             <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-600 mb-1">Target Profile</div>
-                            <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-slate-900 tracking-tight break-words">{analysisData.companyInfo?.name || '未知公司'}</h2>
+                            <div className="flex items-start gap-2 sm:gap-3 flex-wrap">
+                              <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-slate-900 tracking-tight break-words min-w-0">
+                                {analysisData.companyInfo?.name || '未知公司'}
+                              </h2>
+                              <button
+                                type="button"
+                                onClick={() => void handleExcludeCurrentCompany()}
+                                title="排除非目标客户（下次搜索自动跳过）"
+                                className="mt-1 sm:mt-2 inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-600 px-3 py-1.5 text-xs font-black flex-shrink-0 touch-manipulation"
+                              >
+                                <Trash2 size={14} /> 排除客户
+                              </button>
+                            </div>
                             <a href={websiteHref(analysisData.companyInfo?.website)} target="_blank" rel="noreferrer" className="text-cyan-600 font-semibold mt-2 hover:underline text-sm sm:text-base break-all">{analysisData.companyInfo?.website || '—'}</a>
                             {(analysisData.searchKeyword || analysisData.searchTags?.length) && (
                               <div className="flex flex-wrap gap-1.5 mt-3">

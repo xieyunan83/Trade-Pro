@@ -23,6 +23,7 @@ import {
   gatherIdentityEvidence,
   testAnysearchConnection,
 } from './anysearchService';
+import { filterExcludedSearchResults } from './excludedCompanies';
 
 const NATIVE_MODEL = 'gemini-3-pro-preview';
 
@@ -705,7 +706,10 @@ ${roster}
 5. 采购/买手/品类/供应链 → type=Buyer；CEO/Founder/Owner/President → CEO；其它 Other。
 
 严格返回 JSON 数组（与输入人数相同、顺序一致）：
-[{"email":"...","fullName":"","firstName":"","lastName":"","title":"","linkedin":"","type":"CEO|Buyer|Other","influenceScore":1-5}]
+[{"email":"...","fullName":"","firstName":"","lastName":"","title":"","phone":"","whatsapp":"","linkedin":"","type":"CEO|Buyer|Other","influenceScore":1-5}]
+规则补充：
+- phone / whatsapp 仅填公开可查到的号码（官网 Contact、名片、新闻）；查不到留空，不要编造。
+- WhatsApp 可为国际号码格式或 wa.me 链接中的号码。
 只输出 JSON，不要 markdown。`;
 
   try {
@@ -736,6 +740,8 @@ ${roster}
       const firstName = String(row.firstName || '').trim() || undefined;
       const lastName = String(row.lastName || '').trim() || undefined;
       const linkedin = String(row.linkedin || '').trim();
+      const phone = String(row.phone || '').trim();
+      const whatsapp = String(row.whatsapp || '').trim();
       const typeRaw = String(row.type || '').trim();
       const type: DecisionMaker['type'] =
         typeRaw === 'CEO' || typeRaw === 'Buyer'
@@ -759,10 +765,12 @@ ${roster}
             : '';
       return {
         ...c,
-        name: preferName || (isIncompletePersonName(c.name) ? c.name : c.name),
+        name: preferName || c.name,
         firstName: firstName || c.firstName,
         lastName: lastName || c.lastName,
         title: title && !isWeakJobTitle(title) ? title : isWeakJobTitle(c.title) ? title || c.title : c.title,
+        phone: phone || c.phone,
+        whatsapp: whatsapp || c.whatsapp,
         linkedin: linkedin && /linkedin\.com\/in\//i.test(linkedin) ? linkedin : c.linkedin,
         type,
         influenceScore,
@@ -2180,21 +2188,14 @@ ${evidenceBlock}
      - Certifications (CE, FDA, UL, BSCI, ISO, REACH, GRS, OEKO-TEX, etc.) if mentioned on site or news
      - Preferred Incoterms / MOQ / buying season if found
      - Risk level (低/中/高/未知) + short notes (sanctions/adverse media only if real evidence)
-  4. DECISION MAKERS — procurement first, NO artificial 5-person cap (CRITICAL):
-     - Start from the company LinkedIn People/Employees list. Collect EVERY real person whose title matches
-       Procurement / Purchasing / Sourcing / Buyer / Category / Merchandising / Supply Chain / Import.
-     - Also mine website About/Team/Contact pages for the same roles.
-     - Return as many REAL procurement people as found (often 3–30+). Do NOT stop at 5.
-     - Include Owner/CEO/Founder only as secondary (max 2) if useful for outreach.
-     - Require firstName, lastName, full name, title, department if possible
-     - Real personal LinkedIn URL (linkedin.com/in/...) when searchable; otherwise leave empty (do NOT invent)
-     - ONLY fill emailGuess when you have a REAL publicly listed email for that person.
-       If name is unknown, set name to "公开信息未找到" and leave emailGuess EMPTY.
-       NEVER invent departmental mailbox patterns (e.g. purchasing@, sourcing.toys@) without a real person name.
-     - phone if public; yearsActive if known; influenceScore 1-5 (Buyer highest)
-     - type must be CEO | Buyer | Other — mark procurement roles as Buyer
-     - System will NOT search Anymail during due diligence. Leave emailGuess empty unless a real public email is known.
-       User will trigger decision-maker email search later after confirming the lead.
+  4. DECISION MAKERS — ONLY include people with a REAL full name AND at least one of: public phone, email, or personal LinkedIn.
+     - Do NOT invent placeholder people with name "公开信息未找到" and empty contact fields.
+     - Prefer fewer high-quality contacts over many empty cards.
+     - Include public phone / WhatsApp / mobile when found on website Contact pages.
+     - Procurement / Purchasing / Sourcing / Buyer first; CEO/Founder secondary (max 2).
+     - If no verifiable contacts, return decisionMakers: [].
+     - NEVER invent emails. Leave emailGuess empty unless publicly listed.
+     - phone / whatsapp only when publicly listed; otherwise leave empty.
   5. Products, pricing, SWOT, traffic estimates, competitors, action plan for Chinese suppliers.
 ${productFocusBlock}
   6. Financial trends last 5 years — estimate if needed, never all zeros.
@@ -2239,7 +2240,7 @@ ${productFocusBlock}
     "socials": { "linkedin": "", "facebook": "", "instagram": "", "youtube": "" },
     "products": [{ "name": "", "retailPrice": "", "retailPriceCNY": 0, "estimatedFOBPriceCNY": 0, "imageUrl": "", "competitorLink": "", "pricingStrategy": "", "pitchPoint": "", "techSpecs": "", "features": "", "colors": "", "packaging": "", "keywordMatch": false }],
     "marketTrends": "",
-    "decisionMakers": [{ "firstName": "", "lastName": "", "name": "", "title": "", "department": "", "emailGuess": "", "phone": "", "linkedin": "", "yearsActive": "", "type": "Buyer", "source": "AI", "isVerified": false, "influenceScore": 4 }],
+    "decisionMakers": [{ "firstName": "", "lastName": "", "name": "", "title": "", "department": "", "emailGuess": "", "phone": "", "whatsapp": "", "linkedin": "", "yearsActive": "", "type": "Buyer", "source": "AI", "isVerified": false, "influenceScore": 4 }],
     "strategy": { "buyingOfficeLocation": "", "actionPlan": [] },
     "similarCompanies": [{ "name": "", "website": "", "country": "", "mainProducts": "" }]
   }
@@ -2332,29 +2333,41 @@ ${productFocusBlock}
         keywordMatch: !!p.keywordMatch,
     })),
     marketTrends: aiResult.marketTrends || "N/A",
-    decisionMakers: (aiResult.decisionMakers || []).map((dm: any) => {
-      const name = dm.name || [dm.firstName, dm.lastName].filter(Boolean).join(' ') || '';
-      const placeholder = isPlaceholderPersonName(name) && !dm.firstName;
-      // 无真实姓名时清空 AI 瞎编的部门邮箱，避免后面拿去 verify 白烧积分
-      const emailGuess = placeholder ? '' : (dm.emailGuess || '');
-      return {
-        ...dm,
-        name: name || '公开信息未找到',
-        type: dm.type === 'CEO' || dm.type === 'Buyer' ? dm.type : classifyDecisionMakerType(dm.title || ''),
-        source: 'AI' as const,
-        emailGuess,
-        emailSource: emailGuess ? (dm.emailSource || 'AI') : undefined,
-        emailStatus: emailGuess ? 'unverified' : undefined,
-        isVerified: false,
-        influenceScore:
-          dm.influenceScore ||
-          (classifyDecisionMakerType(dm.title || '') === 'Buyer'
-            ? 5
-            : classifyDecisionMakerType(dm.title || '') === 'CEO'
-              ? 4
-              : 2),
-      };
-    }),
+    decisionMakers: (aiResult.decisionMakers || [])
+      .map((dm: any) => {
+        const name = dm.name || [dm.firstName, dm.lastName].filter(Boolean).join(' ') || '';
+        const placeholder = isPlaceholderPersonName(name) && !dm.firstName;
+        const emailGuess = placeholder ? '' : (dm.emailGuess || '');
+        const phone = String(dm.phone || '').trim() || undefined;
+        const whatsapp = String(dm.whatsapp || '').trim() || undefined;
+        return {
+          ...dm,
+          name: name || '公开信息未找到',
+          type: dm.type === 'CEO' || dm.type === 'Buyer' ? dm.type : classifyDecisionMakerType(dm.title || ''),
+          source: 'AI' as const,
+          emailGuess,
+          emailSource: emailGuess ? (dm.emailSource || 'AI') : undefined,
+          emailStatus: emailGuess ? 'unverified' : undefined,
+          phone,
+          whatsapp,
+          isVerified: false,
+          influenceScore:
+            dm.influenceScore ||
+            (classifyDecisionMakerType(dm.title || '') === 'Buyer'
+              ? 5
+              : classifyDecisionMakerType(dm.title || '') === 'CEO'
+                ? 4
+                : 2),
+        };
+      })
+      // 背调阶段不展示空壳联系人；有电话/邮箱/WhatsApp 的保留
+      .filter((dm: DecisionMaker) => {
+        const hasPhone = !!(dm.phone || '').trim();
+        const hasWhatsapp = !!(dm.whatsapp || '').trim();
+        const hasEmail = !!(dm.emailGuess || '').includes('@');
+        if (hasPhone || hasWhatsapp || hasEmail) return true;
+        return false;
+      }),
     strategy: {
       buyingOfficeLocation: aiResult.strategy?.buyingOfficeLocation || "N/A",
       actionPlan: aiResult.strategy?.actionPlan || []
@@ -2533,27 +2546,30 @@ export const searchPotentialClients = async (productKeyword: string, country: st
     }
   }
 
-  return results.map((r: any) => ({
-    name: r.name || 'Unknown',
-    website: r.website || '',
-    description: r.description || '',
-    country: r.country || (isVagueMarketCountry(country) ? '' : country) || '',
-    clientType: r.clientType || clientType || '',
-    mainProducts: r.mainProducts || '',
-    estimatedScale: r.estimatedScale || '',
-    city: r.city || '',
-    linkedinCompanyUrl: r.linkedinCompanyUrl || '',
-    contactHint: r.contactHint || '',
-    fitScore: typeof r.fitScore === 'number' ? r.fitScore : undefined,
-    fitReason: r.fitReason || '',
-    searchKeyword: productKeyword || undefined,
-    // Prefer company country from result; never force Global as identity country
-    searchCountry:
-      r.country ||
-      (countries.find((c) => !isVagueMarketCountry(c)) ||
-        (!isVagueMarketCountry(country) ? country : '') ||
-        undefined),
-  })).sort((a: ClientSearchResult, b: ClientSearchResult) => (b.fitScore || 0) - (a.fitScore || 0));
+  return filterExcludedSearchResults(
+    results
+      .map((r: any) => ({
+        name: r.name || 'Unknown',
+        website: r.website || '',
+        description: r.description || '',
+        country: r.country || (isVagueMarketCountry(country) ? '' : country) || '',
+        clientType: r.clientType || clientType || '',
+        mainProducts: r.mainProducts || '',
+        estimatedScale: r.estimatedScale || '',
+        city: r.city || '',
+        linkedinCompanyUrl: r.linkedinCompanyUrl || '',
+        contactHint: r.contactHint || '',
+        fitScore: typeof r.fitScore === 'number' ? r.fitScore : undefined,
+        fitReason: r.fitReason || '',
+        searchKeyword: productKeyword || undefined,
+        searchCountry:
+          r.country ||
+          (countries.find((c) => !isVagueMarketCountry(c)) ||
+            (!isVagueMarketCountry(country) ? country : '') ||
+            undefined),
+      }))
+      .sort((a: ClientSearchResult, b: ClientSearchResult) => (b.fitScore || 0) - (a.fitScore || 0))
+  );
 };
 
 export const streamStrategyChat = async function* (
