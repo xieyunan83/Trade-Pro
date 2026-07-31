@@ -1,5 +1,9 @@
 import { ClientSearchResult } from '../types';
 
+/** Global / 全球等非具体国家：不能盖住结果里的真实国家 */
+const isNonSpecificCountry = (c?: string) =>
+  !c?.trim() || /^(global|worldwide|international|国际|全球|不限)$/i.test(c.trim());
+
 /** 为搜索结果打上来源标签（关键词 / 国家 / 类型） */
 export const stampSearchResults = (
   results: ClientSearchResult[],
@@ -13,9 +17,12 @@ export const stampSearchResults = (
   const keyword = (opts.keyword || '').trim();
   const targetCountry = (opts.targetCountry || '').trim();
   const types = (opts.clientTypes || []).filter(Boolean);
+  const specificTarget = isNonSpecificCountry(targetCountry) ? '' : targetCountry;
 
   return results.map((r) => {
-    const countryTag = (r.country || targetCountry || '').trim();
+    // Prefer the company's own country from search; never stamp "Global" over Poland etc.
+    const companyCountry = (r.country || '').trim();
+    const countryTag = (companyCountry || specificTarget || '').trim();
     const tags = [
       keyword ? `关键词:${keyword}` : '',
       countryTag ? `国家:${countryTag}` : '',
@@ -28,10 +35,10 @@ export const stampSearchResults = (
     return {
       ...r,
       searchKeyword: keyword || r.searchKeyword,
-      searchCountry: targetCountry || r.country || r.searchCountry,
+      searchCountry: companyCountry || specificTarget || r.searchCountry || undefined,
       searchTags: unique.length ? unique : r.searchTags,
       searchId: opts.searchId,
-      country: r.country || targetCountry,
+      country: companyCountry || specificTarget || r.country,
     };
   });
 };

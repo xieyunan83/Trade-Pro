@@ -64,6 +64,13 @@ Your goal is to provide deep, actionable insights for Chinese export suppliers.
 You MUST use 联网搜索 (web search) to find REAL, CURRENT information about companies, websites, and markets.
 DO NOT hallucinate. If data is unavailable, say "公开信息未找到".
 
+IDENTITY RULES (CRITICAL — never break these):
+1. The TARGET DOMAIN / official website is the single source of truth for company identity.
+2. Headquarters, city, and country MUST come from that company's official site (Contact / About / Footer / Impressum / company registry linked from the site), LinkedIn company page for THAT domain, or reputable filings naming that exact legal entity.
+3. NEVER confuse two companies that share a similar brand name but operate in different countries (e.g. Polish SMYK smyk.com in Warsaw ≠ any Russian retailer with a similar name).
+4. If the user provides a target market/country context, HQ must be consistent with the official entity on the given domain. If public sources conflict, prefer the official website of the given domain and state the conflict briefly.
+5. Do NOT invent locations, shipment IDs, emails, or LinkedIn URLs.
+
 LANGUAGE REQUIREMENT:
 All descriptive text MUST be in SIMPLIFIED CHINESE (简体中文). 
 Do NOT use English for descriptions unless it is a proper noun (like a specific company name or product model).
@@ -1813,6 +1820,156 @@ export const generateConsolidatedEmailStrategy = async (clients: AnalysisResult[
     };
 };
 
+
+/** Country aliases for HQ vs search-market conflict checks */
+const COUNTRY_ALIAS_GROUPS: string[][] = [
+  ['poland', 'polish', 'polska', '波兰', '华沙', 'warsaw', 'warszawa'],
+  ['russia', 'russian', 'россия', '俄罗斯', '俄国', '莫斯科', 'moscow', 'москва'],
+  ['germany', 'german', 'deutschland', '德国', 'berlin'],
+  ['france', 'french', '法国', 'paris'],
+  ['italy', 'italian', '意大利', 'rome', 'milan'],
+  ['spain', 'spanish', '西班牙', 'madrid', 'barcelona'],
+  ['uk', 'united kingdom', 'britain', 'england', '英国', 'london'],
+  ['usa', 'united states', 'america', '美国', 'new york', 'california'],
+  ['china', '中国', 'beijing', 'shanghai', 'shenzhen', 'guangzhou'],
+  ['japan', '日本', 'tokyo', 'osaka'],
+  ['korea', 'south korea', '韩国', 'seoul'],
+  ['india', '印度', 'mumbai', 'delhi'],
+  ['brazil', '巴西', 'sao paulo', 'são paulo'],
+  ['mexico', '墨西哥', 'mexico city'],
+  ['turkey', '土耳其', 'istanbul', 'ankara'],
+  ['netherlands', 'holland', '荷兰', 'amsterdam'],
+  ['belgium', '比利时', 'brussels'],
+  ['czech', 'czechia', 'czech republic', '捷克', 'prague', 'praha'],
+  ['romania', '罗马尼亚', 'bucharest'],
+  ['hungary', '匈牙利', 'budapest'],
+  ['ukraine', '乌克兰', 'kyiv', 'kiev'],
+  ['australia', '澳大利亚', 'sydney', 'melbourne'],
+  ['canada', '加拿大', 'toronto', 'vancouver'],
+];
+
+const normalizeGeoText = (s?: string) =>
+  (s || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').trim();
+
+const isVagueMarketCountry = (c?: string) =>
+  !c?.trim() || /global|worldwide|international|国际|全球|不限/i.test(c.trim());
+
+const geoGroupIndex = (text: string): number => {
+  const n = normalizeGeoText(text);
+  if (!n) return -1;
+  for (let i = 0; i < COUNTRY_ALIAS_GROUPS.length; i++) {
+    if (COUNTRY_ALIAS_GROUPS[i].some((a) => n.includes(a))) return i;
+  }
+  return -1;
+};
+
+const hqConflictsWithSearchCountry = (hq?: string, city?: string, searchCountry?: string): boolean => {
+  if (isVagueMarketCountry(searchCountry)) return false;
+  const market = geoGroupIndex(searchCountry || '');
+  if (market < 0) return false;
+  const loc = geoGroupIndex(`${hq || ''} ${city || ''}`);
+  if (loc < 0) return false;
+  return loc !== market;
+};
+
+/**
+ * Second-pass identity verification: official domain wins over namesake brands.
+ * Overwrites HQ/city/description when web search contradicts the first pass.
+ */
+const verifyCompanyIdentity = async (
+  result: AnalysisResult,
+  canonicalDomain: string,
+  searchCountry?: string
+): Promise<AnalysisResult> => {
+  if (!canonicalDomain || canonicalDomain === 'unknown' || !canonicalDomain.includes('.')) {
+    return result;
+  }
+
+  const info = result.companyInfo;
+  const prompt = `
+IDENTITY VERIFICATION (联网搜索，强制以官网为准)
+
+Canonical domain (唯一身份主键): ${canonicalDomain}
+Official website URL to verify: https://${canonicalDomain}
+Search market hint (may be empty/Global): ${searchCountry || 'N/A'}
+Current (possibly wrong) draft:
+- Company: ${info.name}
+- HQ: ${info.headquarters || 'N/A'}
+- City: ${info.city || 'N/A'}
+- Description: ${(info.description || '').slice(0, 320)}
+
+TASK:
+1. Search/open the OFFICIAL site of ${canonicalDomain} (About, Contact, Footer, Impressum, legal / company info).
+2. Confirm legal entity name, headquarters city & country for THAT domain only.
+3. REJECT any other company that merely shares a similar brand name in another country.
+   Example: smyk.com = SMYK (Poland, Warsaw) — NOT a Russian retailer with a similar name / Moscow HQ.
+4. If draft HQ/city/country/description conflicts with the official site, overwrite with official facts.
+5. Rewrite description in Simplified Chinese to match the verified entity (max 2 sentences).
+   Geography in the description MUST match verified HQ (do not say Russia if HQ is Poland).
+
+Output JSON only:
+{
+  "verified": true,
+  "companyName": "...",
+  "headquarters": "City, Country",
+  "city": "...",
+  "description": "简体中文...",
+  "corrected": true/false,
+  "reason": "简短说明"
+}
+`;
+
+  try {
+    const text = await generateContentUnified('analysis', prompt, SYSTEM_INSTRUCTION, true);
+    const v = extractJson(text) as Record<string, any>;
+    if (!v || v.verified === false) return result;
+
+    const next: AnalysisResult = {
+      ...result,
+      companyInfo: { ...result.companyInfo },
+    };
+    let changed = false;
+
+    if (v.companyName && String(v.companyName).trim()) {
+      next.companyInfo.name = String(v.companyName).trim();
+      changed = true;
+    }
+    if (v.headquarters && String(v.headquarters).trim()) {
+      next.companyInfo.headquarters = String(v.headquarters).trim();
+      changed = true;
+    }
+    if (v.city && String(v.city).trim()) {
+      next.companyInfo.city = String(v.city).trim();
+      changed = true;
+    }
+    if (v.description && String(v.description).trim()) {
+      next.companyInfo.description = String(v.description).trim();
+      changed = true;
+    }
+
+    // Keep website bound to canonical domain
+    next.companyInfo.website = canonicalDomain;
+
+    if (hqConflictsWithSearchCountry(next.companyInfo.headquarters, next.companyInfo.city, searchCountry)) {
+      console.warn('[verifyCompanyIdentity] HQ still conflicts with search country; clearing HQ/city');
+      next.companyInfo.headquarters = '公开信息待核实';
+      next.companyInfo.city = '';
+      changed = true;
+    }
+
+    if (changed || v.corrected) {
+      console.log('[verifyCompanyIdentity]', canonicalDomain, v.reason || 'updated', {
+        hq: next.companyInfo.headquarters,
+        city: next.companyInfo.city,
+      });
+    }
+    return next;
+  } catch (e) {
+    console.warn('[verifyCompanyIdentity] failed, keeping first-pass result', e);
+    return result;
+  }
+};
+
 export const analyzeCompany = async (
   domainOrName: string,
   mode: 'detailed' | 'economy' = 'detailed',
@@ -1820,6 +1977,11 @@ export const analyzeCompany = async (
 ): Promise<AnalysisResult> => {
   const searchKeyword = (opts?.searchKeyword || '').trim();
   const searchCountry = (opts?.searchCountry || '').trim();
+  const rawInput = (domainOrName || '').trim();
+  const canonicalDomain = cleanDomain(rawInput).toLowerCase();
+  const hasDomain = Boolean(canonicalDomain && canonicalDomain.includes('.') && !/\s/.test(canonicalDomain));
+  const identityDomain = hasDomain ? canonicalDomain : rawInput;
+
   const productFocusBlock = searchKeyword
     ? `
   PRODUCT FOCUS (CRITICAL — user found this client via keyword search "${searchKeyword}"):
@@ -1829,7 +1991,7 @@ export const analyzeCompany = async (
   - productSummary.recommendedProducts / marketPreference / featureAnalysis MUST center on "${searchKeyword}" opportunity for Chinese exporters.
   - businessScope.relevantProducts should list SKUs or categories matching "${searchKeyword}".
   - If the company barely sells this keyword category, still analyze adjacent/related lines and say so clearly.
-  ${searchCountry ? `- Search target market context: ${searchCountry}.` : ''}
+  ${searchCountry && !isVagueMarketCountry(searchCountry) ? `- Search target market context: ${searchCountry}.` : ''}
 `
     : `
   PRODUCT FOCUS:
@@ -1837,16 +1999,26 @@ export const analyzeCompany = async (
   - Set keywordMatch=false (no active search keyword).
 `;
 
+  const identityBlock = `
+  IDENTITY LOCK (CRITICAL — wrong HQ destroys the whole report):
+  - Canonical domain / identity primary key: "${identityDomain}"
+  - Analyze ONLY the legal entity that owns/operates this domain. Official site About/Contact/Footer/Impressum wins over directories.
+  - NEVER mix same-name brands across countries. Example: smyk.com = SMYK Poland (Warsaw) — NOT Moscow/Russia.
+  - headquarters + city MUST match the official entity on this domain. If unverifiable, use "公开信息未找到" — NEVER guess another country's capital.
+  ${searchCountry && !isVagueMarketCountry(searchCountry) ? `- Lead market hint: ${searchCountry}. Prefer the entity of this domain that matches this market; still do not invent HQ.` : '- No specific market hint (or Global): still bind identity strictly to the domain above.'}
+`;
+
   const prompt = `
-  Target: "${domainOrName}".
+  Target: "${rawInput}".
   Task: DEEP B2B FOREIGN-TRADE DUE DILIGENCE for Chinese exporters selling to this buyer/importer.
 ${searchKeyword ? `  Discovery source keyword: "${searchKeyword}". Tag this report with that search source.` : ''}
+${identityBlock}
 
-  You MUST use web search. Prefer official website, LinkedIn company page, trade directories, exhibition pages,
+  You MUST use web search. Prefer official website of ${identityDomain}, LinkedIn company page for THAT domain, trade directories, exhibition pages,
   ImportYeti / Bill of Lading public indexes, news, certification pages. If a fact is unknown, write "公开信息未找到" — NEVER invent customs shipment IDs.
 
   Action checklist:
-  1. Company identity: legal/trading name, HQ city, founded year, nature (importer/distributor/retailer/brand/manufacturer), scale, employees.
+  1. Company identity: legal/trading name, HQ city+country (verified for ${identityDomain}), founded year, nature (importer/distributor/retailer/brand/manufacturer), scale, employees. Description geography MUST match HQ.
   2. Business model: channels, distributors, ecommerce, exhibitions, procurement habits, supply-chain role.
   3. TRADE INTELLIGENCE (critical for exporters):
      - HS codes / product categories they likely import
@@ -1925,14 +2097,16 @@ ${productFocusBlock}
   const aiResult = extractJson(text);
   
   // Merge Defaults
-  const result: AnalysisResult = {
+  let result: AnalysisResult = {
     companyInfo: {
       name: aiResult.companyInfo?.name || domainOrName || "Unknown",
       headquarters: aiResult.companyInfo?.headquarters || "N/A",
       foundedYear: aiResult.companyInfo?.foundedYear || "N/A",
       nature: aiResult.companyInfo?.nature || "N/A",
       scale: aiResult.companyInfo?.scale || "N/A",
-      website: aiResult.companyInfo?.website || "N/A",
+      website: hasDomain
+        ? canonicalDomain
+        : (aiResult.companyInfo?.website || "N/A"),
       description: aiResult.companyInfo?.description || "N/A",
       employeeRange: aiResult.companyInfo?.employeeRange || "",
       city: aiResult.companyInfo?.city || "",
@@ -2055,7 +2229,29 @@ ${productFocusBlock}
       .sort((a, b) => Number(!!b.keywordMatch) - Number(!!a.keywordMatch));
   }
 
-  // 2. 背调阶段不调用 Anymail、不自动生成开发信（开发信由用户在策略模块按需手动生成）
+  // 2. Domain-bound identity verification (fixes namesake / wrong-country HQ)
+  if (hasDomain) {
+    result = await verifyCompanyIdentity(result, canonicalDomain, searchCountry);
+  }
+
+  // Final safety: never leave a conflicting HQ after verification
+  if (
+    hqConflictsWithSearchCountry(
+      result.companyInfo.headquarters,
+      result.companyInfo.city,
+      searchCountry
+    )
+  ) {
+    console.warn('[analyzeCompany] Post-verify HQ conflict; blanking HQ', {
+      hq: result.companyInfo.headquarters,
+      city: result.companyInfo.city,
+      searchCountry,
+    });
+    result.companyInfo.headquarters = '公开信息待核实';
+    result.companyInfo.city = '';
+  }
+
+  // 3. 背调阶段不调用 Anymail、不自动生成开发信（开发信由用户在策略模块按需手动生成）
   result.decisionMakers = rankDecisionMakers(result.decisionMakers);
 
   return result;
@@ -2135,6 +2331,8 @@ export const searchPotentialClients = async (productKeyword: string, country: st
   - fitScore 1-5; description / fitReason / mainProducts in Simplified Chinese.
   - Do NOT invent emails.
   - Keep each field concise (1 short sentence max for description/fitReason).
+  - country / city MUST match the legal entity that owns the website domain (official HQ). Never confuse same-name brands across countries (e.g. smyk.com = Poland/Warsaw, not Russia/Moscow).
+  - If search market is Global/worldwide, still return each company's REAL HQ country — do not write "Global" as country.
 
   Return a valid JSON Array ONLY:
   [{
@@ -2186,7 +2384,7 @@ export const searchPotentialClients = async (productKeyword: string, country: st
     name: r.name || 'Unknown',
     website: r.website || '',
     description: r.description || '',
-    country: r.country || country || '',
+    country: r.country || (isVagueMarketCountry(country) ? '' : country) || '',
     clientType: r.clientType || clientType || '',
     mainProducts: r.mainProducts || '',
     estimatedScale: r.estimatedScale || '',
@@ -2196,7 +2394,12 @@ export const searchPotentialClients = async (productKeyword: string, country: st
     fitScore: typeof r.fitScore === 'number' ? r.fitScore : undefined,
     fitReason: r.fitReason || '',
     searchKeyword: productKeyword || undefined,
-    searchCountry: countries[0] || country || undefined,
+    // Prefer company country from result; never force Global as identity country
+    searchCountry:
+      r.country ||
+      (countries.find((c) => !isVagueMarketCountry(c)) ||
+        (!isVagueMarketCountry(country) ? country : '') ||
+        undefined),
   })).sort((a: ClientSearchResult, b: ClientSearchResult) => (b.fitScore || 0) - (a.fitScore || 0));
 };
 

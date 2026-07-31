@@ -95,6 +95,8 @@ const App: React.FC = () => {
   const [batchModalOpen, setBatchModalOpen] = useState(false);
   const [pendingBatch, setPendingBatch] = useState<string[]>([]);
   const [pendingBatchContext, setPendingBatchContext] = useState<string>('');
+  /** Per-domain country hints for batch 背调 (avoids hardcoding Global) */
+  const [pendingBatchCountries, setPendingBatchCountries] = useState<Record<string, string>>({});
   
   const [cloudModalOpen, setCloudModalOpen] = useState(false);
   const [manualToken, setManualToken] = useState('');
@@ -593,22 +595,40 @@ const App: React.FC = () => {
             alert('你没有「批量背调」权限，请联系管理员或部门主管开通。');
             return;
           }
-          setPendingBatch(lines); setPendingBatchContext('Manual Input'); setBatchModalOpen(true);
+          setPendingBatch(lines);
+          setPendingBatchContext('Manual Input');
+          setPendingBatchCountries({});
+          setBatchModalOpen(true);
       }
   };
 
-  const performSingleAnalysis = async (domain: string) => {
+  const performSingleAnalysis = async (
+    domain: string,
+    override?: { searchKeyword?: string; searchTags?: string[]; searchCountry?: string }
+  ) => {
     setLoading(true); setErrorMsg(null); setActiveModule(ModuleType.BACKGROUND); setMobileMenuOpen(false);
     try {
-      const keyword = (discoveryState.product || '').trim();
+      const keyword = (override?.searchKeyword || discoveryState.product || '').trim();
       if (keyword) addCustomKeyword(keyword);
-      const tags = keyword
-        ? buildSearchTags(keyword, discoveryState.countries?.[0] || discoveryState.country || '')
-        : undefined;
+      const countryHint = (
+        override?.searchCountry ||
+        discoveryState.countries?.[0] ||
+        discoveryState.country ||
+        ''
+      ).trim();
+      const specificCountry = /^(global|worldwide|international|国际|全球|不限)$/i.test(countryHint)
+        ? ''
+        : countryHint;
+      const tags =
+        override?.searchTags?.length
+          ? override.searchTags
+          : keyword
+            ? buildSearchTags(keyword, specificCountry)
+            : undefined;
       const result = await analyzeCompany(domain, 'economy', {
         searchKeyword: keyword || undefined,
         searchTags: tags,
-        searchCountry: discoveryState.countries?.[0] || discoveryState.country || undefined,
+        searchCountry: specificCountry || undefined,
       });
       setAnalysisData(result);
       incrementUsage('analysis');
@@ -1103,7 +1123,16 @@ const App: React.FC = () => {
       // 保留关键词标签到批量上下文
       const kw = results[0]?.searchKeyword || discoveryState.product || 'Discovery Batch';
       setPendingBatch(results.map(r => r.website)); 
-      setPendingBatchContext(kw); 
+      setPendingBatchContext(kw);
+      const countryMap: Record<string, string> = {};
+      for (const r of results) {
+        const key = (r.website || '').toLowerCase();
+        const c = (r.country || r.searchCountry || '').trim();
+        if (key && c && !/^(global|worldwide|international|国际|全球|不限)$/i.test(c)) {
+          countryMap[key] = c;
+        }
+      }
+      setPendingBatchCountries(countryMap);
       setBatchModalOpen(true); 
   };
   
@@ -1112,7 +1141,16 @@ const App: React.FC = () => {
       const targets = clients.map(c => c.website || c.name); 
       const kw = clients.find((c) => c.searchKeyword)?.searchKeyword || discoveryState.product || 'CRM Batch';
       setPendingBatch(targets); 
-      setPendingBatchContext(kw); 
+      setPendingBatchContext(kw);
+      const countryMap: Record<string, string> = {};
+      for (const c of clients) {
+        const key = (c.website || c.name || '').toLowerCase();
+        const country = (c.country || '').trim();
+        if (key && country && !/^(global|worldwide|international|国际|全球|不限)$/i.test(country)) {
+          countryMap[key] = country;
+        }
+      }
+      setPendingBatchCountries(countryMap);
       if (kw && kw !== 'CRM Batch') {
         setDiscoveryState((prev) => ({ ...prev, product: kw }));
         addCustomKeyword(kw);
@@ -1132,18 +1170,24 @@ const App: React.FC = () => {
       if (kw && kw !== 'Manual Input' && kw !== 'CRM Batch' && kw !== 'Discovery Batch') {
         addCustomKeyword(kw);
       }
+      const discoveryCountry = (discoveryState.countries?.[0] || discoveryState.country || '').trim();
+      const fallbackCountry =
+        discoveryCountry && !/^(global|worldwide|international|国际|全球|不限)$/i.test(discoveryCountry)
+          ? discoveryCountry
+          : '';
       const newTasks: AutomationResult[] = pendingBatch.map(target => stampOwnership({ 
           id: Math.random().toString(36).substr(2, 9), 
           clientName: target, 
           website: target, 
-          country: 'Global', 
+          country: pendingBatchCountries[target.toLowerCase()] || fallbackCountry || '', 
           status: 'pending', 
           productContext: pendingBatchContext, 
           productImages: [], 
           mode: mode,
           keyword: kw || undefined,
           createdAt: Date.now(),
-      })); 
+      }));
+      setPendingBatchCountries({}); 
       
       setAutomationResults(prev => [...prev, ...newTasks]); 
       for (const task of newTasks) { 
@@ -1488,14 +1532,35 @@ const App: React.FC = () => {
                         onSearchArchived={handleSearchArchived}
                         onSelect={(item) => {
                           const domain = typeof item === 'string' ? item : (item.website || item.name);
-                          const kw = typeof item === 'string' ? discoveryState.product : (item.searchKeyword || discoveryState.product);
-                          if (kw && !discoveryState.product) {
-                            setDiscoveryState(prev => ({ ...prev, product: kw }));
-                          } else if (kw && kw !== discoveryState.product) {
-                            setDiscoveryState(prev => ({ ...prev, product: kw }));
+                          const kw =
+                            typeof item === 'string'
+                              ? discoveryState.product
+                              : (item.searchKeyword || discoveryState.product);
+                          // Prefer company country from the search hit; avoid "Global" masking Poland etc.
+                          const countryFromItem =
+                            typeof item === 'string'
+                              ? ''
+                              : (item.country || item.searchCountry || item.city || '').trim();
+                          const tags =
+                            typeof item === 'string' ? undefined : item.searchTags;
+                          if (kw && kw !== discoveryState.product) {
+                            setDiscoveryState((prev) => ({ ...prev, product: kw }));
                           }
                           setDomainInput(domain);
-                          handleAnalyzeInput(domain);
+                          if (!hasPermission(currentUser, 'feature.analyze_company')) {
+                            alert('你没有「单次背调」权限，请联系管理员或部门主管开通。');
+                            return;
+                          }
+                          const limit = checkLimit('analysis');
+                          if (!limit.allowed) {
+                            alert(`今日背调次数已达上限（${limit.current}/${limit.max}）。请联系管理员提高限额，或明日再试。`);
+                            return;
+                          }
+                          performSingleAnalysis(domain, {
+                            searchKeyword: kw || undefined,
+                            searchCountry: countryFromItem || undefined,
+                            searchTags: tags,
+                          });
                         }} 
                         onBatchAddToCRM={handleBatchAddToCRM}
                         onBatchAnalyze={handleBatchAnalyzeExisting}
