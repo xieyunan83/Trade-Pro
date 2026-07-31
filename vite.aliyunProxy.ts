@@ -44,10 +44,17 @@ async function resolveHostname(hostname: string): Promise<{ address: string; via
   }
 }
 
+type MountProxyOptions = {
+  /** 若请求未带 Authorization，注入服务端 Key（如 AnySearch） */
+  injectAuthorization?: () => string | undefined;
+  extraHeaders?: Record<string, string>;
+};
+
 function mountOriginProxy(
   server: ViteDevServer,
   mountPath: string,
-  resolveOrigin: (req: IncomingMessage) => string
+  resolveOrigin: (req: IncomingMessage) => string,
+  options?: MountProxyOptions
 ) {
   server.middlewares.use(mountPath, (req, res) => {
     let origin = resolveOrigin(req).replace(/\/$/, '');
@@ -98,6 +105,15 @@ function mountOriginProxy(
         headers['content-length'] = body.length;
         if (!headers['content-type'] && body.length) {
           headers['content-type'] = 'application/json';
+        }
+        if (options?.extraHeaders) {
+          for (const [k, v] of Object.entries(options.extraHeaders)) {
+            if (!headers[k.toLowerCase()]) headers[k] = v;
+          }
+        }
+        if (!headers.authorization && !headers.Authorization) {
+          const injected = options?.injectAuthorization?.();
+          if (injected) headers.authorization = injected;
         }
 
         const proxyReq = lib.request(
@@ -167,8 +183,12 @@ function mountOriginProxy(
  * 开发环境代理：
  * - /qwen-api → 阿里云（X-Qwen-Origin 动态路由）
  * - /anymail-api → api.anymailfinder.com（解决浏览器 CORS Failed to fetch）
+ * - /anysearch-api → api.anysearch.com（背调身份补全；Key 从 env 注入）
  */
-export function aliyunDevProxyPlugin(fallbackOrigin = 'https://dashscope.aliyuncs.com'): Plugin {
+export function aliyunDevProxyPlugin(
+  fallbackOrigin = 'https://dashscope.aliyuncs.com',
+  opts?: { anysearchApiKey?: string }
+): Plugin {
   return {
     name: 'aliyun-dev-proxy',
     configureServer(server: ViteDevServer) {
@@ -182,6 +202,13 @@ export function aliyunDevProxyPlugin(fallbackOrigin = 'https://dashscope.aliyunc
 
       mountOriginProxy(server, '/anymail-api', () => 'https://api.anymailfinder.com');
       mountOriginProxy(server, '/hunter-api', () => 'https://api.hunter.io');
+      mountOriginProxy(server, '/anysearch-api', () => 'https://api.anysearch.com', {
+        extraHeaders: { 'X-Anysearch-Client': 'trade-pro/1.0' },
+        injectAuthorization: () => {
+          const k = (opts?.anysearchApiKey || process.env.ANYSEARCH_API_KEY || '').trim();
+          return k ? `Bearer ${k.replace(/^Bearer\s+/i, '')}` : undefined;
+        },
+      });
     },
   };
 }

@@ -16,8 +16,16 @@ export default defineConfig(({ mode }) => {
     /* keep default */
   }
 
+  // 供 Vite 代理注入 AnySearch（勿 define 进浏览器包）
+  if (env.ANYSEARCH_API_KEY) {
+    process.env.ANYSEARCH_API_KEY = env.ANYSEARCH_API_KEY;
+  }
+
   return {
-    plugins: [react(), aliyunDevProxyPlugin(fallbackOrigin)],
+    plugins: [
+      react(),
+      aliyunDevProxyPlugin(fallbackOrigin, { anysearchApiKey: env.ANYSEARCH_API_KEY || '' }),
+    ],
     build: {
       sourcemap: false,
       minify: 'esbuild',

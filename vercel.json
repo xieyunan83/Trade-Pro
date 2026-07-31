@@ -25,14 +25,20 @@
     "api/hunter.ts": {
       "maxDuration": 30,
       "memory": 256
+    },
+    "api/anysearch.ts": {
+      "maxDuration": 60,
+      "memory": 256
     }
   },
   "rewrites": [
     { "source": "/qwen-api/:path*", "destination": "/api/qwen?__upstream=/:path*" },
     { "source": "/anymail-api/:path*", "destination": "/api/anymail?__upstream=/:path*" },
     { "source": "/hunter-api/:path*", "destination": "/api/hunter?__upstream=/:path*" },
+    { "source": "/anysearch-api/:path*", "destination": "/api/anysearch" },
     { "source": "/api/qwen-api/:path*", "destination": "/api/qwen?__upstream=/:path*" },
     { "source": "/api/anymail-api/:path*", "destination": "/api/anymail?__upstream=/:path*" },
-    { "source": "/api/hunter-api/:path*", "destination": "/api/hunter?__upstream=/:path*" }
+    { "source": "/api/hunter-api/:path*", "destination": "/api/hunter?__upstream=/:path*" },
+    { "source": "/api/anysearch-api/:path*", "destination": "/api/anysearch" }
   ]
 }

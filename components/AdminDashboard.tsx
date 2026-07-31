@@ -8,7 +8,7 @@ import {
   Youtube, Music, Video, FileSpreadsheet, FilePieChart, FileCode, Image, Mail, Building2
 } from 'lucide-react';
 import { getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/db';
-import { testApiKey, testQwenApiKey, testAnymailFinderApiKey, testHunterApiKey } from '../services/geminiService';
+import { testApiKey, testQwenApiKey, testAnymailFinderApiKey, testHunterApiKey, testAnysearchApiKey } from '../services/geminiService';
 import { testWanImageApi } from '../services/wanImageService';
 import { saveApiConfig, getApiConfig, isSupabaseConfigured, saveKnowledgeFile, getKnowledgeFiles, deleteKnowledgeFile, resetSupabaseClient, testSupabaseConnection } from '../services/supabase';
 import { getSupabaseConfig, saveSupabaseConfig, clearSupabaseOverride, saveEmailSearchKeys, getEmailSearchKeys, env } from '../services/env';
@@ -91,10 +91,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const [isTestingWan, setIsTestingWan] = useState(false);
   const [isTestingAnymail, setIsTestingAnymail] = useState(false);
   const [isTestingHunter, setIsTestingHunter] = useState(false);
+  const [isTestingAnysearch, setIsTestingAnysearch] = useState(false);
   const [isSavingConfigs, setIsSavingConfigs] = useState(false);
   const [qwenTestMsg, setQwenTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [anymailTestMsg, setAnymailTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [hunterTestMsg, setHunterTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [anysearchTestMsg, setAnysearchTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [wanTestMsg, setWanTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [saveConfigMsg, setSaveConfigMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [ytLink, setYtLink] = useState('');
@@ -476,6 +478,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
       alert(text);
     } finally {
       setIsTestingHunter(false);
+    }
+  };
+
+  const handleTestAnysearch = async () => {
+    setIsTestingAnysearch(true);
+    setAnysearchTestMsg({ ok: true, text: '正在测试 AnySearch（最长约 40 秒）…' });
+    try {
+      const result = await testAnysearchApiKey();
+      setAnysearchTestMsg({ ok: result.success, text: result.message });
+      alert(result.message);
+    } catch (e: any) {
+      const text = `AnySearch 测试异常: ${e?.message || String(e)}`;
+      setAnysearchTestMsg({ ok: false, text });
+      alert(text);
+    } finally {
+      setIsTestingAnysearch(false);
     }
   };
 
@@ -1060,6 +1078,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                   {anymailTestMsg && (
                     <p className={`text-xs font-bold mt-2 ${anymailTestMsg.ok ? 'text-violet-700' : 'text-rose-600'}`}>
                       {anymailTestMsg.text}
+                    </p>
+                  )}
+                </div>
+
+                <div className="bg-cyan-50/40 border border-cyan-100 rounded-2xl p-6 space-y-3">
+                  <div className="flex items-center gap-2 text-cyan-800 font-black text-sm">
+                    <Globe size={16} /> AnySearch 背调身份补全
+                  </div>
+                  <p className="text-[10px] text-slate-500 font-bold leading-relaxed">
+                    背调前自动用 AnySearch 抽取官网页面（extract）并并行检索总部线索（batch_search），降低同名品牌错国风险。
+                    Key 放在环境变量 <code className="bg-white px-1 rounded">ANYSEARCH_API_KEY</code>（本地 .env.local / Vercel Env），不会进浏览器包。
+                  </p>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={handleTestAnysearch}
+                      disabled={isTestingAnysearch}
+                      className="bg-cyan-600 hover:bg-cyan-700 text-white px-5 py-3 rounded-xl font-black flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      {isTestingAnysearch ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} fill="currentColor" />}
+                      测试 AnySearch
+                    </button>
+                  </div>
+                  {anysearchTestMsg && (
+                    <p className={`text-xs font-bold ${anysearchTestMsg.ok ? 'text-cyan-800' : 'text-rose-600'}`}>
+                      {anysearchTestMsg.text}
                     </p>
                   )}
                 </div>

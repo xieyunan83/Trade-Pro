@@ -18,6 +18,7 @@ import {
   DEFAULT_TOKEN_PLAN_ORIGIN,
 } from './qwenProxy';
 import { env, getEmailSearchKeys } from './env';
+import { gatherIdentityEvidence, testAnysearchConnection } from './anysearchService';
 
 const NATIVE_MODEL = 'gemini-3-pro-preview';
 
@@ -1075,6 +1076,12 @@ export const testAnymailFinderApiKey = async (
   }
 };
 
+/** 后台测试 AnySearch（背调身份补全；Key 由服务端/本地代理从 ANYSEARCH_API_KEY 注入） */
+export const testAnysearchApiKey = async (): Promise<{ success: boolean; message: string }> => {
+  const r = await testAnysearchConnection();
+  return { success: r.ok, message: r.message };
+};
+
 /** 后台测试 Hunter.io Key（读账户额度，短超时） */
 export const testHunterApiKey = async (
   apiKey: string
@@ -1879,13 +1886,21 @@ const hqConflictsWithSearchCountry = (hq?: string, city?: string, searchCountry?
 const verifyCompanyIdentity = async (
   result: AnalysisResult,
   canonicalDomain: string,
-  searchCountry?: string
+  searchCountry?: string,
+  identityEvidence?: string
 ): Promise<AnalysisResult> => {
   if (!canonicalDomain || canonicalDomain === 'unknown' || !canonicalDomain.includes('.')) {
     return result;
   }
 
   const info = result.companyInfo;
+  const evidenceBlock = identityEvidence?.trim()
+    ? `
+GROUND-TRUTH EVIDENCE from AnySearch (MUST prefer this over draft / third-party mix-ups):
+${identityEvidence.trim()}
+`
+    : '';
+
   const prompt = `
 IDENTITY VERIFICATION (联网搜索，强制以官网为准)
 
@@ -1897,13 +1912,13 @@ Current (possibly wrong) draft:
 - HQ: ${info.headquarters || 'N/A'}
 - City: ${info.city || 'N/A'}
 - Description: ${(info.description || '').slice(0, 320)}
-
+${evidenceBlock}
 TASK:
-1. Search/open the OFFICIAL site of ${canonicalDomain} (About, Contact, Footer, Impressum, legal / company info).
+1. Use the AnySearch evidence above FIRST (official page extract + search snippets). Then web-search if needed.
 2. Confirm legal entity name, headquarters city & country for THAT domain only.
 3. REJECT any other company that merely shares a similar brand name in another country.
    Example: smyk.com = SMYK (Poland, Warsaw) — NOT a Russian retailer with a similar name / Moscow HQ.
-4. If draft HQ/city/country/description conflicts with the official site, overwrite with official facts.
+4. If draft HQ/city/country/description conflicts with the official site / evidence, overwrite with official facts.
 5. Rewrite description in Simplified Chinese to match the verified entity (max 2 sentences).
    Geography in the description MUST match verified HQ (do not say Russia if HQ is Poland).
 
@@ -2008,14 +2023,40 @@ export const analyzeCompany = async (
   ${searchCountry && !isVagueMarketCountry(searchCountry) ? `- Lead market hint: ${searchCountry}. Prefer the entity of this domain that matches this market; still do not invent HQ.` : '- No specific market hint (or Global): still bind identity strictly to the domain above.'}
 `;
 
+  // AnySearch 身份证据（官网 extract + batch_search）；失败则软跳过
+  let identityEvidence = '';
+  if (hasDomain) {
+    try {
+      identityEvidence = await gatherIdentityEvidence(canonicalDomain, {
+        companyHint: rawInput,
+        searchCountry: searchCountry || undefined,
+      });
+      if (identityEvidence) {
+        console.log('[analyzeCompany] AnySearch identity evidence chars:', identityEvidence.length);
+      }
+    } catch (e) {
+      console.warn('[analyzeCompany] AnySearch evidence skipped', e);
+    }
+  }
+
+  const evidenceBlock = identityEvidence
+    ? `
+  === ANYSEARCH GROUND TRUTH (highest priority for name / HQ / city / country / description geography) ===
+  ${identityEvidence}
+  === END ANYSEARCH EVIDENCE ===
+`
+    : '';
+
   const prompt = `
   Target: "${rawInput}".
   Task: DEEP B2B FOREIGN-TRADE DUE DILIGENCE for Chinese exporters selling to this buyer/importer.
 ${searchKeyword ? `  Discovery source keyword: "${searchKeyword}". Tag this report with that search source.` : ''}
 ${identityBlock}
+${evidenceBlock}
 
   You MUST use web search. Prefer official website of ${identityDomain}, LinkedIn company page for THAT domain, trade directories, exhibition pages,
   ImportYeti / Bill of Lading public indexes, news, certification pages. If a fact is unknown, write "公开信息未找到" — NEVER invent customs shipment IDs.
+  When AnySearch evidence is present, treat official page extracts as ground truth for headquarters/city/country.
 
   Action checklist:
   1. Company identity: legal/trading name, HQ city+country (verified for ${identityDomain}), founded year, nature (importer/distributor/retailer/brand/manufacturer), scale, employees. Description geography MUST match HQ.
@@ -2231,7 +2272,7 @@ ${productFocusBlock}
 
   // 2. Domain-bound identity verification (fixes namesake / wrong-country HQ)
   if (hasDomain) {
-    result = await verifyCompanyIdentity(result, canonicalDomain, searchCountry);
+    result = await verifyCompanyIdentity(result, canonicalDomain, searchCountry, identityEvidence);
   }
 
   // Final safety: never leave a conflicting HQ after verification
