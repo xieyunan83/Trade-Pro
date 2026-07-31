@@ -1607,8 +1607,22 @@ const callQwenChat = async (
     return await runOnce(searchPayload);
   } catch (err: any) {
     const msg = String(err?.message || '');
-    const isTimeout = /超时|timeout|AbortError/i.test(msg);
+    const isTimeout = /超时|timeout|AbortError|504|Gateway Timeout|上游超时/i.test(msg);
     const is546 = /546|WORKER_RESOURCE|云端代理算力不足/i.test(msg);
+
+    // 客户搜索/背调：超时后先再试一次联网（代理已加长，避免立刻丢掉联网）
+    if (
+      options.enableSearch &&
+      isTimeout &&
+      (options.task === 'search' || options.task === 'analysis')
+    ) {
+      console.warn('[Qwen] 联网超时/504，联网重试一次…');
+      try {
+        return await runOnce(qwenSearchPayload(true, false));
+      } catch (retryErr: any) {
+        console.warn('[Qwen] 联网重试仍失败:', retryErr?.message || retryErr);
+      }
+    }
 
     // 线上代理超时 / 546：降级为不联网再试一次（保证功能可用）
     const degradeNoSearch =
@@ -2098,6 +2112,8 @@ ${JSON.stringify(summary, null, 2)}`;
 export const searchPotentialClients = async (productKeyword: string, country: string, industry: string = '', clientType: string = '', limit: number = 15): Promise<ClientSearchResult[]> => {
   const countries = country.split(/[,，;/|]+/).map(s => s.trim()).filter(Boolean);
   const types = clientType.split(/[,，;/|]+/).map(s => s.trim()).filter(Boolean);
+  // 单次请求控制体量，降低联网超时概率（多类型时仍覆盖，但条数略减）
+  const effectiveLimit = Math.min(Math.max(limit, 5), types.length > 2 ? 10 : 12);
   const marketHint = countries.length
     ? `these target markets (cover as many as possible): ${countries.join(', ')}`
     : 'relevant global target markets';
@@ -2115,7 +2131,7 @@ export const searchPotentialClients = async (productKeyword: string, country: st
 
   Rules:
   - Only real companies with active websites. Prefer B2B buyers.
-  - Return up to ${limit} diverse targets (no duplicates).
+  - Return up to ${effectiveLimit} diverse targets (no duplicates). Prefer speed: shorter fields.
   - fitScore 1-5; description / fitReason / mainProducts in Simplified Chinese.
   - Do NOT invent emails.
   - Keep each field concise (1 short sentence max for description/fitReason).
@@ -2136,11 +2152,36 @@ export const searchPotentialClients = async (productKeyword: string, country: st
     "fitReason": "匹配原因"
   }]
   `;
-  const text = await generateContentUnified('search', prompt, SYSTEM_INSTRUCTION, true);
-  const results = extractJson(text, true);
-  if (!Array.isArray(results) || results.length === 0) {
-    throw new Error('搜索未返回有效结果。请确认千问 API 已配置，并使用支持联网搜索的模型。');
+
+  const runSearch = async () => {
+    const text = await generateContentUnified('search', prompt, SYSTEM_INSTRUCTION, true);
+    const results = extractJson(text, true);
+    if (!Array.isArray(results) || results.length === 0) {
+      throw new Error('搜索未返回有效结果。请确认千问 API 已配置，并使用支持联网搜索的模型。');
+    }
+    return results;
+  };
+
+  let results: any[];
+  try {
+    results = await runSearch();
+  } catch (firstErr: any) {
+    const msg = String(firstErr?.message || firstErr);
+    // 超时/504：用更少条数再搜一次（仍联网）
+    if (/超时|timeout|504|上游超时|Gateway/i.test(msg) && effectiveLimit > 6) {
+      console.warn('[search] 首次超时，缩小结果数后重试…');
+      const slimPrompt = prompt.replace(
+        `Return up to ${effectiveLimit} diverse targets`,
+        'Return up to 6 diverse targets'
+      );
+      const text = await generateContentUnified('search', slimPrompt, SYSTEM_INSTRUCTION, true);
+      results = extractJson(text, true);
+      if (!Array.isArray(results) || results.length === 0) throw firstErr;
+    } else {
+      throw firstErr;
+    }
   }
+
   return results.map((r: any) => ({
     name: r.name || 'Unknown',
     website: r.website || '',

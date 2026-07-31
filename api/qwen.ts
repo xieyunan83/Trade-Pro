@@ -14,8 +14,11 @@ export const config = {
 };
 
 const FALLBACK = 'https://token-plan.cn-beijing.maas.aliyuncs.com';
-/** 上游默认超时；连接测试由前端更短超时先行中止 */
-const UPSTREAM_TIMEOUT_MS = 90_000;
+/**
+ * 联网搜索（客户搜索/背调）常需 2–4 分钟。
+ * 须与前端 TASK_TIMEOUT / viaAppProxy 上限对齐，且低于 functions.maxDuration(300)。
+ */
+const UPSTREAM_TIMEOUT_MS = 280_000;
 
 const applyCors = (res: { setHeader: (k: string, v: string) => void }) => {
   res.setHeader('Access-Control-Allow-Origin', '*');

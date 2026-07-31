@@ -21,12 +21,18 @@
     "api/anymail.ts": {
       "maxDuration": 180,
       "memory": 512
+    },
+    "api/hunter.ts": {
+      "maxDuration": 30,
+      "memory": 256
     }
   },
   "rewrites": [
     { "source": "/qwen-api/:path*", "destination": "/api/qwen?__upstream=/:path*" },
     { "source": "/anymail-api/:path*", "destination": "/api/anymail?__upstream=/:path*" },
+    { "source": "/hunter-api/:path*", "destination": "/api/hunter?__upstream=/:path*" },
     { "source": "/api/qwen-api/:path*", "destination": "/api/qwen?__upstream=/:path*" },
-    { "source": "/api/anymail-api/:path*", "destination": "/api/anymail?__upstream=/:path*" }
+    { "source": "/api/anymail-api/:path*", "destination": "/api/anymail?__upstream=/:path*" },
+    { "source": "/api/hunter-api/:path*", "destination": "/api/hunter?__upstream=/:path*" }
   ]
 }
