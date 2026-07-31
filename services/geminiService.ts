@@ -774,63 +774,6 @@ ${roster}
   }
 };
 
-/** 用 Hunter 域名搜索结果补全姓名/职位/领英（按邮箱对齐；不覆盖已验证邮箱） */
-const mergeHunterProfilesOntoContacts = (
-  contacts: DecisionMaker[],
-  hunterPeople: DecisionMaker[]
-): { contacts: DecisionMaker[]; enriched: number; added: number } => {
-  if (!hunterPeople.length) return { contacts, enriched: 0, added: 0 };
-  const byEmail = new Map(
-    hunterPeople
-      .filter((h) => h.emailGuess)
-      .map((h) => [(h.emailGuess || '').toLowerCase(), h] as const)
-  );
-  let enriched = 0;
-  const next = contacts.map((c) => {
-    const h = byEmail.get((c.emailGuess || '').toLowerCase());
-    if (!h) return c;
-    byEmail.delete((c.emailGuess || '').toLowerCase());
-    const betterName =
-      h.name && !isIncompletePersonName(h.name)
-        ? h.name
-        : '';
-    const betterTitle = h.title && !isWeakJobTitle(h.title) ? h.title : '';
-    const changed =
-      (betterName && isIncompletePersonName(c.name)) ||
-      (betterTitle && isWeakJobTitle(c.title)) ||
-      (!!h.linkedin && !c.linkedin);
-    if (!changed) return c;
-    enriched += 1;
-    return {
-      ...c,
-      name: betterName && isIncompletePersonName(c.name) ? betterName : c.name,
-      firstName: c.firstName || h.firstName,
-      lastName: c.lastName || h.lastName,
-      title: betterTitle && isWeakJobTitle(c.title) ? betterTitle : c.title,
-      linkedin: c.linkedin || h.linkedin,
-      type:
-        c.type !== 'Other'
-          ? c.type
-          : betterTitle
-            ? classifyDecisionMakerType(betterTitle)
-            : h.type || c.type,
-      influenceScore: Math.max(c.influenceScore || 0, h.influenceScore || 0) || c.influenceScore,
-    };
-  });
-
-  // Hunter 独有、带姓名职位的联系人也纳入（提升决策人完整度）
-  let added = 0;
-  const extras: DecisionMaker[] = [];
-  for (const h of byEmail.values()) {
-    if (!h.emailGuess) continue;
-    if (isIncompletePersonName(h.name) && isWeakJobTitle(h.title)) continue;
-    extras.push(h);
-    added += 1;
-  }
-  return { contacts: [...next, ...extras], enriched, added };
-};
-
-
 /** 验证邮箱（仅用于非 Anymail 来源的二次确认；每次约 0.2 分） */
 const verifyEmailWithAnymail = async (
   email: string
@@ -881,9 +824,9 @@ export type DecisionMakerResearchResult = {
 
 /**
  * 决策人邮箱搜索：
- * 1) Anymail 公司域名搜索 → AnySearch+联网补全姓名/职位/领英 → Hunter 按邮箱对齐补全
+ * 1) Anymail 公司域名搜索 → AnySearch + 大模型补全姓名/职位/领英（不调用 Hunter）
  * 2) 已有真实姓名补邮箱；深挖角色接口（姓名+职位）
- * 3) 若仍无邮箱，回退 Hunter domain-search（额度用尽静默跳过）
+ * 3) 仅当 Anymail 完全无邮箱时，才回退 Hunter domain-search
  */
 export const researchDecisionMakerEmails = async (opts: {
   domain: string;
@@ -1007,29 +950,12 @@ export const researchDecisionMakerEmails = async (opts: {
         });
         let companyPeople = companyHit.people;
         if (companyPeople.length) {
+          // 姓名/职位/领英：用 AnySearch + 大模型补全，不调用 Hunter（省额度）
           companyPeople = await enrichCompanyContactsWithWebIntel(
             domain || companyName,
             companyName || domain,
             companyPeople
           );
-          // Hunter 常有职位/姓名/领英：按邮箱对齐补全（即使 Anymail 已找到邮箱也要跑）
-          if (hasHunter && domain && domain.includes('.')) {
-            try {
-              const hunterHit = await fetchHunterEmails(domain);
-              const mergedHunter = mergeHunterProfilesOntoContacts(
-                companyPeople,
-                hunterHit.people
-              );
-              companyPeople = mergedHunter.contacts;
-              if (mergedHunter.enriched || mergedHunter.added) {
-                console.info(
-                  `[DM] Hunter profile enrich: +${mergedHunter.enriched} upgraded, +${mergedHunter.added} added`
-                );
-              }
-            } catch (e) {
-              console.warn('[DM] Hunter enrich skipped', e);
-            }
-          }
           for (const p of companyPeople) {
             if (p.linkedin) stats.linkedinDiscovered += 1;
             pushOrMergeCompanyContact(p);
@@ -1176,30 +1102,7 @@ export const researchDecisionMakerEmails = async (opts: {
       }
     }
 
-    // ——— 3b) 仍缺姓名/职位：再跑一轮 Hunter 对齐补全（覆盖已在 merged 中的人）———
-    if (hasHunter && domain && domain.includes('.')) {
-      const stillWeak = merged.filter((d) => d.emailGuess && needsProfileEnrichment(d));
-      if (stillWeak.length) {
-        try {
-          const hunterHit = await fetchHunterEmails(domain);
-          const { contacts: enrichedList, enriched, added } = mergeHunterProfilesOntoContacts(
-            merged,
-            hunterHit.people
-          );
-          if (enriched || added) {
-            merged.length = 0;
-            merged.push(...enrichedList);
-            stats.upgraded += enriched;
-            stats.added += added;
-            console.info(`[DM] post-pass Hunter enrich: +${enriched} / +${added}`);
-          }
-        } catch (e) {
-          console.warn('[DM] post-pass Hunter enrich failed', e);
-        }
-      }
-    }
-
-    // ——— 4) Anymail 未找到任何带邮箱联系人 → 回退 Hunter.io（额度用尽不报错）———
+    // ——— 4) 仅当 Anymail 完全未找到邮箱时，才回退 Hunter（避免浪费 Hunter 额度）———
     const anymailFoundContacts = stats.anymailFound > 0 || countWithEmail() > emailsBeforeAnymail;
     const needHunterFallback = hasHunter && domain && domain.includes('.') && !anymailFoundContacts;
 
