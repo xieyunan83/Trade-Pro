@@ -13,9 +13,9 @@ const statusUi = (job: DmEmailSearchJob) => {
   }
   if (job.status === 'running') {
     return {
-      icon: <Loader2 size={14} className="animate-spin text-violet-600" />,
+      icon: <Loader2 size={14} className="animate-spin text-cyan-600" />,
       label: '搜索中',
-      tone: 'text-violet-700',
+      tone: 'text-cyan-700',
     };
   }
   if (job.status === 'completed') {
@@ -35,25 +35,25 @@ export const DmEmailSearchPanel: React.FC = () => {
   if (recent.length === 0) return null;
 
   return (
-    <div className="fixed bottom-4 right-4 z-[60] w-[min(100vw-2rem,22rem)] shadow-2xl">
-      <div className="rounded-2xl border border-violet-200 bg-white overflow-hidden">
+    <div className="fixed bottom-4 right-4 z-[60] w-[min(100vw-2rem,22rem)] shadow-signal">
+      <div className="rounded-2xl border border-cyan-200/70 bg-white/90 backdrop-blur-xl overflow-hidden">
         <button
           type="button"
           onClick={() => setCollapsed((v) => !v)}
-          className="w-full flex items-center justify-between gap-2 px-4 py-3 bg-violet-600 text-white"
+          className="w-full flex items-center justify-between gap-2 px-4 py-3 bg-gradient-to-r from-cyan-600 to-sky-600 text-white"
         >
-          <span className="flex items-center gap-2 text-sm font-black">
+          <span className="flex items-center gap-2 text-sm font-bold">
             <Users size={16} />
             决策人邮箱后台任务
             {active.length > 0 && (
               <span className="bg-white/20 px-2 py-0.5 rounded-lg text-[10px]">{active.length} 进行中</span>
             )}
           </span>
-          <span className="text-[10px] font-bold opacity-80">{collapsed ? '展开' : '收起'}</span>
+          <span className="text-[10px] font-semibold opacity-80">{collapsed ? '展开' : '收起'}</span>
         </button>
 
         {!collapsed && (
-          <div className="max-h-72 overflow-y-auto p-3 space-y-2 bg-slate-50">
+          <div className="max-h-72 overflow-y-auto p-3 space-y-2 bg-slate-50/90">
             {recent.map((job) => {
               const ui = statusUi(job);
               return (

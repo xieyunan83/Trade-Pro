@@ -259,13 +259,13 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   const taxonomyList = groupBy === 'keyword' ? keywords : groupBy === 'country' ? countries : [];
 
   return (
-    <div className="fixed inset-y-0 left-0 md:left-72 w-full sm:w-[min(100vw,28rem)] md:w-96 lg:w-[28rem] max-w-full bg-white shadow-2xl z-50 border-r border-slate-200 flex flex-col animate-fade-in safe-area-inset">
-      <div className="p-3 sm:p-4 border-b bg-slate-50 flex justify-between items-center gap-2">
+    <div className="fixed inset-y-0 left-0 md:left-72 w-full sm:w-[min(100vw,28rem)] md:w-96 lg:w-[28rem] max-w-full bg-white/95 backdrop-blur-xl shadow-signal z-50 border-r border-slate-200/80 flex flex-col animate-fade-in safe-area-inset">
+      <div className="p-3 sm:p-4 border-b border-slate-200/70 bg-gradient-to-r from-slate-50 to-cyan-50/40 flex justify-between items-center gap-2">
         <div className="min-w-0">
-          <div className="font-black text-slate-800 text-sm flex items-center gap-2">
-            <FolderOpen size={16} className="text-blue-600 flex-shrink-0" /> 记录中心
+          <div className="font-extrabold text-slate-900 text-sm flex items-center gap-2 tracking-tight">
+            <FolderOpen size={16} className="text-cyan-600 flex-shrink-0" /> 记录中心
           </div>
-          <div className="text-[10px] text-slate-400 font-bold mt-0.5 truncate">自定义分类 · 可增删改</div>
+          <div className="text-[10px] text-slate-400 font-semibold mt-0.5 truncate tracking-wide">自定义分类 · 可增删改</div>
         </div>
         <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-700 text-lg px-2 touch-manipulation">
           ✕

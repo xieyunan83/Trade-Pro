@@ -1245,23 +1245,26 @@ const App: React.FC = () => {
 
   return (
     <AccessGate user={currentUser} onLogout={handleLogout}>
-    <div className="flex min-h-screen min-h-[100dvh] bg-slate-100 overflow-hidden">
+    <div className="tp-app flex min-h-screen min-h-[100dvh] overflow-hidden">
       {/* Mobile sidebar backdrop */}
       {mobileMenuOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 z-20 md:hidden" onClick={() => setMobileMenuOpen(false)} />
+        <div className="fixed inset-0 bg-ink-950/60 backdrop-blur-sm z-20 md:hidden" onClick={() => setMobileMenuOpen(false)} />
       )}
-      <aside className={`fixed md:static z-30 h-full w-[min(100vw-3rem,18rem)] md:w-72 bg-white border-r border-slate-200 transition-transform duration-300 ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'} flex flex-col shadow-2xl md:shadow-none`}>
-        <div className="p-6 border-b flex items-center gap-3">
-            <div className="bg-blue-600 p-2 rounded-lg text-white shadow-md shadow-blue-100"><Zap size={20} /></div>
+      <aside className={`tp-sidebar fixed md:static z-30 h-full w-[min(100vw-3rem,18rem)] md:w-72 border-r transition-transform duration-300 ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'} flex flex-col`}>
+        <div className="p-6 border-b border-white/5 flex items-center gap-3">
+            <div className="tp-brand-mark p-2.5 rounded-xl text-white"><Zap size={20} /></div>
             <div>
-                <h1 className="text-lg font-black text-slate-800 tracking-tight leading-tight">楠哥的小助理 <span className="text-blue-600">Pro</span></h1>
-                <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-1 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500"></span>{currentUser.username}{currentUser.role === 'manager' ? ' · 主管' : ''}</div>
+                <h1 className="text-lg font-extrabold text-white tracking-tight leading-tight">楠哥的小助理 <span className="text-signal-400">Pro</span></h1>
+                <div className="text-[10px] text-slate-400 font-semibold uppercase tracking-[0.14em] mt-1 flex items-center gap-1.5">
+                  <span className="tp-live-dot w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                  {currentUser.username}{currentUser.role === 'manager' ? ' · 主管' : ''}
+                </div>
             </div>
         </div>
         
         {systemNotice && (
-            <div className="bg-yellow-50 p-3 mx-4 mt-4 rounded-xl border border-yellow-200 text-yellow-800 text-xs font-bold flex items-start gap-2">
-                <Info size={14} className="flex-shrink-0 mt-0.5"/>
+            <div className="bg-amber-400/10 p-3 mx-4 mt-4 rounded-xl border border-amber-300/25 text-amber-100 text-xs font-semibold flex items-start gap-2">
+                <Info size={14} className="flex-shrink-0 mt-0.5 text-amber-300"/>
                 {systemNotice}
             </div>
         )}
@@ -1281,37 +1284,37 @@ const App: React.FC = () => {
 
         <nav className="p-3 sm:p-4 space-y-1 flex-1 overflow-y-auto custom-scrollbar">
           {navModules.map(item => (
-            <button key={item.id} onClick={() => { setActiveModule(item.id); setMobileMenuOpen(false); }} disabled={!analysisData && !alwaysActiveModules.includes(item.id)} className={`w-full flex items-center gap-3 px-3 sm:px-4 py-3 sm:py-3.5 rounded-xl sm:rounded-2xl text-sm font-bold transition-all touch-manipulation ${activeModule === item.id ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800 disabled:opacity-30'}`}>
-              <item.icon size={18} className="flex-shrink-0" />
-              <span className="truncate"><span className="md:hidden">{item.label}</span><span className="hidden md:inline">{item.label} ({item.sub})</span></span>
+            <button key={item.id} onClick={() => { setActiveModule(item.id); setMobileMenuOpen(false); }} disabled={!analysisData && !alwaysActiveModules.includes(item.id)} className={`tp-nav-item w-full flex items-center gap-3 px-3 sm:px-4 py-3 sm:py-3.5 rounded-xl text-sm font-semibold transition-all touch-manipulation disabled:opacity-30 ${activeModule === item.id ? 'is-active' : ''}`}>
+              <item.icon size={18} className={`flex-shrink-0 ${activeModule === item.id ? 'text-signal-300' : 'text-slate-500'}`} />
+              <span className="truncate"><span className="md:hidden">{item.label}</span><span className="hidden md:inline">{item.label} <span className="text-[10px] font-medium opacity-50">({item.sub})</span></span></span>
             </button>
           ))}
           {hasPermission(currentUser, 'feature.manage_team_users') && currentUser.role === 'manager' && (
             <button
               type="button"
               onClick={() => { setTeamManageOpen(true); setMobileMenuOpen(false); }}
-              className="w-full flex items-center gap-3 px-3 sm:px-4 py-3 sm:py-3.5 rounded-xl sm:rounded-2xl text-sm font-bold text-violet-700 hover:bg-violet-50 touch-manipulation"
+              className="tp-nav-item w-full flex items-center gap-3 px-3 sm:px-4 py-3 sm:py-3.5 rounded-xl text-sm font-semibold touch-manipulation"
             >
-              <Users size={18} className="flex-shrink-0" />
+              <Users size={18} className="flex-shrink-0 text-signal-400" />
               <span>团队权限</span>
             </button>
           )}
         </nav>
 
-        <div className="p-4 border-t border-slate-100 space-y-2">
+        <div className="p-4 border-t border-white/5 space-y-2">
             {isGitHubConnected && (
-                <div className="w-full flex items-center gap-2 px-4 py-2 bg-purple-50 text-purple-700 rounded-xl text-xs font-bold mb-2">
+                <div className="w-full flex items-center gap-2 px-4 py-2 bg-signal-500/10 text-signal-300 rounded-xl text-xs font-semibold mb-2 border border-signal-500/20">
                     <Github size={14} /> GitHub Auto-Sync Active
                 </div>
             )}
             
             <div 
-                className={`px-4 py-2 bg-green-50 rounded-xl border border-green-100 flex items-center gap-2 mb-2 cursor-pointer hover:bg-green-100 transition-colors ${isKBSyncing ? 'opacity-70' : ''}`}
+                className={`px-4 py-2.5 rounded-xl border border-emerald-400/20 bg-emerald-400/10 flex items-center gap-2 mb-2 cursor-pointer hover:bg-emerald-400/15 transition-colors ${isKBSyncing ? 'opacity-70' : ''}`}
             >
-                {isKBSyncing ? <Loader2 size={16} className="text-green-600 animate-spin" /> : <CheckCircle2 size={16} className="text-green-600" />}
+                {isKBSyncing ? <Loader2 size={16} className="text-emerald-300 animate-spin" /> : <CheckCircle2 size={16} className="text-emerald-300" />}
                 <div>
-                    <div className="text-[10px] font-black text-green-800 uppercase tracking-wide">System Files Loaded</div>
-                    <div className="text-[10px] text-green-600">
+                    <div className="text-[10px] font-bold text-emerald-200 uppercase tracking-[0.12em]">System Files Loaded</div>
+                    <div className="text-[10px] text-emerald-300/80 font-medium">
                         {kbCount} Files Ready to Use
                     </div>
                 </div>
@@ -1324,13 +1327,13 @@ const App: React.FC = () => {
                 }
                 setHistoryOpen(!historyOpen);
               }}
-              className="w-full flex items-center justify-between px-4 py-3 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-xl text-sm font-bold transition-colors"
+              className="w-full flex items-center justify-between px-4 py-3 bg-white/5 hover:bg-white/10 text-slate-200 rounded-xl text-sm font-semibold transition-colors border border-white/5"
             >
-                <span className="flex items-center gap-2"><History size={18} /> 记录中心</span><ChevronRight size={16} className={`transition-transform ${historyOpen ? 'rotate-90' : ''}`} />
+                <span className="flex items-center gap-2"><History size={18} className="text-signal-400" /> 记录中心</span><ChevronRight size={16} className={`transition-transform text-slate-500 ${historyOpen ? 'rotate-90' : ''}`} />
             </button>
-            <button onClick={handleLogout} className="w-full flex items-center gap-2 px-4 py-3 text-red-500 hover:bg-red-50 rounded-xl text-sm font-bold transition-colors"><LogOut size={18} /> 退出登录</button>
-            <div className="px-4 pt-1 text-[9px] font-bold text-slate-300 text-center select-all">
-              版本 v20260730e · 修复打开历史空白
+            <button onClick={handleLogout} className="w-full flex items-center gap-2 px-4 py-3 text-rose-300 hover:bg-rose-500/10 rounded-xl text-sm font-semibold transition-colors"><LogOut size={18} /> 退出登录</button>
+            <div className="px-4 pt-1 text-[9px] font-semibold text-slate-600 text-center select-all tracking-wide">
+              版本 v20260731b · 输入文字加深
             </div>
         </div>
       </aside>
@@ -1426,13 +1429,13 @@ const App: React.FC = () => {
 
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col overflow-hidden relative min-w-0">
-        <header className="bg-white border-b px-3 sm:px-6 py-3 sm:py-4 flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4 shadow-sm z-10">
+        <header className="tp-header px-3 sm:px-6 py-3 sm:py-4 flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4 z-10">
           <div className="flex items-center gap-3 sm:contents">
             <button onClick={() => setMobileMenuOpen(true)} className="md:hidden p-2 text-slate-500 flex-shrink-0 touch-manipulation" aria-label="打开菜单"><Menu size={24} /></button>
             <div className="flex-1 relative group min-w-0 sm:order-none">
-              <Search className="absolute left-3 sm:left-4 top-3 sm:top-5 text-slate-400 pointer-events-none" size={20} />
+              <Search className="absolute left-3 sm:left-4 top-3 sm:top-5 text-signal-500/70 pointer-events-none" size={20} />
               <textarea 
-                  className="w-full pl-10 sm:pl-12 pr-3 sm:pr-4 py-3 sm:py-4 border border-slate-200 rounded-2xl bg-slate-50 text-slate-900 font-bold text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all shadow-inner resize-none overflow-hidden min-h-[48px] sm:min-h-[56px] focus:min-h-[100px] sm:focus:min-h-[120px] z-20 relative" 
+                  className="tp-scan-input w-full pl-10 sm:pl-12 pr-3 sm:pr-4 py-3 sm:py-4 rounded-2xl text-slate-950 font-semibold text-sm sm:text-base focus:outline-none transition-all resize-none overflow-hidden min-h-[48px] sm:min-h-[56px] focus:min-h-[100px] sm:focus:min-h-[120px] z-20 relative placeholder:text-slate-500" 
                   placeholder="输入目标网址或公司名称..." 
                   value={domainInput} 
                   onChange={e => setDomainInput(e.target.value)} 
@@ -1440,24 +1443,27 @@ const App: React.FC = () => {
               />
             </div>
           </div>
-          <button onClick={() => handleAnalyzeInput()} disabled={loading || !domainInput.trim()} className="bg-blue-600 hover:bg-blue-700 text-white px-6 sm:px-8 py-3 sm:py-3 rounded-2xl font-black shadow-lg disabled:opacity-50 w-full sm:w-auto sm:min-w-[140px] flex justify-center items-center touch-manipulation flex-shrink-0">
+          <button onClick={() => handleAnalyzeInput()} disabled={loading || !domainInput.trim()} className="tp-btn-primary text-white px-6 sm:px-8 py-3 rounded-2xl font-extrabold disabled:opacity-50 w-full sm:w-auto sm:min-w-[140px] flex justify-center items-center touch-manipulation flex-shrink-0">
             {loading ? <Loader2 className="animate-spin" size={20} /> : '深度调查'}
           </button>
         </header>
 
         <div className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 relative custom-scrollbar">
           {cooldownTime > 0 && (
-              <div className="absolute inset-0 bg-white/90 z-50 flex flex-col items-center justify-center backdrop-blur-sm animate-fade-in cursor-wait">
-                  <div className="relative"><Hourglass size={64} className="text-blue-600 animate-pulse" /><div className="absolute -top-2 -right-2 bg-red-500 text-white w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs">{cooldownTime}</div></div>
-                  <h3 className="text-2xl font-black text-slate-800 mt-6">API 冷却中</h3>
+              <div className="absolute inset-0 bg-mist-50/85 z-50 flex flex-col items-center justify-center backdrop-blur-md animate-fade-in cursor-wait">
+                  <div className="relative"><Hourglass size={64} className="text-signal-500 animate-pulse" /><div className="absolute -top-2 -right-2 bg-rose-500 text-white w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs">{cooldownTime}</div></div>
+                  <h3 className="text-2xl font-extrabold text-ink-900 mt-6 tracking-tight">API 冷却中</h3>
                   <p className="text-slate-500 mt-2 font-medium max-w-md text-center">正在等待 API 配额恢复。</p>
               </div>
           )}
 
           {loading && (
-            <div className="absolute inset-0 bg-white/95 z-50 flex flex-col items-center justify-center backdrop-blur-sm animate-fade-in">
-              <Loader2 className="animate-spin w-16 h-16 text-blue-600 mb-6" />
-              <h3 className="text-2xl font-black text-slate-800">正在深度挖掘情报...</h3>
+            <div className="absolute inset-0 bg-mist-50/90 z-50 flex flex-col items-center justify-center backdrop-blur-md animate-fade-in">
+              <div className="relative mb-6">
+                <div className="absolute inset-0 rounded-full bg-signal-400/20 blur-xl animate-pulse" />
+                <Loader2 className="relative animate-spin w-16 h-16 text-signal-500" />
+              </div>
+              <h3 className="text-2xl font-extrabold text-ink-900 tracking-tight">正在深度挖掘情报...</h3>
               <p className="text-slate-500 mt-2 font-medium text-center px-4">正在联网检索官网、贸易线索、认证信息与决策人邮箱...</p>
             </div>
           )}
@@ -1528,8 +1534,12 @@ const App: React.FC = () => {
                 {activeModule === ModuleType.STRATEGY && (
                     <div className="animate-fade-in max-w-7xl mx-auto pb-10">
                         {analysisData && (
-                            <div className="mb-6 sm:mb-8 flex flex-col md:flex-row md:items-end justify-between gap-4 bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
-                                <div className="min-w-0"><h2 className="text-2xl sm:text-3xl md:text-4xl font-black text-slate-900 tracking-tight truncate">{analysisData.companyInfo?.name}</h2><div className="text-xs sm:text-sm text-slate-500 font-bold mt-2">上下文：深度调查报告</div></div>
+                            <div className="mb-6 sm:mb-8 flex flex-col md:flex-row md:items-end justify-between gap-4 bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-panel">
+                                <div className="min-w-0">
+                                  <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-600 mb-1">Strategy Context</div>
+                                  <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-slate-900 tracking-tight truncate">{analysisData.companyInfo?.name}</h2>
+                                  <div className="text-xs sm:text-sm text-slate-500 font-semibold mt-2">上下文：深度调查报告</div>
+                                </div>
                             </div>
                         )}
                         <ModuleStrategy
@@ -1546,10 +1556,11 @@ const App: React.FC = () => {
                 {analysisData && !alwaysActiveModules.includes(activeModule) && (
                     <ErrorBoundary label="背调报告">
                     <div className="animate-fade-in max-w-7xl mx-auto pb-10">
-                    <div className="mb-6 sm:mb-8 flex flex-col md:flex-row md:items-end justify-between gap-4 bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
+                    <div className="mb-6 sm:mb-8 flex flex-col md:flex-row md:items-end justify-between gap-4 bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-panel">
                         <div className="min-w-0">
-                            <h2 className="text-2xl sm:text-3xl md:text-4xl font-black text-slate-900 tracking-tight break-words">{analysisData.companyInfo?.name || '未知公司'}</h2>
-                            <a href={websiteHref(analysisData.companyInfo?.website)} target="_blank" rel="noreferrer" className="text-blue-600 font-bold mt-2 hover:underline text-sm sm:text-base break-all">{analysisData.companyInfo?.website || '—'}</a>
+                            <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-600 mb-1">Target Profile</div>
+                            <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-slate-900 tracking-tight break-words">{analysisData.companyInfo?.name || '未知公司'}</h2>
+                            <a href={websiteHref(analysisData.companyInfo?.website)} target="_blank" rel="noreferrer" className="text-cyan-600 font-semibold mt-2 hover:underline text-sm sm:text-base break-all">{analysisData.companyInfo?.website || '—'}</a>
                             {(analysisData.searchKeyword || analysisData.searchTags?.length) && (
                               <div className="flex flex-wrap gap-1.5 mt-3">
                                 {analysisData.searchKeyword && (
@@ -1573,7 +1584,7 @@ const App: React.FC = () => {
                                 const res = enqueueCurrentDmEmailSearch(analysisData, viewingHistoryId);
                                 if (res.message) alert(res.message);
                               }}
-                              className="flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 transition-colors text-white px-4 sm:px-6 py-3 rounded-2xl font-bold shadow-lg touch-manipulation"
+                              className="flex items-center justify-center gap-2 bg-cyan-600 hover:bg-cyan-700 transition-colors text-white px-4 sm:px-6 py-3 rounded-2xl font-semibold shadow-signal touch-manipulation"
                             >
                               <Users size={18} />{' '}
                               {analysisData.decisionMakerEmailSearchAt ? '再次深挖决策人邮箱' : '后台搜索决策人邮箱'}

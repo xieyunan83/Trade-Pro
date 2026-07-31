@@ -124,20 +124,27 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
   };
 
   return (
-    <div className="min-h-screen min-h-[100dvh] flex flex-col items-center justify-center bg-[#F4F7FA] p-4 sm:p-6">
-      <div className="text-center mb-8 sm:mb-12 px-2">
-        <h1 className="text-3xl sm:text-4xl md:text-5xl font-black text-slate-800 tracking-tight mb-3 sm:mb-4">
-          楠哥的小助理 <span className="text-blue-600">Pro</span>
+    <div className="tp-login min-h-screen min-h-[100dvh] flex flex-col items-center justify-center p-4 sm:p-6 relative overflow-hidden">
+      <div className="pointer-events-none absolute inset-0 opacity-40" style={{
+        backgroundImage: 'linear-gradient(rgba(34,211,238,0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(34,211,238,0.08) 1px, transparent 1px)',
+        backgroundSize: '56px 56px',
+      }} />
+      <div className="text-center mb-8 sm:mb-12 px-2 relative z-10 animate-fade-in">
+        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-cyan-400/30 bg-cyan-400/10 text-cyan-200 text-[10px] font-bold uppercase tracking-[0.2em] mb-4">
+          Trade Intelligence OS
+        </div>
+        <h1 className="text-3xl sm:text-4xl md:text-5xl font-extrabold text-white tracking-tight mb-3 sm:mb-4">
+          楠哥的小助理 <span className="text-cyan-300">Pro</span>
         </h1>
-        <p className="text-base sm:text-lg md:text-xl text-slate-500 font-medium tracking-wide">企业级外贸情报平台</p>
+        <p className="text-base sm:text-lg md:text-xl text-slate-400 font-medium tracking-wide">企业级外贸情报平台</p>
       </div>
 
-      <div className="bg-white p-6 sm:p-8 md:p-12 rounded-3xl sm:rounded-[40px] shadow-[0_20px_50px_rgba(0,0,0,0.05)] w-full max-w-lg border border-white">
+      <div className="relative z-10 bg-white/95 backdrop-blur-xl p-6 sm:p-8 md:p-12 rounded-3xl sm:rounded-[2rem] shadow-signal w-full max-w-lg border border-white/20 animate-fade-in">
         <div className="flex items-center gap-3 mb-8 sm:mb-10">
-          <div className="text-blue-600">
+          <div className="text-cyan-600 bg-cyan-50 p-2.5 rounded-xl">
             {pendingUser ? <Cpu size={28} strokeWidth={2.5} /> : <UserIcon size={28} strokeWidth={2.5} className="sm:w-8 sm:h-8" />}
           </div>
-          <h2 className="text-2xl sm:text-3xl font-black text-slate-800">
+          <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
             {pendingUser ? (bindMode === 'remac' ? '确认网卡地址' : '绑定本机设备') : '登录系统'}
           </h2>
         </div>
@@ -180,7 +187,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-2xl font-black text-lg shadow-lg disabled:opacity-70"
+              className="w-full bg-gradient-to-r from-cyan-600 to-sky-600 hover:brightness-105 text-white py-4 rounded-2xl font-extrabold text-lg shadow-signal disabled:opacity-70"
             >
               {loading ? <Loader2 className="animate-spin mx-auto" size={22} /> : bindMode === 'remac' ? '确认并进入' : '绑定并进入'}
             </button>
@@ -208,7 +215,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  className="w-full pl-12 sm:pl-14 pr-4 sm:pr-6 py-4 sm:py-5 rounded-2xl border-2 border-slate-100 focus:border-blue-500 focus:ring-0 focus:outline-none font-bold text-base sm:text-lg transition-all placeholder:text-slate-300"
+                  className="w-full pl-12 sm:pl-14 pr-4 sm:pr-6 py-4 sm:py-5 rounded-2xl border-2 border-slate-100 focus:border-cyan-500 focus:ring-0 focus:outline-none font-semibold text-base sm:text-lg text-slate-950 transition-all placeholder:text-slate-500"
                   placeholder="输入用户名"
                   required
                   autoComplete="username"
@@ -225,7 +232,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full pl-12 sm:pl-14 pr-4 sm:pr-6 py-4 sm:py-5 rounded-2xl border-2 border-slate-100 focus:border-blue-500 focus:ring-0 focus:outline-none font-bold text-base sm:text-lg transition-all placeholder:text-slate-300"
+                  className="w-full pl-12 sm:pl-14 pr-4 sm:pr-6 py-4 sm:py-5 rounded-2xl border-2 border-slate-100 focus:border-cyan-500 focus:ring-0 focus:outline-none font-semibold text-base sm:text-lg text-slate-950 transition-all placeholder:text-slate-500"
                   placeholder="••••••••"
                   required
                   autoComplete="current-password"
@@ -235,7 +242,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white py-4 sm:py-6 rounded-2xl font-black text-lg sm:text-xl shadow-[0_10px_30px_rgba(37,99,235,0.3)] transition-all flex items-center justify-center gap-3 disabled:opacity-70 touch-manipulation"
+              className="w-full bg-gradient-to-r from-cyan-600 to-sky-600 hover:brightness-105 text-white py-4 sm:py-6 rounded-2xl font-extrabold text-lg sm:text-xl shadow-signal transition-all flex items-center justify-center gap-3 disabled:opacity-70 touch-manipulation"
             >
               {loading ? <Loader2 className="animate-spin" size={24} /> : '进入平台'}
             </button>

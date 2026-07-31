@@ -1,26 +1,21 @@
-
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="build-stamp" content="2026-07-30-v5-history-blank-fix">
+    <meta name="build-stamp" content="2026-07-31-v6b-input-contrast">
     <title>楠哥的小助理 - AI 智能客户开发</title>
     
     <script>
         // Fix for "Uncaught TypeError: Cannot set property fetch of #<Window> which has only a getter"
-        // This must run BEFORE any other scripts that might try to polyfill fetch
         (function() {
             try {
                 var target = window;
                 var desc = Object.getOwnPropertyDescriptor(target, 'fetch');
-                
-                // If not on window, check the prototype chain
                 if (!desc && window.constructor && window.constructor.prototype) {
                     target = window.constructor.prototype;
                     desc = Object.getOwnPropertyDescriptor(target, 'fetch');
                 }
-
                 if (desc && desc.configurable) {
                     var originalFetch = window.fetch;
                     Object.defineProperty(window, 'fetch', {
@@ -30,7 +25,6 @@
                         enumerable: true
                     });
                 } else if (!desc) {
-                    // If no descriptor found at all, try to define it anyway
                     var _fetch = window.fetch;
                     Object.defineProperty(window, 'fetch', {
                         get: function() { return _fetch; },
@@ -39,13 +33,10 @@
                         enumerable: true
                     });
                 }
-            } catch (e) {
-                // If we can't redefine it, we at least tried. 
-            }
+            } catch (e) {}
         })();
     </script>
 
-    <!-- Social Sharing Meta Tags -->
     <meta name="description" content="基于 Gemini 3 Pro 的智能外贸客户背调与开发工具。一键提取决策人、分析供应链、生成开发信。">
     <meta property="og:title" content="楠哥的小助理">
     <meta property="og:description" content="深度背调、决策人挖掘、竞品分析，您的 24 小时外贸情报官。">
@@ -53,26 +44,285 @@
     <meta property="og:type" content="website">
 
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              ink: {
+                950: '#070b14',
+                900: '#0b1220',
+                800: '#121a2b',
+                700: '#1a2438',
+              },
+              signal: {
+                300: '#67e8f9',
+                400: '#22d3ee',
+                500: '#06b6d4',
+                600: '#0891b2',
+              },
+              mist: {
+                50: '#f4f7fb',
+                100: '#e8eef6',
+                200: '#d5e0ee',
+              },
+            },
+            fontFamily: {
+              display: ['"Sora"', 'system-ui', 'sans-serif'],
+              sans: ['"Sora"', 'system-ui', 'sans-serif'],
+              mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
+            },
+            boxShadow: {
+              'signal': '0 0 0 1px rgba(6,182,212,0.18), 0 18px 40px -18px rgba(8,24,48,0.35)',
+              'panel': '0 1px 0 rgba(255,255,255,0.65) inset, 0 12px 32px -16px rgba(15,23,42,0.18)',
+            },
+          },
+        },
+      };
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Sora:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <!-- Export Libraries -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
-    <!-- Word Document Parser -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
     <style>
+        :root {
+          --tp-ink: #0b1220;
+          --tp-ink-soft: #121a2b;
+          --tp-signal: #06b6d4;
+          --tp-signal-soft: rgba(6, 182, 212, 0.14);
+          --tp-canvas: #e9eef5;
+          --tp-card: rgba(255, 255, 255, 0.82);
+          --tp-line: rgba(15, 23, 42, 0.08);
+          --tp-text: #0f172a;
+          --tp-muted: #64748b;
+        }
+
         html, body, #root { min-height: 100%; min-height: 100dvh; }
-        body { font-family: 'Inter', sans-serif; background-color: #f8fafc; -webkit-font-smoothing: antialiased; }
-        .animate-fade-in { animation: fadeIn 0.4s ease-out; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        body {
+          font-family: 'Sora', system-ui, sans-serif;
+          background: var(--tp-canvas);
+          color: var(--tp-text);
+          -webkit-font-smoothing: antialiased;
+          text-rendering: optimizeLegibility;
+        }
+
+        /* ——— App shell atmosphere ——— */
+        .tp-app {
+          position: relative;
+          background:
+            radial-gradient(1100px 520px at 12% -10%, rgba(6, 182, 212, 0.16), transparent 55%),
+            radial-gradient(900px 480px at 92% 0%, rgba(14, 165, 233, 0.12), transparent 50%),
+            radial-gradient(700px 400px at 70% 100%, rgba(16, 185, 129, 0.08), transparent 45%),
+            linear-gradient(165deg, #eef3f9 0%, #e4ebf4 45%, #dde6f2 100%);
+        }
+        .tp-app::before {
+          content: '';
+          position: fixed;
+          inset: 0;
+          pointer-events: none;
+          z-index: 0;
+          opacity: 0.35;
+          background-image:
+            linear-gradient(rgba(15, 23, 42, 0.035) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(15, 23, 42, 0.035) 1px, transparent 1px);
+          background-size: 48px 48px;
+          mask-image: radial-gradient(ellipse at 50% 20%, black 20%, transparent 75%);
+        }
+        .tp-app > * { position: relative; z-index: 1; }
+
+        /* ——— Sidebar ——— */
+        .tp-sidebar {
+          background:
+            linear-gradient(180deg, rgba(18, 26, 43, 0.98) 0%, rgba(11, 18, 32, 1) 100%);
+          border-right: 1px solid rgba(6, 182, 212, 0.12) !important;
+          box-shadow: 8px 0 40px -20px rgba(0, 0, 0, 0.45);
+          backdrop-filter: blur(16px);
+        }
+        .tp-sidebar .tp-brand-mark {
+          background: linear-gradient(135deg, #22d3ee 0%, #0891b2 55%, #0e7490 100%);
+          box-shadow: 0 0 0 1px rgba(255,255,255,0.12) inset, 0 10px 24px -8px rgba(6, 182, 212, 0.65);
+        }
+        .tp-nav-item {
+          position: relative;
+          color: rgba(226, 232, 240, 0.62) !important;
+          border: 1px solid transparent;
+        }
+        .tp-nav-item:hover:not(:disabled) {
+          color: #f8fafc !important;
+          background: rgba(255, 255, 255, 0.04) !important;
+          border-color: rgba(148, 163, 184, 0.08);
+        }
+        .tp-nav-item.is-active {
+          color: #ecfeff !important;
+          background: linear-gradient(90deg, rgba(6, 182, 212, 0.22), rgba(6, 182, 212, 0.06)) !important;
+          border-color: rgba(6, 182, 212, 0.28) !important;
+          box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.08) inset;
+        }
+        .tp-nav-item.is-active::before {
+          content: '';
+          position: absolute;
+          left: 0;
+          top: 20%;
+          bottom: 20%;
+          width: 3px;
+          border-radius: 999px;
+          background: linear-gradient(180deg, #67e8f9, #0891b2);
+          box-shadow: 0 0 12px rgba(34, 211, 238, 0.55);
+        }
+
+        /* ——— Header / scan bar ——— */
+        .tp-header {
+          background: rgba(255, 255, 255, 0.72) !important;
+          border-bottom: 1px solid rgba(15, 23, 42, 0.06) !important;
+          backdrop-filter: blur(18px) saturate(1.2);
+          box-shadow: 0 10px 30px -24px rgba(15, 23, 42, 0.35);
+        }
+        .tp-scan-input {
+          background: rgba(248, 250, 252, 0.9) !important;
+          border: 1px solid rgba(15, 23, 42, 0.08) !important;
+          box-shadow: 0 1px 0 rgba(255,255,255,0.8) inset !important;
+          letter-spacing: -0.01em;
+          color: #020617 !important;
+          -webkit-text-fill-color: #020617;
+          font-weight: 600;
+        }
+        .tp-scan-input:focus {
+          background: #fff !important;
+          border-color: rgba(6, 182, 212, 0.55) !important;
+          box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.15) !important;
+          color: #020617 !important;
+          -webkit-text-fill-color: #020617;
+        }
+
+        /* 所有输入控件：文字加深，避免看不清 */
+        input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
+        textarea,
+        select {
+          color: #020617 !important;
+          -webkit-text-fill-color: #020617;
+          caret-color: #0f172a;
+        }
+        input::placeholder,
+        textarea::placeholder {
+          color: #64748b !important;
+          -webkit-text-fill-color: #64748b;
+          opacity: 1;
+        }
+        input:disabled,
+        textarea:disabled,
+        select:disabled {
+          color: #475569 !important;
+          -webkit-text-fill-color: #475569;
+          opacity: 1;
+        }
+        input:-webkit-autofill,
+        input:-webkit-autofill:hover,
+        input:-webkit-autofill:focus,
+        textarea:-webkit-autofill,
+        textarea:-webkit-autofill:hover,
+        textarea:-webkit-autofill:focus {
+          -webkit-text-fill-color: #020617 !important;
+          transition: background-color 99999s ease-in-out 0s;
+        }
+        /* 深色侧栏内若有输入，保持可读 */
+        .tp-sidebar input:not([type="checkbox"]):not([type="radio"]),
+        .tp-sidebar textarea,
+        .tp-sidebar select {
+          color: #f8fafc !important;
+          -webkit-text-fill-color: #f8fafc;
+        }
+        .tp-login input:not([type="checkbox"]):not([type="radio"]),
+        .tp-login textarea,
+        .tp-login select {
+          color: #020617 !important;
+          -webkit-text-fill-color: #020617;
+        }
+        .tp-btn-primary {
+          background: linear-gradient(135deg, #06b6d4 0%, #0284c7 100%) !important;
+          box-shadow: 0 10px 24px -10px rgba(6, 182, 212, 0.8), 0 1px 0 rgba(255,255,255,0.25) inset !important;
+          letter-spacing: 0.02em;
+          transition: transform 0.15s ease, filter 0.15s ease, box-shadow 0.15s ease;
+        }
+        .tp-btn-primary:hover:not(:disabled) {
+          filter: brightness(1.05);
+          transform: translateY(-1px);
+        }
+        .tp-btn-primary:disabled { filter: grayscale(0.2); transform: none; }
+
+        /* ——— Elevate common white cards across modules (no structure change) ——— */
+        .tp-app main .bg-white {
+          background: var(--tp-card) !important;
+          backdrop-filter: blur(14px);
+          box-shadow: 0 1px 0 rgba(255,255,255,0.7) inset, 0 14px 36px -22px rgba(15, 23, 42, 0.28);
+        }
+        .tp-app main .border-slate-200,
+        .tp-app main .border-slate-100 {
+          border-color: rgba(15, 23, 42, 0.08) !important;
+        }
+        .tp-app main .rounded-3xl,
+        .tp-app main .rounded-2xl {
+          border-radius: 1.15rem !important;
+        }
+        .tp-app main h2.font-black,
+        .tp-app main h3.font-black {
+          letter-spacing: -0.03em;
+        }
+
+        /* Unify loud accent buttons into signal system */
+        .tp-app main .bg-violet-600,
+        .tp-app main .bg-purple-600 {
+          background: linear-gradient(135deg, #0e7490, #0891b2) !important;
+        }
+        .tp-app main .hover\:bg-violet-700:hover,
+        .tp-app main .hover\:bg-purple-700:hover {
+          filter: brightness(1.06);
+        }
+        .tp-app main .bg-emerald-600 {
+          background: linear-gradient(135deg, #059669, #0d9488) !important;
+        }
+        .tp-app main .bg-blue-600:not(.tp-keep) {
+          background: linear-gradient(135deg, #0284c7, #0891b2) !important;
+        }
+
+        .animate-fade-in { animation: fadeIn 0.45s cubic-bezier(0.22, 1, 0.36, 1); }
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(12px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes tpPulse {
+          0%, 100% { opacity: 0.55; transform: scale(1); }
+          50% { opacity: 1; transform: scale(1.15); }
+        }
+        .tp-live-dot {
+          box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2);
+          animation: tpPulse 2.2s ease-in-out infinite;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar { width: 7px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background: linear-gradient(180deg, rgba(6,182,212,0.35), rgba(100,116,139,0.35));
+          border-radius: 999px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(6, 182, 212, 0.55); }
         .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
         .scrollbar-hide::-webkit-scrollbar { display: none; }
         .touch-manipulation { touch-action: manipulation; }
+
+        /* Login atmosphere */
+        .tp-login {
+          min-height: 100dvh;
+          background:
+            radial-gradient(900px 500px at 20% 10%, rgba(6, 182, 212, 0.22), transparent 55%),
+            radial-gradient(700px 400px at 90% 80%, rgba(14, 165, 233, 0.18), transparent 50%),
+            linear-gradient(160deg, #070b14 0%, #0b1220 40%, #101a2e 100%);
+          color: #e2e8f0;
+        }
     </style>
 
 </head>

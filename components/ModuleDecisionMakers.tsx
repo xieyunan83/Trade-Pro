@@ -270,18 +270,19 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
 
   return (
     <div className="space-y-4 sm:space-y-6 animate-fade-in">
-      <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
+      <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200/80 shadow-panel">
         <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4 mb-6">
           <div className="min-w-0">
-            <h3 className="text-xl sm:text-2xl font-black text-slate-800 flex items-center gap-2">
-              <Users className="text-blue-600" /> 关键决策人挖掘
+            <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-600 mb-1">Intelligence · Contacts</div>
+            <h3 className="text-xl sm:text-2xl font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
+              <Users className="text-cyan-600" /> 关键决策人挖掘
             </h3>
-            <p className="text-sm text-slate-500 font-medium mt-1">
+            <p className="text-sm text-slate-500 font-medium mt-1 leading-relaxed">
               背调不会自动扣 Anymail 积分。点「后台搜索」时优先走官网同款「公司域名搜索」：约 1 积分拿到最多 20 个已验证邮箱，再用联网搜索补职位/领英；「再次深挖」才会额外按采购等角色补充（成功约 2 积分/人）。
             </p>
             {lastSearchAt ? (
-              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-bold text-slate-500">
-                <span className="inline-flex items-center gap-1 text-violet-700">
+              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-semibold text-slate-500">
+                <span className="inline-flex items-center gap-1 text-cyan-700">
                   <Clock size={12} /> 最近搜索：{formatSearchTime(lastSearchAt)}
                 </span>
                 {searchHistory.length > 1 && (
@@ -289,17 +290,17 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
                 )}
               </div>
             ) : (
-              <div className="mt-2 text-[11px] font-bold text-amber-600">尚未搜索决策人邮箱（背调阶段已跳过，需手动触发）。</div>
+              <div className="mt-2 text-[11px] font-semibold text-amber-600">尚未搜索决策人邮箱（背调阶段已跳过，需手动触发）。</div>
             )}
             {queueMsg && (
-              <div className="mt-2 text-[11px] font-bold text-emerald-700">{queueMsg}</div>
+              <div className="mt-2 text-[11px] font-semibold text-emerald-700">{queueMsg}</div>
             )}
           </div>
           <div className="flex flex-col sm:flex-row gap-2 flex-shrink-0">
             <button
               type="button"
               onClick={handleAddDecisionMaker}
-              className="inline-flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl text-sm font-bold touch-manipulation"
+              className="inline-flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl text-sm font-semibold touch-manipulation shadow-sm"
             >
               <Plus size={16} /> 手动新增决策人
             </button>
@@ -307,7 +308,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
               <button
                 type="button"
                 onClick={handleClearAllDecisionMakers}
-                className="inline-flex items-center justify-center gap-2 bg-white border-2 border-red-300 hover:bg-red-50 text-red-600 px-4 py-2.5 rounded-xl text-sm font-black touch-manipulation"
+                className="inline-flex items-center justify-center gap-2 bg-white border border-rose-300 hover:bg-rose-50 text-rose-600 px-4 py-2.5 rounded-xl text-sm font-semibold touch-manipulation"
               >
                 <Trash2 size={16} /> 清空全部
               </button>
@@ -316,7 +317,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
               <button
                 type="button"
                 onClick={handleBatchDelete}
-                className="inline-flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 text-white px-4 py-2.5 rounded-xl text-sm font-black touch-manipulation"
+                className="inline-flex items-center justify-center gap-2 bg-rose-600 hover:bg-rose-700 text-white px-4 py-2.5 rounded-xl text-sm font-semibold touch-manipulation"
               >
                 <Trash2 size={16} /> 批量删除 ({selectedIndices.size})
               </button>
@@ -326,7 +327,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
                 type="button"
                 onClick={handleEnqueueSearch}
                 disabled={jobActive}
-                className="inline-flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 disabled:opacity-60 text-white px-4 py-2.5 rounded-xl text-sm font-bold touch-manipulation"
+                className="inline-flex items-center justify-center gap-2 bg-cyan-600 hover:bg-cyan-700 disabled:opacity-60 text-white px-4 py-2.5 rounded-xl text-sm font-semibold touch-manipulation shadow-sm"
               >
                 {jobActive ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
                 {jobActive ? '后台搜索中…' : lastSearchAt ? '再次深挖决策人邮箱' : '后台搜索决策人邮箱'}
@@ -346,7 +347,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
                     data.companyInfo?.name || 'contacts'
                   )
                 }
-                className="inline-flex items-center justify-center gap-2 bg-slate-900 hover:bg-blue-600 text-white px-4 py-2.5 rounded-xl text-sm font-bold touch-manipulation"
+                className="inline-flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 text-white px-4 py-2.5 rounded-xl text-sm font-semibold touch-manipulation"
               >
                 <Download size={16} /> 导出 Excel
               </button>
@@ -355,7 +356,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
         </div>
 
         {jobActive && canDmEmailSearch && (
-          <div className="mb-4 rounded-2xl border border-violet-100 bg-violet-50 px-4 py-3 text-xs font-bold text-violet-800">
+          <div className="mb-4 rounded-2xl border border-cyan-200/80 bg-cyan-50/80 px-4 py-3 text-xs font-semibold text-cyan-900">
             已在后台按「公司域名 → 补职位/领英」搜索，可切换其它客户继续浏览；完成后可点「再次深挖」按角色补充更多决策人。
           </div>
         )}
@@ -366,36 +367,36 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
             onClick={() => { setListFilter('all'); setSelectedIndices(new Set()); }}
             className={`rounded-2xl p-3 border text-center transition-all touch-manipulation ${
               listFilter === 'all'
-                ? 'bg-slate-900 text-white border-slate-900 ring-2 ring-slate-300'
-                : 'bg-slate-50 border-slate-100 hover:border-slate-300'
+                ? 'bg-ink-900 text-white border-ink-900 shadow-signal'
+                : 'bg-slate-50/80 border-slate-200/80 hover:border-cyan-300 hover:bg-white'
             }`}
           >
-            <div className={`text-xl font-black ${listFilter === 'all' ? 'text-white' : 'text-slate-900'}`}>{decisionMakers.length}</div>
-            <div className={`text-[10px] font-black uppercase ${listFilter === 'all' ? 'text-slate-300' : 'text-slate-400'}`}>联系人</div>
+            <div className={`text-xl font-extrabold tracking-tight ${listFilter === 'all' ? 'text-white' : 'text-slate-900'}`}>{decisionMakers.length}</div>
+            <div className={`text-[10px] font-bold uppercase tracking-[0.12em] ${listFilter === 'all' ? 'text-slate-300' : 'text-slate-400'}`}>联系人</div>
           </button>
           <button
             type="button"
             onClick={() => { setListFilter('buyer'); setSelectedIndices(new Set()); }}
             className={`rounded-2xl p-3 border text-center transition-all touch-manipulation ${
               listFilter === 'buyer'
-                ? 'bg-blue-600 text-white border-blue-600 ring-2 ring-blue-200'
-                : 'bg-blue-50 border-blue-100 hover:border-blue-300'
+                ? 'bg-cyan-600 text-white border-cyan-600 shadow-signal'
+                : 'bg-cyan-50/70 border-cyan-100 hover:border-cyan-300 hover:bg-cyan-50'
             }`}
           >
-            <div className={`text-xl font-black ${listFilter === 'buyer' ? 'text-white' : 'text-blue-700'}`}>{buyers}</div>
-            <div className={`text-[10px] font-black uppercase ${listFilter === 'buyer' ? 'text-blue-100' : 'text-blue-400'}`}>采购相关</div>
+            <div className={`text-xl font-extrabold tracking-tight ${listFilter === 'buyer' ? 'text-white' : 'text-cyan-700'}`}>{buyers}</div>
+            <div className={`text-[10px] font-bold uppercase tracking-[0.12em] ${listFilter === 'buyer' ? 'text-cyan-100' : 'text-cyan-500'}`}>采购相关</div>
           </button>
           <button
             type="button"
             onClick={() => { setListFilter('verified'); setSelectedIndices(new Set()); }}
             className={`rounded-2xl p-3 border text-center transition-all touch-manipulation ${
               listFilter === 'verified'
-                ? 'bg-emerald-600 text-white border-emerald-600 ring-2 ring-emerald-200'
-                : 'bg-emerald-50 border-emerald-100 hover:border-emerald-300'
+                ? 'bg-teal-600 text-white border-teal-600 shadow-signal'
+                : 'bg-teal-50/70 border-teal-100 hover:border-teal-300 hover:bg-teal-50'
             }`}
           >
-            <div className={`text-xl font-black ${listFilter === 'verified' ? 'text-white' : 'text-emerald-700'}`}>{verified}</div>
-            <div className={`text-[10px] font-black uppercase ${listFilter === 'verified' ? 'text-emerald-100' : 'text-emerald-500'}`}>已验证邮箱</div>
+            <div className={`text-xl font-extrabold tracking-tight ${listFilter === 'verified' ? 'text-white' : 'text-teal-700'}`}>{verified}</div>
+            <div className={`text-[10px] font-bold uppercase tracking-[0.12em] ${listFilter === 'verified' ? 'text-teal-100' : 'text-teal-500'}`}>已验证邮箱</div>
           </button>
         </div>
         {listFilter !== 'all' && (
@@ -538,7 +539,7 @@ const DecisionMakerCard: React.FC<{
   };
 
   return (
-    <div className={`bg-slate-50 p-5 sm:p-6 rounded-2xl sm:rounded-3xl border transition-all group ${selected ? 'border-red-300 ring-2 ring-red-100' : 'border-slate-100 hover:border-blue-200'}`}>
+    <div className={`bg-gradient-to-br from-slate-50 to-white p-5 sm:p-6 rounded-2xl sm:rounded-3xl border transition-all group ${selected ? 'border-rose-300 ring-2 ring-rose-100' : 'border-slate-200/80 hover:border-cyan-300 hover:shadow-panel'}`}>
       <div className="flex justify-between items-start mb-4 gap-3">
         <div className="flex items-center gap-3 min-w-0">
           <input
@@ -548,7 +549,7 @@ const DecisionMakerCard: React.FC<{
             className="w-5 h-5 rounded border-slate-300 flex-shrink-0 cursor-pointer"
             title="勾选以便批量删除"
           />
-          <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center text-white font-black text-xl shadow-lg flex-shrink-0">
+          <div className="w-12 h-12 bg-gradient-to-br from-cyan-500 to-sky-600 rounded-2xl flex items-center justify-center text-white font-extrabold text-xl shadow-signal flex-shrink-0">
             {(dm.name || '?').charAt(0)}
           </div>
           <div className="min-w-0">
