@@ -543,17 +543,22 @@ const App: React.FC = () => {
       (u) => u.username.trim().toLowerCase() === currentUser.username.trim().toLowerCase()
     );
     if (!fresh) return;
-    // 管理员改了设备/时段后，让当前会话立即生效
-    const sameBind =
-      JSON.stringify(fresh.boundDevices || []) === JSON.stringify(currentUser.boundDevices || []) &&
-      JSON.stringify(fresh.accessSchedule || null) === JSON.stringify(currentUser.accessSchedule || null) &&
-      fresh.deviceBindRequired === currentUser.deviceBindRequired &&
-      fresh.disabled === currentUser.disabled &&
-      fresh.role === currentUser.role &&
-      fresh.departmentId === currentUser.departmentId &&
-      JSON.stringify(fresh.permissions || []) === JSON.stringify(currentUser.permissions || []);
-    if (!sameBind) setCurrentUser(fresh);
-  }, [users, currentUser]);
+    // 仅在权限/设备相关字段变化时同步，避免与 currentUser 循环 setState 卡死
+    const finger = (u: typeof fresh) =>
+      [
+        u.role,
+        u.departmentId || '',
+        u.disabled ? '1' : '0',
+        u.deviceBindRequired === true ? '1' : u.deviceBindRequired === false ? '0' : 'd',
+        JSON.stringify(u.permissions || []),
+        JSON.stringify(u.boundDevices || []),
+        JSON.stringify(u.accessSchedule || null),
+      ].join('|');
+    if (finger(fresh) !== finger(currentUser)) {
+      setCurrentUser(fresh);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 故意不依赖 currentUser，防止同步循环
+  }, [users]);
 
   useEffect(() => {
       if (!currentUser || !userDataReadyRef.current) return;

@@ -16,6 +16,7 @@ import { hashPassword, persistUsers, findUserByName, updateUserPassword } from '
 import { loadDepartmentsFromStorage } from '../services/orgStore';
 import { roleLabel } from '../services/permissions';
 import { OrgPermissionPanel } from './OrgPermissionPanel';
+import { AddUserModal } from './AddUserModal';
 import {
   getAliyunProxyMode,
   setAliyunProxyMode,
@@ -102,6 +103,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const [saveConfigMsg, setSaveConfigMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [ytLink, setYtLink] = useState('');
   const [isUploading, setIsUploading] = useState(false);
+  const [addUserOpen, setAddUserOpen] = useState(false);
 
   useEffect(() => {
     const stored = localStorage.getItem('trade_scout_api_configs');
@@ -575,31 +577,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     }
   };
 
-  const handleAddUser = async () => {
-    const username = prompt('请输入新用户名:');
-    if (!username?.trim()) return;
-    const trimmed = username.trim();
-    if (findUserByName(users, trimmed)) {
-      alert('该用户名已存在');
-      return;
-    }
-    const pwd = prompt('请设置登录密码（至少 6 位）:');
-    if (!pwd || pwd.length < 6) {
-      alert('密码至少需要 6 位');
-      return;
-    }
-    const newUser: User = {
-      username: trimmed,
-      role: 'user',
-      password: await hashPassword(pwd),
-      isFirstLogin: true,
-      createdAt: Date.now()
-    };
-    const next = [...users, newUser];
-    setUsers(next);
-    await persistUsers(next);
-    alert(`用户 ${trimmed} 已创建，请使用刚设置的密码登录（已同步云端，手机/电脑通用）`);
-  };
+  const handleAddUser = () => setAddUserOpen(true);
 
   const handleResetPassword = async (username: string) => {
     const pwd = prompt(`为「${username}」设置新密码（至少 6 位）:`);
@@ -610,7 +588,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     const hashed = await hashPassword(pwd);
     const next = updateUserPassword(users, username, hashed);
     setUsers(next);
-    await persistUsers(next);
+    await persistUsers(next, Date.now(), departments);
     alert(`已重置 ${username} 的密码并同步到云端，手机与电脑请用同一新密码登录`);
   };
 
@@ -1478,6 +1456,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
           </div>
         </div>
       </main>
+
+      <AddUserModal
+        open={addUserOpen}
+        onClose={() => setAddUserOpen(false)}
+        users={users}
+        departments={departments}
+        allowRolePick
+        onCreated={({ users: next, created }) => {
+          setUsers(next);
+          alert(`用户 ${created.username} 已创建（本机已保存，云端后台同步）`);
+        }}
+      />
     </div>
   );
 };

@@ -67,7 +67,46 @@ export function normalizeUsers(users: User[]): User[] {
   return users.map(normalizeUser);
 }
 
-/** 本地 + 云端（Supabase / GitHub）一并持久化，保证手机与电脑账号一致 */
+const withTimeout = async <T,>(
+  promise: Promise<T>,
+  ms: number,
+  label: string
+): Promise<T | null> => {
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<null>((resolve) => {
+        setTimeout(() => {
+          console.warn(`${label} timed out after ${ms}ms`);
+          resolve(null);
+        }, ms);
+      }),
+    ]);
+  } catch (e) {
+    console.warn(label, e);
+    return null;
+  }
+};
+
+/** 本地立刻落盘；云端后台限时同步，避免后台「添加用户」假死 */
+const syncUsersToCloudBackground = (
+  normalized: User[],
+  updatedAt: number,
+  depts: Department[]
+) => {
+  void (async () => {
+    if (isSupabaseConfigured()) {
+      await withTimeout(
+        saveAppUsersToCloud(normalized, updatedAt, depts),
+        8_000,
+        'Supabase 用户同步'
+      );
+    }
+    await withTimeout(saveUsersToCloud(normalized), 8_000, 'GitHub 用户同步');
+  })();
+};
+
+/** 本地 + 云端（Supabase / GitHub）持久化。本地同步完成即返回，不阻塞 UI。 */
 export async function persistUsers(
   users: User[],
   updatedAt: number = Date.now(),
@@ -77,18 +116,7 @@ export async function persistUsers(
   saveUsersToStorage(normalized, updatedAt);
   const depts = departments ?? loadDepartmentsFromStorage();
   saveDepartmentsToStorage(depts, updatedAt);
-  try {
-    if (isSupabaseConfigured()) {
-      await saveAppUsersToCloud(normalized, updatedAt, depts);
-    }
-  } catch (e) {
-    console.warn('Supabase 用户同步失败', e);
-  }
-  try {
-    await saveUsersToCloud(normalized);
-  } catch (e) {
-    console.warn('GitHub 用户同步失败', e);
-  }
+  syncUsersToCloudBackground(normalized, updatedAt, depts);
   return normalized;
 }
 

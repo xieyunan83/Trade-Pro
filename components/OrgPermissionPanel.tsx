@@ -15,6 +15,7 @@ import {
   defaultAccessSchedule,
   describeSchedule,
 } from '../services/deviceBind';
+import { AddUserModal } from './AddUserModal';
 
 interface OrgPermissionPanelProps {
   currentUser: User;
@@ -53,6 +54,7 @@ export const OrgPermissionPanel: React.FC<OrgPermissionPanelProps> = ({
   const [draftDeviceBindRequired, setDraftDeviceBindRequired] = useState(true);
   const [draftSchedule, setDraftSchedule] = useState<AccessSchedule>(defaultAccessSchedule());
   const [msg, setMsg] = useState('');
+  const [addUserOpen, setAddUserOpen] = useState(false);
 
   const manageableUsers = useMemo(() => {
     if (isAdmin) return users;
@@ -214,52 +216,9 @@ export const OrgPermissionPanel: React.FC<OrgPermissionPanelProps> = ({
     await persistUsers(nextUsers, Date.now(), nextDepts);
   };
 
-  const handleAddUserAdmin = async () => {
+  const handleAddUserAdmin = () => {
     if (!isAdmin) return;
-    const username = prompt('请输入新用户名:');
-    if (!username?.trim()) return;
-    const trimmed = username.trim();
-    if (findUserByName(users, trimmed)) {
-      alert('该用户名已存在');
-      return;
-    }
-    const pwd = prompt('请设置登录密码（至少 6 位）:');
-    if (!pwd || pwd.length < 6) {
-      alert('密码至少需要 6 位');
-      return;
-    }
-    const roleRaw =
-      prompt(
-        '角色：user（员工） / manager（主管） / director（总管），默认 user：',
-        'user'
-      ) || 'user';
-    const trimmedRole = roleRaw.trim().toLowerCase();
-    const role: UserRole =
-      trimmedRole === 'manager'
-        ? 'manager'
-        : trimmedRole === 'director'
-          ? 'director'
-          : 'user';
-    const deptName = departments.length
-      ? prompt(`分配部门 ID（可选；总管可不分配）:\n${departments.map((d) => `${d.id} = ${d.name}`).join('\n')}`)
-      : '';
-    const newUser: User = {
-      username: trimmed,
-      role,
-      password: await hashPassword(pwd),
-      isFirstLogin: true,
-      createdAt: Date.now(),
-      departmentId: deptName?.trim() || undefined,
-      permissions: defaultPermissionsForRole(role),
-      deviceBindRequired: role === 'user',
-      boundDevices: [],
-      accessSchedule: defaultAccessSchedule(),
-    };
-    const next = [...users, newUser];
-    setUsers(next);
-    await persistUsers(next, Date.now(), departments);
-    alert(`用户 ${trimmed} 已创建`);
-    loadUser(trimmed);
+    setAddUserOpen(true);
   };
 
   return (
@@ -607,6 +566,19 @@ export const OrgPermissionPanel: React.FC<OrgPermissionPanelProps> = ({
           </div>
         </div>
       </div>
+
+      <AddUserModal
+        open={addUserOpen}
+        onClose={() => setAddUserOpen(false)}
+        users={users}
+        departments={departments}
+        allowRolePick
+        onCreated={({ users: next, created }) => {
+          setUsers(next);
+          setMsg(`用户「${created.username}」已创建`);
+          loadUser(created.username);
+        }}
+      />
     </div>
   );
 };
