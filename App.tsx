@@ -898,28 +898,52 @@ const App: React.FC = () => {
   };
   
   const handleAddToCRM = () => { 
-      if (!analysisData) return; 
-      const newClient: Client = { 
-          id: Date.now().toString(), 
-          name: analysisData.companyInfo.name, 
-          website: analysisData.companyInfo.website, 
-          country: analysisData.companyInfo.headquarters.split(',').pop()?.trim() || 'Global', 
-          type: '进口商', 
-          status: '新建/潜在', 
-          productType: analysisData.businessScope.coreProducts[0] || 'N/A', 
+      if (!analysisData) return;
+      const website = analysisData.companyInfo.website;
+      const websiteKey = (website || '').toLowerCase();
+      const nameKey = (analysisData.companyInfo.name || '').trim().toLowerCase();
+      const patch: Partial<Client> = {
+          name: analysisData.companyInfo.name,
+          website,
+          country: analysisData.companyInfo.headquarters.split(',').pop()?.trim() || 'Global',
+          productType: analysisData.businessScope.coreProducts[0] || 'N/A',
           industry: analysisData.companyInfo.nature || 'N/A',
-          priceRange: analysisData.businessScope.priceSensitivity || 'Medium', 
-          isSampleNeeded: false, 
-          hasAnalyzed: true, 
-          lastOrderDate: '', 
-          lastContactSent: '', 
-          lastContactReceived: '', 
-          nextFollowUpDate: new Date().toISOString().split('T')[0], 
-          activityLog: `Added from Deep Analysis. Rev: ${analysisData.financials.revenueEstimate}.`,
-          contacts: analysisData.decisionMakers || [] // Auto-populate contacts
-      }; 
-      setCrmClients(prev => [stampOwnership(newClient), ...prev]); 
-      alert("Added to CRM with " + (newClient.contacts?.length || 0) + " contacts!"); 
+          priceRange: analysisData.businessScope.priceSensitivity || 'Medium',
+          hasAnalyzed: true,
+          hasBackgroundCheck: true,
+          contacts: analysisData.decisionMakers || [],
+      };
+      setCrmClients(prev => {
+          const idx = prev.findIndex(c =>
+              (websiteKey && (c.website || '').toLowerCase() === websiteKey) ||
+              (nameKey && (c.name || '').trim().toLowerCase() === nameKey)
+          );
+          if (idx >= 0) {
+              const updated = [...prev];
+              updated[idx] = {
+                  ...updated[idx],
+                  ...patch,
+                  activityLog:
+                      (updated[idx].activityLog || '') +
+                      ` [Synced from Deep Analysis ${new Date().toLocaleDateString()}]`,
+              };
+              return updated;
+          }
+          const newClient: Client = stampOwnership({
+              id: Date.now().toString(),
+              type: '进口商',
+              status: '新建/潜在',
+              isSampleNeeded: false,
+              lastOrderDate: '',
+              lastContactSent: '',
+              lastContactReceived: '',
+              nextFollowUpDate: new Date().toISOString().split('T')[0],
+              activityLog: `Added from Deep Analysis. Rev: ${analysisData.financials.revenueEstimate}.`,
+              ...patch,
+          } as Client);
+          return [newClient, ...prev];
+      });
+      alert("已加入客户管理（含背调标记与 " + (analysisData.decisionMakers?.length || 0) + " 位决策人）");
   };
   
   // RESTORED: Handle batch adding clients from Discovery
@@ -1654,6 +1678,7 @@ const App: React.FC = () => {
                         setClients={setCrmClients} 
                         onBatchAnalyze={handleBatchAnalyzeFromCRM} 
                         history={history}
+                        onOpenHistory={loadFromHistory}
                     />
                 )}
                 {activeModule === ModuleType.EMAIL_CAMPAIGN && (
