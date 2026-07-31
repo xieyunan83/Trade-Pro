@@ -766,7 +766,7 @@ const App: React.FC = () => {
       domain,
       companyName,
       historyId: hid,
-      deepDig: !!src.decisionMakerEmailSearchAt,
+      deepDig: true,
       authorized: hasPermission(currentUser, 'feature.dm_email_search'),
       existingDecisionMakers: src.decisionMakers || [],
       resolveExisting: () => {

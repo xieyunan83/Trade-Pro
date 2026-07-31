@@ -17,8 +17,12 @@ import {
   resolveQwenRequestTarget,
   DEFAULT_TOKEN_PLAN_ORIGIN,
 } from './qwenProxy';
-import { env, getEmailSearchKeys } from './env';
-import { gatherIdentityEvidence, testAnysearchConnection } from './anysearchService';
+import { env, getEmailSearchKeys, getAnysearchApiKey } from './env';
+import {
+  anysearchBatchSearch,
+  gatherIdentityEvidence,
+  testAnysearchConnection,
+} from './anysearchService';
 
 const NATIVE_MODEL = 'gemini-3-pro-preview';
 
@@ -296,6 +300,30 @@ const isPlaceholderPersonName = (name?: string): boolean => {
   return false;
 };
 
+/** 姓名是否不完整（仅邮箱前缀/单名），需要官网/LinkedIn 校对补全 */
+const isIncompletePersonName = (name?: string): boolean => {
+  if (isPlaceholderPersonName(name)) return true;
+  const parts = (name || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (parts.length < 2) return true;
+  // 职能邮箱本地部分当姓名
+  if (/^(info|sales|contact|support|admin|office|dpo|hr|ceo|cfo|coo)$/i.test(parts[0])) return true;
+  return false;
+};
+
+const isWeakJobTitle = (title?: string): boolean =>
+  !title?.trim() ||
+  /Company Contact|待补充|Domain Search|Employee|Professional|^Manager$/i.test(title.trim());
+
+const needsProfileEnrichment = (dm: DecisionMaker): boolean =>
+  isIncompletePersonName(dm.name) ||
+  isWeakJobTitle(dm.title) ||
+  !dm.linkedin ||
+  !/linkedin\.com\/in\//i.test(dm.linkedin || '');
+
+
 /** 是否像真实在职联系人（有姓名 + 领英或可核对职位），占位名不算 */
 const isLikelyRealPerson = (
   dm: Pick<DecisionMaker, 'name' | 'firstName' | 'lastName' | 'title' | 'linkedin'>
@@ -545,16 +573,14 @@ const fetchAnymailCompanyEmails = async (
     const people = list.slice(0, 20).map((email: string) => {
       const parsed = nameFromEmailLocal(email);
       const generic = isGenericRoleEmail(email);
-      const title = generic
-        ? `Company Contact (${parsed.name}@)`
-        : 'Company Contact (Domain Search)';
+      const title = generic ? '待补充职位（职能邮箱）' : '待补充职位';
       return {
-        name: generic ? parsed.name : parsed.name,
+        name: parsed.name,
         firstName: generic ? undefined : parsed.firstName,
         lastName: generic ? undefined : parsed.lastName,
         title,
         emailGuess: email,
-        type: classifyDecisionMakerType(title),
+        type: 'Other' as const,
         source: 'AnymailFinder' as const,
         emailSource: 'AnymailFinder',
         emailStatus: isVerified ? 'valid' : emailStatus,
@@ -609,7 +635,7 @@ const fetchAnymailDecisionMakers = async (
       if (seenEmails.has(key)) continue;
       seenEmails.add(key);
       people.push(person);
-      if (people.length >= 2) break;
+      if (people.length >= 4) break;
     } catch (e) {
       console.warn('Anymail decision-maker error', role.categories, e);
     }
@@ -618,47 +644,83 @@ const fetchAnymailDecisionMakers = async (
 };
 
 /**
- * 用联网 AI 为「域名搜出的邮箱联系人」补职位 / LinkedIn（不额外烧 Anymail 积分）
+ * 用 AnySearch（官网/网页检索）+ 联网 AI 为域名邮箱补全：全名、职位、LinkedIn。
+ * 不额外消耗 Anymail 积分。
  */
 const enrichCompanyContactsWithWebIntel = async (
   domain: string,
   companyName: string,
   contacts: DecisionMaker[]
 ): Promise<DecisionMaker[]> => {
-  const targets = contacts
-    .filter((c) => c.emailGuess && !isGenericRoleEmail(c.emailGuess))
-    .slice(0, 20);
+  const targets = contacts.filter((c) => c.emailGuess && needsProfileEnrichment(c)).slice(0, 20);
   if (!targets.length) return contacts;
+
+  // 1) AnySearch：并行检索每人 + 公司团队页线索
+  let searchEvidence = '';
+  if (getAnysearchApiKey().trim() || isSupabaseConfigured()) {
+    try {
+      const queries = [
+        {
+          query: `${companyName || domain} ${domain} LinkedIn company employees team leadership procurement`,
+          max_results: 5,
+        },
+        ...targets.slice(0, 4).map((c) => ({
+          query: `${c.emailGuess} OR ${c.name} ${domain} LinkedIn job title`,
+          max_results: 3,
+        })),
+      ].slice(0, 5);
+      const batchText = await anysearchBatchSearch(queries);
+      if (batchText?.trim()) {
+        searchEvidence = batchText.trim().slice(0, 8_000);
+        console.log('[DM enrich] AnySearch evidence chars:', searchEvidence.length);
+      }
+    } catch (e) {
+      console.warn('[DM enrich] AnySearch batch failed', e);
+    }
+  }
 
   const roster = targets
     .map(
       (c, i) =>
-        `${i + 1}. name=${c.name}; email=${c.emailGuess}; first=${c.firstName || ''}; last=${c.lastName || ''}`
+        `${i + 1}. email=${c.emailGuess}; guessedName=${c.name}; first=${c.firstName || ''}; last=${c.lastName || ''}; currentTitle=${c.title || ''}`
     )
     .join('\n');
 
-  const prompt = `你是外贸 B2B 情报分析师。公司：${companyName || domain}，官网域名：${domain}。
-下面是从 Anymail Finder「公司域名搜索」得到的邮箱联系人（最多 20 个）。请用联网搜索（LinkedIn、官网 about/team、新闻）为每人补充职位与领英主页。
+  const prompt = `你是外贸 B2B 情报分析师。请为公司联系人补全「真实全名 + 职位 + LinkedIn」。
 
-联系人：
+公司：${companyName || domain}
+官网域名：${domain}
+
+AnySearch 网页检索证据（优先采信；可能含 LinkedIn / 新闻 / 团队页片段）：
+${searchEvidence || '（无 AnySearch 证据，请自行联网搜索 LinkedIn、官网 About/Team/Contact）'}
+
+待补全联系人（邮箱来自 Anymail 公司域名搜索，姓名可能只是邮箱前缀）：
 ${roster}
 
-严格返回 JSON 数组（与输入顺序一致，长度相同），每项：
-{"email":"...","fullName":"真实姓名或空","title":"职位英文或中文","linkedin":"领英URL或空","type":"CEO|Buyer|Other","influenceScore":1-5}
-规则：
-- 查不到就 title 留空字符串，不要编造邮箱
-- 采购/买手/供应链标 Buyer；CEO/Founder/Owner 标 CEO
-- 只输出 JSON 数组，不要 markdown`;
+任务：
+1. 对每人用邮箱本地部分 + 公司名在 LinkedIn / 官网 / 新闻中交叉验证。
+2. 输出真实 First Last 全名（拉丁字母姓名优先）；查不到则 fullName 留空，不要把邮箱前缀当全名。
+3. 职位写具体岗位（如 Purchasing Manager / Category Buyer / CFO）；查不到 title 留空。
+4. linkedin 必须是 linkedin.com/in/... 个人主页；不确定则留空，严禁编造。
+5. 采购/买手/品类/供应链 → type=Buyer；CEO/Founder/Owner/President → CEO；其它 Other。
+
+严格返回 JSON 数组（与输入人数相同、顺序一致）：
+[{"email":"...","fullName":"","firstName":"","lastName":"","title":"","linkedin":"","type":"CEO|Buyer|Other","influenceScore":1-5}]
+只输出 JSON，不要 markdown。`;
 
   try {
     const text = await callQwen(prompt, {
       jsonMode: true,
       enableSearch: true,
-      task: 'email',
-      timeoutMs: 90_000,
+      forcedSearch: true,
+      task: 'analysis',
+      timeoutMs: 120_000,
     });
-    const parsed = JSON.parse(text.replace(/^```json\s*|\s*```$/g, '').trim());
-    if (!Array.isArray(parsed)) return contacts;
+    const parsed = extractJson(text, true);
+    if (!Array.isArray(parsed) || !parsed.length) {
+      console.warn('[DM enrich] empty/invalid AI enrich result');
+      return contacts;
+    }
 
     const byEmail = new Map<string, any>();
     for (const row of parsed) {
@@ -671,6 +733,8 @@ ${roster}
       if (!row) return c;
       const title = String(row.title || '').trim();
       const fullName = String(row.fullName || '').trim();
+      const firstName = String(row.firstName || '').trim() || undefined;
+      const lastName = String(row.lastName || '').trim() || undefined;
       const linkedin = String(row.linkedin || '').trim();
       const typeRaw = String(row.type || '').trim();
       const type: DecisionMaker['type'] =
@@ -681,13 +745,25 @@ ${roster}
             : c.type;
       const influenceScore = Math.min(
         5,
-        Math.max(1, Number(row.influenceScore) || (type === 'Buyer' ? 5 : type === 'CEO' ? 4 : c.influenceScore || 2))
+        Math.max(
+          1,
+          Number(row.influenceScore) ||
+            (type === 'Buyer' ? 5 : type === 'CEO' ? 4 : c.influenceScore || 2)
+        )
       );
+      const preferName =
+        fullName && !isIncompletePersonName(fullName)
+          ? fullName
+          : firstName && lastName
+            ? `${firstName} ${lastName}`
+            : '';
       return {
         ...c,
-        name: fullName && !isPlaceholderPersonName(fullName) ? fullName : c.name,
-        title: title || c.title,
-        linkedin: linkedin && /linkedin\.com/i.test(linkedin) ? linkedin : c.linkedin,
+        name: preferName || (isIncompletePersonName(c.name) ? c.name : c.name),
+        firstName: firstName || c.firstName,
+        lastName: lastName || c.lastName,
+        title: title && !isWeakJobTitle(title) ? title : isWeakJobTitle(c.title) ? title || c.title : c.title,
+        linkedin: linkedin && /linkedin\.com\/in\//i.test(linkedin) ? linkedin : c.linkedin,
         type,
         influenceScore,
       };
@@ -697,6 +773,63 @@ ${roster}
     return contacts;
   }
 };
+
+/** 用 Hunter 域名搜索结果补全姓名/职位/领英（按邮箱对齐；不覆盖已验证邮箱） */
+const mergeHunterProfilesOntoContacts = (
+  contacts: DecisionMaker[],
+  hunterPeople: DecisionMaker[]
+): { contacts: DecisionMaker[]; enriched: number; added: number } => {
+  if (!hunterPeople.length) return { contacts, enriched: 0, added: 0 };
+  const byEmail = new Map(
+    hunterPeople
+      .filter((h) => h.emailGuess)
+      .map((h) => [(h.emailGuess || '').toLowerCase(), h] as const)
+  );
+  let enriched = 0;
+  const next = contacts.map((c) => {
+    const h = byEmail.get((c.emailGuess || '').toLowerCase());
+    if (!h) return c;
+    byEmail.delete((c.emailGuess || '').toLowerCase());
+    const betterName =
+      h.name && !isIncompletePersonName(h.name)
+        ? h.name
+        : '';
+    const betterTitle = h.title && !isWeakJobTitle(h.title) ? h.title : '';
+    const changed =
+      (betterName && isIncompletePersonName(c.name)) ||
+      (betterTitle && isWeakJobTitle(c.title)) ||
+      (!!h.linkedin && !c.linkedin);
+    if (!changed) return c;
+    enriched += 1;
+    return {
+      ...c,
+      name: betterName && isIncompletePersonName(c.name) ? betterName : c.name,
+      firstName: c.firstName || h.firstName,
+      lastName: c.lastName || h.lastName,
+      title: betterTitle && isWeakJobTitle(c.title) ? betterTitle : c.title,
+      linkedin: c.linkedin || h.linkedin,
+      type:
+        c.type !== 'Other'
+          ? c.type
+          : betterTitle
+            ? classifyDecisionMakerType(betterTitle)
+            : h.type || c.type,
+      influenceScore: Math.max(c.influenceScore || 0, h.influenceScore || 0) || c.influenceScore,
+    };
+  });
+
+  // Hunter 独有、带姓名职位的联系人也纳入（提升决策人完整度）
+  let added = 0;
+  const extras: DecisionMaker[] = [];
+  for (const h of byEmail.values()) {
+    if (!h.emailGuess) continue;
+    if (isIncompletePersonName(h.name) && isWeakJobTitle(h.title)) continue;
+    extras.push(h);
+    added += 1;
+  }
+  return { contacts: [...next, ...extras], enriched, added };
+};
+
 
 /** 验证邮箱（仅用于非 Anymail 来源的二次确认；每次约 0.2 分） */
 const verifyEmailWithAnymail = async (
@@ -748,9 +881,9 @@ export type DecisionMakerResearchResult = {
 
 /**
  * 决策人邮箱搜索：
- * 1) 优先 AnymailFinder「公司域名搜索」→ 联网补职位/领英 → 按人补邮箱 → deepDig 角色补充
- * 2) 若 Anymail 未找到任何带邮箱的联系人，再回退 Hunter.io domain-search
- * 3) Hunter 额度用尽 / 限流时静默跳过，不向用户报错，直接返回已有结果
+ * 1) Anymail 公司域名搜索 → AnySearch+联网补全姓名/职位/领英 → Hunter 按邮箱对齐补全
+ * 2) 已有真实姓名补邮箱；深挖角色接口（姓名+职位）
+ * 3) 若仍无邮箱，回退 Hunter domain-search（额度用尽静默跳过）
  */
 export const researchDecisionMakerEmails = async (opts: {
   domain: string;
@@ -765,7 +898,7 @@ export const researchDecisionMakerEmails = async (opts: {
   const domain = cleanDomain(opts.domain || '');
   const companyName = (opts.companyName || '').trim();
   const reverifyNonAnymail = opts.reverifyNonAnymail !== false;
-  const deepDig = !!opts.deepDig;
+  const deepDig = opts.deepDig !== false; // 默认深挖：角色接口带回姓名+职位
 
   const stats: DecisionMakerResearchStats = {
     added: 0,
@@ -819,11 +952,11 @@ export const researchDecisionMakerEmails = async (opts: {
           {
             ...cur,
             title:
-              cur.title && !/Company Contact/i.test(cur.title)
+              cur.title && !isWeakJobTitle(cur.title)
                 ? cur.title
                 : candidate.title || cur.title,
             linkedin: cur.linkedin || candidate.linkedin,
-            name: !isPlaceholderPersonName(cur.name) ? cur.name : candidate.name,
+            name: !isIncompletePersonName(cur.name) ? cur.name : candidate.name,
           },
           searchedAt
         );
@@ -835,8 +968,8 @@ export const researchDecisionMakerEmails = async (opts: {
         {
           ...cur,
           ...candidate,
-          name: !isPlaceholderPersonName(cur.name) ? cur.name : candidate.name,
-          title: cur.title && !/Company Contact/i.test(cur.title) ? cur.title : candidate.title,
+          name: !isIncompletePersonName(cur.name) ? cur.name : candidate.name,
+          title: !isWeakJobTitle(cur.title) ? cur.title : candidate.title,
           linkedin: cur.linkedin || candidate.linkedin,
           type: cur.type !== 'Other' ? cur.type : candidate.type,
           influenceScore: Math.max(cur.influenceScore || 0, candidate.influenceScore || 0) || candidate.influenceScore,
@@ -879,6 +1012,24 @@ export const researchDecisionMakerEmails = async (opts: {
             companyName || domain,
             companyPeople
           );
+          // Hunter 常有职位/姓名/领英：按邮箱对齐补全（即使 Anymail 已找到邮箱也要跑）
+          if (hasHunter && domain && domain.includes('.')) {
+            try {
+              const hunterHit = await fetchHunterEmails(domain);
+              const mergedHunter = mergeHunterProfilesOntoContacts(
+                companyPeople,
+                hunterHit.people
+              );
+              companyPeople = mergedHunter.contacts;
+              if (mergedHunter.enriched || mergedHunter.added) {
+                console.info(
+                  `[DM] Hunter profile enrich: +${mergedHunter.enriched} upgraded, +${mergedHunter.added} added`
+                );
+              }
+            } catch (e) {
+              console.warn('[DM] Hunter enrich skipped', e);
+            }
+          }
           for (const p of companyPeople) {
             if (p.linkedin) stats.linkedinDiscovered += 1;
             pushOrMergeCompanyContact(p);
@@ -974,21 +1125,76 @@ export const researchDecisionMakerEmails = async (opts: {
         if (hadBadEmail) stats.reFoundAfterInvalid += 1;
       }
 
-      // ——— 3) 深挖：少量角色补充（buyer → logistics → ceo），串行且最多 2 人 ———
+      // ——— 3) 深挖：角色接口（带回 person_full_name / job_title / linkedin）———
       if (deepDig && domain) {
         const roleCandidates = await fetchAnymailDecisionMakers(domain, [
           { categories: ['buyer'], title: 'Procurement / Buyer', score: 5 },
           { categories: ['logistics'], title: 'Logistics / Supply Chain', score: 4 },
           { categories: ['ceo'], title: 'CEO / Owner', score: 4 },
+          { categories: ['finance'], title: 'Finance / CFO', score: 3 },
         ]);
         for (const candidate of roleCandidates) {
           const em = emailKey(candidate);
-          if (em && seenEmails.has(em)) continue;
+          if (em && seenEmails.has(em)) {
+            // 同邮箱：用角色结果补全姓名/职位
+            const idx = merged.findIndex((d) => emailKey(d) === em);
+            if (idx >= 0) {
+              const cur = merged[idx];
+              merged[idx] = stampChecked(
+                {
+                  ...cur,
+                  name:
+                    candidate.name && !isIncompletePersonName(candidate.name)
+                      ? candidate.name
+                      : cur.name,
+                  firstName: cur.firstName || candidate.firstName,
+                  lastName: cur.lastName || candidate.lastName,
+                  title:
+                    candidate.title && !isWeakJobTitle(candidate.title)
+                      ? candidate.title
+                      : cur.title,
+                  linkedin: cur.linkedin || candidate.linkedin,
+                  type: candidate.type !== 'Other' ? candidate.type : cur.type,
+                  influenceScore: Math.max(
+                    cur.influenceScore || 0,
+                    candidate.influenceScore || 0
+                  ),
+                },
+                searchedAt
+              );
+              stats.upgraded += 1;
+              if (candidate.linkedin) stats.linkedinDiscovered += 1;
+            }
+            continue;
+          }
           if (em) seenEmails.add(em);
           merged.push(stampChecked(candidate, searchedAt));
           stats.added += 1;
           stats.anymailFound += 1;
           if (candidate.linkedin) stats.linkedinDiscovered += 1;
+        }
+      }
+    }
+
+    // ——— 3b) 仍缺姓名/职位：再跑一轮 Hunter 对齐补全（覆盖已在 merged 中的人）———
+    if (hasHunter && domain && domain.includes('.')) {
+      const stillWeak = merged.filter((d) => d.emailGuess && needsProfileEnrichment(d));
+      if (stillWeak.length) {
+        try {
+          const hunterHit = await fetchHunterEmails(domain);
+          const { contacts: enrichedList, enriched, added } = mergeHunterProfilesOntoContacts(
+            merged,
+            hunterHit.people
+          );
+          if (enriched || added) {
+            merged.length = 0;
+            merged.push(...enrichedList);
+            stats.upgraded += enriched;
+            stats.added += added;
+            console.info(`[DM] post-pass Hunter enrich: +${enriched} / +${added}`);
+          }
+        } catch (e) {
+          console.warn('[DM] post-pass Hunter enrich failed', e);
         }
       }
     }
@@ -2695,6 +2901,7 @@ export const callQwen = async (
     jsonMode?: boolean;
     override?: Partial<QwenRuntimeConfig>;
     enableSearch?: boolean;
+    forcedSearch?: boolean;
     task?: TaskType;
     timeoutMs?: number;
   } = {}
@@ -2709,6 +2916,7 @@ export const callQwen = async (
       {
         jsonMode: options.jsonMode,
         enableSearch: options.enableSearch,
+        forcedSearch: options.forcedSearch,
         task: options.task,
         override: options.override,
         timeoutMs: options.timeoutMs,
