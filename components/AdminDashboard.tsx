@@ -91,10 +91,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const [isTestingWan, setIsTestingWan] = useState(false);
   const [isTestingAnymail, setIsTestingAnymail] = useState(false);
   const [isTestingHunter, setIsTestingHunter] = useState(false);
+  const [isSavingConfigs, setIsSavingConfigs] = useState(false);
   const [qwenTestMsg, setQwenTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [anymailTestMsg, setAnymailTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [hunterTestMsg, setHunterTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [wanTestMsg, setWanTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [saveConfigMsg, setSaveConfigMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [ytLink, setYtLink] = useState('');
   const [isUploading, setIsUploading] = useState(false);
 
@@ -248,70 +250,123 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   };
 
   const handleSaveApiConfigs = async () => {
-    localStorage.setItem('trade_scout_api_configs', JSON.stringify(localApiConfigs));
-    localStorage.setItem('trade_scout_default_ai_model', defaultAIModel);
-    if (qwenApiKey.trim()) {
-      localStorage.setItem('trade_scout_qwen_api_key', qwenApiKey.trim());
-    }
-    if (qwenBaseUrl.trim()) {
-      localStorage.setItem('trade_scout_qwen_base_url', qwenBaseUrl.trim());
-    }
-    if (qwenModelId.trim()) {
-      localStorage.setItem('trade_scout_qwen_model_id', qwenModelId.trim());
-    }
-    if (wanApiKey.trim()) {
-      localStorage.setItem('trade_scout_wan_api_key', wanApiKey.trim());
-    } else if (qwenApiKey.trim()) {
-      // 未单独填万相 Key 时，与千问共用
-      localStorage.setItem('trade_scout_wan_api_key', qwenApiKey.trim());
-    }
-    if (wanBaseUrl.trim()) {
-      localStorage.setItem('trade_scout_wan_base_url', wanBaseUrl.trim());
-    } else if (qwenBaseUrl.trim()) {
-      localStorage.setItem('trade_scout_wan_base_url', qwenBaseUrl.trim());
-    }
-    if (wanModelId.trim()) {
-      localStorage.setItem('trade_scout_wan_model_id', wanModelId.trim());
-    }
+    if (isSavingConfigs) return;
+    setIsSavingConfigs(true);
+    setSaveConfigMsg({ ok: true, text: '正在保存配置…' });
+    const cloudWithTimeout = async (label: string, fn: () => Promise<boolean>) => {
+      try {
+        const ok = await Promise.race([
+          fn(),
+          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 12_000)),
+        ]);
+        return { label, ok };
+      } catch (e: any) {
+        console.error(`save ${label} failed`, e);
+        return { label, ok: false };
+      }
+    };
 
-    saveEmailSearchKeys({
-      hunter: hunterApiKey,
-      findymail: findymailApiKey,
-      anymailFinder: anymailFinderApiKey,
-    });
+    try {
+      localStorage.setItem('trade_scout_api_configs', JSON.stringify(localApiConfigs));
+      localStorage.setItem('trade_scout_default_ai_model', defaultAIModel);
+      if (qwenApiKey.trim()) {
+        localStorage.setItem('trade_scout_qwen_api_key', qwenApiKey.trim());
+      }
+      if (qwenBaseUrl.trim()) {
+        localStorage.setItem('trade_scout_qwen_base_url', qwenBaseUrl.trim());
+      }
+      if (qwenModelId.trim()) {
+        localStorage.setItem('trade_scout_qwen_model_id', qwenModelId.trim());
+      }
+      if (wanApiKey.trim()) {
+        localStorage.setItem('trade_scout_wan_api_key', wanApiKey.trim());
+      } else if (qwenApiKey.trim()) {
+        localStorage.setItem('trade_scout_wan_api_key', qwenApiKey.trim());
+      }
+      if (wanBaseUrl.trim()) {
+        localStorage.setItem('trade_scout_wan_base_url', wanBaseUrl.trim());
+      } else if (qwenBaseUrl.trim()) {
+        localStorage.setItem('trade_scout_wan_base_url', qwenBaseUrl.trim());
+      }
+      if (wanModelId.trim()) {
+        localStorage.setItem('trade_scout_wan_model_id', wanModelId.trim());
+      }
 
-    if (qwenApiKey.trim() && isSupabaseConfigured()) {
-      await saveApiConfig({
-        provider: 'qwen',
-        apiKey: qwenApiKey.trim(),
-        baseUrl: qwenBaseUrl.trim() || undefined,
-        modelId: qwenModelId.trim() || 'qwen-max',
+      saveEmailSearchKeys({
+        hunter: hunterApiKey,
+        findymail: findymailApiKey,
+        anymailFinder: anymailFinderApiKey,
       });
-    }
 
-    const wanKeyToSave = wanApiKey.trim() || qwenApiKey.trim();
-    if (wanKeyToSave && isSupabaseConfigured()) {
-      await saveApiConfig({
-        provider: 'wan',
-        apiKey: wanKeyToSave,
-        baseUrl: (wanBaseUrl.trim() || qwenBaseUrl.trim()) || undefined,
-        modelId: wanModelId.trim() || 'wan2.7-image',
-      });
-    }
+      const emailLocal = [
+        anymailFinderApiKey.trim() ? 'Anymail✓' : 'Anymail✗',
+        hunterApiKey.trim() ? 'Hunter✓' : 'Hunter✗',
+        findymailApiKey.trim() ? 'Findymail✓' : 'Findymail✗',
+      ].join(' · ');
 
-    if (isSupabaseConfigured()) {
-      if (hunterApiKey.trim()) {
-        await saveApiConfig({ provider: 'hunter', apiKey: hunterApiKey.trim() });
-      }
-      if (findymailApiKey.trim()) {
-        await saveApiConfig({ provider: 'findymail', apiKey: findymailApiKey.trim() });
-      }
-      if (anymailFinderApiKey.trim()) {
-        await saveApiConfig({ provider: 'anymailfinder', apiKey: anymailFinderApiKey.trim() });
-      }
-    }
+      const cloudParts: string[] = [];
+      if (isSupabaseConfigured()) {
+        if (qwenApiKey.trim()) {
+          const r = await cloudWithTimeout('千问', () =>
+            saveApiConfig({
+              provider: 'qwen',
+              apiKey: qwenApiKey.trim(),
+              baseUrl: qwenBaseUrl.trim() || undefined,
+              modelId: qwenModelId.trim() || 'qwen-max',
+            })
+          );
+          cloudParts.push(`${r.label}${r.ok ? '✓' : '✗'}`);
+        }
 
-    alert('API 配置已保存 (本地 + 云端)');
+        const wanKeyToSave = wanApiKey.trim() || qwenApiKey.trim();
+        if (wanKeyToSave) {
+          const r = await cloudWithTimeout('万相', () =>
+            saveApiConfig({
+              provider: 'wan',
+              apiKey: wanKeyToSave,
+              baseUrl: (wanBaseUrl.trim() || qwenBaseUrl.trim()) || undefined,
+              modelId: wanModelId.trim() || 'wan2.7-image',
+            })
+          );
+          cloudParts.push(`${r.label}${r.ok ? '✓' : '✗'}`);
+        }
+
+        if (hunterApiKey.trim()) {
+          const r = await cloudWithTimeout('Hunter', () =>
+            saveApiConfig({ provider: 'hunter', apiKey: hunterApiKey.trim() })
+          );
+          cloudParts.push(`${r.label}${r.ok ? '✓' : '✗'}`);
+        }
+        if (findymailApiKey.trim()) {
+          const r = await cloudWithTimeout('Findymail', () =>
+            saveApiConfig({ provider: 'findymail', apiKey: findymailApiKey.trim() })
+          );
+          cloudParts.push(`${r.label}${r.ok ? '✓' : '✗'}`);
+        }
+        if (anymailFinderApiKey.trim()) {
+          const r = await cloudWithTimeout('Anymail', () =>
+            saveApiConfig({ provider: 'anymailfinder', apiKey: anymailFinderApiKey.trim() })
+          );
+          cloudParts.push(`${r.label}${r.ok ? '✓' : '✗'}`);
+        }
+      }
+
+      const cloudLine = isSupabaseConfigured()
+        ? cloudParts.length
+          ? `云端：${cloudParts.join(' · ')}`
+          : '云端：无新增邮箱 Key 可同步（请确认已填写）'
+        : '云端：Supabase 未配置（仅本机生效）';
+
+      const text = `配置已保存\n本机邮箱 Key：${emailLocal}\n${cloudLine}\n\n普通用户请刷新页面后再搜决策人（会自动拉取云端 Key）`;
+      setSaveConfigMsg({ ok: true, text: text.replace(/\n/g, ' · ') });
+      alert(text);
+    } catch (e: any) {
+      const text = `保存失败：${e?.message || String(e)}（本机 Key 可能已写入，云端请重试）`;
+      setSaveConfigMsg({ ok: false, text });
+      alert(text);
+    } finally {
+      setIsSavingConfigs(false);
+    }
   };
 
   const handleSaveProxy = () => {
@@ -695,14 +750,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     <p className="text-xs sm:text-sm text-slate-400 font-bold mt-1">国内千问 API — 支持联网搜索、背景调查、PPT 导出等全部功能</p>
                   </div>
                   <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
-                  <button onClick={handleSaveApiConfigs} className="bg-slate-900 hover:bg-slate-800 text-white px-4 sm:px-6 py-3 rounded-xl font-black flex items-center justify-center gap-2 shadow-lg touch-manipulation">
-                    <Save size={20} /> 保存配置
+                  <button
+                    onClick={handleSaveApiConfigs}
+                    disabled={isSavingConfigs}
+                    className="bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white px-4 sm:px-6 py-3 rounded-xl font-black flex items-center justify-center gap-2 shadow-lg touch-manipulation"
+                  >
+                    {isSavingConfigs ? <Loader2 size={20} className="animate-spin" /> : <Save size={20} />}
+                    {isSavingConfigs ? '保存中…' : '保存配置'}
                   </button>
                   <button onClick={handleAddApi} className="bg-blue-600 hover:bg-blue-700 text-white px-4 sm:px-6 py-3 rounded-xl font-black flex items-center justify-center gap-2 shadow-lg shadow-blue-100 touch-manipulation">
                     <Plus size={20} /> 添加新密钥
                   </button>
                   </div>
                 </div>
+                {saveConfigMsg && (
+                  <p className={`text-xs font-bold ${saveConfigMsg.ok ? 'text-emerald-700' : 'text-rose-600'}`}>
+                    {saveConfigMsg.text}
+                  </p>
+                )}
 
                 {/* Qwen + Supabase */}
                 <div className="bg-emerald-50/50 border border-emerald-100 rounded-2xl p-6 space-y-4">

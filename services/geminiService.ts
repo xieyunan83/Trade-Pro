@@ -1167,15 +1167,14 @@ export const hasApiKeyConfigured = (): boolean => {
     return false;
 };
 
-/** 从 Supabase 拉取管理员保存的 API 密钥到 localStorage，供普通用户登录后使用 */
+/** 从 Supabase 拉取管理员保存的 API 密钥到 localStorage（含邮箱搜索 Key）
+ * 注意：即使本地已有千问 Key，也必须继续同步 Hunter / Anymail，否则决策人挖掘会空跑。
+ */
 export const hydrateApiConfigsFromCloud = async (): Promise<boolean> => {
-    if (hasApiKeyConfigured()) return true;
-    if (!isSupabaseConfigured()) return false;
+    if (!isSupabaseConfigured()) return hasApiKeyConfigured();
 
     try {
         const configs = await getAllApiConfigs();
-        if (configs.length === 0) return false;
-
         for (const c of configs) {
             if (c.provider === 'qwen' && c.apiKey?.trim()) {
                 localStorage.setItem('trade_scout_qwen_api_key', c.apiKey.trim());
@@ -1197,7 +1196,6 @@ export const hydrateApiConfigsFromCloud = async (): Promise<boolean> => {
                 if (c.modelId?.trim()) localStorage.setItem('trade_scout_wan_model_id', c.modelId.trim());
             }
         }
-
         return hasApiKeyConfigured();
     } catch (e) {
         console.error('Failed to hydrate API configs from Supabase', e);
@@ -1205,13 +1203,40 @@ export const hydrateApiConfigsFromCloud = async (): Promise<boolean> => {
     }
 };
 
+/** 确保邮箱搜索 Key 已从云端同步到本机（决策人挖掘前调用） */
+export const ensureEmailSearchKeysReady = async (): Promise<{
+  anymail: boolean;
+  hunter: boolean;
+  findymail: boolean;
+}> => {
+  try {
+    await hydrateApiConfigsFromCloud();
+  } catch (e) {
+    console.warn('ensureEmailSearchKeysReady hydrate failed', e);
+  }
+  const keys = getEmailSearchKeys();
+  return {
+    anymail: !!keys.anymailFinder,
+    hunter: !!keys.hunter,
+    findymail: !!keys.findymail,
+  };
+};
+
 export const checkApiKeyAvailability = async (): Promise<boolean> => {
+    // 始终尝试同步云端（含邮箱 Key）；本地已有千问时也不能跳过
+    if (isSupabaseConfigured()) {
+      try {
+        await hydrateApiConfigsFromCloud();
+      } catch {
+        /* ignore */
+      }
+    }
     if (hasApiKeyConfigured()) return true;
     if (typeof window !== 'undefined' && window.aistudio?.hasSelectedApiKey) {
         const studioKey = await window.aistudio.hasSelectedApiKey();
         if (studioKey) return true;
     }
-    return hydrateApiConfigsFromCloud();
+    return hasApiKeyConfigured();
 };
 
 const getDefaultAIModel = (): 'qwen' | 'gemini' | 'auto' => {

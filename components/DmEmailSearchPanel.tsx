@@ -82,7 +82,8 @@ export const DmEmailSearchPanel: React.FC = () => {
                             }`;
                           })()
                         : ''}
-                      {job.status === 'failed' && job.error ? ` · ${job.error.slice(0, 60)}` : ''}
+                      {job.status === 'failed' && job.error ? ` · ${job.error.slice(0, 80)}` : ''}
+                      {job.status === 'completed' && job.error ? ` · ${job.error.slice(0, 80)}` : ''}
                     </div>
                   </div>
                   {(job.status === 'completed' || job.status === 'failed') && (

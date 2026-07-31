@@ -2,6 +2,7 @@
  * 决策人邮箱后台搜索队列：可并行、不阻塞页面浏览。
  */
 import {
+  ensureEmailSearchKeysReady,
   researchDecisionMakerEmails,
   type DecisionMakerResearchStats,
 } from './geminiService';
@@ -143,6 +144,16 @@ const pump = async () => {
       // 并行启动，不 await 在循环里串行
       void (async (job) => {
         try {
+          const keyStatus = await ensureEmailSearchKeysReady();
+          if (!keyStatus.anymail && !keyStatus.hunter) {
+            job.status = 'failed';
+            job.finishedAt = Date.now();
+            job.error =
+              '未检测到 AnymailFinder / Hunter.io API Key。请管理员在后台填写并点「保存配置」，然后本页强制刷新（Cmd+Shift+R）后再搜。';
+            notify();
+            return;
+          }
+
           const resolver = resolveExistingHandlers.get(job.id);
           let existing = job.existingSnapshot || [];
           if (resolver) {
@@ -167,6 +178,12 @@ const pump = async () => {
           job.resultDecisionMakers = research.decisionMakers;
           job.searchedAt = research.searchedAt;
           job.searchHistoryAppend = research.searchedAt;
+          const foundEmails = (research.decisionMakers || []).filter((d) => d.emailGuess?.includes('@')).length;
+          if (foundEmails === 0 && (research.stats?.added || 0) + (research.stats?.upgraded || 0) === 0) {
+            job.error = keyStatus.anymail
+              ? 'Anymail 未返回联系人' + (keyStatus.hunter ? '，Hunter 回退也无结果（或额度已用尽已静默跳过）' : '（未配置 Hunter 回退）')
+              : '仅配置了 Hunter，本次未找到联系人（额度用尽时会静默跳过）';
+          }
           notify();
 
           const handler = onCompleteHandlers.get(job.id);
