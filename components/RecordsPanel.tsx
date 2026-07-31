@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { HistoryItem, DiscoveryArchiveItem, DiscoveryState } from '../types';
+import { HistoryItem, DiscoveryArchiveItem, Client, DiscoveryState } from '../types';
 import {
   ChevronDown,
   ChevronRight,
@@ -27,6 +27,11 @@ import {
   mergeObservedKeywords,
   mergeObservedCountries,
 } from '../services/taxonomyStore';
+import {
+  historyHasDmSearch,
+  isHistoryInCrm,
+  normalizeCrmHost,
+} from '../utils/crmHistory';
 
 type RecordTab = 'search' | 'background' | 'all';
 type GroupBy = 'keyword' | 'country' | 'time' | 'dmMined';
@@ -34,6 +39,8 @@ type GroupBy = 'keyword' | 'country' | 'time' | 'dmMined';
 interface RecordsPanelProps {
   history: HistoryItem[];
   discoveryArchives: DiscoveryArchiveItem[];
+  /** Used to show「已入CRM」status tags */
+  crmClients?: Client[];
   onClose: () => void;
   onOpenHistory: (item: HistoryItem) => void;
   onDownloadHistory: (item: HistoryItem) => void;
@@ -73,13 +80,38 @@ const historyCountry = (h: HistoryItem) =>
   normalizeCountryZh(h.country || h.data?.companyInfo?.headquarters || h.data?.companyInfo?.city || '');
 
 const historyDmMined = (h: HistoryItem) =>
-  h.data?.decisionMakerEmailSearchAt ? '已挖掘决策人' : '未挖掘决策人';
+  historyHasDmSearch(h) ? '已挖掘决策人' : '未挖掘决策人';
 
 const discoveryDmMined = () => '搜索记录（无决策人挖掘）';
+
+/** Status chip: done = solid tint, pending = muted outline */
+const StatusChip: React.FC<{ done: boolean; doneLabel: string; pendingLabel: string; tone: 'violet' | 'amber' | 'emerald' }> = ({
+  done,
+  doneLabel,
+  pendingLabel,
+  tone,
+}) => {
+  const doneClass =
+    tone === 'violet'
+      ? 'bg-violet-600 text-white'
+      : tone === 'amber'
+        ? 'bg-amber-500 text-white'
+        : 'bg-emerald-600 text-white';
+  const pendingClass = 'bg-slate-100 text-slate-400 border border-slate-200';
+  return (
+    <span
+      className={`text-[9px] font-black px-1.5 py-0.5 rounded ${done ? doneClass : pendingClass}`}
+      title={done ? doneLabel : pendingLabel}
+    >
+      {done ? doneLabel : pendingLabel}
+    </span>
+  );
+};
 
 export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   history,
   discoveryArchives,
+  crmClients = [],
   onClose,
   onOpenHistory,
   onDownloadHistory,
@@ -319,6 +351,13 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
           「已挖掘」= 已点过决策人邮箱搜索；「未挖掘」= 背调后尚未搜索决策人，避免重复操作。
         </div>
       )}
+      <div className="px-3 py-1.5 text-[9px] text-slate-400 font-semibold border-b border-slate-50 flex flex-wrap gap-1.5 items-center">
+        <span className="mr-0.5">状态:</span>
+        <StatusChip done doneLabel="已背调" pendingLabel="未背调" tone="violet" />
+        <StatusChip done doneLabel="已挖决策人" pendingLabel="未挖决策人" tone="amber" />
+        <StatusChip done doneLabel="已入CRM" pendingLabel="未入CRM" tone="emerald" />
+        <span className="text-slate-300 ml-0.5">灰底 = 未完成</span>
+      </div>
 
       {/* 自定义分类管理 */}
       {(groupBy === 'keyword' || groupBy === 'country') && (
@@ -452,8 +491,20 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                               <div className="text-xs font-black text-slate-800 truncate">{row.item.data?.companyInfo?.name || row.item.domain}</div>
                               <div className="text-[10px] text-slate-400 truncate">{row.item.domain}</div>
                               <div className="flex flex-wrap gap-1 mt-1.5">
-                                <span className="text-[9px] font-black bg-violet-50 text-violet-600 px-1.5 py-0.5 rounded">背调</span>
-                                <span className="text-[9px] font-black bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded">
+                                <StatusChip done doneLabel="已背调" pendingLabel="未背调" tone="violet" />
+                                <StatusChip
+                                  done={historyHasDmSearch(row.item)}
+                                  doneLabel="已挖决策人"
+                                  pendingLabel="未挖决策人"
+                                  tone="amber"
+                                />
+                                <StatusChip
+                                  done={isHistoryInCrm(row.item, crmClients)}
+                                  doneLabel="已入CRM"
+                                  pendingLabel="未入CRM"
+                                  tone="emerald"
+                                />
+                                <span className="text-[9px] font-black bg-slate-50 text-slate-500 px-1.5 py-0.5 rounded border border-slate-100">
                                   {historyKeyword(row.item)}
                                 </span>
                                 <span className="text-[9px] font-black bg-sky-50 text-sky-700 px-1.5 py-0.5 rounded">
@@ -463,7 +514,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                                   .filter((t) => typeof t === 'string' && !t.startsWith('关键词:') && !t.startsWith('国家:'))
                                   .slice(0, 3)
                                   .map((t) => (
-                                    <span key={t} className="text-[9px] font-black bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded">
+                                    <span key={t} className="text-[9px] font-black bg-slate-50 text-slate-500 px-1.5 py-0.5 rounded border border-slate-100">
                                       {t}
                                     </span>
                                   ))}
@@ -535,6 +586,42 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                               <div className="text-[10px] text-slate-400">{row.item.results?.length || 0} 家客户</div>
                               <div className="flex flex-wrap gap-1 mt-1.5">
                                 <span className="text-[9px] font-black bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded">客户搜索</span>
+                                {(() => {
+                                  const results = row.item.results || [];
+                                  let bgCount = 0;
+                                  let crmCount = 0;
+                                  for (const r of results) {
+                                    const host = normalizeCrmHost(r.website);
+                                    if (!host) continue;
+                                    if (
+                                      history.some(
+                                        (h) =>
+                                          normalizeCrmHost(h.domain || h.data?.companyInfo?.website) === host
+                                      )
+                                    ) {
+                                      bgCount += 1;
+                                    }
+                                    if (crmClients.some((c) => normalizeCrmHost(c.website) === host)) {
+                                      crmCount += 1;
+                                    }
+                                  }
+                                  return (
+                                    <>
+                                      <StatusChip
+                                        done={bgCount > 0}
+                                        doneLabel={`已背调 ${bgCount}/${results.length}`}
+                                        pendingLabel="未背调 0"
+                                        tone="violet"
+                                      />
+                                      <StatusChip
+                                        done={crmCount > 0}
+                                        doneLabel={`已入CRM ${crmCount}/${results.length}`}
+                                        pendingLabel="未入CRM 0"
+                                        tone="emerald"
+                                      />
+                                    </>
+                                  );
+                                })()}
                                 <span className="text-[9px] font-black bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded">
                                   关键词:{discoveryKeyword(row.item)}
                                 </span>

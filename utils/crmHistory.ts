@@ -36,3 +36,24 @@ export const clientHasBackgroundCheck = (
   if (client.hasBackgroundCheck || client.hasAnalyzed) return true;
   return !!findHistoryForClient(client, history);
 };
+
+/** Whether a history / analysis domain is already in CRM */
+export const isHistoryInCrm = (
+  item: Pick<HistoryItem, 'domain' | 'data'>,
+  clients: Client[]
+): boolean => {
+  if (!clients?.length) return false;
+  const host = normalizeCrmHost(item.domain || item.data?.companyInfo?.website);
+  const name = (item.data?.companyInfo?.name || '').trim().toLowerCase();
+  return clients.some((c) => {
+    const cHost = normalizeCrmHost(c.website);
+    if (host && cHost && host === cHost) return true;
+    if (name && (c.name || '').trim().toLowerCase() === name) return true;
+    return false;
+  });
+};
+
+/** Decision-maker email search already run on this report */
+export const historyHasDmSearch = (item: HistoryItem): boolean =>
+  !!item.data?.decisionMakerEmailSearchAt ||
+  !!(item.data?.decisionMakerEmailSearchHistory && item.data.decisionMakerEmailSearchHistory.length > 0);

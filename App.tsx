@@ -1492,6 +1492,7 @@ const App: React.FC = () => {
         <RecordsPanel
           history={history}
           discoveryArchives={discoveryArchives}
+          crmClients={crmClients}
           onClose={() => setHistoryOpen(false)}
           onOpenHistory={loadFromHistory}
           onDownloadHistory={(item) => {
