@@ -9,7 +9,7 @@ import {
   roleLabel,
 } from '../services/permissions';
 import { createDepartment } from '../services/orgStore';
-import { findUserByName, hashPassword, persistDepartments, persistUsers } from '../services/auth';
+import { findUserByName, persistDepartments, persistUsers } from '../services/auth';
 import {
   clearUserDeviceBindings,
   defaultAccessSchedule,

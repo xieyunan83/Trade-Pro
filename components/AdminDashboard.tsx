@@ -12,7 +12,7 @@ import { testApiKey, testQwenApiKey, testAnymailFinderApiKey, testHunterApiKey, 
 import { testWanImageApi } from '../services/wanImageService';
 import { saveApiConfig, getApiConfig, isSupabaseConfigured, saveKnowledgeFile, getKnowledgeFiles, deleteKnowledgeFile, resetSupabaseClient, testSupabaseConnection } from '../services/supabase';
 import { getSupabaseConfig, saveSupabaseConfig, clearSupabaseOverride, saveEmailSearchKeys, getEmailSearchKeys, getAnysearchApiKey, saveAnysearchApiKey, env } from '../services/env';
-import { hashPassword, persistUsers, findUserByName, updateUserPassword } from '../services/auth';
+import { hashPassword, persistUsers, updateUserPassword } from '../services/auth';
 import { loadDepartmentsFromStorage } from '../services/orgStore';
 import { roleLabel } from '../services/permissions';
 import { OrgPermissionPanel } from './OrgPermissionPanel';
