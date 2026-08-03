@@ -417,7 +417,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     setIsTestingQwen(true);
     setQwenTestMsg({
       ok: true,
-      text: testSearch ? '正在测试联网搜索（最长约 18 秒）…' : '正在测试连接（最长约 18 秒）…',
+      text: testSearch ? '正在测试联网搜索（最长约 45 秒）…' : '正在测试连接（最长约 45 秒）…',
     });
     try {
       const result = await testQwenApiKey(qwenApiKey, qwenBaseUrl, qwenModelId, testSearch);
@@ -431,18 +431,37 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
 
   const handleTestWan = async () => {
     if (isTestingWan) return;
-    const key = wanApiKey.trim() || qwenApiKey.trim();
+    const key = (wanApiKey.trim() || qwenApiKey.trim()).replace(/\s+/g, '');
     if (!key) {
       setWanTestMsg({ ok: false, text: '请先填写万相 API Key（可与千问 Token Plan 共用）' });
       return;
     }
+    const base =
+      wanBaseUrl.trim() ||
+      qwenBaseUrl.trim() ||
+      'https://token-plan.cn-beijing.maas.aliyuncs.com';
+    const origin = (() => {
+      try {
+        return key.startsWith('sk-sp-')
+          ? 'https://token-plan.cn-beijing.maas.aliyuncs.com'
+          : new URL(base.startsWith('http') ? base : `https://${base}`).origin;
+      } catch {
+        return 'https://token-plan.cn-beijing.maas.aliyuncs.com';
+      }
+    })();
     localStorage.setItem('trade_scout_wan_api_key', key);
-    localStorage.setItem('trade_scout_wan_base_url', (wanBaseUrl.trim() || qwenBaseUrl.trim() || 'https://token-plan.cn-beijing.maas.aliyuncs.com'));
+    localStorage.setItem('trade_scout_wan_base_url', origin);
     localStorage.setItem('trade_scout_wan_model_id', wanModelId.trim() || 'wan2.7-image');
+    setWanBaseUrl(origin);
+    if (!wanApiKey.trim()) setWanApiKey(key);
     setIsTestingWan(true);
-    setWanTestMsg({ ok: true, text: '正在测试万相连接…' });
+    setWanTestMsg({ ok: true, text: '正在测试万相连接（最长约 45 秒）…' });
     try {
-      const result = await testWanImageApi();
+      const result = await testWanImageApi({
+        apiKey: key,
+        origin,
+        modelId: wanModelId.trim() || 'wan2.7-image',
+      });
       setWanTestMsg({ ok: result.success, text: result.message });
     } catch (e: any) {
       setWanTestMsg({ ok: false, text: `万相测试异常: ${e?.message || String(e)}` });
@@ -966,7 +985,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     <Image size={16} /> 万相图片生成（wan2.7-image）
                   </div>
                   <p className="text-xs text-slate-500 font-medium">
-                    可与上方千问 Token Plan 共用同一 API Key。若留空 Key，保存时自动使用千问 Key。
+                    与上方千问共用同一把 Token Plan Key（sk-sp-）和域名 token-plan.cn-beijing.maas.aliyuncs.com。
+                    Key 留空则自动用千问 Key。若千问已通而万相仍 401，请到阿里云控制台确认套餐已开通 wan2.7-image。
                   </p>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="md:col-span-2">

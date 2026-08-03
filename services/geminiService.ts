@@ -36,8 +36,8 @@ const TASK_TIMEOUT_MS: Partial<Record<TaskType, number>> = {
   email: 180_000,
 };
 
-/** 连接测试专用短超时，避免云端后台长时间转圈无反馈 */
-const CONNECTION_TEST_TIMEOUT_MS = 18_000;
+/** 连接测试专用超时（含 Vercel 冷启动 + 跨境到阿里云） */
+const CONNECTION_TEST_TIMEOUT_MS = 45_000;
 
 const fetchWithTimeout = async (
   input: RequestInfo | URL,
