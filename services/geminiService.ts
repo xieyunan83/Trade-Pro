@@ -1554,7 +1554,9 @@ const callOpenAICompatible = async (
     } else {
         errorMsg += `Last Error: ${lastError?.message || 'Network Error'}. Check URL/Network.`;
         errorMsg += qwenCorsHint(lastError?.message);
-        if (!isLocalDevHost() && isDomesticQwenEndpoint(baseUrl) && !baseUrl.includes('/functions/v1/qwen-proxy')) {
+        if (/FUNCTION_INVOCATION_FAILED/i.test(String(lastError?.message || ''))) {
+          errorMsg += ' 同域云函数异常，请重新部署最新代码后重试。';
+        } else if (!isLocalDevHost() && isDomesticQwenEndpoint(baseUrl) && !baseUrl.includes('/functions/v1/qwen-proxy') && !isAppHostedQwenProxy(baseUrl)) {
           errorMsg += ' 若尚未部署 qwen-proxy，线上测试必失败。';
         }
     }

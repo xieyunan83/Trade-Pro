@@ -2,6 +2,8 @@
  * Vercel Serverless：同域转发 Hunter.io（规避浏览器 CORS）
  * 用法：/api/hunter?__upstream=/v2/account&api_key=xxx
  */
+import { guardApiRequest } from '../lib/serverApiGuard';
+
 export const config = {
   runtime: 'nodejs',
   maxDuration: 30,
@@ -37,8 +39,7 @@ export default async function handler(req: any, res: any) {
     return;
   }
 
-  const { guardApiRequest } = await import('./_firewall');
-  if (!guardApiRequest(req, res, 'hunter')) return;
+  if (!guardApiRequest(req, res, 'hunter', { skipBodyCheck: true })) return;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);

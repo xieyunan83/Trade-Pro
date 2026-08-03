@@ -3,6 +3,8 @@
  * Auth：优先使用客户端 Authorization（云端同步的 Key）；否则回退 process.env.ANYSEARCH_API_KEY
  * 用法：POST /api/anysearch  →  https://api.anysearch.com/mcp
  */
+import { guardApiRequest } from '../lib/serverApiGuard';
+
 export const config = {
   runtime: 'nodejs',
   maxDuration: 60,
@@ -47,8 +49,7 @@ export default async function handler(req: any, res: any) {
     return;
   }
 
-  const { guardApiRequest } = await import('./_firewall');
-  if (!guardApiRequest(req, res, 'anysearch')) return;
+  if (!guardApiRequest(req, res, 'anysearch', { skipBodyCheck: true })) return;
 
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'AnySearch proxy only accepts POST' });
