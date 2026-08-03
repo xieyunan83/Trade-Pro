@@ -1,21 +1,12 @@
 /**
- * Vercel Serverless：同域转发 Anymail Finder（单文件）
- * 用法：/api/anymail?__upstream=/v5.1/verify-email
+ * Vercel Serverless：同域转发 Anymail Finder（零外部 import）
  */
-import { guardApiRequest } from '../lib/serverApiGuard';
-
 export const config = {
   runtime: 'nodejs',
   maxDuration: 180,
-  api: {
-    bodyParser: {
-      sizeLimit: '2mb',
-    },
-  },
 };
 
 const ORIGIN = 'https://api.anymailfinder.com';
-/** 公司域名搜索官方建议最长约 180s；过短会导致前端拿到空结果 */
 const UPSTREAM_TIMEOUT_MS = 170_000;
 
 const applyCors = (res: { setHeader: (k: string, v: string) => void }) => {
@@ -64,59 +55,65 @@ const resolveUpstreamPath = (req: any): string => {
   return '/';
 };
 
-/** 官方要求 Authorization 值为 API Key；兼容客户端误带 Bearer */
 const normalizeAnymailAuth = (auth: string): string =>
   String(auth).replace(/^Bearer\s+/i, '').trim();
 
 export default async function handler(req: any, res: any) {
-  applyCors(res);
-  if (req.method === 'OPTIONS') {
-    res.status(204).end();
-    return;
-  }
-
-  if (!guardApiRequest(req, res, 'anymail', { skipBodyCheck: true })) return;
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
-
   try {
-    const path = resolveUpstreamPath(req);
-    const target = new URL(path, ORIGIN + '/');
-
-    const headers: Record<string, string> = {};
-    const ct = req.headers['content-type'];
-    if (ct) headers['Content-Type'] = String(ct);
-    else if (req.method !== 'GET' && req.method !== 'HEAD') {
-      headers['Content-Type'] = 'application/json';
+    applyCors(res);
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
     }
-    const auth = req.headers.authorization || req.headers['x-upstream-authorization'];
-    if (auth) headers.Authorization = normalizeAnymailAuth(String(auth));
 
-    const upstream = await fetch(target.toString(), {
-      method: req.method || 'POST',
-      headers,
-      body: readBody(req),
-      signal: controller.signal,
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
 
-    const text = await upstream.text();
-    applyCors(res);
-    res.status(upstream.status);
-    res.setHeader('X-Proxied-To', ORIGIN);
-    res.setHeader('Cache-Control', 'no-store');
-    const uct = upstream.headers.get('content-type');
-    if (uct) res.setHeader('Content-Type', uct);
-    res.send(text);
+    try {
+      const path = resolveUpstreamPath(req);
+      const target = new URL(path, ORIGIN + '/');
+
+      const headers: Record<string, string> = {};
+      const ct = req.headers['content-type'];
+      if (ct) headers['Content-Type'] = String(ct);
+      else if (req.method !== 'GET' && req.method !== 'HEAD') {
+        headers['Content-Type'] = 'application/json';
+      }
+      const auth = req.headers.authorization || req.headers['x-upstream-authorization'];
+      if (auth) headers.Authorization = normalizeAnymailAuth(String(auth));
+
+      const upstream = await fetch(target.toString(), {
+        method: req.method || 'POST',
+        headers,
+        body: readBody(req),
+        signal: controller.signal,
+      });
+
+      const text = await upstream.text();
+      applyCors(res);
+      res.status(upstream.status);
+      res.setHeader('X-Proxied-To', ORIGIN);
+      res.setHeader('Cache-Control', 'no-store');
+      const uct = upstream.headers.get('content-type');
+      if (uct) res.setHeader('Content-Type', uct);
+      res.send(text);
+    } catch (e: any) {
+      applyCors(res);
+      const aborted = e?.name === 'AbortError' || /aborted|timeout/i.test(String(e?.message || e));
+      res.status(aborted ? 504 : 502).json({
+        error: aborted
+          ? `Anymail 上游超时（${UPSTREAM_TIMEOUT_MS / 1000}s）`
+          : e?.message || String(e),
+      });
+    } finally {
+      clearTimeout(timer);
+    }
   } catch (e: any) {
-    applyCors(res);
-    const aborted = e?.name === 'AbortError' || /aborted|timeout/i.test(String(e?.message || e));
-    res.status(aborted ? 504 : 502).json({
-      error: aborted
-        ? `Anymail 上游超时（${UPSTREAM_TIMEOUT_MS / 1000}s）`
-        : e?.message || String(e),
-    });
-  } finally {
-    clearTimeout(timer);
+    try {
+      applyCors(res);
+      if (!res.headersSent) res.status(500).json({ error: e?.message || 'anymail proxy crashed' });
+    } catch {
+      /* ignore */
+    }
   }
 }

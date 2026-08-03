@@ -1,21 +1,13 @@
 /**
- * Vercel Serverless：同域转发阿里云（单文件，避免 [...path] 多段 404）
+ * Vercel Serverless：同域转发阿里云（零外部 import，避免函数打包漏文件崩溃）
  * 用法：/api/qwen?__upstream=/compatible-mode/v1/chat/completions
  */
-import { guardApiRequest } from '../lib/serverApiGuard';
-
 export const config = {
   runtime: 'nodejs',
   maxDuration: 300,
-  api: {
-    bodyParser: {
-      sizeLimit: '8mb',
-    },
-  },
 };
 
 const FALLBACK = 'https://token-plan.cn-beijing.maas.aliyuncs.com';
-/** 联网搜索常需 2–4 分钟；须低于 functions.maxDuration(300) */
 const UPSTREAM_TIMEOUT_MS = 280_000;
 
 const applyCors = (res: { setHeader: (k: string, v: string) => void }) => {
@@ -72,7 +64,11 @@ export default async function handler(req: any, res: any) {
       return;
     }
 
-    if (!guardApiRequest(req, res, 'qwen', { skipBodyCheck: true })) return;
+    const method = String(req.method || 'GET').toUpperCase();
+    if (!['GET', 'POST', 'HEAD'].includes(method)) {
+      res.status(405).json({ error: 'Method not allowed' });
+      return;
+    }
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
@@ -94,14 +90,14 @@ export default async function handler(req: any, res: any) {
       const headers: Record<string, string> = {};
       const ct = req.headers['content-type'];
       if (ct) headers['Content-Type'] = String(ct);
-      else if (req.method !== 'GET' && req.method !== 'HEAD') {
+      else if (method !== 'GET' && method !== 'HEAD') {
         headers['Content-Type'] = 'application/json';
       }
       const auth = req.headers.authorization || req.headers['x-upstream-authorization'];
       if (auth) headers.Authorization = String(auth);
 
       const upstream = await fetch(target.toString(), {
-        method: req.method || 'POST',
+        method: method === 'HEAD' ? 'GET' : method,
         headers,
         body: readBody(req),
         signal: controller.signal,
@@ -129,7 +125,9 @@ export default async function handler(req: any, res: any) {
   } catch (e: any) {
     try {
       applyCors(res);
-      res.status(500).json({ error: e?.message || 'qwen proxy crashed' });
+      if (!res.headersSent) {
+        res.status(500).json({ error: e?.message || 'qwen proxy crashed' });
+      }
     } catch {
       /* ignore */
     }
