@@ -858,51 +858,65 @@ const App: React.FC = () => {
 
   /** 仅删除当前背调报告（不加入排除名单） */
   const handleDeleteCurrentReport = async () => {
-    const data = analysisDataRef.current;
-    if (!data?.companyInfo) return;
-    const name = data.companyInfo.name || data.companyInfo.website || '当前报告';
-    const website = data.companyInfo.website || domainInput || '';
+    const data = analysisDataRef.current || analysisData;
+    if (!data) {
+      alert('当前没有可删除的背调报告。');
+      return;
+    }
+    const name =
+      data.companyInfo?.name || data.companyInfo?.website || domainInput || '当前报告';
+    const website = data.companyInfo?.website || domainInput || '';
     const ok = window.confirm(
       `确认删除「${name}」的背调报告？\n\n不会加入排除名单，以后搜索仍可能再次出现。`
     );
     if (!ok) return;
-    try {
-      const hid = viewingHistoryIdRef.current;
-      if (hid) {
-        await deleteHistoryItem(hid);
-        try {
-          await deleteInvestigationHistory(hid);
-        } catch {
-          /* cloud optional */
-        }
-        setHistory((prev) => prev.filter((h) => h.id !== hid));
-      } else {
-        const domainKey = (website || '')
-          .toLowerCase()
-          .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
-          .split('/')[0];
-        const match = historyRef.current.find(
-          (h) =>
-            (h.domain || '')
-              .toLowerCase()
-              .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
-              .split('/')[0] === domainKey
-        );
-        if (match) {
-          await deleteHistoryItem(match.id);
-          try {
-            await deleteInvestigationHistory(match.id);
-          } catch {
-            /* ignore */
-          }
-          setHistory((prev) => prev.filter((h) => h.id !== match.id));
-        }
+
+    const normalizeHost = (url?: string | null) =>
+      (url || '')
+        .toLowerCase()
+        .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
+        .split('/')[0]
+        .trim();
+
+    const hid = viewingHistoryIdRef.current || viewingHistoryId;
+    const domainKey = normalizeHost(website);
+    const nameKey = (data.companyInfo?.name || '').trim().toLowerCase();
+    const idsToDelete = new Set<string>();
+    if (hid) idsToDelete.add(hid);
+    for (const h of historyRef.current) {
+      const hHost = normalizeHost(h.domain || h.data?.companyInfo?.website);
+      const hName = (h.data?.companyInfo?.name || '').trim().toLowerCase();
+      if ((domainKey && hHost && domainKey === hHost) || (nameKey && hName && nameKey === hName)) {
+        idsToDelete.add(h.id);
       }
-      setAnalysisData(null);
-      setViewingHistoryId(null);
-      setDomainInput('');
-      setActiveModule(ModuleType.DISCOVERY);
-      alert('已删除该背调报告。');
+    }
+
+    // 先清界面，避免云端删除挂起导致「点了没反应」
+    setAnalysisData(null);
+    setViewingHistoryId(null);
+    setDomainInput('');
+    setActiveModule(ModuleType.DISCOVERY);
+    if (idsToDelete.size > 0) {
+      setHistory((prev) => prev.filter((h) => !idsToDelete.has(h.id)));
+    }
+
+    try {
+      for (const id of idsToDelete) {
+        try {
+          await deleteHistoryItem(id);
+        } catch (e) {
+          console.error('local history delete failed', id, e);
+        }
+        // 云端删除不阻塞；失败也不回滚本地已删
+        void deleteInvestigationHistory(id).catch((e) =>
+          console.warn('cloud history delete failed', id, e)
+        );
+      }
+      alert(
+        idsToDelete.size > 0
+          ? '已删除该背调报告。'
+          : '已关闭当前报告（未找到对应历史记录，记录中心可能仍保留副本）。'
+      );
     } catch (e: any) {
       alert(`删除失败: ${e?.message || String(e)}`);
     }
@@ -1172,7 +1186,23 @@ const App: React.FC = () => {
           return;
       }
       setAnalysisData(task.analysis);
-      setViewingHistoryId(null);
+      const domainKey = (task.analysis.companyInfo?.website || task.website || '')
+        .toLowerCase()
+        .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
+        .split('/')[0];
+      const nameKey = (task.analysis.companyInfo?.name || task.clientName || '').trim().toLowerCase();
+      const matched = historyRef.current.find((h) => {
+        const hHost = (h.domain || h.data?.companyInfo?.website || '')
+          .toLowerCase()
+          .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
+          .split('/')[0];
+        const hName = (h.data?.companyInfo?.name || '').trim().toLowerCase();
+        return (
+          (domainKey && hHost && domainKey === hHost) ||
+          (nameKey && hName && nameKey === hName)
+        );
+      });
+      setViewingHistoryId(matched?.id || null);
       setDomainInput(task.analysis.companyInfo?.website || task.website || '');
       setActiveModule(ModuleType.BACKGROUND);
       setErrorMsg(null);
@@ -1617,7 +1647,7 @@ const App: React.FC = () => {
             </button>
             <button onClick={handleLogout} className="w-full flex items-center gap-2 px-4 py-3 text-rose-300 hover:bg-rose-500/10 rounded-xl text-sm font-semibold transition-colors"><LogOut size={18} /> 退出登录</button>
             <div className="px-4 pt-1 text-[9px] font-semibold text-slate-600 text-center select-all tracking-wide">
-              版本 v20260803d · 背景调查页去掉决策人侧栏
+              版本 v20260803e · 修复背调页删除无响应
             </div>
         </div>
       </aside>
