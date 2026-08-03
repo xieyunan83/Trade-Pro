@@ -174,6 +174,24 @@ export interface AutomationResult {
   departmentId?: string;
 }
 
+/** 自动化获客工作流确认配置 */
+export interface AutomationPipelineConfig {
+  keyword: string;
+  /** 行业词，可空 */
+  industry: string;
+  clientTypes: string[];
+  countries: string[];
+  /** 每个国家找出的客户数量 */
+  perCountryLimit: number;
+  productContext: string;
+  /** 搜索完成后立即背调 */
+  doBackgroundCheck: boolean;
+  /** 背调后挖掘决策人邮箱 */
+  doDmMine: boolean;
+  /** 挖掘到有决策人的直接导入 CRM */
+  doCrmImport: boolean;
+}
+
 export interface DecisionMaker {
   name: string;
   firstName?: string;

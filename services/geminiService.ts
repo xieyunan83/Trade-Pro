@@ -2510,7 +2510,7 @@ export const searchPotentialClients = async (productKeyword: string, country: st
   const countries = country.split(/[,，;/|]+/).map(s => s.trim()).filter(Boolean);
   const types = clientType.split(/[,，;/|]+/).map(s => s.trim()).filter(Boolean);
   // 单次请求控制体量，降低联网超时概率（多类型时仍覆盖，但条数略减）
-  const effectiveLimit = Math.min(Math.max(limit, 5), types.length > 2 ? 10 : 12);
+  const effectiveLimit = Math.min(Math.max(limit, 3), countries.length > 1 ? 12 : 20);
   const marketHint = countries.length
     ? `these target markets (cover as many as possible): ${countries.join(', ')}`
     : 'relevant global target markets';

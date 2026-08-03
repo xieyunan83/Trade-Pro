@@ -1,10 +1,28 @@
-import React, { useState } from 'react';
-import { AutomationResult } from '../types';
-import { Ruler, PlayCircle, Trash2, CheckCircle2, Loader2, AlertTriangle, Clock, Hourglass, FileText, Download } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { AutomationPipelineConfig, AutomationResult, CLIENT_TYPE_OPTIONS } from '../types';
+import {
+  Ruler,
+  PlayCircle,
+  Trash2,
+  CheckCircle2,
+  Loader2,
+  AlertTriangle,
+  Clock,
+  Hourglass,
+  FileText,
+  Download,
+  X,
+  ListChecks,
+  Search,
+  Building2,
+  Users,
+  ShieldCheck,
+} from 'lucide-react';
 import { ContinentCountryMultiSelect } from './ContinentCountryMultiSelect';
+import { findCountryByEn } from '../data/countriesByContinent';
 
 interface ModulePromoGeneratorProps {
-  onStartAutomation: (keyword: string, productContext: string, countries: string[], productImages: string[], clientType: string) => void;
+  onStartAutomation: (config: AutomationPipelineConfig) => void;
   automationResults: AutomationResult[];
   isAutomating: boolean;
   onRunPending: () => void;
@@ -16,14 +34,30 @@ interface ModulePromoGeneratorProps {
   canExportPpt?: boolean;
   onClearCompleted: () => void;
   onClearAll: () => void;
+  canDmMine?: boolean;
+  canCrmImport?: boolean;
 }
 
-export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({ 
-  onStartAutomation, 
-  automationResults, 
-  isAutomating, 
-  onRunPending, 
-  onRunSingle, 
+const PER_COUNTRY_OPTIONS = [3, 5, 8, 10, 12, 15];
+
+const emptyDraft = (): Omit<AutomationPipelineConfig, never> => ({
+  keyword: '',
+  industry: '',
+  clientTypes: ['Importer'],
+  countries: ['United States', 'United Kingdom', 'Germany'],
+  perCountryLimit: 5,
+  productContext: '',
+  doBackgroundCheck: true,
+  doDmMine: false,
+  doCrmImport: false,
+});
+
+export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
+  onStartAutomation,
+  automationResults,
+  isAutomating,
+  onRunPending,
+  onRunSingle,
   onDelete,
   onViewResult,
   onDownloadResult,
@@ -31,66 +65,408 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   canExportPpt = false,
   onClearCompleted,
   onClearAll,
+  canDmMine = false,
+  canCrmImport = false,
 }) => {
-  const [keyword, setKeyword] = useState('');
-  const [productContext, setProductContext] = useState('');
-  const [selectedCountries, setSelectedCountries] = useState<string[]>(['United States', 'United Kingdom', 'Germany']);
-  const [clientType, setClientType] = useState('Importer');
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [draft, setDraft] = useState<AutomationPipelineConfig>(emptyDraft);
+  const [confirming, setConfirming] = useState(false);
 
   const completedCount = automationResults.filter((r) => r.status === 'completed' && r.analysis).length;
 
-  const handleStart = () => {
-    if (!selectedCountries.length) {
-      alert('请先选择至少一个目标国家');
+  const patchDraft = (partial: Partial<AutomationPipelineConfig>) => {
+    setDraft((prev) => {
+      const next = { ...prev, ...partial };
+      // CRM 依赖决策人挖掘
+      if (partial.doDmMine === false) next.doCrmImport = false;
+      if (partial.doBackgroundCheck === false) {
+        next.doDmMine = false;
+        next.doCrmImport = false;
+      }
+      return next;
+    });
+  };
+
+  const toggleClientType = (value: string) => {
+    setDraft((prev) => {
+      const has = prev.clientTypes.includes(value);
+      const next = has
+        ? prev.clientTypes.filter((t) => t !== value)
+        : [...prev.clientTypes, value];
+      return { ...prev, clientTypes: next.length ? next : prev.clientTypes };
+    });
+  };
+
+  const estimatedLeads = draft.countries.length * draft.perCountryLimit;
+
+  const validationError = useMemo(() => {
+    if (!draft.keyword.trim()) return '请填写搜索关键词';
+    if (!draft.countries.length) return '请至少选择一个目标国家';
+    if (!draft.clientTypes.length) return '请至少选择一种客户类型';
+    if (draft.perCountryLimit < 1) return '每个国家数量无效';
+    return null;
+  }, [draft]);
+
+  const openDialog = () => {
+    setConfirming(false);
+    setDialogOpen(true);
+  };
+
+  const handleConfirmStart = () => {
+    if (validationError) {
+      alert(validationError);
       return;
     }
-    onStartAutomation(keyword, productContext, selectedCountries, [], clientType);
+    if (!confirming) {
+      setConfirming(true);
+      return;
+    }
+    const config: AutomationPipelineConfig = {
+      ...draft,
+      keyword: draft.keyword.trim(),
+      industry: draft.industry.trim(),
+      productContext: draft.productContext.trim(),
+      doDmMine: draft.doBackgroundCheck && draft.doDmMine && canDmMine,
+      doCrmImport: draft.doBackgroundCheck && draft.doDmMine && draft.doCrmImport && canCrmImport,
+    };
+    setDialogOpen(false);
+    setConfirming(false);
+    onStartAutomation(config);
   };
 
   return (
     <div className="max-w-7xl mx-auto space-y-4 sm:space-y-8 animate-fade-in">
       <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
-        <h2 className="text-xl sm:text-2xl font-black text-slate-800 mb-4 sm:mb-6 flex items-center gap-2">
+        <h2 className="text-xl sm:text-2xl font-black text-slate-800 mb-2 flex items-center gap-2">
           <Ruler className="text-blue-600" /> 自动化获客工作流
         </h2>
-        
-        <div className="grid grid-cols-1 gap-4 sm:gap-6">
-          <div>
-            <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">搜索关键词</label>
-            <input 
-              type="text" 
-              value={keyword} 
-              onChange={e => setKeyword(e.target.value)}
-              className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold"
-              placeholder="例如: Silicone Baby Products"
-            />
+        <p className="text-sm text-slate-500 font-medium mb-6 leading-relaxed">
+          同一关键词按国家逐个搜索；一国搜完即并行背调 / 决策人挖掘 / 导入 CRM，无需等全部国家搜完。
+        </p>
+
+        <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-4 sm:p-5 mb-6 space-y-2 text-sm text-slate-600 font-medium">
+          <div className="flex items-start gap-2">
+            <ListChecks size={16} className="text-blue-600 mt-0.5 flex-shrink-0" />
+            <span>配置：关键词 · 行业词 · 客户类型 · 国家 · 每国数量 · 背调 / 决策人 / CRM 选项</span>
           </div>
-          <ContinentCountryMultiSelect
-            value={selectedCountries}
-            onChange={setSelectedCountries}
-            label="目标国家（一级大洲 / 二级国家多选）"
-            defaultOpen
-          />
-          <div>
-            <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">产品背景/卖点</label>
-            <textarea 
-              value={productContext} 
-              onChange={e => setProductContext(e.target.value)}
-              className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold h-[120px] resize-none"
-              placeholder="描述您的产品优势，用于生成开发信..."
-            />
+          <div className="flex items-start gap-2">
+            <Search size={16} className="text-cyan-600 mt-0.5 flex-shrink-0" />
+            <span>执行：国家串行搜索 → 每国结果立即进入后续任务（可并行）</span>
           </div>
         </div>
-        
-        <button 
-          onClick={handleStart}
-          disabled={isAutomating || !keyword || selectedCountries.length === 0}
-          className="w-full mt-6 bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-xl font-black shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+
+        <button
+          type="button"
+          onClick={openDialog}
+          disabled={isAutomating}
+          className="w-full bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-xl font-black shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50"
         >
           {isAutomating ? <Loader2 className="animate-spin" size={20} /> : <PlayCircle size={20} />}
-          开始自动化任务
+          {isAutomating ? '自动化执行中…' : '配置并启动自动化流程'}
         </button>
       </div>
+
+      {dialogOpen && (
+        <div className="fixed inset-0 z-[80] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-900/50 backdrop-blur-sm">
+          <div className="bg-white w-full sm:max-w-3xl max-h-[92vh] rounded-t-3xl sm:rounded-3xl shadow-2xl flex flex-col overflow-hidden animate-fade-in">
+            <div className="flex items-center justify-between gap-3 px-4 sm:px-6 py-4 border-b border-slate-100">
+              <div>
+                <h3 className="text-lg font-black text-slate-800 flex items-center gap-2">
+                  <ListChecks className="text-blue-600" size={20} />
+                  {confirming ? '确认自动化步骤' : '配置自动化流程'}
+                </h3>
+                <p className="text-[11px] text-slate-400 font-bold mt-0.5">
+                  {confirming ? '请核对下列步骤后开始执行' : '填写全部选项后进入确认'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setDialogOpen(false);
+                  setConfirming(false);
+                }}
+                className="p-2 rounded-xl hover:bg-slate-100 text-slate-400"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 space-y-5 custom-scrollbar">
+              {!confirming ? (
+                <>
+                  <div>
+                    <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
+                      1. 搜索关键词 *
+                    </label>
+                    <input
+                      type="text"
+                      value={draft.keyword}
+                      onChange={(e) => patchDraft({ keyword: e.target.value })}
+                      className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold"
+                      placeholder="例如: Silicone Baby Products"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
+                      2. 行业词（可留空）
+                    </label>
+                    <input
+                      type="text"
+                      value={draft.industry}
+                      onChange={(e) => patchDraft({ industry: e.target.value })}
+                      className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold"
+                      placeholder="例如: Baby products / Juvenile furniture"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
+                      3. 客户类型 *
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      {CLIENT_TYPE_OPTIONS.map((opt) => {
+                        const on = draft.clientTypes.includes(opt.value);
+                        return (
+                          <button
+                            key={opt.value}
+                            type="button"
+                            onClick={() => toggleClientType(opt.value)}
+                            className={`px-3 py-2 rounded-xl text-xs font-black border transition-colors ${
+                              on
+                                ? 'bg-blue-600 text-white border-blue-600'
+                                : 'bg-white text-slate-600 border-slate-200 hover:border-blue-300'
+                            }`}
+                          >
+                            {opt.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <ContinentCountryMultiSelect
+                    value={draft.countries}
+                    onChange={(countries) => patchDraft({ countries })}
+                    label="4. 目标国家（一级大洲 / 二级国家多选）*"
+                    defaultOpen
+                  />
+
+                  <div>
+                    <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
+                      5. 每个国家找出客户数量 *
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      {PER_COUNTRY_OPTIONS.map((n) => (
+                        <button
+                          key={n}
+                          type="button"
+                          onClick={() => patchDraft({ perCountryLimit: n })}
+                          className={`min-w-[3rem] px-3 py-2 rounded-xl text-sm font-black border ${
+                            draft.perCountryLimit === n
+                              ? 'bg-cyan-600 text-white border-cyan-600'
+                              : 'bg-white text-slate-600 border-slate-200'
+                          }`}
+                        >
+                          {n}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[11px] text-slate-400 font-bold mt-2">
+                      预计最多约 {estimatedLeads} 家（{draft.countries.length} 国 × {draft.perCountryLimit}）
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
+                      产品背景 / 卖点（可选）
+                    </label>
+                    <textarea
+                      value={draft.productContext}
+                      onChange={(e) => patchDraft({ productContext: e.target.value })}
+                      className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold h-[100px] resize-none"
+                      placeholder="描述您的产品优势，用于后续开发信…"
+                    />
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+                    <div className="text-xs font-black text-slate-500 uppercase tracking-widest">
+                      6–8. 后续自动化动作
+                    </div>
+                    <label className="flex items-start gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="mt-1 rounded border-slate-300"
+                        checked={draft.doBackgroundCheck}
+                        onChange={(e) => patchDraft({ doBackgroundCheck: e.target.checked })}
+                      />
+                      <span className="text-sm font-bold text-slate-700">
+                        <Building2 size={14} className="inline mr-1 text-violet-600" />
+                        搜索完成后直接进行背调（一国搜完即开始，不等其它国家）
+                      </span>
+                    </label>
+                    <label
+                      className={`flex items-start gap-3 ${
+                        draft.doBackgroundCheck && canDmMine ? 'cursor-pointer' : 'opacity-40'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        className="mt-1 rounded border-slate-300"
+                        disabled={!draft.doBackgroundCheck || !canDmMine}
+                        checked={draft.doDmMine && canDmMine}
+                        onChange={(e) => patchDraft({ doDmMine: e.target.checked })}
+                      />
+                      <span className="text-sm font-bold text-slate-700">
+                        <Users size={14} className="inline mr-1 text-amber-600" />
+                        背调后挖掘决策人邮箱
+                        {!canDmMine && (
+                          <span className="block text-[11px] text-slate-400 font-bold mt-0.5">
+                            当前账号无决策人邮箱搜索权限
+                          </span>
+                        )}
+                      </span>
+                    </label>
+                    <label
+                      className={`flex items-start gap-3 ${
+                        draft.doBackgroundCheck && draft.doDmMine && canCrmImport
+                          ? 'cursor-pointer'
+                          : 'opacity-40'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        className="mt-1 rounded border-slate-300"
+                        disabled={!draft.doBackgroundCheck || !draft.doDmMine || !canCrmImport}
+                        checked={draft.doCrmImport && canCrmImport}
+                        onChange={(e) => patchDraft({ doCrmImport: e.target.checked })}
+                      />
+                      <span className="text-sm font-bold text-slate-700">
+                        <ShieldCheck size={14} className="inline mr-1 text-emerald-600" />
+                        挖掘到有决策人的直接导入 CRM
+                        {!canCrmImport && (
+                          <span className="block text-[11px] text-slate-400 font-bold mt-0.5">
+                            当前账号无 CRM 模块权限
+                          </span>
+                        )}
+                      </span>
+                    </label>
+                  </div>
+                </>
+              ) : (
+                <div className="space-y-3">
+                  {[
+                    { n: 1, t: '关键词', v: draft.keyword.trim() },
+                    { n: 2, t: '行业词', v: draft.industry.trim() || '（空）' },
+                    {
+                      n: 3,
+                      t: '客户类型',
+                      v: draft.clientTypes
+                        .map((c) => CLIENT_TYPE_OPTIONS.find((o) => o.value === c)?.label || c)
+                        .join('、'),
+                    },
+                    {
+                      n: 4,
+                      t: '目标国家',
+                      v: draft.countries
+                        .map((c) => {
+                          const item = findCountryByEn(c);
+                          return item ? `${item.zh} (${item.en})` : c;
+                        })
+                        .join('、'),
+                    },
+                    {
+                      n: 5,
+                      t: '每国数量',
+                      v: `${draft.perCountryLimit}（预计约 ${estimatedLeads} 家）`,
+                    },
+                    {
+                      n: 6,
+                      t: '搜索后背调',
+                      v: draft.doBackgroundCheck ? '是 · 一国搜完即并行背调' : '否 · 仅入队待手动继续',
+                    },
+                    {
+                      n: 7,
+                      t: '背调后挖决策人',
+                      v: draft.doBackgroundCheck && draft.doDmMine && canDmMine ? '是 · 后台并行' : '否',
+                    },
+                    {
+                      n: 8,
+                      t: '有决策人导入 CRM',
+                      v:
+                        draft.doBackgroundCheck && draft.doDmMine && draft.doCrmImport && canCrmImport
+                          ? '是'
+                          : '否',
+                    },
+                  ].map((row) => (
+                    <div
+                      key={row.n}
+                      className="flex gap-3 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3"
+                    >
+                      <span className="flex-shrink-0 w-6 h-6 rounded-lg bg-blue-600 text-white text-[11px] font-black flex items-center justify-center">
+                        {row.n}
+                      </span>
+                      <div className="min-w-0">
+                        <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                          {row.t}
+                        </div>
+                        <div className="text-sm font-bold text-slate-800 break-words">{row.v}</div>
+                      </div>
+                    </div>
+                  ))}
+                  {draft.productContext.trim() && (
+                    <div className="rounded-xl border border-slate-100 bg-white px-4 py-3 text-sm text-slate-600 font-medium">
+                      <span className="text-[10px] font-black text-slate-400 uppercase">卖点备注</span>
+                      <p className="mt-1 whitespace-pre-wrap">{draft.productContext.trim()}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="px-4 sm:px-6 py-4 border-t border-slate-100 flex flex-col sm:flex-row gap-2">
+              {confirming && (
+                <button
+                  type="button"
+                  onClick={() => setConfirming(false)}
+                  className="sm:mr-auto px-4 py-3 rounded-xl border border-slate-200 text-sm font-black text-slate-600 hover:bg-slate-50"
+                >
+                  返回修改
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setDialogOpen(false);
+                  setConfirming(false);
+                }}
+                className="px-4 py-3 rounded-xl border border-slate-200 text-sm font-black text-slate-500"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={!!validationError || isAutomating}
+                onClick={handleConfirmStart}
+                className="flex-1 sm:flex-none sm:min-w-[12rem] px-4 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-black disabled:opacity-40 inline-flex items-center justify-center gap-2"
+              >
+                {confirming ? (
+                  <>
+                    <PlayCircle size={16} /> 确认并开始执行
+                  </>
+                ) : (
+                  <>
+                    <ListChecks size={16} /> 下一步：确认步骤
+                  </>
+                )}
+              </button>
+            </div>
+            {validationError && !confirming && (
+              <div className="px-4 sm:px-6 pb-3 text-[11px] font-bold text-rose-500">{validationError}</div>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
         <div className="p-4 sm:p-6 border-b border-slate-100 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 bg-slate-50/50">
@@ -129,16 +505,20 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                 <Trash2 size={14} /> 清空列表
               </button>
             )}
-            <button 
+            <button
               onClick={onRunPending}
-              disabled={isAutomating || automationResults.filter(r => r.status === 'pending' || r.status === 'failed').length === 0}
+              disabled={
+                isAutomating ||
+                automationResults.filter((r) => r.status === 'pending' || r.status === 'failed')
+                  .length === 0
+              }
               className="bg-slate-900 text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-blue-600 transition-colors disabled:opacity-50"
             >
               继续待处理任务
             </button>
           </div>
         </div>
-        
+
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
@@ -152,31 +532,44 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
             <tbody className="divide-y divide-slate-50">
               {automationResults.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="px-6 py-12 text-center text-slate-400 font-bold">暂无任务队列</td>
+                  <td colSpan={4} className="px-6 py-12 text-center text-slate-400 font-bold">
+                    暂无任务队列
+                  </td>
                 </tr>
               ) : (
                 automationResults.map((task) => (
                   <tr key={task.id} className="hover:bg-slate-50/50 transition-colors">
                     <td className="px-6 py-4">
                       <div className="font-bold text-slate-800">{task.clientName}</div>
-                      <div className="text-[10px] text-slate-400 font-bold">{task.website} • {task.country}</div>
+                      <div className="text-[10px] text-slate-400 font-bold">
+                        {task.website} • {task.country}
+                      </div>
                     </td>
                     <td className="px-6 py-4">
-                      <div className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-tighter ${
-                        task.status === 'completed' ? 'bg-green-100 text-green-600' :
-                        task.status === 'failed' ? 'bg-red-100 text-red-600' :
-                        task.status === 'pending' ? 'bg-slate-100 text-slate-400' :
-                        'bg-blue-100 text-blue-600'
-                      }`}>
-                        {task.status === 'analyzing' || task.status === 'generating_email' ? <Loader2 className="animate-spin" size={10}/> : null}
-                        {task.status === 'completed' ? <CheckCircle2 size={10}/> : null}
-                        {task.status === 'failed' ? <AlertTriangle size={10}/> : null}
-                        {task.status === 'pending' ? <Hourglass size={10}/> : null}
+                      <div
+                        className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-tighter ${
+                          task.status === 'completed'
+                            ? 'bg-green-100 text-green-600'
+                            : task.status === 'failed'
+                              ? 'bg-red-100 text-red-600'
+                              : task.status === 'pending'
+                                ? 'bg-slate-100 text-slate-400'
+                                : 'bg-blue-100 text-blue-600'
+                        }`}
+                      >
+                        {task.status === 'analyzing' || task.status === 'generating_email' ? (
+                          <Loader2 className="animate-spin" size={10} />
+                        ) : null}
+                        {task.status === 'completed' ? <CheckCircle2 size={10} /> : null}
+                        {task.status === 'failed' ? <AlertTriangle size={10} /> : null}
+                        {task.status === 'pending' ? <Hourglass size={10} /> : null}
                         {task.status.replace('_', ' ')}
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <span className="text-[10px] font-black text-slate-400 uppercase">{task.mode || 'economy'}</span>
+                      <span className="text-[10px] font-black text-slate-400 uppercase">
+                        {task.mode || 'economy'}
+                      </span>
                     </td>
                     <td className="px-6 py-4 text-right">
                       <div className="flex justify-end gap-1">
@@ -201,18 +594,18 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                           </>
                         )}
                         {(task.status === 'pending' || task.status === 'failed') && (
-                          <button 
+                          <button
                             onClick={() => onRunSingle(task.id)}
                             disabled={isAutomating}
-                            className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors disabled:opacity-50" 
+                            className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors disabled:opacity-50"
                             title="运行"
                           >
                             <PlayCircle size={16} />
                           </button>
                         )}
-                        <button 
+                        <button
                           onClick={() => onDelete(task.id)}
-                          className="p-2 text-red-400 hover:bg-red-50 rounded-lg transition-colors" 
+                          className="p-2 text-red-400 hover:bg-red-50 rounded-lg transition-colors"
                           title="删除"
                         >
                           <Trash2 size={16} />

@@ -10,7 +10,7 @@ import { normalizeCountryZh } from './utils/countryNormalize';
 import { buildSearchTags, stampSearchResults } from './utils/searchTags';
 import { mergeDiscoveryResultsIntoCrm, mergeHistoryItemsIntoCrm } from './utils/crmHistory';
 import { checkLimit, incrementUsage, updateLocalConfig, resetDailyUsage, getDailyUsagePublic } from './services/limitService';
-import { ModuleType, AnalysisResult, DiscoveryState, Client, User, HistoryItem, AutomationResult, ClientSearchResult, DiscoveryArchiveItem, DecisionMaker, Department } from './types';
+import { ModuleType, AnalysisResult, DiscoveryState, Client, User, HistoryItem, AutomationResult, ClientSearchResult, DiscoveryArchiveItem, DecisionMaker, Department, AutomationPipelineConfig } from './types';
 import { ModuleBackground } from './components/ModuleBackground';
 import { ModuleProducts } from './components/ModuleProducts';
 import { ModuleDecisionMakers } from './components/ModuleDecisionMakers';
@@ -1235,56 +1235,280 @@ const App: React.FC = () => {
   };
 
   const stopAutomation = () => { shouldStopRef.current = true; setIsAutomating(false); };
-  
-  // RESTORED: Generate Tasks Logic
-  const handleStartQueueGeneration = async (keyword: string, productContext: string, countries: string[], productImages: string[], clientType: string) => { 
-      await generateQueue(keyword, productContext, countries, productImages, clientType); 
-      const freshQueue = await getAutomationQueue(); 
-      const pending = freshQueue.filter(t => t.status === 'pending'); 
-      await processBatchQueue(pending); 
+
+  /** 限制背调并行度，避免打爆限额 */
+  const withConcurrency = <T,>(limit: number) => {
+    let active = 0;
+    const waiters: Array<() => void> = [];
+    const acquire = () =>
+      new Promise<void>((resolve) => {
+        if (active < limit) {
+          active += 1;
+          resolve();
+        } else {
+          waiters.push(resolve);
+        }
+      });
+    const release = () => {
+      active -= 1;
+      const next = waiters.shift();
+      if (next) {
+        active += 1;
+        next();
+      }
+    };
+    return async (fn: () => Promise<T>): Promise<T> => {
+      await acquire();
+      try {
+        return await fn();
+      } finally {
+        release();
+      }
+    };
   };
 
-  const generateQueue = async (keyword: string, productContext: string, countries: string[], productImages: string[], clientType: string) => { 
-      setBatchModalOpen(false); 
-      setIsAutomating(true);
-      const newTasks: AutomationResult[] = [];
-      const kw = (keyword || '').trim();
-      if (kw) {
-        addCustomKeyword(kw);
-        setDiscoveryState((prev) => ({ ...prev, product: kw }));
+  const importAnalysisToCrmFromPipeline = (analysis: AnalysisResult) => {
+    const dms = analysis.decisionMakers || [];
+    if (!dms.some((d) => d.name || d.emailGuess?.includes('@'))) return;
+    if (!canAccessModule(currentUser, ModuleType.CLIENT_CRM)) return;
+    const histItem: HistoryItem = stampOwnership({
+      id: `auto_crm_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      type: ModuleType.BACKGROUND,
+      data: analysis,
+      timestamp: Date.now(),
+      domain: analysis.companyInfo?.website || analysis.companyInfo?.name || '',
+      keyword: analysis.searchKeyword,
+      country: normalizeCountryZh(
+        analysis.searchCountry || analysis.companyInfo?.headquarters || analysis.companyInfo?.city || ''
+      ),
+      source: 'batch',
+    });
+    setCrmClients((prev) => mergeHistoryItemsIntoCrm(prev, [histItem], stampOwnership).clients);
+  };
+
+  /** 单条背调（供流水线并行调用）；可选后续挖决策人 / 入 CRM */
+  const runOneAutomationAnalysis = async (
+    task: AutomationResult,
+    opts: Pick<AutomationPipelineConfig, 'doDmMine' | 'doCrmImport' | 'keyword'>
+  ) => {
+    if (shouldStopRef.current) return;
+    const limit = checkLimit('analysis');
+    if (!limit.allowed) {
+      console.warn('analysis limit reached, skip', task.website);
+      return;
+    }
+
+    setAutomationResults((prev) =>
+      prev.map((t) => (t.id === task.id ? { ...t, status: 'analyzing' } : t))
+    );
+
+    try {
+      const kw = (task.keyword || opts.keyword || discoveryState.product || '').trim();
+      if (kw) addCustomKeyword(kw);
+      const result = await analyzeCompany(task.website, task.mode || 'economy', {
+        searchKeyword: kw || undefined,
+        searchTags: kw ? buildSearchTags(kw, task.country || '') : undefined,
+        searchCountry: task.country || undefined,
+      });
+
+      const completedTask: AutomationResult = {
+        ...task,
+        clientName: result.companyInfo?.name || task.clientName,
+        website: result.companyInfo?.website || task.website,
+        country: result.companyInfo?.headquarters?.split(',').pop()?.trim() || task.country,
+        status: 'completed',
+        analysis: result,
+        mailGroup: undefined,
+        keyword: kw || task.keyword,
+      };
+
+      await saveAutomationTask(completedTask);
+      setAutomationResults((prev) => prev.map((t) => (t.id === task.id ? completedTask : t)));
+
+      let historyId: string | null = null;
+      try {
+        const saved = await saveAnalysisToHistory(result, 'batch');
+        historyId = saved.id;
+      } catch (histErr) {
+        console.error('流水线结果写入历史失败', histErr);
       }
-      
-      for (const country of countries) {
-          try {
-              // Quick search (limit 5 per country for automation demo)
-              const raw = await searchPotentialClients(keyword, country, '', clientType, 5);
-              const results = stampSearchResults(raw, {
-                keyword: kw,
-                targetCountry: country,
-                clientTypes: clientType ? [clientType] : [],
-                searchId: `auto_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+
+      incrementUsage('analysis');
+      updateCrmStatus(result);
+
+      if (opts.doDmMine && hasPermission(currentUser, 'feature.dm_email_search')) {
+        const domain = result.companyInfo?.website || task.website || '';
+        const companyName = result.companyInfo?.name || task.clientName || domain;
+        enqueueDmEmailSearch({
+          domain,
+          companyName,
+          historyId,
+          deepDig: true,
+          authorized: true,
+          existingDecisionMakers: result.decisionMakers || [],
+          resolveExisting: () => {
+            if (historyId) {
+              const item = historyRef.current.find((h) => h.id === historyId);
+              if (item?.data?.decisionMakers) return item.data.decisionMakers;
+            }
+            return result.decisionMakers || [];
+          },
+          onComplete: async (job: DmEmailSearchJob) => {
+            if (job.status !== 'completed' || !job.resultDecisionMakers || !job.searchedAt) return;
+            const searchHistory = [
+              ...((historyId
+                ? historyRef.current.find((h) => h.id === historyId)?.data?.decisionMakerEmailSearchHistory
+                : undefined) || []),
+              job.searchedAt,
+            ].slice(-30);
+            await persistDecisionMakerResearch(
+              {
+                decisionMakers: job.resultDecisionMakers,
+                decisionMakerEmailSearchAt: job.searchedAt,
+                decisionMakerEmailSearchHistory: searchHistory,
+              },
+              { historyId: job.historyId, domain: job.domain, companyName: job.companyName }
+            );
+            setAutomationResults((prev) =>
+              prev.map((t) =>
+                t.id === task.id && t.analysis
+                  ? {
+                      ...t,
+                      analysis: {
+                        ...t.analysis,
+                        decisionMakers: job.resultDecisionMakers,
+                        decisionMakerEmailSearchAt: job.searchedAt,
+                      },
+                    }
+                  : t
+              )
+            );
+            if (
+              opts.doCrmImport &&
+              job.resultDecisionMakers.some((d) => d.name || d.emailGuess?.includes('@'))
+            ) {
+              importAnalysisToCrmFromPipeline({
+                ...result,
+                decisionMakers: job.resultDecisionMakers,
+                decisionMakerEmailSearchAt: job.searchedAt,
               });
-              for (const res of results) {
-                  newTasks.push(stampOwnership({
-                      id: Math.random().toString(36).substr(2, 9),
-                      clientName: res.name,
-                      website: res.website,
-                      country: res.country,
-                      status: 'pending',
-                      productContext: productContext,
-                      productImages: productImages,
-                      mode: 'economy',
-                      keyword: res.searchKeyword || kw || undefined,
-                      createdAt: Date.now(),
-                  }));
-              }
-          } catch(e) { console.error(e); }
+            }
+          },
+        });
       }
-      
-      setAutomationResults(prev => [...prev, ...newTasks]);
-      for (const task of newTasks) { await saveAutomationTask(task); }
+    } catch (e: any) {
+      console.error(`Pipeline task ${task.id} failed`, e);
+      const failedTask: AutomationResult = { ...task, status: 'failed' };
+      await saveAutomationTask(failedTask);
+      setAutomationResults((prev) => prev.map((t) => (t.id === task.id ? failedTask : t)));
+      if (e?.message && String(e.message).includes('429')) {
+        await new Promise((r) => setTimeout(r, 15_000));
+      }
+    }
+  };
+
+  /** 新版自动化：国家串行搜索 + 背调/决策人并行跟进 */
+  const handleStartQueueGeneration = async (config: AutomationPipelineConfig) => {
+    const kw = (config.keyword || '').trim();
+    if (!kw) {
+      alert('请填写搜索关键词');
+      return;
+    }
+    if (!config.countries?.length) {
+      alert('请选择至少一个目标国家');
+      return;
+    }
+
+    shouldStopRef.current = false;
+    setIsAutomating(true);
+    addCustomKeyword(kw);
+    setDiscoveryState((prev) => ({
+      ...prev,
+      product: kw,
+      industry: config.industry || prev.industry,
+      clientTypes: config.clientTypes?.length ? config.clientTypes : prev.clientTypes,
+      clientType: (config.clientTypes || []).join(', '),
+    }));
+
+    const runLimited = withConcurrency<void>(2);
+    const followUps: Promise<void>[] = [];
+    let searchedCount = 0;
+    const clientTypeArg = (config.clientTypes || []).join(', ');
+    const perCountry = Math.min(Math.max(config.perCountryLimit || 5, 3), 20);
+
+    try {
+      for (const country of config.countries) {
+        if (shouldStopRef.current) break;
+        try {
+          const raw = await searchPotentialClients(
+            kw,
+            country,
+            config.industry || '',
+            clientTypeArg,
+            perCountry
+          );
+          const results = stampSearchResults(raw, {
+            keyword: kw,
+            targetCountry: country,
+            clientTypes: config.clientTypes || [],
+            searchId: `auto_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          });
+          const newTasks: AutomationResult[] = results.map((res) =>
+            stampOwnership({
+              id: Math.random().toString(36).substr(2, 9),
+              clientName: res.name,
+              website: res.website,
+              country: res.country || country,
+              status: 'pending',
+              productContext: config.productContext,
+              productImages: [],
+              mode: 'economy',
+              keyword: res.searchKeyword || kw,
+              createdAt: Date.now(),
+            })
+          );
+
+          if (newTasks.length === 0) continue;
+          searchedCount += newTasks.length;
+          setAutomationResults((prev) => [...prev, ...newTasks]);
+          for (const task of newTasks) {
+            await saveAutomationTask(task);
+          }
+
+          // 一国搜完立刻启动背调，不等其它国家 —— 与后续搜索并行
+          if (config.doBackgroundCheck) {
+            for (const task of newTasks) {
+              followUps.push(
+                runLimited(() =>
+                  runOneAutomationAnalysis(task, {
+                    doDmMine: config.doDmMine,
+                    doCrmImport: config.doCrmImport,
+                    keyword: kw,
+                  })
+                )
+              );
+            }
+          }
+        } catch (e) {
+          console.error('automation search failed for', country, e);
+        }
+      }
+
+      if (followUps.length) {
+        await Promise.allSettled(followUps);
+      }
+
+      const parts = [`搜索入队 ${searchedCount} 家`];
+      if (config.doBackgroundCheck) parts.push('背调已并行处理');
+      else parts.push('未开启背调（可点「继续待处理任务」）');
+      if (config.doDmMine) parts.push('决策人挖掘已后台排队');
+      if (config.doCrmImport) parts.push('有决策人将自动入 CRM');
+      alert(`自动化流程结束：${parts.join('；')}。`);
+    } catch (e: any) {
+      alert(`自动化失败: ${e?.message || String(e)}`);
+    } finally {
       setIsAutomating(false);
-      return newTasks;
+    }
   };
 
   // RESTORED: Process Automation Queue
@@ -1647,7 +1871,7 @@ const App: React.FC = () => {
             </button>
             <button onClick={handleLogout} className="w-full flex items-center gap-2 px-4 py-3 text-rose-300 hover:bg-rose-500/10 rounded-xl text-sm font-semibold transition-colors"><LogOut size={18} /> 退出登录</button>
             <div className="px-4 pt-1 text-[9px] font-semibold text-slate-600 text-center select-all tracking-wide">
-              版本 v20260803e · 修复背调页删除无响应
+              版本 v20260804a · 自动化获客流程升级
             </div>
         </div>
       </aside>
@@ -1866,6 +2090,8 @@ const App: React.FC = () => {
                         onDownloadResult={handleDownloadAutomationResult}
                         onDownloadAll={handleDownloadAllCompleted}
                         canExportPpt={hasPermission(currentUser, 'feature.export_ppt')}
+                        canDmMine={hasPermission(currentUser, 'feature.dm_email_search')}
+                        canCrmImport={canAccessModule(currentUser, ModuleType.CLIENT_CRM)}
                         onClearCompleted={handleClearCompletedTasks}
                         onClearAll={handleClearAllTasks}
                     />
