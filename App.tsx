@@ -1617,7 +1617,7 @@ const App: React.FC = () => {
             </button>
             <button onClick={handleLogout} className="w-full flex items-center gap-2 px-4 py-3 text-rose-300 hover:bg-rose-500/10 rounded-xl text-sm font-semibold transition-colors"><LogOut size={18} /> 退出登录</button>
             <div className="px-4 pt-1 text-[9px] font-semibold text-slate-600 text-center select-all tracking-wide">
-              版本 v20260803c · 记录中心批量导入CRM
+              版本 v20260803d · 背景调查页去掉决策人侧栏
             </div>
         </div>
       </aside>
@@ -1925,17 +1925,16 @@ const App: React.FC = () => {
                             <button onClick={handleExportReport} className="flex items-center justify-center gap-2 bg-slate-900 hover:bg-blue-600 transition-colors text-white px-4 sm:px-6 py-3 rounded-2xl font-bold shadow-lg touch-manipulation"><FileSpreadsheet size={18} /> 下载 PPT 报告</button>
                           )}
                         </div>
-                        {(analysisData.decisionMakers?.some((d) => d.emailGuess) ||
-                          analysisData.generatedEmails) && (
-                          <div className="mb-4">
-                            <ReportEnrichmentPanel
-                              data={analysisData}
-                              showDecisionMakers={canViewFullDecisionMakerEmails(currentUser)}
-                              canViewEmails={canViewFullDecisionMakerEmails(currentUser)}
-                            />
-                          </div>
-                        )}
                     </div>
+                    {analysisData.generatedEmails && (
+                      <div className="mb-6">
+                        <ReportEnrichmentPanel
+                          data={analysisData}
+                          showDecisionMakers={false}
+                          canViewEmails={canViewFullDecisionMakerEmails(currentUser)}
+                        />
+                      </div>
+                    )}
                     {activeModule === ModuleType.BACKGROUND && (
                       <ModuleBackground
                         data={analysisData}
