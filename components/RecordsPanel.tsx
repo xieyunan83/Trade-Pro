@@ -130,6 +130,9 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   const [keywords, setKeywords] = useState<string[]>(() => getCustomKeywords());
   const [countries, setCountries] = useState<string[]>(() => getCustomCountries());
   const [manageOpen, setManageOpen] = useState(false);
+  /** 批量删除选中：h:id / d:id */
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [isBatchDeleting, setIsBatchDeleting] = useState(false);
 
   // 启动时把已有记录里的词合并进自定义列表
   useEffect(() => {
@@ -207,6 +210,68 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
         return a.key.localeCompare(b.key, 'zh');
       });
   }, [rows, groupBy]);
+
+  // 切换 Tab / 筛选时清空勾选，避免误删不可见项
+  useEffect(() => {
+    setSelected(new Set());
+  }, [tab, query, groupBy]);
+
+  const rowSelectKey = (row: Row) =>
+    row.kind === 'history' ? `h:${row.item.id}` : `d:${row.item.id}`;
+
+  const toggleSelect = (key: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const toggleSelectGroup = (items: Row[]) => {
+    const keys = items.map(rowSelectKey);
+    setSelected((prev) => {
+      const next = new Set(prev);
+      const allOn = keys.every((k) => next.has(k));
+      if (allOn) keys.forEach((k) => next.delete(k));
+      else keys.forEach((k) => next.add(k));
+      return next;
+    });
+  };
+
+  const toggleSelectAllVisible = () => {
+    const keys = rows.map(rowSelectKey);
+    setSelected((prev) => {
+      if (keys.length > 0 && keys.every((k) => prev.has(k))) return new Set();
+      return new Set(keys);
+    });
+  };
+
+  const selectedCount = selected.size;
+  const canBatchDelete = !!(onDeleteHistory || onDeleteDiscovery);
+
+  const handleBatchDelete = async () => {
+    if (!canBatchDelete || selectedCount === 0 || isBatchDeleting) return;
+    if (!confirm(`确定删除已选中的 ${selectedCount} 条记录？此操作不可恢复。`)) return;
+    setIsBatchDeleting(true);
+    try {
+      const histIds: string[] = [];
+      const discIds: string[] = [];
+      selected.forEach((k) => {
+        if (k.startsWith('h:')) histIds.push(k.slice(2));
+        else if (k.startsWith('d:')) discIds.push(k.slice(2));
+      });
+      for (const id of histIds) {
+        if (onDeleteHistory) await onDeleteHistory(id);
+      }
+      for (const id of discIds) {
+        if (onDeleteDiscovery) await onDeleteDiscovery(id);
+      }
+      setSelected(new Set());
+    } finally {
+      setIsBatchDeleting(false);
+    }
+  };
 
   useEffect(() => {
     const sig = `${tab}|${groupBy}|${groups.map((g) => g.key).join(',')}`;
@@ -417,7 +482,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
         </div>
       )}
 
-      <div className="px-3 py-2 border-b border-slate-100 flex gap-2">
+      <div className="px-3 py-2 border-b border-slate-100 flex gap-2 items-center">
         <div className="relative flex-1 min-w-0">
           <Search className="absolute left-3 top-2.5 text-slate-400" size={14} />
           <input
@@ -427,6 +492,27 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
             className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 text-xs font-bold"
           />
         </div>
+        {canBatchDelete && (
+          <>
+            <button
+              type="button"
+              onClick={toggleSelectAllVisible}
+              disabled={rows.length === 0}
+              className="px-2 py-2 rounded-xl border border-slate-200 text-[10px] font-black text-slate-600 touch-manipulation whitespace-nowrap disabled:opacity-40"
+            >
+              {rows.length > 0 && rows.every((r) => selected.has(rowSelectKey(r))) ? '取消全选' : '全选'}
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleBatchDelete()}
+              disabled={selectedCount === 0 || isBatchDeleting}
+              className="px-2 py-2 rounded-xl bg-red-50 border border-red-100 text-[10px] font-black text-red-600 touch-manipulation whitespace-nowrap disabled:opacity-40 inline-flex items-center gap-1"
+            >
+              <Trash2 size={12} />
+              {isBatchDeleting ? '删除中…' : selectedCount > 0 ? `批量删除(${selectedCount})` : '批量删除'}
+            </button>
+          </>
+        )}
         <button
           type="button"
           onClick={() => {
@@ -448,6 +534,20 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
             return (
               <div key={`${groupBy}-${g.key}`} className="border border-slate-100 rounded-xl overflow-hidden">
                 <div className="flex items-stretch bg-slate-50">
+                  {canBatchDelete && (
+                    <label
+                      className="flex items-center pl-2 touch-manipulation"
+                      onClick={(e) => e.stopPropagation()}
+                      title="全选本组"
+                    >
+                      <input
+                        type="checkbox"
+                        className="rounded border-slate-300"
+                        checked={g.items.length > 0 && g.items.every((r) => selected.has(rowSelectKey(r)))}
+                        onChange={() => toggleSelectGroup(g.items)}
+                      />
+                    </label>
+                  )}
                   <button
                     type="button"
                     onClick={() => toggle(g.key)}
@@ -484,8 +584,25 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                   <div className="divide-y divide-slate-50">
                     {g.items.map((row) =>
                       row.kind === 'history' ? (
-                        <div key={`h-${row.item.id}`} className="p-3 hover:bg-blue-50/60" onClick={() => onOpenHistory(row.item)}>
+                        <div
+                          key={`h-${row.item.id}`}
+                          className={`p-3 hover:bg-blue-50/60 ${selected.has(rowSelectKey(row)) ? 'bg-blue-50/80' : ''}`}
+                          onClick={() => onOpenHistory(row.item)}
+                        >
                           <div className="flex items-start gap-2">
+                            {canBatchDelete && (
+                              <label
+                                className="pt-0.5 touch-manipulation"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <input
+                                  type="checkbox"
+                                  className="rounded border-slate-300"
+                                  checked={selected.has(rowSelectKey(row))}
+                                  onChange={() => toggleSelect(rowSelectKey(row))}
+                                />
+                              </label>
+                            )}
                             <Building2 size={14} className="text-blue-500 mt-0.5" />
                             <div className="min-w-0 flex-1">
                               <div className="text-xs font-black text-slate-800 truncate">{row.item.data?.companyInfo?.name || row.item.domain}</div>
@@ -578,8 +695,25 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                           </div>
                         </div>
                       ) : (
-                        <div key={`d-${row.item.id}`} className="p-3 hover:bg-emerald-50/60" onClick={() => onRestoreDiscovery(row.item)}>
+                        <div
+                          key={`d-${row.item.id}`}
+                          className={`p-3 hover:bg-emerald-50/60 ${selected.has(rowSelectKey(row)) ? 'bg-emerald-50/80' : ''}`}
+                          onClick={() => onRestoreDiscovery(row.item)}
+                        >
                           <div className="flex items-start gap-2">
+                            {canBatchDelete && (
+                              <label
+                                className="pt-0.5 touch-manipulation"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <input
+                                  type="checkbox"
+                                  className="rounded border-slate-300"
+                                  checked={selected.has(rowSelectKey(row))}
+                                  onChange={() => toggleSelect(rowSelectKey(row))}
+                                />
+                              </label>
+                            )}
                             <Globe size={14} className="text-emerald-500 mt-0.5" />
                             <div className="min-w-0 flex-1">
                               <div className="text-xs font-black truncate">{row.item.product || '搜索'}</div>

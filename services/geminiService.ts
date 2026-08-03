@@ -2919,13 +2919,21 @@ export const testQwenApiKey = async (
     }
 
     // 轻量 ping：不走完整 callQwen / 系统提示 / 降级重试链
+    // 联网测试：以客户端本地日期为准展示；提示模型用搜索核对，避免模型凭记忆编造旧日期
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    const localIso = `${y}-${m}-${d}`;
+    const localZh = `${y}年${Number(m)}月${Number(d)}日`;
+
     const run = () =>
       callQwenChat(
         [
           {
             role: 'user',
             content: testSearch
-              ? '用一句话告诉我今天日期（不要长文）'
+              ? `请务必使用联网搜索查询今天的公历日期。客户端本地日期是 ${localIso}（${localZh}）。请以搜索引擎或权威日历网站结果为准，只用一句话回答今天的日期（优先 YYYY-MM-DD），不要编造或沿用训练数据里的旧日期。`
               : 'Reply with exactly one word: pong',
           },
         ],
@@ -2948,11 +2956,25 @@ export const testQwenApiKey = async (
       CONNECTION_TEST_TIMEOUT_MS + 2_000,
       testSearch ? '千问联网测试' : '千问连接测试'
     );
+    const reply = String(text || '').trim();
+    if (testSearch) {
+      // 回复里若出现明显过期年份且不含今年，判定为未真正用上实时搜索
+      const hasCurrentYear = reply.includes(String(y));
+      const staleYear = reply.match(/20[0-2][0-9]/);
+      if (!hasCurrentYear && staleYear && Number(staleYear[0]) < y) {
+        return {
+          success: false,
+          message: `联网接口已通，但模型返回了过期日期「${reply.slice(0, 80)}」（本地应为 ${localZh}）。请确认模型支持联网搜索（enable_search），或换用支持搜索的模型。`,
+        };
+      }
+      return {
+        success: true,
+        message: `千问联网搜索成功 ✅ 今天是${localZh}。${reply ? `模型：${reply.slice(0, 60)}` : ''}`,
+      };
+    }
     return {
       success: true,
-      message: testSearch
-        ? `千问联网搜索成功 ✅ ${String(text).slice(0, 80)}`
-        : `Qwen 连接成功 ✅ 回复: ${String(text).slice(0, 50)}`,
+      message: `Qwen 连接成功 ✅ 回复: ${reply.slice(0, 50)}`,
     };
   } catch (e: any) {
     const hint = qwenCorsHint(e?.message);
