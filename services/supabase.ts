@@ -681,9 +681,9 @@ export const getDiscoverySearchArchives = async (): Promise<DiscoveryArchiveItem
 export const saveCrmClientsBulk = async (clients: Client[]): Promise<boolean> => {
   if (!isSupabaseConfigured()) return false
   try {
+    // 禁止用空列表清空云端：隔离过滤后的空视图不等于「用户删光了全部 CRM」
     if (clients.length === 0) {
-      const { error } = await supabase.from('crm_clients').delete().eq('user_id', 'default')
-      if (error) throw error
+      console.warn('跳过 CRM 空列表云端写入，避免误删')
       return true
     }
 
@@ -707,35 +707,14 @@ export const saveCrmClientsBulk = async (clients: Client[]): Promise<boolean> =>
   }
 }
 
-/** 全量同步 CRM：删除云端多余项并 upsert 当前列表 */
+/**
+ * 安全同步 CRM：只 upsert 当前列表，不根据「缺失」删除云端其它记录。
+ * 删除请走 deleteCrmClient；避免部门隔离后的局部视图把全库清空。
+ */
 export const syncCrmClients = async (clients: Client[]): Promise<boolean> => {
   if (!isSupabaseConfigured()) return false
-  try {
-    const { data: existing, error: readErr } = await supabase
-      .from('crm_clients')
-      .select('local_id')
-      .eq('user_id', 'default')
-
-    if (readErr) throw readErr
-
-    const localIds = new Set(clients.map(c => c.id))
-    const toDelete = (existing || [])
-      .map(r => r.local_id)
-      .filter(id => !localIds.has(id))
-
-    if (toDelete.length > 0) {
-      const { error: delErr } = await supabase
-        .from('crm_clients')
-        .delete()
-        .in('local_id', toDelete)
-      if (delErr) throw delErr
-    }
-
-    return await saveCrmClientsBulk(clients)
-  } catch (error) {
-    console.error('同步 CRM 失败:', error)
-    return false
-  }
+  if (clients.length === 0) return true
+  return await saveCrmClientsBulk(clients)
 }
 
 export const getCrmClients = async (): Promise<Client[]> => {

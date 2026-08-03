@@ -143,7 +143,7 @@ export const getSubordinateUsernames = (
  * - 本人：可见自己的记录
  * - 部门主管：可见本部门全部记录（按 departmentId 或同部门成员归属）
  * - 普通员工：仅本人
- * - 无归属的旧数据：仅 admin / director 可见（避免串部门）
+ * - 无归属的旧数据：全员可见（隔离上线前的共享 CRM / 历史，避免「资料突然消失」）
  */
 export const canViewOwnedRecord = (
   viewer: User,
@@ -155,7 +155,8 @@ export const canViewOwnedRecord = (
   if (canBrowseAllDepartments(viewer)) return true;
 
   const owner = (record.ownerUsername || '').trim();
-  if (!owner) return false;
+  // 旧数据没有归属字段：视为遗留共享池，所有登录用户可见
+  if (!owner) return true;
 
   if (sameUser(owner, viewer.username)) return true;
 

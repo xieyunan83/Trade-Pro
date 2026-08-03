@@ -4,7 +4,7 @@ import { analyzeCompany, hasApiKeyConfigured, checkApiKeyAvailability, hydrateAp
 import { exportToPPT, exportAutomationReportToPPT, exportBatchAutomationReportsToPPT } from './services/exportService';
 import { saveHistory, getHistory, getAllFilesFromDB, saveAutomationTask, getAutomationQueue, deleteAutomationTask, saveFileToDB, saveDiscoveryArchive, getDiscoveryArchives, deleteDiscoveryArchive, deleteHistoryItem } from './services/db';
 import { fetchGlobalConfig, fetchDocumentsFromRepo, backupUserHistory, fetchCRMFromCloud, saveCRMToCloud, fetchUserHistoryFromCloud, checkGitHubStatus, fetchApiConfigsFromCloud, setManualGitHubConfig } from './services/githubService';
-import { isSupabaseConfigured, getKnowledgeFiles, getInvestigationHistory, saveInvestigationHistory, saveDiscoverySearch, getCrmClients, syncCrmClients, getDiscoverySearchArchives, deleteInvestigationHistory, deleteDiscoverySearchFromCloud, deleteDiscoverySearchesByMeta } from './services/supabase';
+import { isSupabaseConfigured, getKnowledgeFiles, getInvestigationHistory, saveInvestigationHistory, saveDiscoverySearch, getCrmClients, syncCrmClients, deleteCrmClient, getDiscoverySearchArchives, deleteInvestigationHistory, deleteDiscoverySearchFromCloud, deleteDiscoverySearchesByMeta } from './services/supabase';
 import { addCustomKeyword, addCustomCountry } from './services/taxonomyStore';
 import { normalizeCountryZh } from './utils/countryNormalize';
 import { buildSearchTags, stampSearchResults } from './utils/searchTags';
@@ -20,6 +20,7 @@ import { loadDepartmentsFromStorage } from './services/orgStore';
 import {
   canAccessModule,
   canViewFullDecisionMakerEmails,
+  canViewOwnedRecord,
   filterOwnedRecords,
   hasPermission,
 } from './services/permissions';
@@ -603,9 +604,24 @@ const App: React.FC = () => {
 
   useEffect(() => {
       if (!currentUser || !userDataReadyRef.current) return;
+      const before = loadAllCrmClients();
+      const prevVisibleIds = new Set(
+        before
+          .filter((c) => canViewOwnedRecord(currentUser, c, users, departments))
+          .map((c) => c.id)
+      );
       mergeSaveCrmClients(currentUser, crmClients, users, departments);
+      const nowIds = new Set(crmClients.map((c) => c.id));
+      const removedIds = [...prevVisibleIds].filter((id) => !nowIds.has(id));
+
       if (isSupabaseConfigured()) {
-          syncCrmClients(crmClients).catch(e => console.error("Supabase CRM sync failed", e));
+          // 只 upsert 当前可见列表；删除走单条 delete，避免空视图把云端全库清空
+          if (crmClients.length > 0) {
+            syncCrmClients(crmClients).catch(e => console.error("Supabase CRM sync failed", e));
+          }
+          for (const id of removedIds) {
+            deleteCrmClient(id).catch((e) => console.error('CRM delete sync failed', id, e));
+          }
       } else if (isGitHubConnected && crmClients.length > 0) {
           saveCRMToCloud(crmClients).catch(e => console.error("Auto CRM sync failed", e));
       }
