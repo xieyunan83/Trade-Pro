@@ -36,6 +36,9 @@ const TASK_TIMEOUT_MS: Partial<Record<TaskType, number>> = {
   email: 180_000,
 };
 
+/** 连接测试专用短超时，避免云端后台长时间转圈无反馈 */
+const CONNECTION_TEST_TIMEOUT_MS = 18_000;
+
 const fetchWithTimeout = async (
   input: RequestInfo | URL,
   init?: RequestInit,
@@ -52,6 +55,24 @@ const fetchWithTimeout = async (
     throw e;
   } finally {
     clearTimeout(timer);
+  }
+};
+
+/** 硬超时：即使 AbortController 未触发也能结束 Promise（防后台卡死） */
+const withHardTimeout = async <T>(promise: Promise<T>, ms: number, label: string): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label}超时（${Math.round(ms / 1000)} 秒）。请检查 Key/网络后重试。`)),
+          ms
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 };
 
@@ -1675,6 +1696,9 @@ const callQwenChat = async (
     task?: TaskType;
     override?: Partial<QwenRuntimeConfig>;
     timeoutMs?: number;
+    /** 连接测试：禁止降级重试，避免后台转圈数分钟 */
+    connectionTest?: boolean;
+    maxTokens?: number;
   } = {}
 ): Promise<string> => {
   const config = await resolveQwenConfig(options.override);
@@ -1685,32 +1709,38 @@ const callQwenChat = async (
     options.timeoutMs ||
     (options.task && TASK_TIMEOUT_MS[options.task]) ||
     180_000;
-  // 线上 Vercel Node 最长约 300s；本地 Vite 可更长
-  const timeoutMs = viaSupabase
-    ? Math.min(rawTimeout, 50_000)
-    : viaAppProxy && !isLocalDevHost()
-      ? Math.min(rawTimeout, 280_000)
-      : rawTimeout;
+  // 连接测试严格短超时；正式任务线上代理最长约 280s
+  const timeoutMs = options.connectionTest
+    ? Math.min(rawTimeout, CONNECTION_TEST_TIMEOUT_MS)
+    : viaSupabase
+      ? Math.min(rawTimeout, 50_000)
+      : viaAppProxy && !isLocalDevHost()
+        ? Math.min(rawTimeout, 280_000)
+        : rawTimeout;
   const searchPayload = qwenSearchPayload(!!options.enableSearch, !!options.forcedSearch);
   const maxTokens =
-    options.task === 'search'
-      ? viaSupabase
-        ? 2000
-        : config.baseUrl.includes('/functions/v1/qwen-proxy')
-          ? 2500
-          : 4096
-      : options.task === 'analysis'
+    options.maxTokens ??
+    (options.connectionTest
+      ? 64
+      : options.task === 'search'
         ? viaSupabase
-          ? 3000
-          : 6144
-        : 4096;
+          ? 2000
+          : config.baseUrl.includes('/functions/v1/qwen-proxy')
+            ? 2500
+            : 4096
+        : options.task === 'analysis'
+          ? viaSupabase
+            ? 3000
+            : 6144
+          : 4096);
 
   const runOnce = async (extraPayload: Record<string, unknown> | undefined) => {
     if (
       isQwenOpenAICompatible(config.baseUrl) ||
       config.baseUrl.startsWith('/qwen-api') ||
       config.baseUrl.startsWith('/api/qwen') ||
-      config.baseUrl.includes('/qwen-api/')
+      config.baseUrl.includes('/qwen-api/') ||
+      config.baseUrl.includes('__upstream=')
     ) {
       return callOpenAICompatible(
         {
@@ -1742,6 +1772,9 @@ const callQwenChat = async (
   try {
     return await runOnce(searchPayload);
   } catch (err: any) {
+    // 连接测试失败立即返回，不做任何重试（重试会让后台「卡死」感）
+    if (options.connectionTest) throw err;
+
     const msg = String(err?.message || '');
     const isTimeout = /超时|timeout|AbortError|504|Gateway Timeout|上游超时/i.test(msg);
     const is546 = /546|WORKER_RESOURCE|云端代理算力不足/i.test(msg);
@@ -2694,7 +2727,9 @@ const normalizeQwenBaseUrl = (raw: string): string => {
 };
 
 const isQwenOpenAICompatible = (baseUrl: string): boolean =>
-  baseUrl.includes('/compatible-mode/v1');
+  baseUrl.includes('/compatible-mode/v1') ||
+  baseUrl.includes('%2Fcompatible-mode%2Fv1') ||
+  /compatible-mode%2Fv1/i.test(baseUrl);
 
 /** 开发走 Vite；线上走 Vercel /api/qwen-api，始终带上真实阿里云 Origin */
 const toProxiedQwenEndpoint = (normalized: string): { url: string; proxyOrigin?: string } => {
@@ -2721,10 +2756,22 @@ const resolveQwenConfig = async (override?: Partial<QwenRuntimeConfig>): Promise
   const localBase = readLocal('trade_scout_qwen_base_url');
   const localModel = readLocal('trade_scout_qwen_model_id');
 
+  // 测试连接若已带完整 override，跳过云端读取，避免 Supabase 挂起拖死后台
+  const hasFullOverride = !!(override?.apiKey?.trim() && override?.baseUrl?.trim());
+
   // localStorage 优先，避免云端旧 Key 覆盖管理员刚录入的 Token Plan Key
   let cloudConfig: Awaited<ReturnType<typeof getSupabaseApiConfig>> = null;
-  if (!localKey || !localBase) {
-    cloudConfig = await getSupabaseApiConfig('qwen');
+  if (!hasFullOverride && (!localKey || !localBase)) {
+    try {
+      cloudConfig = await withHardTimeout(
+        getSupabaseApiConfig('qwen').catch(() => null),
+        4_000,
+        '读取云端千问配置'
+      );
+    } catch (e) {
+      console.warn('[Qwen] 跳过云端配置读取:', e);
+      cloudConfig = null;
+    }
   }
 
   const apiKey = sanitizeApiKey(override?.apiKey || localKey || cloudConfig?.apiKey || env.qwenApiKey || '');
@@ -2849,9 +2896,6 @@ export const callQwen = async (
   }
 };
 
-/** 连接测试专用短超时，避免云端后台长时间转圈无反馈 */
-const CONNECTION_TEST_TIMEOUT_MS = 25_000;
-
 export const testQwenApiKey = async (
   apiKey: string,
   baseUrl?: string,
@@ -2873,31 +2917,47 @@ export const testQwenApiKey = async (
         message: '配置不匹配：token-plan 域名必须使用 sk-sp- 开头的 Token Plan Key（不要用按量付费 sk-ws-/sk- Key）',
       };
     }
-    if (testSearch) {
-      const text = await callQwen('搜索并告诉我今天日期，用一句话回答。', {
-        override: {
-          apiKey: cleanKey,
-          baseUrl: cleanBase,
-          modelId: modelId?.trim(),
-        },
-        enableSearch: true,
-        task: 'email',
-        timeoutMs: CONNECTION_TEST_TIMEOUT_MS,
-      });
-      return { success: true, message: `千问联网搜索成功 ✅ ${text.slice(0, 80)}` };
-    }
-    const text = await callQwen('Ping. Just reply with the word pong.', {
-      override: {
-        apiKey: cleanKey,
-        baseUrl: cleanBase,
-        modelId: modelId?.trim(),
-      },
-      timeoutMs: CONNECTION_TEST_TIMEOUT_MS,
-    });
-    return { success: true, message: `Qwen 连接成功 ✅ 回复: ${text.slice(0, 50)}` };
+
+    // 轻量 ping：不走完整 callQwen / 系统提示 / 降级重试链
+    const run = () =>
+      callQwenChat(
+        [
+          {
+            role: 'user',
+            content: testSearch
+              ? '用一句话告诉我今天日期（不要长文）'
+              : 'Reply with exactly one word: pong',
+          },
+        ],
+        {
+          enableSearch: testSearch,
+          forcedSearch: false,
+          timeoutMs: CONNECTION_TEST_TIMEOUT_MS,
+          connectionTest: true,
+          maxTokens: 64,
+          override: {
+            apiKey: cleanKey,
+            baseUrl: cleanBase,
+            modelId: modelId?.trim(),
+          },
+        }
+      );
+
+    const text = await withHardTimeout(
+      run(),
+      CONNECTION_TEST_TIMEOUT_MS + 2_000,
+      testSearch ? '千问联网测试' : '千问连接测试'
+    );
+    return {
+      success: true,
+      message: testSearch
+        ? `千问联网搜索成功 ✅ ${String(text).slice(0, 80)}`
+        : `Qwen 连接成功 ✅ 回复: ${String(text).slice(0, 50)}`,
+    };
   } catch (e: any) {
     const hint = qwenCorsHint(e?.message);
-    return { success: false, message: `Qwen 测试失败: ${e.message}${hint}` };
+    const msg = String(e?.message || e).slice(0, 280);
+    return { success: false, message: `Qwen 测试失败: ${msg}${hint}` };
   }
 };
 

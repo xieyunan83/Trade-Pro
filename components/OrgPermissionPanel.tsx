@@ -55,6 +55,7 @@ export const OrgPermissionPanel: React.FC<OrgPermissionPanelProps> = ({
   const [draftSchedule, setDraftSchedule] = useState<AccessSchedule>(defaultAccessSchedule());
   const [msg, setMsg] = useState('');
   const [addUserOpen, setAddUserOpen] = useState(false);
+  const [deptDraft, setDeptDraft] = useState<{ mode: 'add' | 'rename' | 'manager'; id?: string; value: string } | null>(null);
 
   const manageableUsers = useMemo(() => {
     if (isAdmin) return users;
@@ -155,56 +156,81 @@ export const OrgPermissionPanel: React.FC<OrgPermissionPanelProps> = ({
     setMsg(`已清除「${selected.username}」的设备绑定`);
   };
 
-  const handleAddDepartment = async () => {
-    const name = prompt('请输入新部门名称：');
-    if (!name?.trim()) return;
-    const dept = createDepartment(name.trim());
-    const next = [...departments, dept];
-    setDepartments(next);
-    await persistDepartments(next);
-    setMsg(`部门「${dept.name}」已创建`);
+  const handleAddDepartment = () => {
+    setDeptDraft({ mode: 'add', value: '' });
   };
 
-  const handleRenameDepartment = async (id: string) => {
+  const handleRenameDepartment = (id: string) => {
     const dept = departments.find((d) => d.id === id);
     if (!dept) return;
-    const name = prompt('修改部门名称：', dept.name);
-    if (!name?.trim()) return;
-    const next = departments.map((d) => (d.id === id ? { ...d, name: name.trim() } : d));
-    setDepartments(next);
-    await persistDepartments(next);
+    setDeptDraft({ mode: 'rename', id, value: dept.name });
   };
 
-  const handleSetDeptManager = async (id: string) => {
+  const handleSetDeptManager = (id: string) => {
     const dept = departments.find((d) => d.id === id);
     if (!dept) return;
-    const name = prompt('指定部门主管用户名（需已存在）：', dept.managerUsername || '');
-    if (name === null) return;
-    const mgr = name.trim() ? findUserByName(users, name.trim()) : undefined;
-    if (name.trim() && !mgr) {
-      alert('找不到该用户');
+    setDeptDraft({ mode: 'manager', id, value: dept.managerUsername || '' });
+  };
+
+  const submitDeptDraft = async () => {
+    if (!deptDraft) return;
+    const value = deptDraft.value.trim();
+
+    if (deptDraft.mode === 'add') {
+      if (!value) {
+        setMsg('请输入部门名称');
+        return;
+      }
+      const dept = createDepartment(value);
+      const next = [...departments, dept];
+      setDepartments(next);
+      await persistDepartments(next);
+      setMsg(`部门「${dept.name}」已创建`);
+      setDeptDraft(null);
       return;
     }
-    const nextDepts = departments.map((d) =>
-      d.id === id ? { ...d, managerUsername: mgr?.username } : d
-    );
-    setDepartments(nextDepts);
-    let nextUsers = users;
-    if (mgr) {
-      nextUsers = users.map((u) =>
-        u.username === mgr.username
-          ? {
-              ...u,
-              role: u.role === 'admin' ? 'admin' : 'manager',
-              departmentId: id,
-              permissions: effectivePermissions({ ...u, role: u.role === 'admin' ? 'admin' : 'manager' }),
-            }
-          : u
-      );
-      setUsers(nextUsers);
+
+    if (deptDraft.mode === 'rename' && deptDraft.id) {
+      if (!value) {
+        setMsg('请输入部门名称');
+        return;
+      }
+      const next = departments.map((d) => (d.id === deptDraft.id ? { ...d, name: value } : d));
+      setDepartments(next);
+      await persistDepartments(next);
+      setMsg('部门名称已更新');
+      setDeptDraft(null);
+      return;
     }
-    await persistUsers(nextUsers, Date.now(), nextDepts);
-    setMsg('部门主管已更新');
+
+    if (deptDraft.mode === 'manager' && deptDraft.id) {
+      const mgr = value ? findUserByName(users, value) : undefined;
+      if (value && !mgr) {
+        setMsg('找不到该用户');
+        return;
+      }
+      const nextDepts = departments.map((d) =>
+        d.id === deptDraft.id ? { ...d, managerUsername: mgr?.username } : d
+      );
+      setDepartments(nextDepts);
+      let nextUsers = users;
+      if (mgr) {
+        nextUsers = users.map((u) =>
+          u.username === mgr.username
+            ? {
+                ...u,
+                role: u.role === 'admin' ? 'admin' : 'manager',
+                departmentId: deptDraft.id,
+                permissions: effectivePermissions({ ...u, role: u.role === 'admin' ? 'admin' : 'manager' }),
+              }
+            : u
+        );
+        setUsers(nextUsers);
+      }
+      await persistUsers(nextUsers, Date.now(), nextDepts);
+      setMsg('部门主管已更新');
+      setDeptDraft(null);
+    }
   };
 
   const handleDeleteDepartment = async (id: string) => {
@@ -579,6 +605,49 @@ export const OrgPermissionPanel: React.FC<OrgPermissionPanelProps> = ({
           loadUser(created.username);
         }}
       />
+
+      {deptDraft && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/40 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl space-y-3">
+            <h4 className="text-base font-black text-slate-800">
+              {deptDraft.mode === 'add'
+                ? '新增部门'
+                : deptDraft.mode === 'rename'
+                  ? '重命名部门'
+                  : '指定部门主管'}
+            </h4>
+            <input
+              type="text"
+              value={deptDraft.value}
+              onChange={(e) => setDeptDraft({ ...deptDraft, value: e.target.value })}
+              placeholder={
+                deptDraft.mode === 'manager' ? '主管用户名（留空则清除）' : '部门名称'
+              }
+              className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-bold"
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void submitDeptDraft();
+              }}
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setDeptDraft(null)}
+                className="rounded-xl px-3 py-2 text-xs font-bold text-slate-500 hover:bg-slate-100"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => void submitDeptDraft()}
+                className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-black text-white"
+              >
+                确认
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

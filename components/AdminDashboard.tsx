@@ -104,6 +104,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const [ytLink, setYtLink] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const [addUserOpen, setAddUserOpen] = useState(false);
+  const [resetPwdUser, setResetPwdUser] = useState<string | null>(null);
+  const [resetPwdValue, setResetPwdValue] = useState('');
+  const [resetPwdMsg, setResetPwdMsg] = useState<string | null>(null);
+  const [isResettingPwd, setIsResettingPwd] = useState(false);
 
   useEffect(() => {
     const stored = localStorage.getItem('trade_scout_api_configs');
@@ -240,14 +244,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
 
   const handleSaveSupabaseConfig = async () => {
     if (!supabaseUrl.trim() || !supabaseAnonKey.trim()) {
-      alert('请填写 Supabase URL 和 Anon Key');
+      setSaveConfigMsg({ ok: false, text: '请填写 Supabase URL 和 Anon Key' });
       return;
     }
     saveSupabaseConfig(supabaseUrl, supabaseAnonKey);
     resetSupabaseClient();
     setSupabaseReady(true);
-    alert('Supabase 配置已保存，页面将刷新以同步云端数据');
-    window.location.reload();
+    setSaveConfigMsg({ ok: true, text: 'Supabase 配置已保存，即将刷新以同步云端数据…' });
+    window.setTimeout(() => window.location.reload(), 400);
   };
 
   const handleResetSupabaseOverride = () => {
@@ -257,7 +261,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     setSupabaseUrl(sb.url);
     setSupabaseAnonKey(sb.key);
     setSupabaseReady(isSupabaseConfigured());
-    alert('已恢复为 .env.local / bakedConfig 中的默认 Supabase 配置');
+    setSaveConfigMsg({ ok: true, text: '已恢复为 .env.local / bakedConfig 中的默认 Supabase 配置' });
   };
 
   const handleSaveApiConfigs = async () => {
@@ -378,11 +382,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
 
       const text = `配置已保存\n本机 Key：${emailLocal}\n${cloudLine}\n\n普通用户请刷新页面后再使用（会自动拉取云端 Key）`;
       setSaveConfigMsg({ ok: true, text: text.replace(/\n/g, ' · ') });
-      alert(text);
     } catch (e: any) {
       const text = `保存失败：${e?.message || String(e)}（本机 Key 可能已写入，云端请重试）`;
       setSaveConfigMsg({ ok: false, text });
-      alert(text);
     } finally {
       setIsSavingConfigs(false);
     }
@@ -390,48 +392,48 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
 
   const handleSaveProxy = () => {
     localStorage.setItem('trade_scout_custom_proxy', proxyUrl);
-    alert('代理地址已保存');
+    setSaveConfigMsg({ ok: true, text: '代理地址已保存' });
   };
 
   const handleSaveAliyunProxy = () => {
     setAliyunProxyMode(aliyunProxyMode);
     setAliyunProxyBase(aliyunProxyBase);
-    alert('中转设置已保存。保持「自动」即可，本机和线上都会自动走通。');
+    setSaveConfigMsg({ ok: true, text: '中转设置已保存。保持「自动」即可，本机和线上都会自动走通。' });
   };
 
   const handleTestQwen = async (testSearch = false) => {
+    if (isTestingQwen) return;
     if (!qwenApiKey.trim()) {
       const msg = '请先填写 Qwen API Key';
       setQwenTestMsg({ ok: false, text: msg });
-      alert(msg);
       return;
     }
     // 测试前先写入 localStorage，保证请求用的是当前表单里的 Token Plan 配置
     localStorage.setItem('trade_scout_qwen_api_key', qwenApiKey.trim());
     if (qwenBaseUrl.trim()) localStorage.setItem('trade_scout_qwen_base_url', qwenBaseUrl.trim());
+    else localStorage.setItem('trade_scout_qwen_base_url', 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1');
     if (qwenModelId.trim()) localStorage.setItem('trade_scout_qwen_model_id', qwenModelId.trim());
 
     setIsTestingQwen(true);
-    setQwenTestMsg({ ok: true, text: testSearch ? '正在测试联网搜索（最长约 25 秒）…' : '正在测试连接（最长约 25 秒）…' });
+    setQwenTestMsg({
+      ok: true,
+      text: testSearch ? '正在测试联网搜索（最长约 18 秒）…' : '正在测试连接（最长约 18 秒）…',
+    });
     try {
       const result = await testQwenApiKey(qwenApiKey, qwenBaseUrl, qwenModelId, testSearch);
       setQwenTestMsg({ ok: result.success, text: result.message });
-      alert(result.message);
     } catch (e: any) {
-      const text = `Qwen 测试异常: ${e?.message || String(e)}`;
-      setQwenTestMsg({ ok: false, text });
-      alert(text);
+      setQwenTestMsg({ ok: false, text: `Qwen 测试异常: ${e?.message || String(e)}` });
     } finally {
       setIsTestingQwen(false);
     }
   };
 
   const handleTestWan = async () => {
+    if (isTestingWan) return;
     const key = wanApiKey.trim() || qwenApiKey.trim();
     if (!key) {
-      const msg = '请先填写万相 API Key（可与千问 Token Plan 共用）';
-      setWanTestMsg({ ok: false, text: msg });
-      alert(msg);
+      setWanTestMsg({ ok: false, text: '请先填写万相 API Key（可与千问 Token Plan 共用）' });
       return;
     }
     localStorage.setItem('trade_scout_wan_api_key', key);
@@ -442,21 +444,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     try {
       const result = await testWanImageApi();
       setWanTestMsg({ ok: result.success, text: result.message });
-      alert(result.message);
     } catch (e: any) {
-      const text = `万相测试异常: ${e?.message || String(e)}`;
-      setWanTestMsg({ ok: false, text });
-      alert(text);
+      setWanTestMsg({ ok: false, text: `万相测试异常: ${e?.message || String(e)}` });
     } finally {
       setIsTestingWan(false);
     }
   };
 
   const handleTestAnymail = async () => {
+    if (isTestingAnymail) return;
     if (!anymailFinderApiKey.trim()) {
-      const msg = '请先填写 AnymailFinder API Key';
-      setAnymailTestMsg({ ok: false, text: msg });
-      alert(msg);
+      setAnymailTestMsg({ ok: false, text: '请先填写 AnymailFinder API Key' });
       return;
     }
     localStorage.setItem('trade_scout_anymail_finder_api_key', anymailFinderApiKey.trim());
@@ -465,21 +463,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     try {
       const result = await testAnymailFinderApiKey(anymailFinderApiKey.trim());
       setAnymailTestMsg({ ok: result.success, text: result.message });
-      alert(result.message);
     } catch (e: any) {
-      const text = `AnymailFinder 测试异常: ${e?.message || String(e)}`;
-      setAnymailTestMsg({ ok: false, text });
-      alert(text);
+      setAnymailTestMsg({ ok: false, text: `AnymailFinder 测试异常: ${e?.message || String(e)}` });
     } finally {
       setIsTestingAnymail(false);
     }
   };
 
   const handleTestHunter = async () => {
+    if (isTestingHunter) return;
     if (!hunterApiKey.trim()) {
-      const msg = '请先填写 Hunter.io API Key';
-      setHunterTestMsg({ ok: false, text: msg });
-      alert(msg);
+      setHunterTestMsg({ ok: false, text: '请先填写 Hunter.io API Key' });
       return;
     }
     localStorage.setItem('trade_scout_hunter_api_key', hunterApiKey.trim());
@@ -488,21 +482,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     try {
       const result = await testHunterApiKey(hunterApiKey.trim());
       setHunterTestMsg({ ok: result.success, text: result.message });
-      alert(result.message);
     } catch (e: any) {
-      const text = `Hunter.io 测试异常: ${e?.message || String(e)}`;
-      setHunterTestMsg({ ok: false, text });
-      alert(text);
+      setHunterTestMsg({ ok: false, text: `Hunter.io 测试异常: ${e?.message || String(e)}` });
     } finally {
       setIsTestingHunter(false);
     }
   };
 
   const handleTestAnysearch = async () => {
+    if (isTestingAnysearch) return;
     if (!anysearchApiKey.trim()) {
-      const msg = '请先填写 AnySearch API Key';
-      setAnysearchTestMsg({ ok: false, text: msg });
-      alert(msg);
+      setAnysearchTestMsg({ ok: false, text: '请先填写 AnySearch API Key' });
       return;
     }
     saveAnysearchApiKey(anysearchApiKey.trim());
@@ -511,28 +501,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     try {
       const result = await testAnysearchApiKey();
       setAnysearchTestMsg({ ok: result.success, text: result.message });
-      alert(result.message);
     } catch (e: any) {
-      const text = `AnySearch 测试异常: ${e?.message || String(e)}`;
-      setAnysearchTestMsg({ ok: false, text });
-      alert(text);
+      setAnysearchTestMsg({ ok: false, text: `AnySearch 测试异常: ${e?.message || String(e)}` });
     } finally {
       setIsTestingAnysearch(false);
     }
   };
 
   const handleTestApi = async (api: ApiConfig) => {
+    if (testingApiId) return;
     if (!api.apiKey?.trim()) {
-      alert('请先填写 API Key');
+      setSaveConfigMsg({ ok: false, text: '请先填写 API Key' });
       return;
     }
     setTestingApiId(api.id);
     try {
       const baseUrl = api.baseUrl?.includes('generativelanguage.googleapis.com') ? 'native' : api.baseUrl;
       const result = await testApiKey(api.apiKey, baseUrl, api.modelId);
-      alert(result.message);
+      setSaveConfigMsg({ ok: result.success, text: result.message });
     } catch (e: any) {
-      alert(`API 测试异常: ${e?.message || String(e)}`);
+      setSaveConfigMsg({ ok: false, text: `API 测试异常: ${e?.message || String(e)}` });
     } finally {
       setTestingApiId(null);
     }
@@ -579,17 +567,37 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
 
   const handleAddUser = () => setAddUserOpen(true);
 
-  const handleResetPassword = async (username: string) => {
-    const pwd = prompt(`为「${username}」设置新密码（至少 6 位）:`);
-    if (!pwd || pwd.length < 6) {
-      alert('密码至少需要 6 位');
+  const handleResetPassword = (username: string) => {
+    setResetPwdUser(username);
+    setResetPwdValue('');
+    setResetPwdMsg(null);
+  };
+
+  const submitResetPassword = async () => {
+    if (!resetPwdUser || isResettingPwd) return;
+    const pwd = resetPwdValue.trim();
+    if (pwd.length < 6) {
+      setResetPwdMsg('密码至少需要 6 位');
       return;
     }
-    const hashed = await hashPassword(pwd);
-    const next = updateUserPassword(users, username, hashed);
-    setUsers(next);
-    await persistUsers(next, Date.now(), departments);
-    alert(`已重置 ${username} 的密码并同步到云端，手机与电脑请用同一新密码登录`);
+    setIsResettingPwd(true);
+    setResetPwdMsg(null);
+    try {
+      const hashed = await hashPassword(pwd);
+      const next = updateUserPassword(users, resetPwdUser, hashed);
+      setUsers(next);
+      await persistUsers(next, Date.now(), departments);
+      setResetPwdMsg(`已重置 ${resetPwdUser} 的密码（本机已保存，云端后台同步）`);
+      window.setTimeout(() => {
+        setResetPwdUser(null);
+        setResetPwdValue('');
+        setResetPwdMsg(null);
+      }, 900);
+    } catch (e: any) {
+      setResetPwdMsg(`重置失败：${e?.message || String(e)}`);
+    } finally {
+      setIsResettingPwd(false);
+    }
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1465,9 +1473,55 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
         allowRolePick
         onCreated={({ users: next, created }) => {
           setUsers(next);
-          alert(`用户 ${created.username} 已创建（本机已保存，云端后台同步）`);
+          setSaveConfigMsg({ ok: true, text: `用户 ${created.username} 已创建（本机已保存，云端后台同步）` });
         }}
       />
+
+      {resetPwdUser && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl space-y-4">
+            <h3 className="text-lg font-black text-slate-800">重置密码 · {resetPwdUser}</h3>
+            <input
+              type="password"
+              value={resetPwdValue}
+              onChange={(e) => setResetPwdValue(e.target.value)}
+              placeholder="新密码（至少 6 位）"
+              className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold"
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void submitResetPassword();
+              }}
+            />
+            {resetPwdMsg && (
+              <p className={`text-xs font-bold ${resetPwdMsg.includes('失败') || resetPwdMsg.includes('至少') ? 'text-rose-600' : 'text-emerald-700'}`}>
+                {resetPwdMsg}
+              </p>
+            )}
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={isResettingPwd}
+                onClick={() => {
+                  setResetPwdUser(null);
+                  setResetPwdValue('');
+                  setResetPwdMsg(null);
+                }}
+                className="rounded-xl px-4 py-2 text-sm font-bold text-slate-500 hover:bg-slate-100"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={isResettingPwd}
+                onClick={() => void submitResetPassword()}
+                className="rounded-xl bg-slate-900 px-5 py-2 text-sm font-black text-white hover:bg-blue-600 disabled:opacity-50"
+              >
+                {isResettingPwd ? '保存中…' : '确认重置'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

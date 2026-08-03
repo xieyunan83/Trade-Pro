@@ -176,14 +176,19 @@ export const generateWanImage = async (
 
 export const testWanImageApi = async (): Promise<{ success: boolean; message: string }> => {
   try {
-    const result = await generateWanImage({
-      prompt: '一张简洁的蓝色商务名片背景，纯色，无文字',
-      size: '1K',
-      n: 1,
-      thinkingMode: false,
-    });
+    const result = await Promise.race([
+      generateWanImage({
+        prompt: '一张简洁的蓝色商务名片背景，纯色，无文字',
+        size: '1K',
+        n: 1,
+        thinkingMode: false,
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('万相连接测试超时（40 秒）')), 40_000)
+      ),
+    ]);
     return { success: true, message: `万相连接成功 ✅ 已生成 ${result.images.length} 张图` };
   } catch (e: any) {
-    return { success: false, message: `万相测试失败: ${e.message}` };
+    return { success: false, message: `万相测试失败: ${String(e?.message || e).slice(0, 220)}` };
   }
 };
