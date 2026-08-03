@@ -22,7 +22,15 @@ export const stampSearchResults = (
   return results.map((r) => {
     // Prefer the company's own country from search; never stamp "Global" over Poland etc.
     const companyCountry = (r.country || '').trim();
-    const countryTag = (companyCountry || specificTarget || '').trim();
+    // 有明确目标国时：标签国家优先用目标国；公司国仅在与目标一致时用于展示
+    const matchedCompany =
+      specificTarget && companyCountry && !isNonSpecificCountry(companyCountry)
+        ? companyCountry
+        : '';
+    const displayCountry = specificTarget
+      ? matchedCompany || specificTarget
+      : companyCountry || specificTarget || '';
+    const countryTag = (displayCountry || '').trim();
     const tags = [
       keyword ? `关键词:${keyword}` : '',
       countryTag ? `国家:${countryTag}` : '',
@@ -35,10 +43,11 @@ export const stampSearchResults = (
     return {
       ...r,
       searchKeyword: keyword || r.searchKeyword,
-      searchCountry: companyCountry || specificTarget || r.searchCountry || undefined,
+      // 搜索目标市场：有具体目标国则固定为目标国，避免被模型乱填其它国家污染后续背调
+      searchCountry: specificTarget || companyCountry || r.searchCountry || undefined,
       searchTags: unique.length ? unique : r.searchTags,
       searchId: opts.searchId,
-      country: companyCountry || specificTarget || r.country,
+      country: displayCountry || r.country,
     };
   });
 };

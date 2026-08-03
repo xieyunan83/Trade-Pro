@@ -2505,90 +2505,157 @@ ${JSON.stringify(summary, null, 2)}`;
   };
 };
 
+const countriesLikelyMatch = (a?: string, b?: string): boolean => {
+  if (isVagueMarketCountry(a) || isVagueMarketCountry(b)) return true;
+  const ga = geoGroupIndex(a || '');
+  const gb = geoGroupIndex(b || '');
+  if (ga >= 0 && gb >= 0) return ga === gb;
+  const na = normalizeGeoText(a);
+  const nb = normalizeGeoText(b);
+  if (!na || !nb) return false;
+  return na.includes(nb) || nb.includes(na);
+};
+
+/** 行业词为空时，从产品关键词推断检索约束，避免模型乱扩到无关行业 */
+const inferIndustryConstraint = (productKeyword: string, industry: string): string => {
+  const ind = (industry || '').trim();
+  if (ind) return ind;
+  const p = (productKeyword || '').toLowerCase();
+  if (/bubble|wand|soap.?bubble|泡泡|玩具|toy|doll|plush|teddy|lego|puzzle|game|kids|children|baby|infant|juvenile|party.?favor|novelty/i.test(p)) {
+    return 'Toys / children’s products / party favors / outdoor play / novelty gifts（玩具、儿童用品、派对礼品）';
+  }
+  if (/silicone|baby|paci|teether|bib|nursery/i.test(p)) {
+    return 'Baby products / nursery / infant feeding（母婴用品）';
+  }
+  if (/furniture|chair|table|sofa|cabinet/i.test(p)) {
+    return 'Furniture / home furnishings（家具家居）';
+  }
+  return `Strictly the same product category as "${productKeyword}" — do NOT expand to unrelated industries`;
+};
+
+const productRelevanceOk = (
+  r: Pick<ClientSearchResult, 'name' | 'mainProducts' | 'description' | 'fitReason' | 'fitScore'>,
+  productKeyword: string
+): boolean => {
+  const score = typeof r.fitScore === 'number' ? r.fitScore : 0;
+  if (score > 0 && score < 3) return false;
+  const blob = `${r.name || ''} ${r.mainProducts || ''} ${r.description || ''} ${r.fitReason || ''}`.toLowerCase();
+  const kw = (productKeyword || '').trim().toLowerCase();
+  if (!kw) return score >= 3;
+  const tokens = kw.split(/[\s/_+\-]+/).filter((t) => t.length >= 3);
+  const hit = tokens.some((t) => blob.includes(t));
+  // 中文描述常见玩具/采购词：英文关键词没命中时，高分 + 行业词也可过
+  const softIndustry =
+    /玩具|儿童|母婴|派对|礼品|户外|泡泡|采购|进口|分销|批发|零售|brand|toy|kids|baby|party|import|distribut|wholesale|retail/i.test(
+      blob
+    );
+  if (hit) return true;
+  if (score >= 4 && softIndustry) return true;
+  if (score >= 3 && softIndustry && tokens.length <= 1) return true;
+  // 无分数字段时：至少要命中关键词或明显行业词
+  if (score === 0) return hit || softIndustry;
+  return false;
+};
+
+const filterSearchResultsByMarketAndProduct = (
+  results: ClientSearchResult[],
+  opts: { productKeyword: string; targetCountry: string; limit: number }
+): ClientSearchResult[] => {
+  const target = (opts.targetCountry || '').trim();
+  const specific = !isVagueMarketCountry(target);
+  const filtered = results.filter((r) => {
+    if (!r.website && !r.name) return false;
+    if (specific) {
+      const companyCountry = (r.country || r.searchCountry || '').trim();
+      // 模型未填国家时，暂按目标市场收下，但后面会强制 stamp 为目标国
+      if (companyCountry && !countriesLikelyMatch(companyCountry, target)) return false;
+    }
+    return productRelevanceOk(r, opts.productKeyword);
+  });
+  return filtered
+    .sort((a, b) => (b.fitScore || 0) - (a.fitScore || 0))
+    .slice(0, opts.limit);
+};
+
 // Add this function to export
 export const searchPotentialClients = async (productKeyword: string, country: string, industry: string = '', clientType: string = '', limit: number = 15): Promise<ClientSearchResult[]> => {
   const countries = country.split(/[,，;/|]+/).map(s => s.trim()).filter(Boolean);
   const types = clientType.split(/[,，;/|]+/).map(s => s.trim()).filter(Boolean);
-  // 单次请求控制体量，降低联网超时概率（多类型时仍覆盖，但条数略减）
+  const singleMarket = countries.length === 1 && !isVagueMarketCountry(countries[0]);
+  const targetMarket = singleMarket ? countries[0] : countries.filter((c) => !isVagueMarketCountry(c)).join(', ');
+  // 单次请求控制体量；单国可稍高
   const effectiveLimit = Math.min(Math.max(limit, 3), countries.length > 1 ? 12 : 20);
-  const marketHint = countries.length
-    ? `these target markets (cover as many as possible): ${countries.join(', ')}`
-    : 'relevant global target markets';
+  const industryConstraint = inferIndustryConstraint(productKeyword, industry);
   const typeHint = types.length
     ? types.join(', ')
     : 'Importer, Distributor, Wholesaler, Retailer, Brand Owner, Buying Office';
 
-  const prompt = `
+  const buildPrompt = (askLimit: number, stricter = false) => `
   Act as a high-performance B2B lead discovery engine for Chinese exporters (楠哥的小助理).
-  Use web search to find REAL companies in ${marketHint} that buy / import / distribute "${productKeyword}".
-  Industry focus: ${industry || '与产品相关的行业'}.
-  Preferred buyer types (match ANY of these): ${typeHint}.
-  ${countries.length > 1 ? `- Distribute results across the selected countries when possible.` : ''}
+  Use web search to find REAL companies that buy / import / distribute / wholesale / retail the product: "${productKeyword}".
+
+  TARGET MARKET (CRITICAL):
+  ${
+    singleMarket
+      ? `- Search ONLY in this ONE country/market: ${countries[0]}.
+  - Every result MUST be a real buyer entity whose official HQ / primary operating country is ${countries[0]}.
+  - Do NOT return companies from other countries even if they sell similar products.
+  - The JSON "country" field MUST be "${countries[0]}" (or the local official name of the same country).`
+      : targetMarket
+        ? `- Target markets: ${targetMarket}. Prefer companies headquartered in these markets.`
+        : `- Target: relevant markets, but each result must show its REAL HQ country (never write "Global").`
+  }
+
+  PRODUCT / INDUSTRY (CRITICAL):
+  - Product keyword: "${productKeyword}"
+  - Industry constraint: ${industryConstraint}
+  - Companies MUST clearly deal in this product category (or extremely close substitutes).
+  - REJECT unrelated industries (software, banks, chemicals, construction, logistics-only, generic trading with no product fit, etc.).
+  ${stricter ? `- STRICT MODE: If unsure about product fit OR country fit, OMIT the company. Quality > quantity.` : ''}
+
+  Preferred buyer types (match ANY): ${typeHint}.
   ${types.length > 1 ? `- Mix buyer types among: ${types.join(', ')}.` : ''}
 
   Rules:
   - Only real companies with active websites. Prefer B2B buyers.
-  - Return up to ${effectiveLimit} diverse targets (no duplicates). Prefer speed: shorter fields.
-  - fitScore 1-5; description / fitReason / mainProducts in Simplified Chinese.
+  - Return up to ${askLimit} diverse targets (no duplicates). Prefer precision over filler leads.
+  - fitScore 1-5 reflecting PRODUCT fit for "${productKeyword}" in the target market (3+=usable, 5=excellent).
+  - description / fitReason / mainProducts in Simplified Chinese; explicitly mention how they relate to "${productKeyword}".
   - Do NOT invent emails.
   - Keep each field concise (1 short sentence max for description/fitReason).
-  - country / city MUST match the legal entity that owns the website domain (official HQ). Never confuse same-name brands across countries (e.g. smyk.com = Poland/Warsaw, not Russia/Moscow).
-  - If search market is Global/worldwide, still return each company's REAL HQ country — do not write "Global" as country.
+  - country / city MUST match the legal entity that owns the website domain (official HQ).
 
   Return a valid JSON Array ONLY:
   [{
     "name": "Company Name",
     "website": "www.example.com",
-    "description": "一句话说明为何适合开发",
-    "country": "Country name in English",
+    "description": "一句话说明为何适合开发该产品",
+    "country": "${singleMarket ? countries[0] : 'Official HQ country in English'}",
     "clientType": "Importer|Distributor|Wholesaler|Retailer|Brand|Buying Office",
-    "mainProducts": "主营品类",
+    "mainProducts": "主营品类（须与关键词相关）",
     "estimatedScale": "如 50-200人 / 中型",
     "city": "城市",
     "linkedinCompanyUrl": "",
     "contactHint": "",
     "fitScore": 4,
-    "fitReason": "匹配原因"
+    "fitReason": "匹配原因（含产品与市场）"
   }]
   `;
 
-  const runSearch = async () => {
-    const text = await generateContentUnified('search', prompt, SYSTEM_INSTRUCTION, true);
-    const results = extractJson(text, true);
-    if (!Array.isArray(results) || results.length === 0) {
-      throw new Error('搜索未返回有效结果。请确认千问 API 已配置，并使用支持联网搜索的模型。');
-    }
-    return results;
-  };
-
-  let results: any[];
-  try {
-    results = await runSearch();
-  } catch (firstErr: any) {
-    const msg = String(firstErr?.message || firstErr);
-    // 超时/504：用更少条数再搜一次（仍联网）
-    if (/超时|timeout|504|上游超时|Gateway/i.test(msg) && effectiveLimit > 6) {
-      console.warn('[search] 首次超时，缩小结果数后重试…');
-      const slimPrompt = prompt.replace(
-        `Return up to ${effectiveLimit} diverse targets`,
-        'Return up to 6 diverse targets'
-      );
-      const text = await generateContentUnified('search', slimPrompt, SYSTEM_INSTRUCTION, true);
-      results = extractJson(text, true);
-      if (!Array.isArray(results) || results.length === 0) throw firstErr;
-    } else {
-      throw firstErr;
-    }
-  }
-
-  return filterExcludedSearchResults(
-    results
-      .map((r: any) => ({
+  const mapRaw = (results: any[]): ClientSearchResult[] =>
+    results.map((r: any) => {
+      const modelCountry = (r.country || '').trim();
+      const fallbackCountry = singleMarket
+        ? countries[0]
+        : countries.find((c) => !isVagueMarketCountry(c)) || (!isVagueMarketCountry(country) ? country : '');
+      // 单国搜索：若模型国家与目标不一致，先保留模型值，后面过滤器会丢弃
+      const countryOut = modelCountry || fallbackCountry || '';
+      return {
         name: r.name || 'Unknown',
         website: r.website || '',
         description: r.description || '',
-        country: r.country || (isVagueMarketCountry(country) ? '' : country) || '',
-        clientType: r.clientType || clientType || '',
+        country: countryOut,
+        clientType: r.clientType || (types[0] || clientType || ''),
         mainProducts: r.mainProducts || '',
         estimatedScale: r.estimatedScale || '',
         city: r.city || '',
@@ -2597,14 +2664,81 @@ export const searchPotentialClients = async (productKeyword: string, country: st
         fitScore: typeof r.fitScore === 'number' ? r.fitScore : undefined,
         fitReason: r.fitReason || '',
         searchKeyword: productKeyword || undefined,
-        searchCountry:
-          r.country ||
-          (countries.find((c) => !isVagueMarketCountry(c)) ||
-            (!isVagueMarketCountry(country) ? country : '') ||
-            undefined),
-      }))
-      .sort((a: ClientSearchResult, b: ClientSearchResult) => (b.fitScore || 0) - (a.fitScore || 0))
+        // 搜索目标市场固定为本次请求国家（单国），避免被模型乱填覆盖
+        searchCountry: singleMarket ? countries[0] : countryOut || fallbackCountry || undefined,
+      } as ClientSearchResult;
+    });
+
+  const runOnce = async (askLimit: number, stricter: boolean) => {
+    const text = await generateContentUnified('search', buildPrompt(askLimit, stricter), SYSTEM_INSTRUCTION, true);
+    const parsed = extractJson(text, true);
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      throw new Error('搜索未返回有效结果。请确认千问 API 已配置，并使用支持联网搜索的模型。');
+    }
+    return mapRaw(parsed);
+  };
+
+  let mapped: ClientSearchResult[];
+  try {
+    mapped = await runOnce(effectiveLimit, false);
+  } catch (firstErr: any) {
+    const msg = String(firstErr?.message || firstErr);
+    if (/超时|timeout|504|上游超时|Gateway/i.test(msg) && effectiveLimit > 6) {
+      console.warn('[search] 首次超时，缩小结果数后重试…');
+      mapped = await runOnce(6, true);
+    } else {
+      throw firstErr;
+    }
+  }
+
+  const primaryTarget = singleMarket ? countries[0] : country;
+  let filtered = filterSearchResultsByMarketAndProduct(mapped, {
+    productKeyword,
+    targetCountry: primaryTarget,
+    limit: effectiveLimit,
+  });
+
+  // 过滤后过少：严格模式补搜一次（不删已有合格结果，合并去重）
+  if (filtered.length < Math.min(effectiveLimit, Math.max(3, Math.ceil(limit * 0.6)))) {
+    try {
+      console.warn(
+        `[search] 合格结果仅 ${filtered.length}/${effectiveLimit}，严格补搜中…`,
+        { productKeyword, country: primaryTarget }
+      );
+      const extra = await runOnce(effectiveLimit, true);
+      const merged = [...filtered, ...extra];
+      const seen = new Set<string>();
+      const deduped: ClientSearchResult[] = [];
+      for (const r of merged) {
+        const key = (r.website || r.name || '').toLowerCase().replace(/^www\./, '');
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        deduped.push(r);
+      }
+      filtered = filterSearchResultsByMarketAndProduct(deduped, {
+        productKeyword,
+        targetCountry: primaryTarget,
+        limit: effectiveLimit,
+      });
+    } catch (e) {
+      console.warn('[search] 严格补搜失败，沿用已有过滤结果', e);
+    }
+  }
+
+  // 单国：强制 searchCountry / 缺省 country 为目标国（已通过过滤的结果）
+  if (singleMarket) {
+    filtered = filtered.map((r) => ({
+      ...r,
+      searchCountry: countries[0],
+      country: r.country && countriesLikelyMatch(r.country, countries[0]) ? r.country : countries[0],
+    }));
+  }
+
+  console.log(
+    `[search] ${productKeyword} @ ${primaryTarget || 'global'}: raw=${mapped.length} kept=${filtered.length}`
   );
+
+  return filterExcludedSearchResults(filtered);
 };
 
 export const streamStrategyChat = async function* (

@@ -1308,6 +1308,7 @@ const App: React.FC = () => {
       const result = await analyzeCompany(task.website, task.mode || 'economy', {
         searchKeyword: kw || undefined,
         searchTags: kw ? buildSearchTags(kw, task.country || '') : undefined,
+        // 始终传「搜索目标国」，帮助身份校验对齐市场，而不是模型瞎填的国家
         searchCountry: task.country || undefined,
       });
 
@@ -1315,9 +1316,14 @@ const App: React.FC = () => {
         ...task,
         clientName: result.companyInfo?.name || task.clientName,
         website: result.companyInfo?.website || task.website,
-        country: result.companyInfo?.headquarters?.split(',').pop()?.trim() || task.country,
+        // 保留搜索目标国在任务上；真实 HQ 在 analysis.companyInfo 里查看
+        country: task.country,
         status: 'completed',
-        analysis: result,
+        analysis: {
+          ...result,
+          searchKeyword: result.searchKeyword || kw || undefined,
+          searchCountry: result.searchCountry || task.country || undefined,
+        },
         mailGroup: undefined,
         keyword: kw || task.keyword,
       };
@@ -1453,22 +1459,45 @@ const App: React.FC = () => {
             clientTypes: config.clientTypes || [],
             searchId: `auto_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
           });
-          const newTasks: AutomationResult[] = results.map((res) =>
+          // 再保险：只入队目标国 + 有网站的结果（搜索层已过滤，这里防 stamp 边缘情况）
+          const qualified = results.filter((res) => {
+            if (!(res.website || '').trim()) return false;
+            const c = (res.country || res.searchCountry || '').trim();
+            if (!c) return true;
+            const a = c.toLowerCase();
+            const b = country.toLowerCase();
+            return (
+              a === b ||
+              a.includes(b) ||
+              b.includes(a) ||
+              (res.searchCountry || '').toLowerCase() === b
+            );
+          });
+          if (qualified.length < results.length) {
+            console.warn(
+              `[automation] ${country}: dropped ${results.length - qualified.length} off-market leads`
+            );
+          }
+          const newTasks: AutomationResult[] = qualified.map((res) =>
             stampOwnership({
               id: Math.random().toString(36).substr(2, 9),
               clientName: res.name,
               website: res.website,
-              country: res.country || country,
-              status: 'pending',
+              // 任务国家固定为「本次搜索目标国」，避免模型乱填其它国家带偏背调
+              country: country,
+              status: 'pending' as const,
               productContext: config.productContext,
               productImages: [],
-              mode: 'economy',
+              mode: 'economy' as const,
               keyword: res.searchKeyword || kw,
               createdAt: Date.now(),
             })
           );
 
-          if (newTasks.length === 0) continue;
+          if (newTasks.length === 0) {
+            console.warn(`[automation] ${country}: 无合格客户（产品/国家过滤后为空）`);
+            continue;
+          }
           searchedCount += newTasks.length;
           setAutomationResults((prev) => [...prev, ...newTasks]);
           for (const task of newTasks) {
@@ -1871,7 +1900,7 @@ const App: React.FC = () => {
             </button>
             <button onClick={handleLogout} className="w-full flex items-center gap-2 px-4 py-3 text-rose-300 hover:bg-rose-500/10 rounded-xl text-sm font-semibold transition-colors"><LogOut size={18} /> 退出登录</button>
             <div className="px-4 pt-1 text-[9px] font-semibold text-slate-600 text-center select-all tracking-wide">
-              版本 v20260804a · 自动化获客流程升级
+              版本 v20260804b · 修复搜索跑偏行业与国家
             </div>
         </div>
       </aside>
