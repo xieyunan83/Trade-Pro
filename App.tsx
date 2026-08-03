@@ -8,6 +8,7 @@ import { isSupabaseConfigured, getKnowledgeFiles, getInvestigationHistory, saveI
 import { addCustomKeyword, addCustomCountry } from './services/taxonomyStore';
 import { normalizeCountryZh } from './utils/countryNormalize';
 import { buildSearchTags, stampSearchResults } from './utils/searchTags';
+import { mergeDiscoveryResultsIntoCrm, mergeHistoryItemsIntoCrm } from './utils/crmHistory';
 import { checkLimit, incrementUsage, updateLocalConfig, resetDailyUsage, getDailyUsagePublic } from './services/limitService';
 import { ModuleType, AnalysisResult, DiscoveryState, Client, User, HistoryItem, AutomationResult, ClientSearchResult, DiscoveryArchiveItem, DecisionMaker, Department } from './types';
 import { ModuleBackground } from './components/ModuleBackground';
@@ -1061,6 +1062,54 @@ const App: React.FC = () => {
       });
   };
 
+  const handleBatchImportRecordsToCrm = (
+    historyItems: HistoryItem[],
+    archives: DiscoveryArchiveItem[]
+  ) => {
+    if (!canAccessModule(currentUser, ModuleType.CLIENT_CRM)) {
+      alert('你没有「客户管理 CRM」权限，请联系管理员或部门主管开通。');
+      return;
+    }
+    if ((!historyItems || historyItems.length === 0) && (!archives || archives.length === 0)) return;
+
+    let added = 0;
+    let updated = 0;
+    let skipped = 0;
+
+    setCrmClients((prev) => {
+      let next = prev;
+      added = 0;
+      updated = 0;
+      skipped = 0;
+
+      if (historyItems.length > 0) {
+        const hist = mergeHistoryItemsIntoCrm(next, historyItems, stampOwnership);
+        next = hist.clients;
+        added += hist.stats.added;
+        updated += hist.stats.updated;
+        skipped += hist.stats.skipped;
+      }
+      for (const archive of archives) {
+        const results = archive.results || [];
+        if (!results.length) continue;
+        const disc = mergeDiscoveryResultsIntoCrm(next, results, stampOwnership, {
+          product: archive.product,
+          industry: archive.industry,
+        });
+        next = disc.clients;
+        added += disc.stats.added;
+        skipped += disc.stats.skipped;
+      }
+      return next;
+    });
+
+    const parts: string[] = [];
+    if (added) parts.push(`新建 ${added}`);
+    if (updated) parts.push(`更新 ${updated}`);
+    if (skipped) parts.push(`跳过已存在 ${skipped}`);
+    alert(parts.length ? `CRM 导入完成：${parts.join('，')}` : '没有可导入的客户');
+  };
+
   // RESTORED: Update CRM status if re-analyzed
   const updateCrmStatus = (analysis: AnalysisResult) => { 
       setCrmClients(prev => prev.map(c => {
@@ -1568,7 +1617,7 @@ const App: React.FC = () => {
             </button>
             <button onClick={handleLogout} className="w-full flex items-center gap-2 px-4 py-3 text-rose-300 hover:bg-rose-500/10 rounded-xl text-sm font-semibold transition-colors"><LogOut size={18} /> 退出登录</button>
             <div className="px-4 pt-1 text-[9px] font-semibold text-slate-600 text-center select-all tracking-wide">
-              版本 v20260803b · 记录中心批量删除 · 联网测试日期
+              版本 v20260803c · 记录中心批量导入CRM
             </div>
         </div>
       </aside>
@@ -1588,6 +1637,8 @@ const App: React.FC = () => {
             if (item.data) exportToPPT(item.data);
           }}
           canExportPpt={hasPermission(currentUser, 'feature.export_ppt')}
+          canImportCrm={canAccessModule(currentUser, ModuleType.CLIENT_CRM)}
+          onBatchImportToCrm={handleBatchImportRecordsToCrm}
           onRestoreDiscovery={(archive) => {
             setDiscoveryState(archiveToDiscoveryState(archive));
             setActiveModule(ModuleType.DISCOVERY);

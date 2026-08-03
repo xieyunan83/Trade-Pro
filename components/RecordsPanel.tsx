@@ -13,6 +13,7 @@ import {
   Plus,
   Pencil,
   Tag,
+  ShieldCheck,
 } from 'lucide-react';
 import { normalizeCountryZh } from '../utils/countryNormalize';
 import {
@@ -49,6 +50,10 @@ interface RecordsPanelProps {
   onRestoreDiscovery: (archive: DiscoveryArchiveItem) => void;
   onDeleteHistory?: (id: string) => void;
   onDeleteDiscovery?: (id: string) => void;
+  /** 批量导入选中的背调 / 搜索归档到 CRM */
+  onBatchImportToCrm?: (historyItems: HistoryItem[], discoveryArchives: DiscoveryArchiveItem[]) => void;
+  /** 无 CRM 编辑权限时隐藏导入按钮 */
+  canImportCrm?: boolean;
   /** 更新背调记录的关键词/国家 */
   onPatchHistory?: (id: string, patch: Partial<Pick<HistoryItem, 'keyword' | 'country'>>) => void;
   /** 批量更新 */
@@ -119,6 +124,8 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   onRestoreDiscovery,
   onDeleteHistory,
   onDeleteDiscovery,
+  onBatchImportToCrm,
+  canImportCrm = false,
   onPatchHistory,
   onBulkPatchHistory,
 }) => {
@@ -133,6 +140,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   /** 批量删除选中：h:id / d:id */
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [isBatchDeleting, setIsBatchDeleting] = useState(false);
+  const [isBatchImporting, setIsBatchImporting] = useState(false);
 
   // 启动时把已有记录里的词合并进自定义列表
   useEffect(() => {
@@ -249,6 +257,23 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
 
   const selectedCount = selected.size;
   const canBatchDelete = !!(onDeleteHistory || onDeleteDiscovery);
+  const canBatchImport = !!(canImportCrm && onBatchImportToCrm);
+  const canSelect = canBatchDelete || canBatchImport;
+
+  const resolveSelected = () => {
+    const histItems: HistoryItem[] = [];
+    const discItems: DiscoveryArchiveItem[] = [];
+    selected.forEach((k) => {
+      if (k.startsWith('h:')) {
+        const item = history.find((h) => h.id === k.slice(2));
+        if (item) histItems.push(item);
+      } else if (k.startsWith('d:')) {
+        const item = discoveryArchives.find((d) => d.id === k.slice(2));
+        if (item) discItems.push(item);
+      }
+    });
+    return { histItems, discItems };
+  };
 
   const handleBatchDelete = async () => {
     if (!canBatchDelete || selectedCount === 0 || isBatchDeleting) return;
@@ -270,6 +295,27 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
       setSelected(new Set());
     } finally {
       setIsBatchDeleting(false);
+    }
+  };
+
+  const handleBatchImportCrm = () => {
+    if (!canBatchImport || !onBatchImportToCrm || selectedCount === 0 || isBatchImporting) return;
+    const { histItems, discItems } = resolveSelected();
+    const discoveryCompanies = discItems.reduce((n, a) => n + (a.results?.length || 0), 0);
+    if (histItems.length === 0 && discoveryCompanies === 0) {
+      alert('所选记录没有可导入的公司资料。');
+      return;
+    }
+    const parts: string[] = [];
+    if (histItems.length) parts.push(`背调 ${histItems.length} 条`);
+    if (discoveryCompanies) parts.push(`搜索结果约 ${discoveryCompanies} 家`);
+    if (!confirm(`将选中记录导入 CRM？\n${parts.join('，')}\n已存在的客户会更新背调信息，不会重复新建。`)) return;
+    setIsBatchImporting(true);
+    try {
+      onBatchImportToCrm(histItems, discItems);
+      setSelected(new Set());
+    } finally {
+      setIsBatchImporting(false);
     }
   };
 
@@ -492,7 +538,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
             className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 text-xs font-bold"
           />
         </div>
-        {canBatchDelete && (
+        {canSelect && (
           <>
             <button
               type="button"
@@ -502,15 +548,32 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
             >
               {rows.length > 0 && rows.every((r) => selected.has(rowSelectKey(r))) ? '取消全选' : '全选'}
             </button>
-            <button
-              type="button"
-              onClick={() => void handleBatchDelete()}
-              disabled={selectedCount === 0 || isBatchDeleting}
-              className="px-2 py-2 rounded-xl bg-red-50 border border-red-100 text-[10px] font-black text-red-600 touch-manipulation whitespace-nowrap disabled:opacity-40 inline-flex items-center gap-1"
-            >
-              <Trash2 size={12} />
-              {isBatchDeleting ? '删除中…' : selectedCount > 0 ? `批量删除(${selectedCount})` : '批量删除'}
-            </button>
+            {canBatchImport && (
+              <button
+                type="button"
+                onClick={handleBatchImportCrm}
+                disabled={selectedCount === 0 || isBatchImporting}
+                className="px-2 py-2 rounded-xl bg-emerald-50 border border-emerald-100 text-[10px] font-black text-emerald-700 touch-manipulation whitespace-nowrap disabled:opacity-40 inline-flex items-center gap-1"
+              >
+                <ShieldCheck size={12} />
+                {isBatchImporting
+                  ? '导入中…'
+                  : selectedCount > 0
+                    ? `批量导入CRM(${selectedCount})`
+                    : '批量导入CRM'}
+              </button>
+            )}
+            {canBatchDelete && (
+              <button
+                type="button"
+                onClick={() => void handleBatchDelete()}
+                disabled={selectedCount === 0 || isBatchDeleting}
+                className="px-2 py-2 rounded-xl bg-red-50 border border-red-100 text-[10px] font-black text-red-600 touch-manipulation whitespace-nowrap disabled:opacity-40 inline-flex items-center gap-1"
+              >
+                <Trash2 size={12} />
+                {isBatchDeleting ? '删除中…' : selectedCount > 0 ? `批量删除(${selectedCount})` : '批量删除'}
+              </button>
+            )}
           </>
         )}
         <button
@@ -534,7 +597,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
             return (
               <div key={`${groupBy}-${g.key}`} className="border border-slate-100 rounded-xl overflow-hidden">
                 <div className="flex items-stretch bg-slate-50">
-                  {canBatchDelete && (
+                  {canSelect && (
                     <label
                       className="flex items-center pl-2 touch-manipulation"
                       onClick={(e) => e.stopPropagation()}
@@ -590,7 +653,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                           onClick={() => onOpenHistory(row.item)}
                         >
                           <div className="flex items-start gap-2">
-                            {canBatchDelete && (
+                            {canSelect && (
                               <label
                                 className="pt-0.5 touch-manipulation"
                                 onClick={(e) => e.stopPropagation()}
@@ -701,7 +764,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                           onClick={() => onRestoreDiscovery(row.item)}
                         >
                           <div className="flex items-start gap-2">
-                            {canBatchDelete && (
+                            {canSelect && (
                               <label
                                 className="pt-0.5 touch-manipulation"
                                 onClick={(e) => e.stopPropagation()}
