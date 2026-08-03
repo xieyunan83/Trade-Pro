@@ -29,6 +29,7 @@ import {
   loadAllCrmClients,
   loadUserDiscoveryState,
   mergeSaveCrmClients,
+  migrateLegacyCrmOwnership,
   saveUserDiscoveryState,
 } from './utils/workspaceScope';
 import { ModuleStrategy } from './components/ModuleStrategy';
@@ -551,6 +552,9 @@ const App: React.FC = () => {
             }
 
             if (!cancelled) {
+              // 旧 CRM 回填部门，便于本部门主管按规则看到历史客户
+              const migrated = migrateLegacyCrmOwnership(nextCrm, users, depts());
+              nextCrm = migrated.clients;
               const filteredCrm = scope(nextCrm);
               setCrmClients(filteredCrm);
               mergeSaveCrmClients(currentUser, filteredCrm, users, depts());

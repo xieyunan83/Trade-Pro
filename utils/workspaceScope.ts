@@ -56,6 +56,57 @@ export const loadAllCrmClients = (): Client[] => {
 };
 
 /**
+ * 回填旧 CRM 归属，让「本部门主管」能按部门看到历史客户：
+ * - 已有 owner、缺 departmentId → 按用户表补部门
+ * - 完全无归属且系统只有 1 个部门 → 归入该部门（并尽量挂到部门主管名下）
+ * - 多部门且无归属 → 不改，仅总管/管理员可见，需在后台指定部门后再给主管看
+ */
+export const migrateLegacyCrmOwnership = (
+  clients: Client[],
+  allUsers: User[],
+  departments: Department[]
+): { clients: Client[]; changed: boolean } => {
+  if (!clients.length) return { clients, changed: false };
+
+  const byName = new Map(
+    allUsers.map((u) => [u.username.trim().toLowerCase(), u] as const)
+  );
+  const soleDept = departments.length === 1 ? departments[0] : undefined;
+  let changed = false;
+
+  const next = clients.map((c) => {
+    const owner = (c.ownerUsername || '').trim();
+    const dept = (c.departmentId || '').trim();
+    const patch: Partial<Client> = {};
+
+    if (owner) {
+      const u = byName.get(owner.toLowerCase());
+      if (u?.departmentId && !dept) {
+        patch.departmentId = u.departmentId;
+      }
+    } else if (!dept && soleDept?.id) {
+      patch.departmentId = soleDept.id;
+      const mgr = (soleDept.managerUsername || '').trim();
+      if (mgr) patch.ownerUsername = mgr;
+    }
+
+    if (Object.keys(patch).length === 0) return c;
+    changed = true;
+    return { ...c, ...patch };
+  });
+
+  if (changed) {
+    try {
+      localStorage.setItem(CRM_ALL_KEY, JSON.stringify(next));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return { clients: next, changed };
+};
+
+/**
  * 合并保存 CRM：只替换当前用户可见的记录，保留其它部门/用户的数据，避免同浏览器串号覆盖。
  */
 export const mergeSaveCrmClients = (

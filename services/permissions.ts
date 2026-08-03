@@ -138,12 +138,11 @@ export const getSubordinateUsernames = (
 };
 
 /**
- * 记录可见性（部门数据互不共享）：
+ * 记录可见性（按你规定的部门隔离）：
  * - admin / director（总管）：全部部门
- * - 本人：可见自己的记录
- * - 部门主管：可见本部门全部记录（按 departmentId 或同部门成员归属）
- * - 普通员工：仅本人
- * - 无归属的旧数据：全员可见（隔离上线前的共享 CRM / 历史，避免「资料突然消失」）
+ * - 本部门主管：本部门全部记录（含本部门员工的），其它部门不可见
+ * - 部门员工：仅本人创建的记录；看不到主管及其它人的记录
+ * - 无归属旧数据：仅 admin / director 可见（避免串部门）；加载时会尝试回填部门
  */
 export const canViewOwnedRecord = (
   viewer: User,
@@ -155,20 +154,27 @@ export const canViewOwnedRecord = (
   if (canBrowseAllDepartments(viewer)) return true;
 
   const owner = (record.ownerUsername || '').trim();
-  // 旧数据没有归属字段：视为遗留共享池，所有登录用户可见
-  if (!owner) return true;
+  const recordDept = (record.departmentId || '').trim();
 
-  if (sameUser(owner, viewer.username)) return true;
+  // 无归属旧数据：普通员工/其它部门主管不可见（仅总管/管理员可见，见上方）
+  if (!owner && !recordDept) return false;
 
+  // 部门主管：仅本部门
   if (viewer.role === 'manager' && viewer.departmentId) {
-    if (record.departmentId && record.departmentId === viewer.departmentId) return true;
-    const members = getDepartmentMemberUsernames(viewer.departmentId, allUsers).map((s) =>
-      s.toLowerCase()
-    );
-    if (members.includes(owner.toLowerCase())) return true;
-    // 兼容旧逻辑：下属名单
-    const subs = getSubordinateUsernames(viewer, allUsers, departments).map((s) => s.toLowerCase());
-    return subs.includes(owner.toLowerCase());
+    if (recordDept && recordDept === viewer.departmentId) return true;
+    if (sameUser(owner, viewer.username)) return true;
+    if (owner) {
+      const members = getDepartmentMemberUsernames(viewer.departmentId, allUsers).map((s) =>
+        s.toLowerCase()
+      );
+      if (members.includes(owner.toLowerCase())) return true;
+    }
+    return false;
+  }
+
+  // 部门员工：只能看自己的
+  if (viewer.role === 'user') {
+    return sameUser(owner, viewer.username);
   }
 
   return false;

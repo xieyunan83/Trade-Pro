@@ -327,7 +327,7 @@ export const OrgPermissionPanel: React.FC<OrgPermissionPanelProps> = ({
 
         <p className="text-[11px] font-bold text-slate-500 leading-relaxed">
           {isAdmin
-            ? '各部门搜索/背调/CRM 数据互不共享。部门主管仅看本部门；总管可浏览全部部门；系统管理员可配置组织与密钥。可为任意账户单独开关网卡绑定。'
+            ? '可见性：总管看全部部门；本部门主管看本部门全部；部门员工只看自己的，看不到主管及其它人记录；其它部门（含其它部门主管）一律不可见。系统管理员可配置组织与密钥，并可为任意账户开关网卡绑定。'
             : '你只能调整本部门普通员工的功能权限与设备绑定，不能查看或修改其它部门与主管账号。'}
         </p>
 
