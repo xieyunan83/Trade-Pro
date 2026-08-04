@@ -8,7 +8,7 @@ import {
   Youtube, Music, Video, FileSpreadsheet, FilePieChart, FileCode, Image, Mail, Building2
 } from 'lucide-react';
 import { getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/db';
-import { testApiKey, testQwenApiKey, testAnymailFinderApiKey, testHunterApiKey, testAnysearchApiKey, getTaskAIModels, saveTaskAIModels, type TaskAIModels, type AIEngineChoice } from '../services/geminiService';
+import { testApiKey, testQwenApiKey, testAnymailFinderApiKey, testHunterApiKey, testAnysearchApiKey, getTaskAIModels, saveTaskAIModels, sanitizeApiKey, type TaskAIModels, type AIEngineChoice } from '../services/geminiService';
 import { testWanImageApi } from '../services/wanImageService';
 import { saveApiConfig, getApiConfig, isSupabaseConfigured, saveKnowledgeFile, getKnowledgeFiles, deleteKnowledgeFile, resetSupabaseClient, testSupabaseConnection } from '../services/supabase';
 import { getSupabaseConfig, saveSupabaseConfig, clearSupabaseOverride, saveEmailSearchKeys, getEmailSearchKeys, getAnysearchApiKey, saveAnysearchApiKey, env } from '../services/env';
@@ -320,7 +320,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
       localStorage.setItem('trade_scout_default_ai_model', defaultAIModel);
       saveTaskAIModels(taskAIModels);
       if (geminiApiKey.trim()) {
-        localStorage.setItem('trade_scout_gemini_api_key', geminiApiKey.trim());
+        localStorage.setItem('trade_scout_gemini_api_key', sanitizeApiKey(geminiApiKey));
       }
       if (geminiModelId.trim()) {
         localStorage.setItem('trade_scout_gemini_model_id', geminiModelId.trim());
@@ -330,7 +330,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
         ? [
             {
               id: 'gemini_official',
-              apiKey: geminiApiKey.trim(),
+              apiKey: sanitizeApiKey(geminiApiKey),
               baseUrl: 'native',
               modelId: geminiModelId.trim() || 'gemini-2.0-flash',
               priority: 0,
@@ -397,7 +397,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
           const r = await cloudWithTimeout('Gemini', () =>
             saveApiConfig({
               provider: 'gemini',
-              apiKey: geminiApiKey.trim(),
+              apiKey: sanitizeApiKey(geminiApiKey),
               baseUrl: 'native',
               modelId: geminiModelId.trim() || 'gemini-2.0-flash',
             })
@@ -493,7 +493,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     setGeminiTestMsg(null);
     try {
       const result = await testApiKey(
-        geminiApiKey.trim(),
+        sanitizeApiKey(geminiApiKey),
         'native',
         geminiModelId.trim() || 'gemini-2.0-flash'
       );
@@ -974,7 +974,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     </a>
                   </div>
                   <p className="text-[10px] text-slate-500 font-bold leading-relaxed">
-                    直接连接 Google 官方，无需 HiAPI 等中转。填入 Key 后点测试；用量请在{' '}
+                    经同域代理调用 Google（仅 x-goog-api-key，兼容 AIza / AQ. Auth Key）。填入后先点测试；用量见{' '}
                     <a
                       href="https://aistudio.google.com/usage"
                       target="_blank"
@@ -982,8 +982,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                       className="text-sky-700 underline"
                     >
                       AI Studio Usage
-                    </a>{' '}
-                    查看。
+                    </a>
+                    。
                   </p>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="md:col-span-2">
@@ -995,7 +995,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                         autoComplete="off"
                         value={geminiApiKey}
                         onChange={(e) => setGeminiApiKey(e.target.value)}
-                        placeholder="AIza..."
+                        placeholder="AIza... 或 AQ...."
                         className="w-full bg-white border border-sky-100 rounded-xl px-4 py-3 font-bold text-sm"
                       />
                     </div>

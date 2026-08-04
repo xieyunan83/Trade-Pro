@@ -1,5 +1,4 @@
 
-import { GoogleGenAI, Type, Part } from "@google/genai";
 import { AnalysisResult, ClientSearchResult, DecisionMaker, ChatMessage, KnowledgeFile, KeywordExtractionResult, MailGroup, EmailTemplateRequest, ApiConfig, TaskType } from "../types";
 import { getAllFilesFromDB } from "./db";
 import { getApiConfig as getSupabaseApiConfig, getAllApiConfigs, isSupabaseConfigured } from './supabase';
@@ -177,8 +176,156 @@ export const sanitizeApiKey = (key: string): string =>
 const describeKey = (key: string): string => {
   const k = sanitizeApiKey(key);
   if (!k) return '空';
-  const kind = k.startsWith('sk-sp-') ? 'Token Plan (sk-sp-)' : k.startsWith('sk-ws-') ? '工作空间 (sk-ws-)' : k.startsWith('sk-') ? '通用/其他 (sk-)' : '未知格式';
+  const kind = k.startsWith('AQ.')
+    ? 'Gemini Auth Key (AQ.)'
+    : k.startsWith('AIza')
+      ? 'Gemini Standard Key (AIza)'
+      : k.startsWith('sk-sp-')
+        ? 'Token Plan (sk-sp-)'
+        : k.startsWith('sk-ws-')
+          ? '工作空间 (sk-ws-)'
+          : k.startsWith('sk-')
+            ? '通用/其他 (sk-)'
+            : '未知格式';
   return `${kind}, 长度 ${k.length}`;
+};
+
+/** 开发走 Vite /gemini-api；线上走 Vercel /api/gemini */
+const resolveGeminiProxyUrl = (upstreamPath: string): string => {
+  const path = upstreamPath.startsWith('/') ? upstreamPath : `/${upstreamPath}`;
+  if (typeof window !== 'undefined' && isLocalDevHost()) {
+    return `/gemini-api${path}`;
+  }
+  return `/api/gemini?__upstream=${encodeURIComponent(path)}`;
+};
+
+const formatGeminiAuthError = (status: number, bodyText: string): string => {
+  const lower = bodyText.toLowerCase();
+  if (
+    status === 401 ||
+    /access_token_type_unsupported|unauthenticated|invalid authentication/i.test(bodyText)
+  ) {
+    return (
+      `Gemini 认证失败 (${status}): Google 拒绝了当前 Key。` +
+      `若 Key 以 AQ. 开头，请确认已在 AI Studio 绑定计费项目；` +
+      `也可在 Google Cloud 控制台创建并限制到 Generative Language API 的 Key 再试。` +
+      `详情: ${bodyText.slice(0, 220)}`
+    );
+  }
+  if (status === 403 && /api.?key|permission|blocked/i.test(lower)) {
+    return `Gemini 权限被拒 (403)。请检查 Key 限制与 Generative Language API 是否已启用。${bodyText.slice(0, 180)}`;
+  }
+  return `Gemini API ${status}: ${bodyText.slice(0, 280)}`;
+};
+
+type GeminiInlinePart =
+  | { text: string }
+  | { inline_data: { mime_type: string; data: string } };
+
+const extractGeminiText = (data: any): string => {
+  const parts = data?.candidates?.[0]?.content?.parts;
+  if (!Array.isArray(parts)) return '';
+  return parts
+    .map((p: any) => (typeof p?.text === 'string' ? p.text : ''))
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+};
+
+/**
+ * 官方 Gemini REST（经同域代理）：只用 x-goog-api-key，绝不带 Authorization。
+ */
+const callGeminiGenerateContent = async (
+  apiKey: string,
+  modelId: string,
+  options: {
+    prompt: string;
+    systemInstruction?: string;
+    jsonMode?: boolean;
+    enableSearch?: boolean;
+    images?: string[];
+    attachments?: KnowledgeFile[];
+    timeoutMs?: number;
+  }
+): Promise<string> => {
+  const key = sanitizeApiKey(apiKey);
+  if (!key) throw new Error('未配置 Gemini API Key');
+
+  const model = (modelId || NATIVE_MODEL).trim() || NATIVE_MODEL;
+  const path = `/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+  const url = resolveGeminiProxyUrl(path);
+
+  const userParts: GeminiInlinePart[] = [{ text: options.prompt }];
+  for (const img of options.images || []) {
+    if (img?.trim()) {
+      userParts.push({ inline_data: { mime_type: 'image/jpeg', data: img } });
+    }
+  }
+  for (const file of options.attachments || []) {
+    if (file.type === 'youtube') {
+      userParts.push({ text: `[YouTube: ${file.data}]` });
+    } else if (file.mimeType && file.data) {
+      userParts.push({ inline_data: { mime_type: file.mimeType, data: file.data } });
+    }
+  }
+
+  const body: Record<string, unknown> = {
+    contents: [{ role: 'user', parts: userParts }],
+  };
+  if (options.systemInstruction?.trim()) {
+    body.systemInstruction = {
+      parts: [{ text: options.systemInstruction }],
+    };
+  }
+  if (options.jsonMode) {
+    body.generationConfig = { responseMimeType: 'application/json' };
+  }
+  if (options.enableSearch) {
+    body.tools = [{ google_search: {} }];
+  }
+
+  const controller = new AbortController();
+  const timeoutMs = options.timeoutMs ?? 180_000;
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': key,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      throw new Error(formatGeminiAuthError(res.status, text));
+    }
+    let data: any;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error(`Gemini 返回非 JSON: ${text.slice(0, 200)}`);
+    }
+    if (data?.error) {
+      const msg =
+        typeof data.error === 'string'
+          ? data.error
+          : data.error.message || JSON.stringify(data.error);
+      throw new Error(formatGeminiAuthError(res.status || 401, msg));
+    }
+    const out = extractGeminiText(data);
+    if (!out) throw new Error('Empty Gemini response');
+    return out;
+  } catch (e: any) {
+    if (e?.name === 'AbortError') {
+      throw new Error(`Gemini 请求超时（${Math.round(timeoutMs / 1000)}s）`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
 };
 
 export interface TaskTypeAssignment {
@@ -1740,22 +1887,15 @@ const tryGeminiFailover = async (
   for (const config of relevantCandidates) {
     try {
       if (config.baseUrl === 'native') {
-        const ai = new GoogleGenAI({ apiKey: config.apiKey });
-        const parts: Part[] = [{ text: prompt }];
-        images.forEach(img => parts.push({ inlineData: { mimeType: 'image/jpeg', data: img } }));
-        attachments.forEach(file => {
-          if (file.type === 'youtube') parts.push({ text: `[YouTube: ${file.data}]` });
-          else if (file.mimeType && file.data) parts.push({ inlineData: { mimeType: file.mimeType, data: file.data } });
+        const text = await callGeminiGenerateContent(config.apiKey, config.modelId || NATIVE_MODEL, {
+          prompt,
+          systemInstruction: systemInfo,
+          jsonMode,
+          enableSearch: needsWebSearch,
+          images,
+          attachments,
         });
-        const reqConfig: any = { systemInstruction: systemInfo };
-        if (jsonMode) reqConfig.responseMimeType = 'application/json';
-        if (needsWebSearch) reqConfig.tools = [{ googleSearch: {} }];
-        const response = await ai.models.generateContent({
-          model: config.modelId || NATIVE_MODEL,
-          contents: [{ role: 'user', parts }],
-          config: reqConfig,
-        });
-        if (response.text) return response.text;
+        if (text) return text;
       } else {
         const messages: any[] = [];
         if (systemInfo) messages.push({ role: 'system', content: systemInfo });
@@ -2019,14 +2159,16 @@ export const testApiKey = async (apiKey: string, baseUrl?: string, modelId?: str
     try {
         // Special case for Official Native Key testing
         if (baseUrl === 'native') {
-            const ai = new GoogleGenAI({ apiKey });
-            // Use 'gemini-1.5-flash' for a quick ping test if modelId not provided or generic
-            const testModel = modelId?.includes('gemini') ? modelId : 'gemini-1.5-flash';
-            await ai.models.generateContent({
-                model: testModel,
-                contents: 'Ping',
+            const clean = sanitizeApiKey(apiKey);
+            const testModel = modelId?.includes('gemini') ? modelId : NATIVE_MODEL;
+            const reply = await callGeminiGenerateContent(clean, testModel, {
+              prompt: 'Ping. Reply with the single word pong.',
+              timeoutMs: 45_000,
             });
-            return { success: true, message: "Google Native Connection Successful! ✅" };
+            return {
+              success: true,
+              message: `Google Native Connection Successful! ✅ (${describeKey(clean)}) 回复: ${reply.slice(0, 40)}`,
+            };
         }
 
         // Standard OpenAI Compatible Test
@@ -3248,24 +3390,12 @@ const callGeminiNative = async (
   config: ApiConfig,
   options: { jsonMode?: boolean; enableSearch?: boolean; systemInstruction?: string } = {}
 ): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: config.apiKey });
-  const reqConfig: Record<string, unknown> = {};
-  if (options.systemInstruction) {
-    reqConfig.systemInstruction = options.systemInstruction;
-  }
-  if (options.jsonMode) {
-    reqConfig.responseMimeType = "application/json";
-  }
-  if (options.enableSearch) {
-    reqConfig.tools = [{ googleSearch: {} }];
-  }
-  const response = await ai.models.generateContent({
-    model: config.modelId || NATIVE_MODEL,
-    contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    config: reqConfig
+  return callGeminiGenerateContent(config.apiKey, config.modelId || NATIVE_MODEL, {
+    prompt,
+    systemInstruction: options.systemInstruction,
+    jsonMode: options.jsonMode,
+    enableSearch: options.enableSearch,
   });
-  if (!response.text) throw new Error("Empty Gemini response");
-  return response.text;
 };
 
 /**

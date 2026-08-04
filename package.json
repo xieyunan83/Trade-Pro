@@ -12,7 +12,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@google/genai": "latest",
     "@octokit/rest": "^20.0.2",
     "@supabase/supabase-js": "^2.110.0",
     "dayjs": "^1.11.21",

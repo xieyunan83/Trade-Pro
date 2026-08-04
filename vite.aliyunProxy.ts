@@ -48,6 +48,8 @@ type MountProxyOptions = {
   /** 若请求未带 Authorization，注入服务端 Key（如 AnySearch） */
   injectAuthorization?: () => string | undefined;
   extraHeaders?: Record<string, string>;
+  /** Gemini 等：禁止转发 Authorization，只保留 x-goog-api-key */
+  stripAuthorization?: boolean;
 };
 
 function mountOriginProxy(
@@ -111,7 +113,11 @@ function mountOriginProxy(
             if (!headers[k.toLowerCase()]) headers[k] = v;
           }
         }
-        if (!headers.authorization && !headers.Authorization) {
+        if (options?.stripAuthorization) {
+          for (const k of Object.keys(headers)) {
+            if (k.toLowerCase() === 'authorization') delete headers[k];
+          }
+        } else if (!headers.authorization && !headers.Authorization) {
           const injected = options?.injectAuthorization?.();
           if (injected) headers.authorization = injected;
         }
@@ -184,6 +190,7 @@ function mountOriginProxy(
  * - /qwen-api → 阿里云（X-Qwen-Origin 动态路由）
  * - /anymail-api → api.anymailfinder.com（解决浏览器 CORS Failed to fetch）
  * - /anysearch-api → api.anysearch.com（背调身份补全；Key 从 env 注入）
+ * - /gemini-api → generativelanguage.googleapis.com（仅 x-goog-api-key，禁 Bearer）
  */
 export function aliyunDevProxyPlugin(
   fallbackOrigin = 'https://dashscope.aliyuncs.com',
@@ -208,6 +215,10 @@ export function aliyunDevProxyPlugin(
           const k = (opts?.anysearchApiKey || process.env.ANYSEARCH_API_KEY || '').trim();
           return k ? `Bearer ${k.replace(/^Bearer\s+/i, '')}` : undefined;
         },
+      });
+      // Gemini：转发 x-goog-api-key；显式去掉 Authorization，避免 AQ. Key 被当成 OAuth
+      mountOriginProxy(server, '/gemini-api', () => 'https://generativelanguage.googleapis.com', {
+        stripAuthorization: true,
       });
     },
   };
