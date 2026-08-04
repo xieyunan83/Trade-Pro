@@ -1,13 +1,17 @@
 /**
- * Tavily — 联网搜索 / 网页提取（替代 Gemini Google grounding）
- * Key：管理后台 → localStorage / Supabase；请求经同域代理。
+ * Tavily — 多 Key 池联网搜索 / 网页提取
+ * - 管理后台可添加多把 tvly Key（各账号月额度独立）
+ * - 某把触发额度/付费限制时自动标记本月耗尽并切下一把
+ * - 全部耗尽后返回空证据，由上层回退千问联网
  */
-import { getTavilyApiKey, saveTavilyApiKey } from './env';
+import { getTavilyApiKeys, saveTavilyApiKeys, getTavilyApiKey } from './env';
 import { isLocalDevHost } from './qwenProxy';
 import { getApiConfig, isSupabaseConfigured } from './supabase';
 
 const TIMEOUT_MS = 40_000;
 const MAX_EVIDENCE_CHARS = 10_000;
+const LS_EXHAUSTED = 'trade_scout_tavily_exhausted';
+const LS_ACTIVE_IDX = 'trade_scout_tavily_active_idx';
 
 export type TavilyResult = {
   title?: string;
@@ -23,36 +27,139 @@ export type TavilySearchResponse = {
   response_time?: number;
 };
 
+export type TavilyKeyStatus = {
+  key: string;
+  label: string;
+  exhausted: boolean;
+  active: boolean;
+};
+
+const monthKey = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
+
+const maskKey = (key: string): string => {
+  const k = (key || '').trim();
+  if (k.length <= 10) return '••••';
+  return `${k.slice(0, 8)}…${k.slice(-4)}`;
+};
+
 const resolveTavilyUrl = (upstreamPath: string): string => {
   const path = upstreamPath.startsWith('/') ? upstreamPath : `/${upstreamPath}`;
   if (isLocalDevHost()) return `/tavily-api${path}`;
   return `/api/tavily?__upstream=${encodeURIComponent(path)}`;
 };
 
-const authHeader = (): Record<string, string> => {
-  const key = getTavilyApiKey().replace(/^Bearer\s+/i, '').trim();
-  if (!key) return {};
-  return { Authorization: `Bearer ${key}` };
+type ExhaustedMap = { month: string; keys: string[] };
+
+const readExhausted = (): Set<string> => {
+  try {
+    const raw = localStorage.getItem(LS_EXHAUSTED);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw) as ExhaustedMap;
+    if (parsed.month !== monthKey()) {
+      localStorage.removeItem(LS_EXHAUSTED);
+      return new Set();
+    }
+    return new Set((parsed.keys || []).map((k) => k.trim()).filter(Boolean));
+  } catch {
+    return new Set();
+  }
 };
 
-export const hasTavilyKey = (): boolean => Boolean(getTavilyApiKey().trim());
+const writeExhausted = (set: Set<string>) => {
+  if (typeof localStorage === 'undefined') return;
+  const payload: ExhaustedMap = { month: monthKey(), keys: [...set] };
+  localStorage.setItem(LS_EXHAUSTED, JSON.stringify(payload));
+};
+
+export const markTavilyKeyExhausted = (key: string) => {
+  const k = (key || '').replace(/^Bearer\s+/i, '').trim();
+  if (!k) return;
+  const set = readExhausted();
+  set.add(k);
+  writeExhausted(set);
+  console.warn('[tavily] key exhausted this month:', maskKey(k));
+};
+
+export const clearTavilyExhausted = () => {
+  if (typeof localStorage === 'undefined') return;
+  localStorage.removeItem(LS_EXHAUSTED);
+};
+
+export const isQuotaExhaustedError = (err: unknown): boolean => {
+  const msg = String((err as any)?.message || err || '');
+  return /402|429|payment|quota|credit|limit|insufficient|exceeded|usage|余额|额度|用尽|耗尽/i.test(msg);
+};
+
+/** 规范化后的全部 Key（去重） */
+export const listTavilyKeys = (): string[] => {
+  const fromPool = getTavilyApiKeys();
+  const legacy = getTavilyApiKey().trim();
+  const merged = [...fromPool];
+  if (legacy && !merged.includes(legacy)) merged.unshift(legacy);
+  return [...new Set(merged.map((k) => k.replace(/^Bearer\s+/i, '').trim()).filter(Boolean))];
+};
+
+export const getUsableTavilyKeys = (): string[] => {
+  const exhausted = readExhausted();
+  return listTavilyKeys().filter((k) => !exhausted.has(k));
+};
+
+export const hasTavilyKey = (): boolean => getUsableTavilyKeys().length > 0;
+
+export const getTavilyKeyStatuses = (): TavilyKeyStatus[] => {
+  const all = listTavilyKeys();
+  const exhausted = readExhausted();
+  const usable = getUsableTavilyKeys();
+  const active = usable[0] || '';
+  return all.map((key) => ({
+    key,
+    label: maskKey(key),
+    exhausted: exhausted.has(key),
+    active: key === active,
+  }));
+};
+
+export const setTavilyKeyPool = (keys: string[]) => {
+  const cleaned = [
+    ...new Set(keys.map((k) => k.replace(/^Bearer\s+/i, '').trim()).filter(Boolean)),
+  ];
+  saveTavilyApiKeys(cleaned);
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem(LS_ACTIVE_IDX, '0');
+  }
+};
 
 export const hydrateTavilyKeyFromCloud = async (): Promise<void> => {
   if (!isSupabaseConfigured()) return;
   try {
     const cloud = await getApiConfig('tavily');
-    if (cloud?.apiKey?.trim()) saveTavilyApiKey(cloud.apiKey.trim());
+    if (!cloud?.apiKey?.trim()) return;
+    const raw = cloud.apiKey.trim();
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        setTavilyKeyPool(parsed.map(String));
+        return;
+      }
+    } catch {
+      /* single key string */
+    }
+    setTavilyKeyPool([raw]);
   } catch {
     /* ignore */
   }
 };
 
-const tavilyPost = async <T = any>(
+const tavilyPostWithKey = async <T = any>(
   path: string,
   body: Record<string, unknown>,
+  apiKey: string,
   timeoutMs = TIMEOUT_MS
 ): Promise<T> => {
-  const key = getTavilyApiKey().replace(/^Bearer\s+/i, '').trim();
+  const key = apiKey.replace(/^Bearer\s+/i, '').trim();
   if (!key) throw new Error('未配置 Tavily API Key');
 
   const controller = new AbortController();
@@ -62,7 +169,7 @@ const tavilyPost = async <T = any>(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...authHeader(),
+        Authorization: `Bearer ${key}`,
       },
       body: JSON.stringify(body),
       signal: controller.signal,
@@ -75,12 +182,58 @@ const tavilyPost = async <T = any>(
       throw new Error(`Tavily 返回非 JSON（HTTP ${res.status}）: ${text.slice(0, 200)}`);
     }
     if (!res.ok) {
-      throw new Error(json.error || json.detail || json.message || `Tavily HTTP ${res.status}`);
+      const detail = json.error || json.detail || json.message || `Tavily HTTP ${res.status}`;
+      throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
     }
     return json as T;
   } finally {
     clearTimeout(timer);
   }
+};
+
+/**
+ * 带 Key 池轮换的请求：当前 Key 额度用尽则标记并换下一把。
+ * 全部用尽时抛出 TAVILY_POOL_EXHAUSTED。
+ */
+const tavilyPost = async <T = any>(
+  path: string,
+  body: Record<string, unknown>,
+  timeoutMs = TIMEOUT_MS
+): Promise<T> => {
+  const keys = getUsableTavilyKeys();
+  if (!keys.length) {
+    throw new Error('TAVILY_POOL_EXHAUSTED');
+  }
+
+  let lastErr: unknown;
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i];
+    try {
+      const result = await tavilyPostWithKey<T>(path, body, key, timeoutMs);
+      // 成功则把该 Key 记为当前首选（移到列表前）
+      if (i > 0) {
+        const all = listTavilyKeys();
+        const rest = all.filter((k) => k !== key);
+        setTavilyKeyPool([key, ...rest]);
+      }
+      return result;
+    } catch (e) {
+      lastErr = e;
+      if (isQuotaExhaustedError(e)) {
+        markTavilyKeyExhausted(key);
+        console.warn(`[tavily] rotate after quota on ${maskKey(key)}`);
+        continue;
+      }
+      // 非额度错误：也尝试下一把（防单 Key 临时故障），但不标记耗尽
+      console.warn(`[tavily] key ${maskKey(key)} failed, try next:`, (e as any)?.message || e);
+      continue;
+    }
+  }
+
+  if (!getUsableTavilyKeys().length) {
+    throw new Error('TAVILY_POOL_EXHAUSTED');
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr || 'Tavily 全部 Key 调用失败'));
 };
 
 export const tavilySearch = async (
@@ -105,7 +258,6 @@ export const tavilyExtract = async (urls: string[]): Promise<any> => {
   return tavilyPost('/extract', { urls: clean });
 };
 
-/** 格式化为给大模型用的证据文本 */
 export const formatTavilyEvidence = (data: TavilySearchResponse, label = 'TAVILY'): string => {
   const lines: string[] = [];
   if (data.answer?.trim()) lines.push(`Answer: ${data.answer.trim()}`);
@@ -123,7 +275,6 @@ export const formatTavilyEvidence = (data: TavilySearchResponse, label = 'TAVILY
   return `=== ${label} WEB EVIDENCE ===\n${clipped}\n=== END ${label} ===`;
 };
 
-/** 客户搜索：多查询取证 */
 export const gatherTavilyLeadEvidence = async (opts: {
   productKeyword: string;
   country: string;
@@ -152,13 +303,16 @@ export const gatherTavilyLeadEvidence = async (opts: {
       const block = formatTavilyEvidence(data, `TAVILY:${q.slice(0, 40)}`);
       if (block) chunks.push(block);
     } catch (e) {
+      if (String((e as any)?.message || e).includes('TAVILY_POOL_EXHAUSTED')) {
+        console.warn('[tavily] pool exhausted, fall back to Qwen web search');
+        return '';
+      }
       console.warn('[tavily] lead search failed', q, e);
     }
   }
   return chunks.join('\n\n').slice(0, MAX_EVIDENCE_CHARS);
 };
 
-/** 背调：公司域名相关网页证据 */
 export const gatherTavilyCompanyEvidence = async (opts: {
   domain: string;
   companyHint?: string;
@@ -191,11 +345,14 @@ export const gatherTavilyCompanyEvidence = async (opts: {
         }
       }
     } catch (e) {
+      if (String((e as any)?.message || e).includes('TAVILY_POOL_EXHAUSTED')) {
+        console.warn('[tavily] pool exhausted, fall back to Qwen web search');
+        return '';
+      }
       console.warn('[tavily] company search failed', q, e);
     }
   }
 
-  // 优先抽取官网
   const official = `https://${domain}`;
   if (!topUrls.some((u) => u.includes(domain))) topUrls = [official, ...topUrls].slice(0, 3);
   try {
@@ -212,34 +369,60 @@ export const gatherTavilyCompanyEvidence = async (opts: {
       if (parts.length) chunks.push(`=== TAVILY EXTRACT ===\n${parts.join('\n\n')}\n=== END EXTRACT ===`);
     }
   } catch (e) {
+    if (String((e as any)?.message || e).includes('TAVILY_POOL_EXHAUSTED')) return chunks.join('\n\n').slice(0, MAX_EVIDENCE_CHARS);
     console.warn('[tavily] extract skipped', e);
   }
 
   return chunks.join('\n\n').slice(0, MAX_EVIDENCE_CHARS);
 };
 
+/** 测试单把 Key（不写入耗尽状态以外的池顺序） */
 export const testTavilyApiKey = async (apiKey?: string): Promise<{ success: boolean; message: string }> => {
-  const prev = getTavilyApiKey();
-  const key = (apiKey || prev || '').replace(/^Bearer\s+/i, '').trim();
+  const key = (apiKey || getUsableTavilyKeys()[0] || getTavilyApiKey() || '')
+    .replace(/^Bearer\s+/i, '')
+    .trim();
   if (!key) return { success: false, message: '请先填写 Tavily API Key' };
   try {
-    if (apiKey?.trim()) saveTavilyApiKey(key);
-    const data = await tavilySearch('trade distributor Poland website', {
-      maxResults: 2,
-      searchDepth: 'basic',
-      includeAnswer: false,
-    });
+    const data = await tavilyPostWithKey<TavilySearchResponse>(
+      '/search',
+      {
+        query: 'trade distributor Poland website',
+        search_depth: 'basic',
+        max_results: 2,
+        include_answer: false,
+      },
+      key
+    );
     const n = data.results?.length || 0;
     const sample = data.results?.[0]?.title || data.results?.[0]?.url || '';
     return {
       success: n > 0,
-      message: n > 0 ? `Tavily 连接成功 ✅ ${n} 条结果${sample ? ` · ${sample.slice(0, 40)}` : ''}` : 'Tavily 返回空结果',
+      message: n > 0
+        ? `Tavily 连接成功 ✅ ${maskKey(key)} · ${n} 条${sample ? ` · ${String(sample).slice(0, 36)}` : ''}`
+        : 'Tavily 返回空结果',
     };
   } catch (e: any) {
-    return { success: false, message: `Tavily 测试失败: ${e?.message || String(e)}` };
-  } finally {
-    if (apiKey?.trim() && prev && prev !== key) {
-      /* keep newly saved key */
+    if (isQuotaExhaustedError(e)) {
+      markTavilyKeyExhausted(key);
+      return { success: false, message: `Key 额度已用尽（已标记本月跳过）: ${maskKey(key)}` };
     }
+    return { success: false, message: `Tavily 测试失败: ${e?.message || String(e)}` };
   }
+};
+
+export const testTavilyKeyPool = async (): Promise<{ success: boolean; message: string }> => {
+  const all = listTavilyKeys();
+  if (!all.length) return { success: false, message: '请先添加至少一把 Tavily Key' };
+  const lines: string[] = [];
+  let ok = 0;
+  for (const key of all) {
+    const r = await testTavilyApiKey(key);
+    if (r.success) ok += 1;
+    lines.push(`${maskKey(key)}: ${r.success ? '✓' : '✗'} ${r.message.replace(/^Tavily[^:]*[:：]?\s*/, '').slice(0, 60)}`);
+  }
+  const usable = getUsableTavilyKeys().length;
+  return {
+    success: ok > 0,
+    message: `池内 ${all.length} 把 · 可用 ${usable} · 成功 ${ok}\n${lines.join('\n')}`,
+  };
 };

@@ -1580,7 +1580,18 @@ export const hydrateApiConfigsFromCloud = async (): Promise<boolean> => {
                 localStorage.setItem('trade_scout_anysearch_api_key', c.apiKey.trim());
             }
             if (c.provider === 'tavily' && c.apiKey?.trim()) {
-                localStorage.setItem('trade_scout_tavily_api_key', c.apiKey.trim());
+                const raw = c.apiKey.trim();
+                try {
+                  const parsed = JSON.parse(raw);
+                  if (Array.isArray(parsed)) {
+                    localStorage.setItem('trade_scout_tavily_api_keys', JSON.stringify(parsed));
+                    localStorage.setItem('trade_scout_tavily_api_key', String(parsed[0] || ''));
+                  } else {
+                    localStorage.setItem('trade_scout_tavily_api_key', raw);
+                  }
+                } catch {
+                  localStorage.setItem('trade_scout_tavily_api_key', raw);
+                }
             }
             if (c.provider === 'wan' && c.apiKey?.trim()) {
                 localStorage.setItem('trade_scout_wan_api_key', c.apiKey.trim());

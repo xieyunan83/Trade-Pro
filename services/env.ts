@@ -63,6 +63,7 @@ export const saveEmailSearchKeys = (keys: { hunter?: string; findymail?: string;
 
 const LS_ANYSEARCH = 'trade_scout_anysearch_api_key';
 const LS_TAVILY = 'trade_scout_tavily_api_key';
+const LS_TAVILY_POOL = 'trade_scout_tavily_api_keys';
 
 /** AnySearch Key：localStorage（云端同步后）→ 环境变量兜底 */
 export const getAnysearchApiKey = (): string =>
@@ -73,13 +74,49 @@ export const saveAnysearchApiKey = (key: string): void => {
   localStorage.setItem(LS_ANYSEARCH, (key || '').trim());
 };
 
-/** Tavily Key：localStorage → 环境变量兜底 */
-export const getTavilyApiKey = (): string =>
-  ls(LS_TAVILY) || read('TAVILY_API_KEY') || read('REACT_APP_TAVILY_API_KEY') || '';
+/** Tavily 单 Key（兼容旧版） */
+export const getTavilyApiKey = (): string => {
+  const pool = getTavilyApiKeys();
+  if (pool[0]) return pool[0];
+  return ls(LS_TAVILY) || read('TAVILY_API_KEY') || read('REACT_APP_TAVILY_API_KEY') || '';
+};
 
 export const saveTavilyApiKey = (key: string): void => {
   if (typeof localStorage === 'undefined') return;
-  localStorage.setItem(LS_TAVILY, (key || '').trim());
+  const k = (key || '').trim();
+  localStorage.setItem(LS_TAVILY, k);
+  if (k) {
+    const pool = getTavilyApiKeys().filter((x) => x !== k);
+    saveTavilyApiKeys([k, ...pool]);
+  }
+};
+
+/** Tavily Key 池（多账号额度轮换） */
+export const getTavilyApiKeys = (): string[] => {
+  if (typeof localStorage !== 'undefined') {
+    try {
+      const raw = localStorage.getItem(LS_TAVILY_POOL);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          return [...new Set(parsed.map((x) => String(x || '').trim()).filter(Boolean))];
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    const legacy = ls(LS_TAVILY);
+    if (legacy) return [legacy];
+  }
+  const envKey = read('TAVILY_API_KEY') || read('REACT_APP_TAVILY_API_KEY');
+  return envKey ? [envKey] : [];
+};
+
+export const saveTavilyApiKeys = (keys: string[]): void => {
+  if (typeof localStorage === 'undefined') return;
+  const cleaned = [...new Set(keys.map((k) => (k || '').trim()).filter(Boolean))];
+  localStorage.setItem(LS_TAVILY_POOL, JSON.stringify(cleaned));
+  localStorage.setItem(LS_TAVILY, cleaned[0] || '');
 };
 
 export const env = {

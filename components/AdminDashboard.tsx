@@ -9,10 +9,10 @@ import {
 } from 'lucide-react';
 import { getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/db';
 import { testApiKey, testQwenApiKey, testAnymailFinderApiKey, testHunterApiKey, testAnysearchApiKey, getTaskAIModels, saveTaskAIModels, sanitizeApiKey, type TaskAIModels, type AIEngineChoice } from '../services/geminiService';
-import { testTavilyApiKey } from '../services/tavilyService';
+import { testTavilyKeyPool, listTavilyKeys, setTavilyKeyPool, getTavilyKeyStatuses, clearTavilyExhausted } from '../services/tavilyService';
 import { testWanImageApi } from '../services/wanImageService';
 import { saveApiConfig, getApiConfig, isSupabaseConfigured, saveKnowledgeFile, getKnowledgeFiles, deleteKnowledgeFile, resetSupabaseClient, testSupabaseConnection } from '../services/supabase';
-import { getSupabaseConfig, saveSupabaseConfig, clearSupabaseOverride, saveEmailSearchKeys, getEmailSearchKeys, getAnysearchApiKey, saveAnysearchApiKey, getTavilyApiKey, saveTavilyApiKey, env } from '../services/env';
+import { getSupabaseConfig, saveSupabaseConfig, clearSupabaseOverride, saveEmailSearchKeys, getEmailSearchKeys, getAnysearchApiKey, saveAnysearchApiKey, env } from '../services/env';
 import { hashPassword, persistUsers, updateUserPassword } from '../services/auth';
 import { loadDepartmentsFromStorage } from '../services/orgStore';
 import { roleLabel } from '../services/permissions';
@@ -92,7 +92,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const [findymailApiKey, setFindymailApiKey] = useState('');
   const [anymailFinderApiKey, setAnymailFinderApiKey] = useState('');
   const [anysearchApiKey, setAnysearchApiKey] = useState('');
-  const [tavilyApiKey, setTavilyApiKey] = useState('');
+  const [tavilyKeys, setTavilyKeys] = useState<string[]>([]);
+  const [tavilyDraftKey, setTavilyDraftKey] = useState('');
   const [aliyunProxyMode, setAliyunProxyModeState] = useState<AliyunProxyMode>('auto');
   const [aliyunProxyBase, setAliyunProxyBaseState] = useState('');
   const [testingApiId, setTestingApiId] = useState<string | null>(null);
@@ -222,7 +223,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     setFindymailApiKey(emailKeys.findymail);
     setAnymailFinderApiKey(emailKeys.anymailFinder);
     setAnysearchApiKey(getAnysearchApiKey());
-    setTavilyApiKey(getTavilyApiKey());
+    setTavilyKeys(listTavilyKeys());
 
     const loadEmailKeysFromCloud = async () => {
       if (!isSupabaseConfigured()) return;
@@ -241,8 +242,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
         saveAnysearchApiKey(anysearch.apiKey);
       }
       if (tavily?.apiKey) {
-        setTavilyApiKey(tavily.apiKey);
-        saveTavilyApiKey(tavily.apiKey);
+        const raw = tavily.apiKey.trim();
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            setTavilyKeyPool(parsed.map(String));
+            setTavilyKeys(listTavilyKeys());
+          } else {
+            setTavilyKeyPool([raw]);
+            setTavilyKeys(listTavilyKeys());
+          }
+        } catch {
+          setTavilyKeyPool([raw]);
+          setTavilyKeys(listTavilyKeys());
+        }
       }
     };
     loadEmailKeysFromCloud();
@@ -379,7 +392,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
         anymailFinder: anymailFinderApiKey,
       });
       saveAnysearchApiKey(anysearchApiKey);
-      saveTavilyApiKey(tavilyApiKey);
+      setTavilyKeyPool(tavilyKeys);
 
       const emailLocal = [
         geminiApiKey.trim() ? 'Gemini✓' : 'Gemini✗',
@@ -388,7 +401,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
         hunterApiKey.trim() ? 'Hunter✓' : 'Hunter✗',
         findymailApiKey.trim() ? 'Findymail✓' : 'Findymail✗',
         anysearchApiKey.trim() ? 'AnySearch✓' : 'AnySearch✗',
-        tavilyApiKey.trim() ? 'Tavily✓' : 'Tavily✗',
+        tavilyKeys.length ? `Tavily✓×${tavilyKeys.length}` : 'Tavily✗',
       ].join(' · ');
 
       const cloudParts: string[] = [];
@@ -467,9 +480,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
           cloudParts.push(`${r.label}${r.ok ? '✓' : '✗'}`);
         }
 
-        if (tavilyApiKey.trim()) {
+        if (tavilyKeys.length) {
           const r = await cloudWithTimeout('Tavily', () =>
-            saveApiConfig({ provider: 'tavily', apiKey: tavilyApiKey.trim() })
+            saveApiConfig({ provider: 'tavily', apiKey: JSON.stringify(tavilyKeys) })
           );
           cloudParts.push(`${r.label}${r.ok ? '✓' : '✗'}`);
         }
@@ -659,18 +672,47 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     }
   };
 
-  const handleTestTavily = async () => {
-    if (isTestingTavily) return;
-    if (!tavilyApiKey.trim()) {
-      setTavilyTestMsg({ ok: false, text: '请先填写 Tavily API Key' });
+  const persistTavilyKeys = (keys: string[]) => {
+    const cleaned = [...new Set(keys.map((k) => k.trim()).filter(Boolean))];
+    setTavilyKeys(cleaned);
+    setTavilyKeyPool(cleaned);
+  };
+
+  const handleAddTavilyKey = () => {
+    const k = tavilyDraftKey.trim();
+    if (!k) {
+      setTavilyTestMsg({ ok: false, text: '请先粘贴一把 tvly- Key' });
       return;
     }
-    saveTavilyApiKey(tavilyApiKey.trim());
+    if (tavilyKeys.includes(k)) {
+      setTavilyTestMsg({ ok: false, text: '该 Key 已在池中' });
+      return;
+    }
+    persistTavilyKeys([...tavilyKeys, k]);
+    setTavilyDraftKey('');
+    setTavilyTestMsg({ ok: true, text: `已加入 Key 池（共 ${tavilyKeys.length + 1} 把）` });
+  };
+
+  const handleRemoveTavilyKey = (key: string) => {
+    persistTavilyKeys(tavilyKeys.filter((k) => k !== key));
+  };
+
+  const handleTestTavily = async () => {
+    if (isTestingTavily) return;
+    if (tavilyDraftKey.trim() && !tavilyKeys.includes(tavilyDraftKey.trim())) {
+      persistTavilyKeys([...tavilyKeys, tavilyDraftKey.trim()]);
+      setTavilyDraftKey('');
+    }
+    if (!listTavilyKeys().length) {
+      setTavilyTestMsg({ ok: false, text: '请先添加至少一把 Tavily API Key' });
+      return;
+    }
     setIsTestingTavily(true);
-    setTavilyTestMsg({ ok: true, text: '正在测试 Tavily…' });
+    setTavilyTestMsg({ ok: true, text: '正在测试 Key 池…' });
     try {
-      const result = await testTavilyApiKey(tavilyApiKey.trim());
+      const result = await testTavilyKeyPool();
       setTavilyTestMsg({ ok: result.success, text: result.message });
+      setTavilyKeys(listTavilyKeys());
     } catch (e: any) {
       setTavilyTestMsg({ ok: false, text: `Tavily 测试异常: ${e?.message || String(e)}` });
     } finally {
@@ -1406,7 +1448,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                 <div className="bg-emerald-50/50 border border-emerald-100 rounded-2xl p-6 space-y-3">
                   <div className="flex items-center justify-between gap-3 flex-wrap">
                     <div className="flex items-center gap-2 text-emerald-800 font-black text-sm">
-                      <Globe size={16} /> Tavily 联网搜索（替代 Google grounding）
+                      <Globe size={16} /> Tavily Key 池（多账号额度轮换）
                     </div>
                     <a
                       href="https://app.tavily.com/home"
@@ -1418,22 +1460,70 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     </a>
                   </div>
                   <p className="text-[10px] text-slate-500 font-bold leading-relaxed">
-                    客户搜索与背调前先用 Tavily 抓取实时网页证据，再交给千问整理。每月免费额度适合起步。Key 仅存本机/云端，勿提交 Git。
+                    可添加多把 tvly Key（例如 5×1000=5000 月积分）。某把额度用尽会自动切下一把；全部用尽后搜索/背调回退千问联网。Key 仅存本机/云端，勿提交 Git。
                   </p>
-                  <div>
-                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">
-                      Tavily API Key（tvly-...）
-                    </label>
+                  <div className="flex gap-2">
                     <input
                       type="password"
                       autoComplete="off"
-                      value={tavilyApiKey}
-                      onChange={(e) => setTavilyApiKey(e.target.value)}
-                      placeholder="tvly-dev-..."
-                      className="w-full bg-white border border-emerald-100 rounded-xl px-4 py-3 font-bold text-sm text-slate-950"
+                      value={tavilyDraftKey}
+                      onChange={(e) => setTavilyDraftKey(e.target.value)}
+                      placeholder="粘贴 tvly-dev-... 后点添加"
+                      className="flex-1 bg-white border border-emerald-100 rounded-xl px-4 py-3 font-bold text-sm text-slate-950"
                     />
+                    <button
+                      type="button"
+                      onClick={handleAddTavilyKey}
+                      className="bg-white border border-emerald-200 text-emerald-800 px-4 py-3 rounded-xl font-black flex items-center gap-1"
+                    >
+                      <Plus size={16} /> 添加
+                    </button>
                   </div>
+                  {tavilyKeys.length > 0 ? (
+                    <ul className="space-y-2">
+                      {tavilyKeys.map((k) => {
+                        const st = getTavilyKeyStatuses().find((s) => s.key === k);
+                        return (
+                          <li
+                            key={k}
+                            className="flex items-center justify-between gap-2 bg-white border border-emerald-50 rounded-xl px-3 py-2"
+                          >
+                            <div className="text-xs font-bold text-slate-700 truncate">
+                              {st?.label || k.slice(0, 12)}
+                              {st?.active ? (
+                                <span className="ml-2 text-emerald-600">使用中</span>
+                              ) : null}
+                              {st?.exhausted ? (
+                                <span className="ml-2 text-rose-500">本月已耗尽</span>
+                              ) : null}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveTavilyKey(k)}
+                              className="text-rose-500 hover:text-rose-700 p-1"
+                              title="移除"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : (
+                    <p className="text-[11px] text-slate-400 font-bold">尚未添加 Key</p>
+                  )}
                   <div className="flex flex-wrap justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        clearTavilyExhausted();
+                        setTavilyTestMsg({ ok: true, text: '已清除本月「耗尽」标记，将重新尝试全部 Key' });
+                        setTavilyKeys(listTavilyKeys());
+                      }}
+                      className="bg-white border border-slate-200 text-slate-600 px-4 py-3 rounded-xl font-bold text-xs"
+                    >
+                      重置耗尽标记
+                    </button>
                     <button
                       type="button"
                       onClick={handleTestTavily}
@@ -1441,17 +1531,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                       className="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-3 rounded-xl font-black flex items-center justify-center gap-2 disabled:opacity-50"
                     >
                       {isTestingTavily ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} fill="currentColor" />}
-                      测试 Tavily
+                      测试 Key 池
                     </button>
                   </div>
                   {tavilyTestMsg && (
-                    <p className={`text-xs font-bold ${tavilyTestMsg.ok ? 'text-emerald-800' : 'text-rose-600'}`}>
+                    <p className={`text-xs font-bold whitespace-pre-wrap ${tavilyTestMsg.ok ? 'text-emerald-800' : 'text-rose-600'}`}>
                       {tavilyTestMsg.text}
                     </p>
                   )}
                 </div>
 
-                {/* Recommended Sources + API pool removed: use Gemini official + Qwen sections above */}
+{/* Recommended Sources + API pool removed: use Gemini official + Qwen sections above */}
               </div>
             )}
 
