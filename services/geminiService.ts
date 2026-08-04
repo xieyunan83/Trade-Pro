@@ -25,9 +25,54 @@ import {
 } from './anysearchService';
 import { filterExcludedSearchResults } from './excludedCompanies';
 
-const NATIVE_MODEL = 'gemini-3-pro-preview';
+const NATIVE_MODEL = 'gemini-2.0-flash';
 
 const WEB_SEARCH_TASKS: TaskType[] = ['search', 'analysis'];
+
+export type AIEngineChoice = 'qwen' | 'gemini';
+export type TaskAIModels = {
+  search: AIEngineChoice;
+  analysis: AIEngineChoice;
+  /** 开发信 / 关键词 / 策略对话等整理类任务 */
+  organize: AIEngineChoice;
+};
+
+const DEFAULT_TASK_AI_MODELS: TaskAIModels = {
+  search: 'qwen',
+  analysis: 'qwen',
+  organize: 'qwen',
+};
+
+const TASK_AI_LS_KEY = 'trade_scout_task_ai_models';
+
+export const getTaskAIModels = (): TaskAIModels => {
+  if (typeof localStorage === 'undefined') return { ...DEFAULT_TASK_AI_MODELS };
+  try {
+    const raw = localStorage.getItem(TASK_AI_LS_KEY);
+    if (!raw) return { ...DEFAULT_TASK_AI_MODELS };
+    const parsed = JSON.parse(raw) as Partial<TaskAIModels>;
+    return {
+      search: parsed.search === 'gemini' ? 'gemini' : 'qwen',
+      analysis: parsed.analysis === 'gemini' ? 'gemini' : 'qwen',
+      organize: parsed.organize === 'gemini' ? 'gemini' : 'qwen',
+    };
+  } catch {
+    return { ...DEFAULT_TASK_AI_MODELS };
+  }
+};
+
+export const saveTaskAIModels = (models: TaskAIModels) => {
+  if (typeof localStorage === 'undefined') return;
+  localStorage.setItem(TASK_AI_LS_KEY, JSON.stringify(models));
+};
+
+const resolveEngineForTask = (task: TaskType): AIEngineChoice => {
+  const map = getTaskAIModels();
+  if (task === 'search') return map.search;
+  if (task === 'analysis') return map.analysis;
+  if (task === 'email' || task === 'keywords' || task === 'chat') return map.organize;
+  return map.organize;
+};
 
 const TASK_TIMEOUT_MS: Partial<Record<TaskType, number>> = {
   // 联网搜索拉客户列表常需 2–4 分钟，后台短测能过但前端重任务会超时
@@ -1285,12 +1330,35 @@ export const testHunterApiKey = async (
 export const getGeminiConfig = (): ApiConfig[] => {
     const configs: ApiConfig[] = [];
 
+    // 官方 Gemini Key（管理后台专用字段，优先）
     if (typeof localStorage !== 'undefined') {
+        const officialKey = localStorage.getItem('trade_scout_gemini_api_key')?.trim();
+        const officialModel =
+          localStorage.getItem('trade_scout_gemini_model_id')?.trim() || NATIVE_MODEL;
+        if (officialKey) {
+            configs.push({
+                id: 'gemini_official',
+                apiKey: officialKey,
+                baseUrl: 'native',
+                modelId: officialModel,
+                priority: 0,
+                taskAssignment: 'default',
+            });
+        }
+
         const stored = localStorage.getItem('trade_scout_api_configs');
         if (stored) {
             try {
                 const parsed = JSON.parse(stored);
-                configs.push(...parsed.filter((c: ApiConfig) => c.apiKey && c.apiKey.trim() !== ''));
+                const extras = (parsed as ApiConfig[]).filter(
+                  (c) =>
+                    c.apiKey &&
+                    c.apiKey.trim() !== '' &&
+                    c.apiKey.trim() !== officialKey &&
+                    (c.baseUrl === 'native' ||
+                      (c.baseUrl || '').includes('generativelanguage.googleapis.com'))
+                );
+                configs.push(...extras);
             } catch (e) {
                 console.error("Failed to parse stored API configs", e);
             }
@@ -1314,6 +1382,7 @@ export const getGeminiConfig = (): ApiConfig[] => {
 export const hasApiKeyConfigured = (): boolean => {
     if (env.qwenApiKey) return true;
     if (typeof localStorage !== 'undefined' && localStorage.getItem('trade_scout_qwen_api_key')?.trim()) return true;
+    if (typeof localStorage !== 'undefined' && localStorage.getItem('trade_scout_gemini_api_key')?.trim()) return true;
     if (getGeminiConfig().length > 0) return true;
     if (env.apiKey) return true;
     return false;
@@ -1349,6 +1418,22 @@ export const hydrateApiConfigsFromCloud = async (): Promise<boolean> => {
                 localStorage.setItem('trade_scout_wan_api_key', c.apiKey.trim());
                 if (c.baseUrl?.trim()) localStorage.setItem('trade_scout_wan_base_url', c.baseUrl.trim());
                 if (c.modelId?.trim()) localStorage.setItem('trade_scout_wan_model_id', c.modelId.trim());
+            }
+            if (c.provider === 'gemini' && c.apiKey?.trim()) {
+                localStorage.setItem('trade_scout_gemini_api_key', c.apiKey.trim());
+                if (c.modelId?.trim()) localStorage.setItem('trade_scout_gemini_model_id', c.modelId.trim());
+            }
+            if (c.provider === 'task_ai_models' && c.apiKey?.trim()) {
+                try {
+                    const parsed = JSON.parse(c.apiKey) as TaskAIModels;
+                    saveTaskAIModels({
+                      search: parsed.search === 'gemini' ? 'gemini' : 'qwen',
+                      analysis: parsed.analysis === 'gemini' ? 'gemini' : 'qwen',
+                      organize: parsed.organize === 'gemini' ? 'gemini' : 'qwen',
+                    });
+                } catch {
+                  /* ignore */
+                }
             }
         }
         return hasApiKeyConfigured();
@@ -1833,7 +1918,7 @@ const callQwenChat = async (
   }
 };
 
-// --- Unified Generator：国内千问优先，Gemini 仅作可选备用 ---
+// --- Unified Generator：按任务路由 Gemini / 千问 ---
 const generateContentUnified = async (
     task: TaskType, 
     prompt: string, 
@@ -1843,11 +1928,12 @@ const generateContentUnified = async (
     attachments: KnowledgeFile[] = []
 ): Promise<string> => {
     const needsWebSearch = WEB_SEARCH_TASKS.includes(task);
-    const systemText = needsWebSearch ? QWEN_SYSTEM : (systemInfo || QWEN_SYSTEM);
+    const engine = resolveEngineForTask(task);
+    const systemText = needsWebSearch
+      ? (systemInfo || QWEN_SYSTEM)
+      : (systemInfo || QWEN_SYSTEM);
 
-    console.log(`[AI] Task '${task}' → 千问${needsWebSearch ? ' (联网搜索)' : ''}`);
-
-    try {
+    const runQwen = async () => {
       let userContent = buildQwenUserContent(prompt, images, attachments);
       if (jsonMode && needsWebSearch && typeof userContent === 'string') {
         userContent += '\n\n【重要】请严格输出 JSON 格式，不要包含 markdown 代码块。';
@@ -1856,35 +1942,75 @@ const generateContentUnified = async (
         { role: 'system', content: systemText },
         { role: 'user', content: userContent },
       ];
-
-      return await callQwenChat(messages, {
+      return callQwenChat(messages, {
         jsonMode,
         enableSearch: needsWebSearch,
-        // 客户搜索用普通联网即可；强制搜索易导致数分钟无响应
         forcedSearch: false,
         task,
       });
-    } catch (qwenErr: any) {
-      console.warn(`[AI] 千问调用失败 (${task}):`, qwenErr.message);
+    };
 
-      const defaultModel = getDefaultAIModel();
-      if (defaultModel === 'qwen') {
-        throw new Error(
-          `千问调用失败: ${qwenErr.message}。请确认 API Key / Base URL 正确，联网搜索建议使用 qwen-plus 或 qwen-max 模型。`
-        );
+    const runGemini = async () => {
+      const configs = getGeminiConfig();
+      if (!configs.length) {
+        throw new Error('未配置 Gemini 官方 API Key，请在管理后台「Gemini 官方」中填写');
       }
+      const config =
+        configs.find((c) => c.id === 'gemini_official') ||
+        configs.find((c) => c.baseUrl === 'native') ||
+        configs[0];
+      // 有附件/图片时走 failover 完整路径；纯文本用 native
+      if (images.length || attachments.length) {
+        const text = await tryGeminiFailover(
+          task,
+          prompt,
+          systemText,
+          jsonMode,
+          images,
+          attachments,
+          needsWebSearch
+        );
+        if (!text) throw new Error('Gemini 调用未返回结果');
+        return text;
+      }
+      const fullPrompt = prompt;
+      return callGeminiNative(fullPrompt, { ...config, baseUrl: 'native' }, {
+        jsonMode,
+        enableSearch: needsWebSearch,
+        systemInstruction: systemText,
+      });
+    };
 
-      const geminiResult = await tryGeminiFailover(
-        task, prompt, systemInfo, jsonMode, images, attachments, needsWebSearch
-      );
-      if (geminiResult) return geminiResult;
+    console.log(`[AI] Task '${task}' → ${engine}${needsWebSearch ? ' (联网搜索)' : ''}`);
 
-      throw new Error(
-        `千问调用失败: ${qwenErr.message}。请在管理后台配置千问 API，联网搜索需 qwen-plus / qwen-max。`
-      );
+    if (engine === 'gemini') {
+      try {
+        return await runGemini();
+      } catch (geminiErr: any) {
+        console.warn(`[AI] Gemini 失败 (${task})，尝试千问兜底:`, geminiErr?.message || geminiErr);
+        try {
+          return await runQwen();
+        } catch (qwenErr: any) {
+          throw new Error(
+            `Gemini 与千问均失败。Gemini: ${geminiErr?.message || geminiErr}；千问: ${qwenErr?.message || qwenErr}`
+          );
+        }
+      }
     }
 
-    throw new Error('AI 调用未返回结果');
+    // engine === 'qwen'
+    try {
+      return await runQwen();
+    } catch (qwenErr: any) {
+      console.warn(`[AI] 千问失败 (${task})，尝试 Gemini 兜底:`, qwenErr?.message || qwenErr);
+      try {
+        return await runGemini();
+      } catch (geminiErr: any) {
+        throw new Error(
+          `千问调用失败: ${qwenErr?.message || qwenErr}。Gemini 兜底也失败: ${geminiErr?.message || geminiErr}`
+        );
+      }
+    }
 };
 
 // --- Public Methods ---
@@ -3120,10 +3246,13 @@ export const testQwenApiKey = async (
 const callGeminiNative = async (
   prompt: string,
   config: ApiConfig,
-  options: { jsonMode?: boolean; enableSearch?: boolean } = {}
+  options: { jsonMode?: boolean; enableSearch?: boolean; systemInstruction?: string } = {}
 ): Promise<string> => {
   const ai = new GoogleGenAI({ apiKey: config.apiKey });
   const reqConfig: Record<string, unknown> = {};
+  if (options.systemInstruction) {
+    reqConfig.systemInstruction = options.systemInstruction;
+  }
   if (options.jsonMode) {
     reqConfig.responseMimeType = "application/json";
   }

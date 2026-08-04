@@ -8,7 +8,7 @@ import {
   Youtube, Music, Video, FileSpreadsheet, FilePieChart, FileCode, Image, Mail, Building2
 } from 'lucide-react';
 import { getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/db';
-import { testApiKey, testQwenApiKey, testAnymailFinderApiKey, testHunterApiKey, testAnysearchApiKey } from '../services/geminiService';
+import { testApiKey, testQwenApiKey, testAnymailFinderApiKey, testHunterApiKey, testAnysearchApiKey, getTaskAIModels, saveTaskAIModels, type TaskAIModels, type AIEngineChoice } from '../services/geminiService';
 import { testWanImageApi } from '../services/wanImageService';
 import { saveApiConfig, getApiConfig, isSupabaseConfigured, saveKnowledgeFile, getKnowledgeFiles, deleteKnowledgeFile, resetSupabaseClient, testSupabaseConnection } from '../services/supabase';
 import { getSupabaseConfig, saveSupabaseConfig, clearSupabaseOverride, saveEmailSearchKeys, getEmailSearchKeys, getAnysearchApiKey, saveAnysearchApiKey, env } from '../services/env';
@@ -72,6 +72,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const [qwenApiKey, setQwenApiKey] = useState('');
   const [qwenBaseUrl, setQwenBaseUrl] = useState('');
   const [qwenModelId, setQwenModelId] = useState('qwen-max');
+  const [geminiApiKey, setGeminiApiKey] = useState('');
+  const [geminiModelId, setGeminiModelId] = useState('gemini-2.0-flash');
+  const [taskAIModels, setTaskAIModels] = useState<TaskAIModels>(() => getTaskAIModels());
+  const [isTestingGemini, setIsTestingGemini] = useState(false);
+  const [geminiTestMsg, setGeminiTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [wanApiKey, setWanApiKey] = useState('');
   const [wanBaseUrl, setWanBaseUrl] = useState('https://token-plan.cn-beijing.maas.aliyuncs.com');
   const [wanModelId, setWanModelId] = useState('wan2.7-image');
@@ -127,6 +132,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     const savedModel = localStorage.getItem('trade_scout_default_ai_model') as 'qwen' | 'gemini' | 'auto' | null;
     if (savedModel) setDefaultAIModel(savedModel);
     else if (env.defaultAIModel) setDefaultAIModel(env.defaultAIModel);
+
+    setTaskAIModels(getTaskAIModels());
+
+    const loadGeminiKey = async () => {
+      const localKey = localStorage.getItem('trade_scout_gemini_api_key');
+      const localModel = localStorage.getItem('trade_scout_gemini_model_id');
+      if (localKey) setGeminiApiKey(localKey);
+      if (localModel) setGeminiModelId(localModel);
+      const cloud = await getApiConfig('gemini');
+      if (!localKey && cloud?.apiKey) setGeminiApiKey(cloud.apiKey);
+      if (!localModel && cloud?.modelId) setGeminiModelId(cloud.modelId);
+      // 兼容旧「API 配置池」里 native Gemini
+      if (!localKey && !cloud?.apiKey) {
+        try {
+          const pool = JSON.parse(localStorage.getItem('trade_scout_api_configs') || '[]') as ApiConfig[];
+          const native = pool.find(
+            (c) =>
+              c.apiKey?.trim() &&
+              (c.baseUrl === 'native' || (c.baseUrl || '').includes('generativelanguage.googleapis.com'))
+          );
+          if (native?.apiKey) {
+            setGeminiApiKey(native.apiKey);
+            if (native.modelId) setGeminiModelId(native.modelId);
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+    void loadGeminiKey();
 
     const loadQwenKey = async () => {
       const localKey = localStorage.getItem('trade_scout_qwen_api_key');
@@ -282,8 +317,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     };
 
     try {
-      localStorage.setItem('trade_scout_api_configs', JSON.stringify(localApiConfigs));
       localStorage.setItem('trade_scout_default_ai_model', defaultAIModel);
+      saveTaskAIModels(taskAIModels);
+      if (geminiApiKey.trim()) {
+        localStorage.setItem('trade_scout_gemini_api_key', geminiApiKey.trim());
+      }
+      if (geminiModelId.trim()) {
+        localStorage.setItem('trade_scout_gemini_model_id', geminiModelId.trim());
+      }
+      // 同步一份 native 配置到旧池，兼容其它读取路径；清除中转条目
+      const syncedPool: ApiConfig[] = geminiApiKey.trim()
+        ? [
+            {
+              id: 'gemini_official',
+              apiKey: geminiApiKey.trim(),
+              baseUrl: 'native',
+              modelId: geminiModelId.trim() || 'gemini-2.0-flash',
+              priority: 0,
+              taskAssignment: 'default',
+            },
+          ]
+        : [];
+      setLocalApiConfigs(syncedPool);
+      localStorage.setItem('trade_scout_api_configs', JSON.stringify(syncedPool));
       if (qwenApiKey.trim()) {
         localStorage.setItem('trade_scout_qwen_api_key', qwenApiKey.trim());
       }
@@ -315,6 +371,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
       saveAnysearchApiKey(anysearchApiKey);
 
       const emailLocal = [
+        geminiApiKey.trim() ? 'Gemini✓' : 'Gemini✗',
+        qwenApiKey.trim() ? '千问✓' : '千问✗',
         anymailFinderApiKey.trim() ? 'Anymail✓' : 'Anymail✗',
         hunterApiKey.trim() ? 'Hunter✓' : 'Hunter✗',
         findymailApiKey.trim() ? 'Findymail✓' : 'Findymail✗',
@@ -330,6 +388,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
               apiKey: qwenApiKey.trim(),
               baseUrl: qwenBaseUrl.trim() || undefined,
               modelId: qwenModelId.trim() || 'qwen-max',
+            })
+          );
+          cloudParts.push(`${r.label}${r.ok ? '✓' : '✗'}`);
+        }
+
+        if (geminiApiKey.trim()) {
+          const r = await cloudWithTimeout('Gemini', () =>
+            saveApiConfig({
+              provider: 'gemini',
+              apiKey: geminiApiKey.trim(),
+              baseUrl: 'native',
+              modelId: geminiModelId.trim() || 'gemini-2.0-flash',
+            })
+          );
+          cloudParts.push(`${r.label}${r.ok ? '✓' : '✗'}`);
+        }
+
+        {
+          const r = await cloudWithTimeout('任务路由', () =>
+            saveApiConfig({
+              provider: 'task_ai_models',
+              apiKey: JSON.stringify(taskAIModels),
+              baseUrl: 'local',
+              modelId: 'task-routing',
             })
           );
           cloudParts.push(`${r.label}${r.ok ? '✓' : '✗'}`);
@@ -399,6 +481,37 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     setAliyunProxyMode(aliyunProxyMode);
     setAliyunProxyBase(aliyunProxyBase);
     setSaveConfigMsg({ ok: true, text: '中转设置已保存。保持「自动」即可，本机和线上都会自动走通。' });
+  };
+
+  const handleTestGemini = async () => {
+    if (isTestingGemini) return;
+    if (!geminiApiKey.trim()) {
+      setGeminiTestMsg({ ok: false, text: '请先填写 Gemini 官方 API Key' });
+      return;
+    }
+    setIsTestingGemini(true);
+    setGeminiTestMsg(null);
+    try {
+      const result = await testApiKey(
+        geminiApiKey.trim(),
+        'native',
+        geminiModelId.trim() || 'gemini-2.0-flash'
+      );
+      setGeminiTestMsg({
+        ok: result.success,
+        text: result.success
+          ? `${result.message} 可在 AI Studio 查看用量：https://aistudio.google.com/usage`
+          : result.message,
+      });
+    } catch (e: any) {
+      setGeminiTestMsg({ ok: false, text: `Gemini 测试异常: ${e?.message || String(e)}` });
+    } finally {
+      setIsTestingGemini(false);
+    }
+  };
+
+  const patchTaskAI = (role: keyof TaskAIModels, value: AIEngineChoice) => {
+    setTaskAIModels((prev) => ({ ...prev, [role]: value }));
   };
 
   const handleTestQwen = async (testSearch = false) => {
@@ -790,9 +903,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                   <div>
                     <h3 className="text-xl sm:text-2xl font-black text-slate-800 flex items-center gap-2">
-                      <Key className="text-blue-600" /> API 密钥配置池
+                      <Key className="text-blue-600" /> API 与模型路由
                     </h3>
-                    <p className="text-xs sm:text-sm text-slate-400 font-bold mt-1">国内千问 API — 支持联网搜索、背景调查、PPT 导出等全部功能</p>
+                    <p className="text-xs sm:text-sm text-slate-400 font-bold mt-1">
+                      Gemini 官方 Key + 千问 Key；可按「搜索 / 背调 / 整理」分别选择引擎。决策人挖掘与图片生成配置不变。
+                    </p>
                   </div>
                   <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
                   <button
@@ -803,9 +918,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     {isSavingConfigs ? <Loader2 size={20} className="animate-spin" /> : <Save size={20} />}
                     {isSavingConfigs ? '保存中…' : '保存配置'}
                   </button>
-                  <button onClick={handleAddApi} className="bg-blue-600 hover:bg-blue-700 text-white px-4 sm:px-6 py-3 rounded-xl font-black flex items-center justify-center gap-2 shadow-lg shadow-blue-100 touch-manipulation">
-                    <Plus size={20} /> 添加新密钥
-                  </button>
                   </div>
                 </div>
                 {saveConfigMsg && (
@@ -813,6 +925,110 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     {saveConfigMsg.text}
                   </p>
                 )}
+
+                {/* Task routing */}
+                <div className="bg-violet-50/60 border border-violet-100 rounded-2xl p-6 space-y-4">
+                  <div className="flex items-center gap-2 text-violet-800 font-black text-sm">
+                    <Settings size={16} /> 任务模型路由（搜索 / 背调 / 整理）
+                  </div>
+                  <p className="text-[10px] text-slate-500 font-bold leading-relaxed">
+                    推荐：搜索、背调用 <b>Gemini</b>（Google 联网）；整理（开发信/关键词/策略对话）用 <b>千问</b>。未配置对应 Key 时会自动兜底到另一引擎。
+                  </p>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {(
+                      [
+                        { key: 'search' as const, label: '客户搜索', hint: '自动化 / 客户搜索模块' },
+                        { key: 'analysis' as const, label: '背调分析', hint: '单次/批量背景调查' },
+                        { key: 'organize' as const, label: '资料整理', hint: '开发信、关键词、策略对话' },
+                      ] as const
+                    ).map((row) => (
+                      <div key={row.key} className="bg-white rounded-xl border border-violet-100 p-4">
+                        <div className="text-sm font-black text-slate-800">{row.label}</div>
+                        <div className="text-[10px] text-slate-400 font-bold mt-0.5 mb-3">{row.hint}</div>
+                        <select
+                          value={taskAIModels[row.key]}
+                          onChange={(e) => patchTaskAI(row.key, e.target.value as AIEngineChoice)}
+                          className="w-full bg-slate-50 border border-slate-100 rounded-xl px-3 py-2.5 font-bold text-sm"
+                        >
+                          <option value="gemini">Gemini（Google 联网）</option>
+                          <option value="qwen">千问 Qwen</option>
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Gemini official */}
+                <div className="bg-sky-50/50 border border-sky-100 rounded-2xl p-6 space-y-4">
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div className="flex items-center gap-2 text-sky-800 font-black text-sm">
+                      <Globe size={16} /> Gemini 官方 API（Google AI Studio）
+                    </div>
+                    <a
+                      href="https://aistudio.google.com/apikey"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-[10px] font-black text-sky-700 underline"
+                    >
+                      获取 API Key
+                    </a>
+                  </div>
+                  <p className="text-[10px] text-slate-500 font-bold leading-relaxed">
+                    直接连接 Google 官方，无需 HiAPI 等中转。填入 Key 后点测试；用量请在{' '}
+                    <a
+                      href="https://aistudio.google.com/usage"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-sky-700 underline"
+                    >
+                      AI Studio Usage
+                    </a>{' '}
+                    查看。
+                  </p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="md:col-span-2">
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">
+                        Gemini API Key
+                      </label>
+                      <input
+                        type="password"
+                        autoComplete="off"
+                        value={geminiApiKey}
+                        onChange={(e) => setGeminiApiKey(e.target.value)}
+                        placeholder="AIza..."
+                        className="w-full bg-white border border-sky-100 rounded-xl px-4 py-3 font-bold text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">
+                        模型 ID
+                      </label>
+                      <input
+                        type="text"
+                        value={geminiModelId}
+                        onChange={(e) => setGeminiModelId(e.target.value)}
+                        placeholder="gemini-2.0-flash / gemini-1.5-pro"
+                        className="w-full bg-white border border-sky-100 rounded-xl px-4 py-3 font-bold text-sm"
+                      />
+                    </div>
+                    <div className="flex items-end">
+                      <button
+                        type="button"
+                        onClick={() => void handleTestGemini()}
+                        disabled={isTestingGemini}
+                        className="w-full bg-sky-600 hover:bg-sky-700 text-white px-5 py-3 rounded-xl font-black flex items-center justify-center gap-2 disabled:opacity-50"
+                      >
+                        {isTestingGemini ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} fill="currentColor" />}
+                        测试 Gemini 连接
+                      </button>
+                    </div>
+                  </div>
+                  {geminiTestMsg && (
+                    <p className={`text-xs font-bold ${geminiTestMsg.ok ? 'text-sky-800' : 'text-rose-600'}`}>
+                      {geminiTestMsg.text}
+                    </p>
+                  )}
+                </div>
 
                 {/* Qwen + Supabase */}
                 <div className="bg-emerald-50/50 border border-emerald-100 rounded-2xl p-6 space-y-4">
@@ -826,18 +1042,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">AI 引擎</label>
-                      <select
-                        value={defaultAIModel}
-                        onChange={e => setDefaultAIModel(e.target.value as 'qwen' | 'gemini' | 'auto')}
-                        className="w-full bg-white border border-emerald-100 rounded-xl px-4 py-3 font-bold text-sm"
-                      >
-                        <option value="qwen">千问（推荐，国内联网搜索）</option>
-                        <option value="auto">自动（千问优先，Gemini 备用）</option>
-                        <option value="gemini">Gemini（备用，需额外付费）</option>
-                      </select>
-                    </div>
-                    <div>
                       <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Qwen 模型 ID</label>
                       <input
                         type="text"
@@ -846,6 +1050,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                         placeholder="qwen-max / qwen-plus / qwen-turbo"
                         className="w-full bg-white border border-emerald-100 rounded-xl px-4 py-3 font-bold text-sm"
                       />
+                    </div>
+                    <div className="flex items-end text-[10px] font-bold text-slate-400 pb-2">
+                      引擎选择请到上方「任务模型路由」设置
                     </div>
                     <div className="md:col-span-2">
                       <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Supabase Project URL</label>
@@ -1148,105 +1355,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                   )}
                 </div>
 
-                {/* Recommended Sources */}
-                <div className="bg-blue-50/50 border border-blue-100 rounded-2xl p-6">
-                  <div className="flex items-center gap-2 text-blue-800 font-black text-sm mb-4">
-                    <Play size={16} fill="currentColor" /> 免费/稳定 API 来源推荐 (Recommended Free Sources)
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                    {[
-                      { name: 'HiAPI', desc: '稳定中转，适合生产环境。' },
-                      { name: 'Google AI Studio', desc: 'Native 模式，免费且强大。' },
-                      { name: 'SiliconFlow', desc: '国内直连，送14元额度。' },
-                      { name: 'Groq', desc: 'Llama 3 极速版。' }
-                    ].map((src, i) => (
-                      <div key={i} className="bg-white p-4 rounded-xl border border-blue-100 shadow-sm">
-                        <div className="font-black text-blue-600 text-sm mb-1 flex items-center justify-between">
-                          {src.name}
-                        </div>
-                        <p className="text-[10px] text-slate-400 font-bold">{src.desc}</p>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="mt-6 flex items-center gap-4">
-                    <div className="bg-white border border-blue-100 rounded-lg flex items-center px-3 py-2 flex-1">
-                      <Database size={14} className="text-slate-400 mr-2" />
-                      <input 
-                        type="text" 
-                        value={proxyUrl} 
-                        onChange={e => setProxyUrl(e.target.value)}
-                        className="flex-1 bg-transparent border-none focus:ring-0 text-xs font-bold text-slate-600"
-                      />
-                    </div>
-                    <button onClick={handleSaveProxy} className="bg-blue-600 text-white px-6 py-2 rounded-lg text-xs font-black">Save Proxy</button>
-                  </div>
-                </div>
-
-                {/* API List */}
-                <div className="space-y-4">
-                  {localApiConfigs.map((api, idx) => (
-                    <div key={api.id} className="bg-white border border-slate-100 rounded-2xl sm:rounded-3xl p-4 sm:p-6 md:p-8 shadow-sm relative group">
-                      <button onClick={() => setLocalApiConfigs(localApiConfigs.filter(a => a.id !== api.id))} className="absolute top-6 right-6 text-slate-300 hover:text-red-500 transition-all">
-                        <Trash2 size={20} />
-                      </button>
-                      
-                      <div className="flex items-center gap-4 mb-6">
-                         <div className="bg-purple-100 text-purple-700 px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest flex items-center gap-1">
-                            <Key size={10} /> {api.taskAssignment || 'EMAIL'}
-                         </div>
-                         <div className="bg-green-100 text-green-700 px-3 py-1 rounded-lg text-[10px] font-black flex items-center gap-1">
-                            <CheckCircle2 size={10} /> Saved to Local Browser
-                         </div>
-                         <div className="flex-1"></div>
-                         <select 
-                            onChange={(e) => applyPreset(idx, e.target.value)}
-                            className="text-[10px] font-black text-blue-600 bg-blue-50 border-none rounded-lg px-3 py-1 focus:ring-0 cursor-pointer"
-                         >
-                            <option value="">✨ Apply Preset (快速预设)</option>
-                            <option value="hiapi">HiAPI (Gemini)</option>
-                            <option value="google">Google Native</option>
-                            <option value="siliconflow">SiliconFlow (DeepSeek)</option>
-                            <option value="groq">Groq (Llama 3)</option>
-                         </select>
-                      </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-6 gap-6">
-                        <div>
-                          <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">优先级 (Priority)</label>
-                          <input type="number" value={api.priority ?? 2} onChange={e => updateApiConfig(idx, 'priority', parseInt(e.target.value) || 2)} className="w-full bg-slate-50 border-slate-100 rounded-xl px-4 py-3 font-bold text-sm" />
-                        </div>
-                        <div className="lg:col-span-1">
-                          <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">任务分配 (Task)</label>
-                          <select value={api.taskAssignment || 'default'} onChange={e => updateApiConfig(idx, 'taskAssignment', e.target.value)} className="w-full bg-slate-50 border-slate-100 rounded-xl px-4 py-3 font-bold text-xs appearance-none">
-                            <option value="default">默认 (Default)</option>
-                            <option value="email">开发信撰写 (Email)</option>
-                            <option value="search">客户搜索 (Search)</option>
-                            <option value="analysis">深度分析 (Analysis)</option>
-                            <option value="chat">策略对话 (Chat)</option>
-                            <option value="keywords">关键词提取 (Keywords)</option>
-                          </select>
-                        </div>
-                        <div className="lg:col-span-1">
-                          <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">代理地址 (Base URL)</label>
-                          <input type="text" value={api.baseUrl} onChange={e => updateApiConfig(idx, 'baseUrl', e.target.value)} className="w-full bg-slate-50 border-slate-100 rounded-xl px-4 py-3 font-bold text-[10px]" />
-                        </div>
-                        <div className="lg:col-span-1">
-                          <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">API 密钥 (Key)</label>
-                          <input type="password" value={api.apiKey} onChange={e => updateApiConfig(idx, 'apiKey', e.target.value)} className="w-full bg-slate-50 border-slate-100 rounded-xl px-4 py-3 font-bold text-sm" placeholder="••••••••••••" />
-                        </div>
-                        <div className="lg:col-span-1">
-                          <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">模型 ID (Model)</label>
-                          <input type="text" value={api.modelId || ''} onChange={e => updateApiConfig(idx, 'modelId', e.target.value)} className="w-full bg-slate-50 border-slate-100 rounded-xl px-4 py-3 font-bold text-xs" />
-                        </div>
-                        <div className="flex items-end">
-                           <button onClick={() => handleTestApi(api)} disabled={testingApiId === api.id} className="w-full bg-slate-900 text-white p-3 rounded-xl hover:bg-blue-600 transition-all disabled:opacity-50">
-                              {testingApiId === api.id ? <Loader2 size={16} className="animate-spin mx-auto" /> : <Play size={16} fill="currentColor" className="mx-auto" />}
-                           </button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                {/* Recommended Sources + API pool removed: use Gemini official + Qwen sections above */}
               </div>
             )}
 
