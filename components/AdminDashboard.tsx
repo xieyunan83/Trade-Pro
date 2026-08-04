@@ -543,7 +543,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   };
 
   const patchTaskAI = (role: keyof TaskAIModels, value: AIEngineChoice) => {
-    setTaskAIModels((prev) => ({ ...prev, [role]: value }));
+    setTaskAIModels((prev) => {
+      const next = { ...prev, [role]: value };
+      // 立即写入 localStorage，运行时按此项路由（不必等「保存配置」）
+      saveTaskAIModels(next);
+      if (typeof localStorage !== 'undefined') {
+        // 用户主动选 Gemini 时关掉旧版「强制千问」
+        if (value === 'gemini') localStorage.setItem('trade_scout_force_qwen', '0');
+      }
+      return next;
+    });
   };
 
   const handleTestQwen = async (testSearch = false) => {
@@ -1014,14 +1023,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     <Settings size={16} /> 任务模型路由（搜索 / 背调 / 整理）
                   </div>
                   <p className="text-[10px] text-slate-500 font-bold leading-relaxed">
-                    搜索 / 背调固定降级：<strong>Tavily 取证 → Gemini 写结果 → 失败或额度尽则千问</strong>。
-                    下方选「Gemini」启用该链；选「千问」则跳过 Gemini、直接用千问。整理类任务同样支持 Gemini→千问兜底。
+                    三项各自独立、改完<strong>立即生效</strong>（无需等保存）。含义：
+                    「Gemini 优先」= 该任务先 Gemini，失败/额度尽再千问；「仅用千问」= 该任务跳过 Gemini。
+                    搜索/背调另有 Tavily 取证（与下拉无关，有 Key 就先用）。点「保存配置」会同步到云端。
                   </p>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     {(
                       [
-                        { key: 'search' as const, label: '客户搜索', hint: 'Tavily→Gemini→千问' },
-                        { key: 'analysis' as const, label: '背调分析', hint: 'Tavily→Gemini→千问' },
+                        { key: 'search' as const, label: '客户搜索', hint: '自动化 / 客户搜索' },
+                        { key: 'analysis' as const, label: '背调分析', hint: '单次 / 批量背调' },
                         { key: 'organize' as const, label: '资料整理', hint: '开发信 / 关键词 / 策略' },
                       ] as const
                     ).map((row) => (
@@ -1036,6 +1046,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                           <option value="gemini">Gemini 优先（失败→千问）</option>
                           <option value="qwen">仅用千问 Qwen</option>
                         </select>
+                        <p className="text-[10px] font-bold mt-2 text-violet-700">
+                          {taskAIModels[row.key] === 'gemini'
+                            ? '当前：Gemini → 千问'
+                            : '当前：仅千问'}
+                        </p>
                       </div>
                     ))}
                   </div>

@@ -2306,7 +2306,7 @@ const generateContentUnified = async (
         ? 'Gemini→千问'
         : '千问';
     console.log(
-      `[AI] Task '${task}' → ${cascadeLabel}${needsWebSearch ? ' (联网)' : ''}` +
+      `[AI] Task '${task}' engine=${engine} → ${cascadeLabel}${needsWebSearch ? ' (联网)' : ''}` +
         `${hasGeminiOfficialKey() ? '' : ' [无Gemini Key]'}`
     );
 
