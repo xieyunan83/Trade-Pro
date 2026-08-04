@@ -28,8 +28,67 @@ import {
   gatherTavilyCompanyEvidence,
   hasTavilyKey,
 } from './tavilyService';
+import {
+  getCooldownRemainingSec,
+  noteRateLimited,
+  waitForApiCooldown,
+} from './rateLimitGate';
 
 const NATIVE_MODEL = 'gemini-2.0-flash';
+
+/** 解析阿里云 429/402：区分「瞬时限流」与「套餐额度耗尽」 */
+const parseAliyunLimitError = (
+  status: number,
+  errText: string
+): { kind: 'rate' | 'quota'; detail: string } => {
+  let detail = (errText || '').slice(0, 280);
+  try {
+    const j = JSON.parse(errText);
+    detail =
+      j?.error?.message ||
+      j?.message ||
+      j?.error?.code ||
+      (typeof j?.error === 'string' ? j.error : detail);
+  } catch {
+    /* keep raw */
+  }
+  const blob = `${detail}\n${errText}`;
+  const isQuota =
+    status === 402 ||
+    /AllocationQuota|Allocated quota|insufficient_quota|exceeded your current quota|套餐额度|额度已用尽|坐席额度/i.test(
+      blob
+    );
+  const isRate =
+    /Requests rate limit|rate\s*limit|Throttling\.Rate|Throttling\.Allocation|API-Key Requests rate|请求过于频繁|Too many requests/i.test(
+      blob
+    );
+  // 额度优先：Aliyun 额度耗尽也常返回 429
+  if (isQuota && !/Requests rate limit|API-Key Requests rate/i.test(blob)) {
+    return { kind: 'quota', detail: String(detail).slice(0, 200) };
+  }
+  if (isRate || status === 429) {
+    if (isQuota) return { kind: 'quota', detail: String(detail).slice(0, 200) };
+    return { kind: 'rate', detail: String(detail).slice(0, 200) };
+  }
+  return { kind: 'quota', detail: String(detail).slice(0, 200) };
+};
+
+const formatAliyunLimitError = (
+  status: number,
+  kind: 'rate' | 'quota',
+  detail: string
+): string => {
+  if (kind === 'quota') {
+    return (
+      `套餐额度已用尽 (${status})。${detail ? `上游：${detail}。` : ''}` +
+      '请到阿里云百炼 Token Plan 控制台加购额度，或等待下月额度重置。'
+    );
+  }
+  return (
+    `请求过于频繁被限流 (${status})。${detail ? `上游：${detail}。` : ''}` +
+    '请等待约 1 分钟后重试，并降低批量并发。'
+  );
+};
 
 const WEB_SEARCH_TASKS: TaskType[] = ['search', 'analysis'];
 
@@ -1786,9 +1845,14 @@ const callOpenAICompatible = async (
                     );
                 }
                 
-                // If 402, Quota exceeded. STOP.
+                // 402/429：区分瞬时限流 vs 套餐额度耗尽（阿里云两者都可能是 429）
                 if (response.status === 402 || response.status === 429) {
-                    throw new Error(`Rate Limit or Quota Exceeded (${response.status}).`);
+                    const parsed = parseAliyunLimitError(response.status, errText);
+                    if (parsed.kind === 'rate') {
+                      const retryAfter = Number(response.headers.get('Retry-After') || 0);
+                      noteRateLimited(retryAfter > 0 ? retryAfter : 60);
+                    }
+                    throw new Error(formatAliyunLimitError(response.status, parsed.kind, parsed.detail));
                 }
 
                 // If 403/404/5xx, it might be network/proxy issue. Continue to next proxy.
@@ -1823,6 +1887,8 @@ const callOpenAICompatible = async (
               e.message.includes('402') ||
               e.message.includes('Key Rejected') ||
               e.message.includes('Rate Limit') ||
+              e.message.includes('请求过于频繁') ||
+              e.message.includes('套餐额度已用尽') ||
               /云端代理算力不足 \(HTTP 546\)/.test(e.message)
             ) {
                 throw e;
@@ -2029,32 +2095,68 @@ const callQwenChat = async (
   try {
     return await runOnce(searchPayload);
   } catch (err: any) {
-    // 连接测试失败立即返回，不做任何重试（重试会让后台「卡死」感）
-    if (options.connectionTest) throw err;
+    const msg0 = String(err?.message || '');
+    const isQuotaErr = /套餐额度已用尽|AllocationQuota|Allocated quota|insufficient_quota/i.test(msg0);
+    const isRateErr =
+      !isQuotaErr &&
+      /请求过于频繁|rate\s*limit|429|Throttling|Too many requests|Rate Limit/i.test(msg0);
 
-    const msg = String(err?.message || '');
+    // 连接测试：额度耗尽立即失败；瞬时限流则短退避重试（最多 2 次）
+    if (options.connectionTest) {
+      if (isQuotaErr) throw err;
+      if (isRateErr) {
+        for (let i = 1; i <= 2; i++) {
+          const waitMs = i === 1 ? 8_000 : 20_000;
+          console.warn(`[Qwen] 连接测试遇限流，${waitMs / 1000}s 后重试 (${i}/2)…`);
+          noteRateLimited(Math.ceil(waitMs / 1000));
+          await waitForApiCooldown();
+          try {
+            return await runOnce(searchPayload);
+          } catch (retryErr: any) {
+            const m2 = String(retryErr?.message || '');
+            if (/套餐额度已用尽|AllocationQuota|Allocated quota|insufficient_quota/i.test(m2)) {
+              throw retryErr;
+            }
+            if (
+              !/请求过于频繁|rate\s*limit|429|Throttling|Too many requests|Rate Limit/i.test(m2) ||
+              i === 2
+            ) {
+              throw retryErr;
+            }
+          }
+        }
+      }
+      throw err;
+    }
+
+    const msg = msg0;
     const isTimeout = /超时|timeout|AbortError|504|Gateway Timeout|上游超时/i.test(msg);
     const is546 = /546|WORKER_RESOURCE|云端代理算力不足/i.test(msg);
-    const is429 = /429|rate\s*limit|quota exceeded/i.test(msg);
+    const is429 = isRateErr || (/429|rate\s*limit|quota exceeded/i.test(msg) && !isQuotaErr);
 
     // 限流：短退避后自动重试（最多 2 次），避免整页反复「冷却中」
-    if (is429) {
+    // 套餐额度耗尽不重试
+    if (is429 && !isQuotaErr) {
       for (let i = 1; i <= 2; i++) {
         const waitMs = 20_000 * i;
         console.warn(`[Qwen] 限流 429，${waitMs / 1000}s 后重试 (${i}/2)…`);
-        await new Promise((r) => setTimeout(r, waitMs));
+        noteRateLimited(Math.ceil(waitMs / 1000));
+        await waitForApiCooldown();
         try {
           return await runOnce(searchPayload);
         } catch (retryErr: any) {
           const m2 = String(retryErr?.message || '');
-          if (!/429|rate\s*limit|quota exceeded/i.test(m2) || i === 2) {
+          if (/套餐额度已用尽|AllocationQuota|Allocated quota|insufficient_quota/i.test(m2)) {
+            throw retryErr;
+          }
+          if (!/429|rate\s*limit|quota exceeded|请求过于频繁|Throttling/i.test(m2) || i === 2) {
             if (i === 2) throw retryErr;
-            // non-429: throw immediately
-            if (!/429|rate\s*limit|quota exceeded/i.test(m2)) throw retryErr;
+            if (!/429|rate\s*limit|quota exceeded|请求过于频繁|Throttling/i.test(m2)) throw retryErr;
           }
         }
       }
     }
+    if (isQuotaErr) throw err;
 
     // 客户搜索/背调：超时后先再试一次联网（代理已加长，避免立刻丢掉联网）
     if (
@@ -3405,6 +3507,12 @@ export const testQwenApiKey = async (
       };
     }
 
+    // 若刚被批量任务限流，先等到冷却结束再测，避免误报失败
+    const cool = getCooldownRemainingSec();
+    if (cool > 0) {
+      await waitForApiCooldown();
+    }
+
     // 轻量 ping：不走完整 callQwen / 系统提示 / 降级重试链
     // 联网测试：以客户端本地日期为准展示；提示模型用搜索核对，避免模型凭记忆编造旧日期
     const now = new Date();
@@ -3429,7 +3537,7 @@ export const testQwenApiKey = async (
           forcedSearch: false,
           timeoutMs: CONNECTION_TEST_TIMEOUT_MS,
           connectionTest: true,
-          maxTokens: 64,
+          maxTokens: 32,
           override: {
             apiKey: cleanKey,
             baseUrl: cleanBase,
@@ -3438,9 +3546,10 @@ export const testQwenApiKey = async (
         }
       );
 
+    // 含限流退避重试预算（约 8s+20s），避免硬超时误杀
     const text = await withHardTimeout(
       run(),
-      CONNECTION_TEST_TIMEOUT_MS + 2_000,
+      CONNECTION_TEST_TIMEOUT_MS + 55_000,
       testSearch ? '千问联网测试' : '千问连接测试'
     );
     const reply = String(text || '').trim();

@@ -562,7 +562,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     setIsTestingQwen(true);
     setQwenTestMsg({
       ok: true,
-      text: testSearch ? '正在测试联网搜索（最长约 45 秒）…' : '正在测试连接（最长约 45 秒）…',
+      text: testSearch
+        ? '正在测试联网搜索（遇限流会自动重试，最长约 100 秒）…'
+        : '正在测试连接（遇限流会自动重试，最长约 100 秒）…',
     });
     try {
       const result = await testQwenApiKey(qwenApiKey, qwenBaseUrl, qwenModelId, testSearch);
