@@ -191,6 +191,7 @@ function mountOriginProxy(
  * - /anymail-api → api.anymailfinder.com（解决浏览器 CORS Failed to fetch）
  * - /anysearch-api → api.anysearch.com（背调身份补全；Key 从 env 注入）
  * - /gemini-api → generativelanguage.googleapis.com（仅 x-goog-api-key，禁 Bearer）
+ * - /tavily-api → api.tavily.com（联网搜索）
  */
 export function aliyunDevProxyPlugin(
   fallbackOrigin = 'https://dashscope.aliyuncs.com',
@@ -220,6 +221,7 @@ export function aliyunDevProxyPlugin(
       mountOriginProxy(server, '/gemini-api', () => 'https://generativelanguage.googleapis.com', {
         stripAuthorization: true,
       });
+      mountOriginProxy(server, '/tavily-api', () => 'https://api.tavily.com');
     },
   };
 }

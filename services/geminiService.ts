@@ -23,6 +23,11 @@ import {
   testAnysearchConnection,
 } from './anysearchService';
 import { filterExcludedSearchResults } from './excludedCompanies';
+import {
+  gatherTavilyLeadEvidence,
+  gatherTavilyCompanyEvidence,
+  hasTavilyKey,
+} from './tavilyService';
 
 const NATIVE_MODEL = 'gemini-2.0-flash';
 
@@ -1574,6 +1579,9 @@ export const hydrateApiConfigsFromCloud = async (): Promise<boolean> => {
             if (c.provider === 'anysearch' && c.apiKey?.trim()) {
                 localStorage.setItem('trade_scout_anysearch_api_key', c.apiKey.trim());
             }
+            if (c.provider === 'tavily' && c.apiKey?.trim()) {
+                localStorage.setItem('trade_scout_tavily_api_key', c.apiKey.trim());
+            }
             if (c.provider === 'wan' && c.apiKey?.trim()) {
                 localStorage.setItem('trade_scout_wan_api_key', c.apiKey.trim());
                 if (c.baseUrl?.trim()) localStorage.setItem('trade_scout_wan_base_url', c.baseUrl.trim());
@@ -2468,7 +2476,7 @@ export const analyzeCompany = async (
   ${searchCountry && !isVagueMarketCountry(searchCountry) ? `- Lead market hint: ${searchCountry}. Prefer the entity of this domain that matches this market; still do not invent HQ.` : '- No specific market hint (or Global): still bind identity strictly to the domain above.'}
 `;
 
-  // AnySearch 身份证据（官网 extract + batch_search）；失败则软跳过
+  // AnySearch + Tavily 身份证据；失败则软跳过
   let identityEvidence = '';
   if (hasDomain) {
     try {
@@ -2482,13 +2490,29 @@ export const analyzeCompany = async (
     } catch (e) {
       console.warn('[analyzeCompany] AnySearch evidence skipped', e);
     }
+    try {
+      const tavilyEv = await gatherTavilyCompanyEvidence({
+        domain: canonicalDomain,
+        companyHint: rawInput,
+        searchKeyword: searchKeyword || undefined,
+        searchCountry: searchCountry || undefined,
+      });
+      if (tavilyEv) {
+        identityEvidence = identityEvidence
+          ? `${identityEvidence}\n\n${tavilyEv}`
+          : tavilyEv;
+        console.log('[analyzeCompany] Tavily evidence chars:', tavilyEv.length);
+      }
+    } catch (e) {
+      console.warn('[analyzeCompany] Tavily evidence skipped', e);
+    }
   }
 
   const evidenceBlock = identityEvidence
     ? `
-  === ANYSEARCH GROUND TRUTH (highest priority for name / HQ / city / country / description geography) ===
+  === WEB GROUND TRUTH (AnySearch / Tavily — highest priority for name / HQ / city / country) ===
   ${identityEvidence}
-  === END ANYSEARCH EVIDENCE ===
+  === END WEB EVIDENCE ===
 `
     : '';
 
@@ -2959,8 +2983,36 @@ export const searchPotentialClients = async (productKeyword: string, country: st
       } as ClientSearchResult;
     });
 
+  let tavilyEvidence = '';
+  try {
+    if (hasTavilyKey()) {
+      tavilyEvidence = await gatherTavilyLeadEvidence({
+        productKeyword,
+        country: singleMarket ? countries[0] : country,
+        industry,
+        clientType: typeHint,
+      });
+      if (tavilyEvidence) {
+        console.log('[search] Tavily lead evidence chars:', tavilyEvidence.length);
+      }
+    }
+  } catch (e) {
+    console.warn('[search] Tavily evidence skipped', e);
+  }
+
   const runOnce = async (askLimit: number, stricter: boolean) => {
-    const text = await generateContentUnified('search', buildPrompt(askLimit, stricter), SYSTEM_INSTRUCTION, true);
+    const base = buildPrompt(askLimit, stricter);
+    const promptWithEvidence = tavilyEvidence
+      ? `${base}
+
+  === TAVILY LIVE WEB RESULTS (use these as primary source; extract real company names + websites) ===
+  ${tavilyEvidence}
+  === END TAVILY ===
+  Prefer companies that appear in Tavily results with real URLs. You may still use model knowledge to fill gaps, but do NOT invent websites.`
+      : base;
+    // 有 Tavily 证据时不必强依赖千问联网，降低 429；无证据时仍走联网
+    const text = await generateContentUnified('search', promptWithEvidence, SYSTEM_INSTRUCTION, true);
+
     const parsed = extractJson(text, true);
     if (!Array.isArray(parsed) || parsed.length === 0) {
       throw new Error('搜索未返回有效结果。请确认千问 API 已配置，并使用支持联网搜索的模型。');

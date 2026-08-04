@@ -62,6 +62,7 @@ export const saveEmailSearchKeys = (keys: { hunter?: string; findymail?: string;
 };
 
 const LS_ANYSEARCH = 'trade_scout_anysearch_api_key';
+const LS_TAVILY = 'trade_scout_tavily_api_key';
 
 /** AnySearch Key：localStorage（云端同步后）→ 环境变量兜底 */
 export const getAnysearchApiKey = (): string =>
@@ -70,6 +71,15 @@ export const getAnysearchApiKey = (): string =>
 export const saveAnysearchApiKey = (key: string): void => {
   if (typeof localStorage === 'undefined') return;
   localStorage.setItem(LS_ANYSEARCH, (key || '').trim());
+};
+
+/** Tavily Key：localStorage → 环境变量兜底 */
+export const getTavilyApiKey = (): string =>
+  ls(LS_TAVILY) || read('TAVILY_API_KEY') || read('REACT_APP_TAVILY_API_KEY') || '';
+
+export const saveTavilyApiKey = (key: string): void => {
+  if (typeof localStorage === 'undefined') return;
+  localStorage.setItem(LS_TAVILY, (key || '').trim());
 };
 
 export const env = {
@@ -85,6 +95,7 @@ export const env = {
   findymailApiKey: read('FINDYMAIL_API_KEY'),
   anymailFinderApiKey: read('ANYMAIL_FINDER_API_KEY'),
   anysearchApiKey: read('ANYSEARCH_API_KEY'),
+  tavilyApiKey: read('TAVILY_API_KEY') || read('REACT_APP_TAVILY_API_KEY'),
   get supabaseUrl() { return getSupabaseConfig().url; },
   get supabaseAnonKey() { return getSupabaseConfig().key; },
   githubToken: read('VITE_GITHUB_TOKEN'),
