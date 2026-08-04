@@ -101,9 +101,9 @@ export type TaskAIModels = {
 };
 
 const DEFAULT_TASK_AI_MODELS: TaskAIModels = {
-  search: 'qwen',
-  analysis: 'qwen',
-  organize: 'qwen',
+  search: 'gemini',
+  analysis: 'gemini',
+  organize: 'gemini',
 };
 
 const TASK_AI_LS_KEY = 'trade_scout_task_ai_models';
@@ -111,17 +111,17 @@ const TASK_AI_LS_KEY = 'trade_scout_task_ai_models';
 export const getTaskAIModels = (): TaskAIModels => {
   if (typeof localStorage === 'undefined') return { ...DEFAULT_TASK_AI_MODELS };
   try {
-    // 临时强制全链路千问（Gemini Auth Key 不可用期间）；设 trade_scout_force_qwen=0 可关闭
-    if (localStorage.getItem('trade_scout_force_qwen') !== '0') {
+    // 仅当显式设为 '1' 时强制全链路千问；默认走 Gemini→千问降级
+    if (localStorage.getItem('trade_scout_force_qwen') === '1') {
       return { search: 'qwen', analysis: 'qwen', organize: 'qwen' };
     }
     const raw = localStorage.getItem(TASK_AI_LS_KEY);
     if (!raw) return { ...DEFAULT_TASK_AI_MODELS };
     const parsed = JSON.parse(raw) as Partial<TaskAIModels>;
     return {
-      search: parsed.search === 'gemini' ? 'gemini' : 'qwen',
-      analysis: parsed.analysis === 'gemini' ? 'gemini' : 'qwen',
-      organize: parsed.organize === 'gemini' ? 'gemini' : 'qwen',
+      search: parsed.search === 'qwen' ? 'qwen' : 'gemini',
+      analysis: parsed.analysis === 'qwen' ? 'qwen' : 'gemini',
+      organize: parsed.organize === 'qwen' ? 'qwen' : 'gemini',
     };
   } catch {
     return { ...DEFAULT_TASK_AI_MODELS };
@@ -133,12 +133,29 @@ export const saveTaskAIModels = (models: TaskAIModels) => {
   localStorage.setItem(TASK_AI_LS_KEY, JSON.stringify(models));
 };
 
-/** 将任务路由与默认引擎全部切回千问 */
+/** 将任务路由与默认引擎全部切回千问（应急） */
 export const forceQwenTaskRouting = () => {
   if (typeof localStorage === 'undefined') return;
   localStorage.setItem('trade_scout_force_qwen', '1');
   localStorage.setItem('trade_scout_default_ai_model', 'qwen');
   saveTaskAIModels({ search: 'qwen', analysis: 'qwen', organize: 'qwen' });
+};
+
+/** 启用 Tavily → Gemini → 千问 降级链（关闭强制千问；仅首次迁移写默认） */
+export const enableTavilyGeminiQwenCascade = () => {
+  if (typeof localStorage === 'undefined') return;
+  const migrated = localStorage.getItem('trade_scout_cascade_v20260804n');
+  if (!migrated) {
+    localStorage.setItem('trade_scout_force_qwen', '0');
+    localStorage.setItem('trade_scout_default_ai_model', 'gemini');
+    saveTaskAIModels({ search: 'gemini', analysis: 'gemini', organize: 'gemini' });
+    localStorage.setItem('trade_scout_cascade_v20260804n', '1');
+    return;
+  }
+  // 已迁移：只确保不会误开「强制千问」（除非用户显式设 1）
+  if (localStorage.getItem('trade_scout_force_qwen') !== '1') {
+    localStorage.setItem('trade_scout_force_qwen', '0');
+  }
 };
 
 const resolveEngineForTask = (task: TaskType): AIEngineChoice => {
@@ -147,6 +164,11 @@ const resolveEngineForTask = (task: TaskType): AIEngineChoice => {
   if (task === 'analysis') return map.analysis;
   if (task === 'email' || task === 'keywords' || task === 'chat') return map.organize;
   return map.organize;
+};
+
+const hasGeminiOfficialKey = (): boolean => {
+  if (typeof localStorage === 'undefined') return false;
+  return !!localStorage.getItem('trade_scout_gemini_api_key')?.trim();
 };
 
 const TASK_TIMEOUT_MS: Partial<Record<TaskType, number>> = {
@@ -2212,7 +2234,7 @@ const callQwenChat = async (
   }
 };
 
-// --- Unified Generator：按任务路由 Gemini / 千问 ---
+// --- Unified Generator：搜索/背调默认 Gemini→千问；Tavily 取证在上层注入 ---
 const generateContentUnified = async (
     task: TaskType, 
     prompt: string, 
@@ -2226,6 +2248,9 @@ const generateContentUnified = async (
     const systemText = needsWebSearch
       ? (systemInfo || QWEN_SYSTEM)
       : (systemInfo || QWEN_SYSTEM);
+    /** 搜索 / 背调：固定降级链 Gemini → 千问（除非用户显式选「只用千问」） */
+    const useGeminiThenQwen =
+      (task === 'search' || task === 'analysis') && engine !== 'qwen';
 
     const runQwen = async () => {
       let userContent = buildQwenUserContent(prompt, images, attachments);
@@ -2275,24 +2300,40 @@ const generateContentUnified = async (
       });
     };
 
-    console.log(`[AI] Task '${task}' → ${engine}${needsWebSearch ? ' (联网搜索)' : ''}`);
+    const cascadeLabel = useGeminiThenQwen
+      ? 'Gemini→千问'
+      : engine === 'gemini'
+        ? 'Gemini→千问'
+        : '千问';
+    console.log(
+      `[AI] Task '${task}' → ${cascadeLabel}${needsWebSearch ? ' (联网)' : ''}` +
+        `${hasGeminiOfficialKey() ? '' : ' [无Gemini Key]'}`
+    );
 
-    if (engine === 'gemini') {
-      try {
-        return await runGemini();
-      } catch (geminiErr: any) {
-        console.warn(`[AI] Gemini 失败 (${task})，尝试千问兜底:`, geminiErr?.message || geminiErr);
+    // 搜索/背调默认：Gemini（有 Key）→ 失败/额度尽则千问
+    if (useGeminiThenQwen || engine === 'gemini') {
+      if (hasGeminiOfficialKey() || getGeminiConfig().length > 0) {
         try {
-          return await runQwen();
-        } catch (qwenErr: any) {
-          throw new Error(
-            `Gemini 与千问均失败。Gemini: ${geminiErr?.message || geminiErr}；千问: ${qwenErr?.message || qwenErr}`
+          return await runGemini();
+        } catch (geminiErr: any) {
+          console.warn(
+            `[AI] Gemini 失败/额度不足 (${task})，降级千问:`,
+            geminiErr?.message || geminiErr
           );
+          try {
+            return await runQwen();
+          } catch (qwenErr: any) {
+            throw new Error(
+              `Gemini 与千问均失败。Gemini: ${geminiErr?.message || geminiErr}；千问: ${qwenErr?.message || qwenErr}`
+            );
+          }
         }
       }
+      console.warn(`[AI] 未配置 Gemini，直接使用千问 (${task})`);
+      return await runQwen();
     }
 
-    // engine === 'qwen'：暂不自动打 Gemini（避免坏 Key / 401 放大限流与冷却）
+    // 用户显式选千问（或强制 force_qwen）：只用千问
     return await runQwen();
 };
 
@@ -3123,7 +3164,7 @@ export const searchPotentialClients = async (productKeyword: string, country: st
   === END TAVILY ===
   Prefer companies that appear in Tavily results with real URLs. You may still use model knowledge to fill gaps, but do NOT invent websites.`
       : base;
-    // 有 Tavily 证据时不必强依赖千问联网，降低 429；无证据时仍走联网
+    // 有 Tavily 证据时 Gemini/千问可少依赖自带联网；无证据时仍开联网（Gemini Google Search / 千问 enable_search）
     const text = await generateContentUnified('search', promptWithEvidence, SYSTEM_INSTRUCTION, true);
 
     const parsed = extractJson(text, true);

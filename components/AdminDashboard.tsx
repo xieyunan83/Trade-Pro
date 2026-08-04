@@ -1014,14 +1014,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     <Settings size={16} /> 任务模型路由（搜索 / 背调 / 整理）
                   </div>
                   <p className="text-[10px] text-slate-500 font-bold leading-relaxed">
-                    当前已<strong>强制全链路千问</strong>（搜索/背调/整理）。Gemini 可用后，在控制台执行 localStorage.setItem('trade_scout_force_qwen','0') 再按需切换。
+                    搜索 / 背调固定降级：<strong>Tavily 取证 → Gemini 写结果 → 失败或额度尽则千问</strong>。
+                    下方选「Gemini」启用该链；选「千问」则跳过 Gemini、直接用千问。整理类任务同样支持 Gemini→千问兜底。
                   </p>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     {(
                       [
-                        { key: 'search' as const, label: '客户搜索', hint: '自动化 / 客户搜索模块' },
-                        { key: 'analysis' as const, label: '背调分析', hint: '单次/批量背景调查' },
-                        { key: 'organize' as const, label: '资料整理', hint: '开发信、关键词、策略对话' },
+                        { key: 'search' as const, label: '客户搜索', hint: 'Tavily→Gemini→千问' },
+                        { key: 'analysis' as const, label: '背调分析', hint: 'Tavily→Gemini→千问' },
+                        { key: 'organize' as const, label: '资料整理', hint: '开发信 / 关键词 / 策略' },
                       ] as const
                     ).map((row) => (
                       <div key={row.key} className="bg-white rounded-xl border border-violet-100 p-4">
@@ -1032,8 +1033,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                           onChange={(e) => patchTaskAI(row.key, e.target.value as AIEngineChoice)}
                           className="w-full bg-slate-50 border border-slate-100 rounded-xl px-3 py-2.5 font-bold text-sm"
                         >
-                          <option value="gemini">Gemini（Google 联网）</option>
-                          <option value="qwen">千问 Qwen</option>
+                          <option value="gemini">Gemini 优先（失败→千问）</option>
+                          <option value="qwen">仅用千问 Qwen</option>
                         </select>
                       </div>
                     ))}
@@ -1462,7 +1463,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     </a>
                   </div>
                   <p className="text-[10px] text-slate-500 font-bold leading-relaxed">
-                    可添加多把 tvly Key（例如 5×1000=5000 月积分）。某把额度用尽会自动切下一把；全部用尽后搜索/背调回退千问联网。Key 仅存本机/云端，勿提交 Git。
+                    可添加多把 tvly Key（例如 5×1000=5000 月积分）。某把额度用尽会自动切下一把；全部用尽后搜索/背调改走 <strong>Gemini → 千问</strong> 联网。Key 仅存本机/云端，勿提交 Git。
                   </p>
                   <div className="flex gap-2">
                     <input
