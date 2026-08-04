@@ -205,6 +205,43 @@ export const isHistoryInCrm = (
   });
 };
 
+/** CRM client ids matching a背调 record (by website / name) */
+export const findCrmIdsForHistoryItem = (
+  item: Pick<HistoryItem, 'domain' | 'data'>,
+  clients: Client[]
+): string[] => {
+  if (!clients?.length) return [];
+  const host = normalizeCrmHost(item.domain || item.data?.companyInfo?.website);
+  const name = (item.data?.companyInfo?.name || '').trim().toLowerCase();
+  return clients
+    .filter((c) => {
+      const cHost = normalizeCrmHost(c.website);
+      if (host && cHost && host === cHost) return true;
+      if (name && (c.name || '').trim().toLowerCase() === name) return true;
+      return false;
+    })
+    .map((c) => c.id);
+};
+
+/** CRM client ids matching companies inside a discovery archive */
+export const findCrmIdsForDiscoveryResults = (
+  results: Array<{ website?: string; name?: string }> | undefined,
+  clients: Client[]
+): string[] => {
+  if (!results?.length || !clients?.length) return [];
+  const ids = new Set<string>();
+  for (const r of results) {
+    const host = normalizeCrmHost(r.website);
+    const name = (r.name || '').trim().toLowerCase();
+    for (const c of clients) {
+      const cHost = normalizeCrmHost(c.website);
+      if (host && cHost && host === cHost) ids.add(c.id);
+      else if (name && (c.name || '').trim().toLowerCase() === name) ids.add(c.id);
+    }
+  }
+  return [...ids];
+};
+
 /** Decision-maker email search already run on this report */
 export const historyHasDmSearch = (item: HistoryItem): boolean =>
   !!item.data?.decisionMakerEmailSearchAt ||

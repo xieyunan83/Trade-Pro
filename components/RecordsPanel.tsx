@@ -277,22 +277,31 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
 
   const handleBatchDelete = async () => {
     if (!canBatchDelete || selectedCount === 0 || isBatchDeleting) return;
-    if (!confirm(`确定删除已选中的 ${selectedCount} 条记录？此操作不可恢复。`)) return;
+    const { histItems, discItems } = resolveSelected();
+    if (histItems.length === 0 && discItems.length === 0) {
+      alert('没有可删除的选中记录。');
+      return;
+    }
+    if (
+      !confirm(
+        `确定删除已选中的 ${histItems.length + discItems.length} 条记录？\n将同步删除 CRM 中匹配的客户。\n此操作不可恢复。`
+      )
+    ) {
+      return;
+    }
     setIsBatchDeleting(true);
     try {
-      const histIds: string[] = [];
-      const discIds: string[] = [];
-      selected.forEach((k) => {
-        if (k.startsWith('h:')) histIds.push(k.slice(2));
-        else if (k.startsWith('d:')) discIds.push(k.slice(2));
-      });
-      for (const id of histIds) {
-        if (onDeleteHistory) await onDeleteHistory(id);
-      }
-      for (const id of discIds) {
-        if (onDeleteDiscovery) await onDeleteDiscovery(id);
-      }
+      // 先清选中，立刻给反馈；删除回调内部会先更新列表
       setSelected(new Set());
+      for (const item of histItems) {
+        if (onDeleteHistory) await onDeleteHistory(item.id);
+      }
+      for (const item of discItems) {
+        if (onDeleteDiscovery) await onDeleteDiscovery(item.id);
+      }
+      alert(`已删除 ${histItems.length + discItems.length} 条记录（含 CRM 同步）。`);
+    } catch (e: any) {
+      alert(`批量删除失败: ${e?.message || String(e)}`);
     } finally {
       setIsBatchDeleting(false);
     }
@@ -749,7 +758,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                                 className="text-red-400"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  if (confirm('删除？')) onDeleteHistory(row.item.id);
+                                  if (confirm('删除该背调记录？将同步删除 CRM 中匹配客户。')) onDeleteHistory(row.item.id);
                                 }}
                               >
                                 <Trash2 size={11} />
@@ -837,7 +846,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                                 className="text-red-400"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  if (confirm('删除？')) onDeleteDiscovery(row.item.id);
+                                  if (confirm('删除该搜索记录？将同步删除 CRM 中匹配客户。')) onDeleteDiscovery(row.item.id);
                                 }}
                               >
                                 <Trash2 size={11} />

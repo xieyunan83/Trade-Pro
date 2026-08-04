@@ -8,7 +8,7 @@ import { isSupabaseConfigured, getKnowledgeFiles, getInvestigationHistory, saveI
 import { addCustomKeyword, addCustomCountry } from './services/taxonomyStore';
 import { normalizeCountryZh } from './utils/countryNormalize';
 import { buildSearchTags, stampSearchResults } from './utils/searchTags';
-import { mergeDiscoveryResultsIntoCrm, mergeHistoryItemsIntoCrm } from './utils/crmHistory';
+import { mergeDiscoveryResultsIntoCrm, mergeHistoryItemsIntoCrm, findCrmIdsForHistoryItem, findCrmIdsForDiscoveryResults } from './utils/crmHistory';
 import { checkLimit, incrementUsage, updateLocalConfig, resetDailyUsage, getDailyUsagePublic } from './services/limitService';
 import { ModuleType, AnalysisResult, DiscoveryState, Client, User, HistoryItem, AutomationResult, ClientSearchResult, DiscoveryArchiveItem, DecisionMaker, Department, AutomationPipelineConfig } from './types';
 import { ModuleBackground } from './components/ModuleBackground';
@@ -900,6 +900,24 @@ const App: React.FC = () => {
       setHistory((prev) => prev.filter((h) => !idsToDelete.has(h.id)));
     }
 
+    // 同步删除 CRM 中匹配客户
+    const crmIds = new Set<string>();
+    for (const id of idsToDelete) {
+      const item = historyRef.current.find((h) => h.id === id);
+      if (item) findCrmIdsForHistoryItem(item, crmClients).forEach((cid) => crmIds.add(cid));
+    }
+    // history 已从 state 滤掉，再用当前报告补一轮匹配
+    findCrmIdsForHistoryItem(
+      {
+        domain: website,
+        data: data,
+      },
+      crmClients
+    ).forEach((cid) => crmIds.add(cid));
+    if (crmIds.size > 0) {
+      setCrmClients((prev) => prev.filter((c) => !crmIds.has(c.id)));
+    }
+
     try {
       for (const id of idsToDelete) {
         try {
@@ -914,7 +932,7 @@ const App: React.FC = () => {
       }
       alert(
         idsToDelete.size > 0
-          ? '已删除该背调报告。'
+          ? `已删除该背调报告${crmIds.size ? `，并同步移除 CRM ${crmIds.size} 条` : ''}。`
           : '已关闭当前报告（未找到对应历史记录，记录中心可能仍保留副本）。'
       );
     } catch (e: any) {
@@ -1900,7 +1918,7 @@ const App: React.FC = () => {
             </button>
             <button onClick={handleLogout} className="w-full flex items-center gap-2 px-4 py-3 text-rose-300 hover:bg-rose-500/10 rounded-xl text-sm font-semibold transition-colors"><LogOut size={18} /> 退出登录</button>
             <div className="px-4 pt-1 text-[9px] font-semibold text-slate-600 text-center select-all tracking-wide">
-              版本 v20260804b · 修复搜索跑偏行业与国家
+              版本 v20260804c · 修复批量删除并同步CRM
             </div>
         </div>
       </aside>
@@ -1929,22 +1947,42 @@ const App: React.FC = () => {
             setMobileMenuOpen(false);
           }}
           onDeleteHistory={async (id) => {
-            await deleteHistoryItem(id);
-            if (isSupabaseConfigured()) await deleteInvestigationHistory(id);
-            setHistory(prev => prev.filter(h => h.id !== id));
+            const item = historyRef.current.find((h) => h.id === id) || history.find((h) => h.id === id);
+            const crmIds = item ? findCrmIdsForHistoryItem(item, crmClients) : [];
+            // 先更新界面，避免云端 await 卡住导致批量删除「没反应」
+            setHistory((prev) => prev.filter((h) => h.id !== id));
+            if (crmIds.length) {
+              setCrmClients((prev) => prev.filter((c) => !crmIds.includes(c.id)));
+            }
+            if (viewingHistoryIdRef.current === id || viewingHistoryId === id) {
+              setAnalysisData(null);
+              setViewingHistoryId(null);
+            }
+            try {
+              await deleteHistoryItem(id);
+            } catch (e) {
+              console.error('local history delete failed', id, e);
+            }
+            void deleteInvestigationHistory(id).catch((e) =>
+              console.warn('cloud history delete failed', id, e)
+            );
           }}
           onDeleteDiscovery={async (id) => {
             const target = discoveryArchives.find((d) => d.id === id);
-            await deleteDiscoveryArchive(id);
+            const crmIds = findCrmIdsForDiscoveryResults(target?.results, crmClients);
+            setDiscoveryArchives((prev) => prev.filter((d) => d.id !== id));
+            if (crmIds.length) {
+              setCrmClients((prev) => prev.filter((c) => !crmIds.includes(c.id)));
+            }
+            await deleteDiscoveryArchive(id).catch((e) => console.error(e));
             addDiscoveryTombstone(id, target?.product, target?.country);
             if (isSupabaseConfigured()) {
               const looksUuid = /^[0-9a-f-]{36}$/i.test(id);
-              if (looksUuid) await deleteDiscoverySearchFromCloud(id);
+              if (looksUuid) void deleteDiscoverySearchFromCloud(id);
               if (target?.product) {
-                await deleteDiscoverySearchesByMeta(target.product, target.country || '');
+                void deleteDiscoverySearchesByMeta(target.product, target.country || '');
               }
             }
-            setDiscoveryArchives((prev) => prev.filter((d) => d.id !== id));
           }}
           onPatchHistory={async (id, patch) => {
             setHistory((prev) => {
