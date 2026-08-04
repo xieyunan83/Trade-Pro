@@ -127,7 +127,8 @@ export const addExcludedCompany = async (opts: {
     reason: opts.reason,
   });
   persistLocal(list);
-  await persistCloud(list);
+  // 云端同步不阻塞 UI（否则背调页「排除」会像没反应）
+  void persistCloud(list);
   return list;
 };
 
@@ -139,7 +140,7 @@ export const removeExcludedCompany = async (
     (x) => x.domain !== key && x.name.toLowerCase() !== key
   );
   persistLocal(list);
-  await persistCloud(list);
+  void persistCloud(list);
   return list;
 };
 

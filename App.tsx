@@ -102,6 +102,13 @@ const App: React.FC = () => {
   const [pendingBatchContext, setPendingBatchContext] = useState<string>('');
   /** Per-domain country hints for batch 背调 (avoids hardcoding Global) */
   const [pendingBatchCountries, setPendingBatchCountries] = useState<Record<string, string>>({});
+  /** 背调页排除/删除：用应用内确认，避免 window.confirm 被环境拦截 */
+  const [reportConfirm, setReportConfirm] = useState<null | {
+    type: 'exclude' | 'delete';
+    title: string;
+    message: string;
+  }>(null);
+  const [reportActionBusy, setReportActionBusy] = useState(false);
   
   const [cloudModalOpen, setCloudModalOpen] = useState(false);
   const [manualToken, setManualToken] = useState('');
@@ -835,19 +842,18 @@ const App: React.FC = () => {
   };
 
   /** 仅排除：下次搜索跳过，不删除当前报告 */
-  const handleExcludeCurrentCompany = async () => {
-    const data = analysisDataRef.current;
-    if (!data?.companyInfo) return;
-    const name = data.companyInfo.name || '';
-    const website = data.companyInfo.website || domainInput || '';
-    const ok = window.confirm(
-      `确认排除「${name || website}」？\n\n之后客户搜索会自动跳过该公司/域名，避免浪费 Token。\n当前背调报告仍保留，可自行再点「删除」。`
-    );
-    if (!ok) return;
+  const executeExcludeCurrentCompany = async () => {
+    const data = analysisDataRef.current || analysisData;
+    const name = data?.companyInfo?.name || '';
+    const website = data?.companyInfo?.website || domainInput || '';
+    if (!name && !website) {
+      alert('无法排除：缺少公司名称或网站。');
+      return;
+    }
     try {
       await addExcludedCompany({
         domain: website,
-        name,
+        name: name || website,
         reason: '非目标客户（背调页手动排除）',
       });
       alert('已加入排除名单。下次搜索将自动过滤；如需移除本页报告，请再点「删除」。');
@@ -856,20 +862,14 @@ const App: React.FC = () => {
     }
   };
 
-  /** 仅删除当前背调报告（不加入排除名单） */
-  const handleDeleteCurrentReport = async () => {
+  /** 仅删除当前背调报告（不加入排除名单）+ 同步 CRM */
+  const executeDeleteCurrentReport = async () => {
     const data = analysisDataRef.current || analysisData;
     if (!data) {
       alert('当前没有可删除的背调报告。');
       return;
     }
-    const name =
-      data.companyInfo?.name || data.companyInfo?.website || domainInput || '当前报告';
     const website = data.companyInfo?.website || domainInput || '';
-    const ok = window.confirm(
-      `确认删除「${name}」的背调报告？\n\n不会加入排除名单，以后搜索仍可能再次出现。`
-    );
-    if (!ok) return;
 
     const normalizeHost = (url?: string | null) =>
       (url || '')
@@ -891,7 +891,16 @@ const App: React.FC = () => {
       }
     }
 
-    // 先清界面，避免云端删除挂起导致「点了没反应」
+    const crmIds = new Set<string>();
+    for (const id of idsToDelete) {
+      const item = historyRef.current.find((h) => h.id === id);
+      if (item) findCrmIdsForHistoryItem(item, crmClients).forEach((cid) => crmIds.add(cid));
+    }
+    findCrmIdsForHistoryItem({ domain: website, data }, crmClients).forEach((cid) =>
+      crmIds.add(cid)
+    );
+
+    // 先清界面
     setAnalysisData(null);
     setViewingHistoryId(null);
     setDomainInput('');
@@ -899,44 +908,67 @@ const App: React.FC = () => {
     if (idsToDelete.size > 0) {
       setHistory((prev) => prev.filter((h) => !idsToDelete.has(h.id)));
     }
-
-    // 同步删除 CRM 中匹配客户
-    const crmIds = new Set<string>();
-    for (const id of idsToDelete) {
-      const item = historyRef.current.find((h) => h.id === id);
-      if (item) findCrmIdsForHistoryItem(item, crmClients).forEach((cid) => crmIds.add(cid));
-    }
-    // history 已从 state 滤掉，再用当前报告补一轮匹配
-    findCrmIdsForHistoryItem(
-      {
-        domain: website,
-        data: data,
-      },
-      crmClients
-    ).forEach((cid) => crmIds.add(cid));
     if (crmIds.size > 0) {
       setCrmClients((prev) => prev.filter((c) => !crmIds.has(c.id)));
     }
 
-    try {
-      for (const id of idsToDelete) {
-        try {
-          await deleteHistoryItem(id);
-        } catch (e) {
-          console.error('local history delete failed', id, e);
-        }
-        // 云端删除不阻塞；失败也不回滚本地已删
-        void deleteInvestigationHistory(id).catch((e) =>
-          console.warn('cloud history delete failed', id, e)
-        );
+    for (const id of idsToDelete) {
+      try {
+        await deleteHistoryItem(id);
+      } catch (e) {
+        console.error('local history delete failed', id, e);
       }
-      alert(
-        idsToDelete.size > 0
-          ? `已删除该背调报告${crmIds.size ? `，并同步移除 CRM ${crmIds.size} 条` : ''}。`
-          : '已关闭当前报告（未找到对应历史记录，记录中心可能仍保留副本）。'
+      void deleteInvestigationHistory(id).catch((e) =>
+        console.warn('cloud history delete failed', id, e)
       );
-    } catch (e: any) {
-      alert(`删除失败: ${e?.message || String(e)}`);
+    }
+    alert(
+      idsToDelete.size > 0
+        ? `已删除该背调报告${crmIds.size ? `，并同步移除 CRM ${crmIds.size} 条` : ''}。`
+        : '已关闭当前报告（未找到对应历史记录，记录中心可能仍保留副本）。'
+    );
+  };
+
+  const askExcludeCurrentCompany = () => {
+    const data = analysisDataRef.current || analysisData;
+    const name = data?.companyInfo?.name || '';
+    const website = data?.companyInfo?.website || domainInput || '';
+    if (!name && !website) {
+      alert('无法排除：缺少公司名称或网站。');
+      return;
+    }
+    setReportConfirm({
+      type: 'exclude',
+      title: '确认排除',
+      message: `确认排除「${name || website}」？\n\n之后客户搜索会自动跳过该公司/域名。\n当前背调报告仍保留，可再点「删除」移除。`,
+    });
+  };
+
+  const askDeleteCurrentReport = () => {
+    const data = analysisDataRef.current || analysisData;
+    if (!data) {
+      alert('当前没有可删除的背调报告。');
+      return;
+    }
+    const name =
+      data.companyInfo?.name || data.companyInfo?.website || domainInput || '当前报告';
+    setReportConfirm({
+      type: 'delete',
+      title: '确认删除',
+      message: `确认删除「${name}」的背调报告？\n\n将同步删除 CRM 中匹配客户。\n不会加入排除名单，以后搜索仍可能再次出现。`,
+    });
+  };
+
+  const handleReportConfirmOk = async () => {
+    if (!reportConfirm || reportActionBusy) return;
+    const type = reportConfirm.type;
+    setReportConfirm(null);
+    setReportActionBusy(true);
+    try {
+      if (type === 'exclude') await executeExcludeCurrentCompany();
+      else await executeDeleteCurrentReport();
+    } finally {
+      setReportActionBusy(false);
     }
   };
 
@@ -1918,7 +1950,7 @@ const App: React.FC = () => {
             </button>
             <button onClick={handleLogout} className="w-full flex items-center gap-2 px-4 py-3 text-rose-300 hover:bg-rose-500/10 rounded-xl text-sm font-semibold transition-colors"><LogOut size={18} /> 退出登录</button>
             <div className="px-4 pt-1 text-[9px] font-semibold text-slate-600 text-center select-all tracking-wide">
-              版本 v20260804c · 修复批量删除并同步CRM
+              版本 v20260804d · 修复背调页排除删除无响应
             </div>
         </div>
       </aside>
@@ -2195,20 +2227,30 @@ const App: React.FC = () => {
                               <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-slate-900 tracking-tight break-words min-w-0">
                                 {analysisData.companyInfo?.name || '未知公司'}
                               </h2>
-                              <div className="mt-1 sm:mt-2 flex items-center gap-2 flex-shrink-0">
+                              <div className="mt-1 sm:mt-2 flex items-center gap-2 flex-shrink-0 relative z-10">
                                 <button
                                   type="button"
-                                  onClick={() => void handleExcludeCurrentCompany()}
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    askExcludeCurrentCompany();
+                                  }}
+                                  disabled={reportActionBusy}
                                   title="仅排除：下次搜索跳过，报告仍保留"
-                                  className="inline-flex items-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800 px-3 py-1.5 text-xs font-black touch-manipulation"
+                                  className="inline-flex items-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800 px-3 py-1.5 text-xs font-black touch-manipulation disabled:opacity-50"
                                 >
                                   <Ban size={14} /> 排除
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={() => void handleDeleteCurrentReport()}
-                                  title="仅删除本报告：不加入排除名单"
-                                  className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-600 px-3 py-1.5 text-xs font-black touch-manipulation"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    askDeleteCurrentReport();
+                                  }}
+                                  disabled={reportActionBusy}
+                                  title="仅删除本报告：同步删除 CRM 匹配客户"
+                                  className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-600 px-3 py-1.5 text-xs font-black touch-manipulation disabled:opacity-50"
                                 >
                                   <Trash2 size={14} /> 删除
                                 </button>
@@ -2351,6 +2393,44 @@ const App: React.FC = () => {
       )}
 
       {hasPermission(currentUser, 'feature.dm_email_search') && <DmEmailSearchPanel />}
+
+      {reportConfirm && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
+          <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl p-5 sm:p-6 animate-fade-in">
+            <h3
+              className={`text-lg font-black mb-3 ${
+                reportConfirm.type === 'delete' ? 'text-rose-700' : 'text-amber-800'
+              }`}
+            >
+              {reportConfirm.title}
+            </h3>
+            <p className="text-sm font-medium text-slate-600 whitespace-pre-wrap leading-relaxed mb-6">
+              {reportConfirm.message}
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button
+                type="button"
+                onClick={() => setReportConfirm(null)}
+                className="px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-black text-slate-600 hover:bg-slate-50"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleReportConfirmOk()}
+                disabled={reportActionBusy}
+                className={`px-4 py-2.5 rounded-xl text-sm font-black text-white disabled:opacity-50 ${
+                  reportConfirm.type === 'delete'
+                    ? 'bg-rose-600 hover:bg-rose-700'
+                    : 'bg-amber-600 hover:bg-amber-700'
+                }`}
+              >
+                {reportActionBusy ? '处理中…' : '确认'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {teamManageOpen && currentUser.role === 'manager' && (
         <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-900/50">
