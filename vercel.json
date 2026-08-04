@@ -46,8 +46,6 @@
     { "source": "/hunter-api/:path*", "destination": "/api/hunter?__upstream=/:path*" },
     { "source": "/anysearch-api/:path*", "destination": "/api/anysearch" },
     { "source": "/gemini-api/:path*", "destination": "/api/qwen?__upstream=/:path*" },
-    { "source": "/api/gemini", "destination": "/api/qwen" },
-    { "source": "/api/gemini-api/:path*", "destination": "/api/qwen?__upstream=/:path*" },
     { "source": "/api/qwen-api/:path*", "destination": "/api/qwen?__upstream=/:path*" },
     { "source": "/api/anymail-api/:path*", "destination": "/api/anymail?__upstream=/:path*" },
     { "source": "/api/hunter-api/:path*", "destination": "/api/hunter?__upstream=/:path*" },

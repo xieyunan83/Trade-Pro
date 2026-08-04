@@ -190,13 +190,13 @@ const describeKey = (key: string): string => {
   return `${kind}, 长度 ${k.length}`;
 };
 
-/** 开发走 Vite /gemini-api；线上走 Vercel /api/gemini */
+/** 开发走 Vite /gemini-api；线上复用已部署的 /api/qwen（带 x-goog-api-key 即 Gemini 模式） */
 const resolveGeminiProxyUrl = (upstreamPath: string): string => {
   const path = upstreamPath.startsWith('/') ? upstreamPath : `/${upstreamPath}`;
   if (typeof window !== 'undefined' && isLocalDevHost()) {
     return `/gemini-api${path}`;
   }
-  return `/api/gemini?__upstream=${encodeURIComponent(path)}`;
+  return `/api/qwen?__upstream=${encodeURIComponent(path)}`;
 };
 
 const formatGeminiAuthError = (status: number, bodyText: string): string => {
