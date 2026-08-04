@@ -117,8 +117,21 @@ export default async function handler(req: any, res: any) {
       }
 
       if (geminiMode) {
-        // 仅 x-goog-api-key；绝不带 Authorization（否则 AQ. Key 会 401 ACCESS_TOKEN_TYPE_UNSUPPORTED）
-        headers['x-goog-api-key'] = googKey;
+        // 绝不带 Authorization（Bearer 会触发 ACCESS_TOKEN_TYPE_UNSUPPORTED）
+        // AQ. Auth Key：优先 ?key=；AIza：优先 x-goog-api-key（避免双凭证冲突）
+        if (googKey.startsWith('AQ.')) {
+          if (!target.searchParams.has('key')) {
+            target.searchParams.set('key', googKey);
+          }
+        } else {
+          headers['x-goog-api-key'] = googKey;
+        }
+        const rev = req.headers['api-revision'] || req.headers['Api-Revision'];
+        if (typeof rev === 'string' && rev.trim()) {
+          headers['Api-Revision'] = rev.trim();
+        } else if (/\/interactions/i.test(target.pathname)) {
+          headers['Api-Revision'] = '2026-05-20';
+        }
       } else {
         const auth = req.headers.authorization || req.headers['x-upstream-authorization'];
         if (auth) headers.Authorization = String(auth);

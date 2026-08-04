@@ -974,14 +974,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     </a>
                   </div>
                   <p className="text-[10px] text-slate-500 font-bold leading-relaxed">
-                    经同域代理调用 Google（仅 x-goog-api-key，兼容 AIza / AQ. Auth Key）。填入后先点测试；用量见{' '}
+                    支持 AIza / AQ. Auth Key。经同域代理只用 x-goog-api-key。若测试报
+                    ACCESS_TOKEN_TYPE_UNSUPPORTED：到{' '}
+                    <a
+                      href="https://aistudio.google.com/apikey"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-sky-700 underline"
+                    >
+                      AI Studio
+                    </a>{' '}
+                    新建 Key（旧 Key 若曾泄露会被 Google 自动吊销），只粘贴到下方，并确认项目已结算。用量见{' '}
                     <a
                       href="https://aistudio.google.com/usage"
                       target="_blank"
                       rel="noreferrer"
                       className="text-sky-700 underline"
                     >
-                      AI Studio Usage
+                      Usage
                     </a>
                     。
                   </p>

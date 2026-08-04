@@ -206,10 +206,11 @@ const formatGeminiAuthError = (status: number, bodyText: string): string => {
     /access_token_type_unsupported|unauthenticated|invalid authentication/i.test(bodyText)
   ) {
     return (
-      `Gemini 认证失败 (${status}): Google 拒绝了当前 Key。` +
-      `若 Key 以 AQ. 开头，请确认已在 AI Studio 绑定计费项目；` +
-      `也可在 Google Cloud 控制台创建并限制到 Generative Language API 的 Key 再试。` +
-      `详情: ${bodyText.slice(0, 220)}`
+      `Gemini 认证失败 (${status})：Google 拒绝了当前 Key。` +
+      `AQ. Auth Key 若曾粘贴到公开聊天/截图，可能已被 Google 自动吊销。` +
+      `请打开 https://aistudio.google.com/apikey 点击 Create API key 生成新 Key，` +
+      `只粘贴到本页「Gemini API Key」并点测试（不要发到聊天）。` +
+      `同时确认 AI Studio 项目已关联结算。详情: ${bodyText.slice(0, 160)}`
     );
   }
   if (status === 403 && /api.?key|permission|blocked/i.test(lower)) {
