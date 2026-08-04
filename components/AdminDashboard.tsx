@@ -932,7 +932,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     <Settings size={16} /> 任务模型路由（搜索 / 背调 / 整理）
                   </div>
                   <p className="text-[10px] text-slate-500 font-bold leading-relaxed">
-                    推荐：搜索、背调用 <b>Gemini</b>（Google 联网）；整理（开发信/关键词/策略对话）用 <b>千问</b>。未配置对应 Key 时会自动兜底到另一引擎。
+                    当前已<strong>强制全链路千问</strong>（搜索/背调/整理）。Gemini 可用后，在控制台执行 localStorage.setItem('trade_scout_force_qwen','0') 再按需切换。
                   </p>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     {(

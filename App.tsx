@@ -1,6 +1,13 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { analyzeCompany, hasApiKeyConfigured, checkApiKeyAvailability, hydrateApiConfigsFromCloud, searchPotentialClients } from './services/geminiService';
+import { analyzeCompany, hasApiKeyConfigured, checkApiKeyAvailability, hydrateApiConfigsFromCloud, searchPotentialClients, forceQwenTaskRouting } from './services/geminiService';
+import {
+  subscribeCooldown,
+  withRateLimitRetry,
+  isRateLimitError,
+  noteRateLimited,
+  getCooldownRemainingSec,
+} from './services/rateLimitGate';
 import { exportToPPT, exportAutomationReportToPPT, exportBatchAutomationReportsToPPT } from './services/exportService';
 import { saveHistory, getHistory, getAllFilesFromDB, saveAutomationTask, getAutomationQueue, deleteAutomationTask, saveFileToDB, saveDiscoveryArchive, getDiscoveryArchives, deleteDiscoveryArchive, deleteHistoryItem } from './services/db';
 import { fetchGlobalConfig, fetchDocumentsFromRepo, backupUserHistory, fetchCRMFromCloud, saveCRMToCloud, fetchUserHistoryFromCloud, checkGitHubStatus, fetchApiConfigsFromCloud, setManualGitHubConfig } from './services/githubService';
@@ -130,6 +137,12 @@ const App: React.FC = () => {
   useEffect(() => {
     analysisDataRef.current = analysisData;
   }, [analysisData]);
+
+  // 强制搜索/背调/整理走千问；订阅全局限流冷却 UI
+  useEffect(() => {
+    forceQwenTaskRouting();
+    return subscribeCooldown((sec) => setCooldownTime(sec));
+  }, []);
 
   const DISCOVERY_TOMBSTONE_KEY = 'trade_scout_discovery_deleted_ids';
 
@@ -1355,12 +1368,19 @@ const App: React.FC = () => {
     try {
       const kw = (task.keyword || opts.keyword || discoveryState.product || '').trim();
       if (kw) addCustomKeyword(kw);
-      const result = await analyzeCompany(task.website, task.mode || 'economy', {
-        searchKeyword: kw || undefined,
-        searchTags: kw ? buildSearchTags(kw, task.country || '') : undefined,
-        // 始终传「搜索目标国」，帮助身份校验对齐市场，而不是模型瞎填的国家
-        searchCountry: task.country || undefined,
-      });
+      const result = await withRateLimitRetry(
+        () =>
+          analyzeCompany(task.website, task.mode || 'economy', {
+            searchKeyword: kw || undefined,
+            searchTags: kw ? buildSearchTags(kw, task.country || '') : undefined,
+            searchCountry: task.country || undefined,
+          }),
+        {
+          maxAttempts: 4,
+          baseWaitSec: 45,
+          shouldStop: () => shouldStopRef.current,
+        }
+      );
 
       const completedTask: AutomationResult = {
         ...task,
@@ -1457,8 +1477,8 @@ const App: React.FC = () => {
       const failedTask: AutomationResult = { ...task, status: 'failed' };
       await saveAutomationTask(failedTask);
       setAutomationResults((prev) => prev.map((t) => (t.id === task.id ? failedTask : t)));
-      if (e?.message && String(e.message).includes('429')) {
-        await new Promise((r) => setTimeout(r, 15_000));
+      if (isRateLimitError(e)) {
+        noteRateLimited(60);
       }
     }
   };
@@ -1486,7 +1506,7 @@ const App: React.FC = () => {
       clientType: (config.clientTypes || []).join(', '),
     }));
 
-    const runLimited = withConcurrency<void>(2);
+    const runLimited = withConcurrency<void>(1);
     const followUps: Promise<void>[] = [];
     let searchedCount = 0;
     const clientTypeArg = (config.clientTypes || []).join(', ');
@@ -1496,12 +1516,20 @@ const App: React.FC = () => {
       for (const country of config.countries) {
         if (shouldStopRef.current) break;
         try {
-          const raw = await searchPotentialClients(
-            kw,
-            country,
-            config.industry || '',
-            clientTypeArg,
-            perCountry
+          const raw = await withRateLimitRetry(
+            () =>
+              searchPotentialClients(
+                kw,
+                country,
+                config.industry || '',
+                clientTypeArg,
+                perCountry
+              ),
+            {
+              maxAttempts: 4,
+              baseWaitSec: 40,
+              shouldStop: () => shouldStopRef.current,
+            }
           );
           const results = stampSearchResults(raw, {
             keyword: kw,
@@ -1610,14 +1638,22 @@ const App: React.FC = () => {
           setAutomationResults(prev => prev.map(t => t.id === task.id ? { ...t, status: 'analyzing' } : t));
 
           try {
-              // 1. Analyze — 带上搜索关键词，产品分析聚焦该关键词
+              // 1. Analyze — 遇 429 自动退避重试（全局限流门闩，避免倒计时后再连环冷却）
               const kw = (task.keyword || discoveryState.product || '').trim();
               if (kw) addCustomKeyword(kw);
-              const result = await analyzeCompany(task.website, task.mode || 'economy', {
-                searchKeyword: kw || undefined,
-                searchTags: kw ? buildSearchTags(kw, task.country || '') : undefined,
-                searchCountry: task.country || undefined,
-              });
+              const result = await withRateLimitRetry(
+                () =>
+                  analyzeCompany(task.website, task.mode || 'economy', {
+                    searchKeyword: kw || undefined,
+                    searchTags: kw ? buildSearchTags(kw, task.country || '') : undefined,
+                    searchCountry: task.country || undefined,
+                  }),
+                {
+                  maxAttempts: 4,
+                  baseWaitSec: 45,
+                  shouldStop: () => shouldStopRef.current,
+                }
+              );
 
               // 2. Complete — 立刻落盘任务 + 写入历史（开发信请稍后在策略模块手动生成）
               const completedTask: AutomationResult = { 
@@ -1648,21 +1684,14 @@ const App: React.FC = () => {
               const failedTask: AutomationResult = { ...task, status: 'failed' };
               await saveAutomationTask(failedTask);
               setAutomationResults(prev => prev.map(t => t.id === task.id ? failedTask : t));
-              
-              // Simple Rate Limit Handling
-              if (e.message && e.message.includes('429')) {
-                  setCooldownTime(60);
-                  for(let i=60; i>0; i--) {
-                      if (shouldStopRef.current) break;
-                      setCooldownTime(i);
-                      await new Promise(r => setTimeout(r, 1000));
-                  }
-                  setCooldownTime(0);
+              if (isRateLimitError(e)) {
+                  noteRateLimited(75);
               }
           }
           
-          // Safety delay
-          await new Promise(r => setTimeout(r, 2000));
+          // Safety delay — 冷却中拉长间隔，降低连环 429
+          const gap = getCooldownRemainingSec() > 0 ? 5000 : 2500;
+          await new Promise(r => setTimeout(r, gap));
       }
       setIsAutomating(false);
 
@@ -1950,7 +1979,7 @@ const App: React.FC = () => {
             </button>
             <button onClick={handleLogout} className="w-full flex items-center gap-2 px-4 py-3 text-rose-300 hover:bg-rose-500/10 rounded-xl text-sm font-semibold transition-colors"><LogOut size={18} /> 退出登录</button>
             <div className="px-4 pt-1 text-[9px] font-semibold text-slate-600 text-center select-all tracking-wide">
-              版本 v20260804i · Gemini AQ Key指引与双重认证
+              版本 v20260804j · 强制千问与限流自动重试
             </div>
         </div>
       </aside>
@@ -2093,7 +2122,7 @@ const App: React.FC = () => {
               <div className="absolute inset-0 bg-mist-50/85 z-50 flex flex-col items-center justify-center backdrop-blur-md animate-fade-in cursor-wait">
                   <div className="relative"><Hourglass size={64} className="text-signal-500 animate-pulse" /><div className="absolute -top-2 -right-2 bg-rose-500 text-white w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs">{cooldownTime}</div></div>
                   <h3 className="text-2xl font-extrabold text-ink-900 mt-6 tracking-tight">API 冷却中</h3>
-                  <p className="text-slate-500 mt-2 font-medium max-w-md text-center">正在等待 API 配额恢复。</p>
+                  <p className="text-slate-500 mt-2 font-medium max-w-md text-center">千问配额恢复中，倒计时结束后会自动继续当前任务（无需反复点击）。可点左侧 STOP 暂停。</p>
               </div>
           )}
 

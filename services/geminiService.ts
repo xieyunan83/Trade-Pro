@@ -47,6 +47,10 @@ const TASK_AI_LS_KEY = 'trade_scout_task_ai_models';
 export const getTaskAIModels = (): TaskAIModels => {
   if (typeof localStorage === 'undefined') return { ...DEFAULT_TASK_AI_MODELS };
   try {
+    // 临时强制全链路千问（Gemini Auth Key 不可用期间）；设 trade_scout_force_qwen=0 可关闭
+    if (localStorage.getItem('trade_scout_force_qwen') !== '0') {
+      return { search: 'qwen', analysis: 'qwen', organize: 'qwen' };
+    }
     const raw = localStorage.getItem(TASK_AI_LS_KEY);
     if (!raw) return { ...DEFAULT_TASK_AI_MODELS };
     const parsed = JSON.parse(raw) as Partial<TaskAIModels>;
@@ -63,6 +67,14 @@ export const getTaskAIModels = (): TaskAIModels => {
 export const saveTaskAIModels = (models: TaskAIModels) => {
   if (typeof localStorage === 'undefined') return;
   localStorage.setItem(TASK_AI_LS_KEY, JSON.stringify(models));
+};
+
+/** 将任务路由与默认引擎全部切回千问 */
+export const forceQwenTaskRouting = () => {
+  if (typeof localStorage === 'undefined') return;
+  localStorage.setItem('trade_scout_force_qwen', '1');
+  localStorage.setItem('trade_scout_default_ai_model', 'qwen');
+  saveTaskAIModels({ search: 'qwen', analysis: 'qwen', organize: 'qwen' });
 };
 
 const resolveEngineForTask = (task: TaskType): AIEngineChoice => {
@@ -2004,6 +2016,26 @@ const callQwenChat = async (
     const msg = String(err?.message || '');
     const isTimeout = /超时|timeout|AbortError|504|Gateway Timeout|上游超时/i.test(msg);
     const is546 = /546|WORKER_RESOURCE|云端代理算力不足/i.test(msg);
+    const is429 = /429|rate\s*limit|quota exceeded/i.test(msg);
+
+    // 限流：短退避后自动重试（最多 2 次），避免整页反复「冷却中」
+    if (is429) {
+      for (let i = 1; i <= 2; i++) {
+        const waitMs = 20_000 * i;
+        console.warn(`[Qwen] 限流 429，${waitMs / 1000}s 后重试 (${i}/2)…`);
+        await new Promise((r) => setTimeout(r, waitMs));
+        try {
+          return await runOnce(searchPayload);
+        } catch (retryErr: any) {
+          const m2 = String(retryErr?.message || '');
+          if (!/429|rate\s*limit|quota exceeded/i.test(m2) || i === 2) {
+            if (i === 2) throw retryErr;
+            // non-429: throw immediately
+            if (!/429|rate\s*limit|quota exceeded/i.test(m2)) throw retryErr;
+          }
+        }
+      }
+    }
 
     // 客户搜索/背调：超时后先再试一次联网（代理已加长，避免立刻丢掉联网）
     if (
@@ -2139,19 +2171,8 @@ const generateContentUnified = async (
       }
     }
 
-    // engine === 'qwen'
-    try {
-      return await runQwen();
-    } catch (qwenErr: any) {
-      console.warn(`[AI] 千问失败 (${task})，尝试 Gemini 兜底:`, qwenErr?.message || qwenErr);
-      try {
-        return await runGemini();
-      } catch (geminiErr: any) {
-        throw new Error(
-          `千问调用失败: ${qwenErr?.message || qwenErr}。Gemini 兜底也失败: ${geminiErr?.message || geminiErr}`
-        );
-      }
-    }
+    // engine === 'qwen'：暂不自动打 Gemini（避免坏 Key / 401 放大限流与冷却）
+    return await runQwen();
 };
 
 // --- Public Methods ---
