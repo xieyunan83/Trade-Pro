@@ -1030,17 +1030,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     <Settings size={16} /> 任务模型路由（搜索 / 背调 / 整理）
                   </div>
                   <p className="text-[10px] text-slate-500 font-bold leading-relaxed">
-                    <strong>三项完全独立</strong>：客户搜索只看「搜索」、背调只看「背调」、开发信/关键词/策略只看「整理」。
-                    改完立即生效并同步云端。Gemini 优先 = 该项先 Gemini，失败再千问；仅用千问 = 该项跳过 Gemini。
-                    Tavily 取证与这三项无关（有 Key 就先用）。
+                    <strong>三项完全独立</strong>。客户搜索固定优先级：
+                    <strong>Tavily 取证 →（有结果则只整理）Gemini/千问 →（无 Tavily 才）模型自带联网</strong>。
+                    「搜索」下拉只决定整理用 Gemini 还是千问，不会绕过 Tavily。
+                    背调 / 整理按各自下拉：Gemini 优先或仅千问。改完立即生效并同步云端。
                   </p>
                   <p className="text-[10px] font-black text-violet-700 bg-white border border-violet-100 rounded-xl px-3 py-2">
-                    生效中：{describeTaskAIRouting()}
+                    生效中：{describeTaskAIRouting()} · 搜索取证优先 Tavily
                   </p>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     {(
                       [
-                        { key: 'search' as const, label: '客户搜索', hint: '仅影响：自动化 / 客户搜索' },
+                        { key: 'search' as const, label: '客户搜索', hint: '①Tavily → ②本项整理引擎' },
                         { key: 'analysis' as const, label: '背调分析', hint: '仅影响：单次 / 批量背调' },
                         { key: 'organize' as const, label: '资料整理', hint: '仅影响：开发信 / 关键词 / 策略' },
                       ] as const

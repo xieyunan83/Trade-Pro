@@ -2262,9 +2262,16 @@ const generateContentUnified = async (
     systemInfo?: string, 
     jsonMode: boolean = false, 
     images: string[] = [],
-    attachments: KnowledgeFile[] = []
+    attachments: KnowledgeFile[] = [],
+    opts?: {
+      /** 覆盖默认联网：客户搜索在已有 Tavily 证据时关联网，避免抢优先级 */
+      enableSearch?: boolean;
+    }
 ): Promise<string> => {
-    const needsWebSearch = WEB_SEARCH_TASKS.includes(task);
+    const needsWebSearch =
+      typeof opts?.enableSearch === 'boolean'
+        ? opts.enableSearch
+        : WEB_SEARCH_TASKS.includes(task);
     const map = getTaskAIModels();
     const engine = resolveEngineForTask(task);
     const systemText = systemInfo || QWEN_SYSTEM;
@@ -2319,7 +2326,7 @@ const generateContentUnified = async (
     console.log(
       `[AI] Task '${task}' → ${cascadeLabel}` +
         ` | 路由表: 搜索=${map.search}, 背调=${map.analysis}, 整理=${map.organize}` +
-        `${needsWebSearch ? ' (联网)' : ''}` +
+        `${needsWebSearch ? ' (联网)' : ' (不联网/用已有证据)'}` +
         `${hasGeminiOfficialKey() ? '' : ' [无Gemini Key]'}`
     );
 
@@ -3150,9 +3157,11 @@ export const searchPotentialClients = async (productKeyword: string, country: st
       } as ClientSearchResult;
     });
 
+  // 客户搜索优先级：① Tavily 联网取证 → ② Gemini/千问整理（有 Tavily 时不再开模型自带联网）
   let tavilyEvidence = '';
   try {
     if (hasTavilyKey()) {
+      console.log('[search] priority=1 Tavily lead search…');
       tavilyEvidence = await gatherTavilyLeadEvidence({
         productKeyword,
         country: singleMarket ? countries[0] : country,
@@ -3160,11 +3169,15 @@ export const searchPotentialClients = async (productKeyword: string, country: st
         clientType: typeHint,
       });
       if (tavilyEvidence) {
-        console.log('[search] Tavily lead evidence chars:', tavilyEvidence.length);
+        console.log('[search] Tavily OK, chars:', tavilyEvidence.length, '→ LLM organize only (no model web search)');
+      } else {
+        console.warn('[search] Tavily returned empty → fallback model web search (Gemini→千问)');
       }
+    } else {
+      console.warn('[search] No usable Tavily key → fallback model web search (Gemini→千问)');
     }
   } catch (e) {
-    console.warn('[search] Tavily evidence skipped', e);
+    console.warn('[search] Tavily failed → fallback model web search', e);
   }
 
   const runOnce = async (askLimit: number, stricter: boolean) => {
@@ -3172,17 +3185,37 @@ export const searchPotentialClients = async (productKeyword: string, country: st
     const promptWithEvidence = tavilyEvidence
       ? `${base}
 
-  === TAVILY LIVE WEB RESULTS (use these as primary source; extract real company names + websites) ===
+  === TAVILY LIVE WEB RESULTS (HIGHEST PRIORITY — primary source of truth) ===
   ${tavilyEvidence}
   === END TAVILY ===
-  Prefer companies that appear in Tavily results with real URLs. You may still use model knowledge to fill gaps, but do NOT invent websites.`
-      : base;
-    // 有 Tavily 证据时 Gemini/千问可少依赖自带联网；无证据时仍开联网（Gemini Google Search / 千问 enable_search）
-    const text = await generateContentUnified('search', promptWithEvidence, SYSTEM_INSTRUCTION, true);
+
+  CRITICAL SEARCH RULES:
+  1) Tavily results above are the FIRST and HIGHEST priority source.
+  2) Extract real company names + websites primarily from Tavily evidence.
+  3) Do NOT invent websites. Prefer companies that appear in Tavily with real URLs.
+  4) You may lightly fill gaps from knowledge only when Tavily has too few matches — never override Tavily facts.`
+      : `${base}
+
+  NOTE: Tavily web search was unavailable. Use your web search / grounding to find real companies with real websites.`;
+
+    // 有 Tavily：只让路由模型整理名单（关联网）；无 Tavily：Gemini→千问自带联网兜底
+    const text = await generateContentUnified(
+      'search',
+      promptWithEvidence,
+      SYSTEM_INSTRUCTION,
+      true,
+      [],
+      [],
+      { enableSearch: !tavilyEvidence }
+    );
 
     const parsed = extractJson(text, true);
     if (!Array.isArray(parsed) || parsed.length === 0) {
-      throw new Error('搜索未返回有效结果。请确认千问 API 已配置，并使用支持联网搜索的模型。');
+      throw new Error(
+        tavilyEvidence
+          ? 'Tavily 已返回证据，但模型未能整理出有效客户列表。请重试或检查关键词。'
+          : '搜索未返回有效结果。请确认已配置 Tavily Key，或千问/Gemini 联网可用。'
+      );
     }
     return mapRaw(parsed);
   };
