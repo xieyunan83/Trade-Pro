@@ -137,6 +137,19 @@ export const ModulePosterStudio: React.FC = () => {
     return res.images[0];
   };
 
+  /** 参考图顺序：LOGO（可选）→ 原图（外观主依据）→ 抠图（干净合成） */
+  const buildReferenceStack = (originals: string[], cut: string[], logo?: string): string[] => {
+    const refs: string[] = [];
+    if (logo) refs.push(logo);
+    for (const o of originals) {
+      if (o?.trim()) refs.push(o);
+    }
+    for (const c of cut) {
+      if (c?.trim() && !refs.includes(c)) refs.push(c);
+    }
+    return refs.slice(0, 8);
+  };
+
   const handleCutout = async () => {
     if (!productImages.length) {
       setError('请先拍照或上传产品图');
@@ -167,8 +180,8 @@ export const ModulePosterStudio: React.FC = () => {
   };
 
   const handleGenerate = async () => {
-    const imgs = cutouts.length ? cutouts : productImages;
-    if (!imgs.length) {
+    const originals = productImages;
+    if (!originals.length) {
       setError('请先上传/拍摄产品图');
       return;
     }
@@ -189,26 +202,29 @@ export const ModulePosterStudio: React.FC = () => {
     setError(null);
     setResultUrl(null);
     try {
-      let working = imgs;
-      if (!cutouts.length) {
-        setStep('先扣除背景…');
-        working = [];
-        for (let i = 0; i < imgs.length; i++) {
-          setStep(`扣背景 ${i + 1}/${imgs.length}…`);
-          working.push(await removeBgOne(imgs[i]));
+      let workingCutouts = cutouts;
+      if (!workingCutouts.length) {
+        setStep('先扣除背景，便于长图合成…');
+        workingCutouts = [];
+        for (let i = 0; i < originals.length; i++) {
+          setStep(`扣背景 ${i + 1}/${originals.length}…`);
+          workingCutouts.push(await removeBgOne(originals[i]));
         }
-        setCutouts(working);
+        setCutouts(workingCutouts);
       }
 
-      setStep('正在生成海报…');
+      setStep('分析产品外观与卖点，生成电商长图（约需 1–2 分钟）…');
       const logo = logoForGen();
-      const refs = [...working];
-      if (logo) refs.unshift(logo);
+      const refs = buildReferenceStack(originals, workingCutouts, logo);
 
       const prompt =
         mode === 'single'
-          ? buildSingleProductPosterPrompt(singleFields, logoMode)
-          : buildMultiProductPosterPrompt(multiFields, working.length, logoMode);
+          ? buildSingleProductPosterPrompt(singleFields, logoMode === 'builtin' && !logo ? 'none' : logoMode)
+          : buildMultiProductPosterPrompt(
+              multiFields,
+              Math.max(originals.length, workingCutouts.length),
+              logoMode === 'builtin' && !logo ? 'none' : logoMode
+            );
 
       const res = await generateWanImage({
         prompt,
@@ -217,6 +233,7 @@ export const ModulePosterStudio: React.FC = () => {
         n: 1,
         thinkingMode: true,
         watermark: false,
+        timeoutMs: 180_000,
       });
       setResultUrl(res.images[0]);
       setStep('');
@@ -240,8 +257,8 @@ export const ModulePosterStudio: React.FC = () => {
           <Sparkles className="text-pink-600" /> 产品海报工作室
         </h2>
         <p className="text-sm text-slate-500 font-medium mb-4">
-          {isMobile ? '手机可拍照或上传' : '电脑端请上传产品图'} → 扣背景 → 填资料 → 选 LOGO → 生成海报。
-          方案一参考工程车单品海报；方案二参考多品目录页。
+          {isMobile ? '手机可拍照或上传' : '电脑端请上传产品图'} → 扣背景 → 填资料 → 选 LOGO → 生成电商长图。
+          万相会先分析产品外观，再结合你填写的名称/型号/尺寸/卖点等，生成英文详情页长图（场景、功能、参数、适用人群）。
         </p>
 
         <div className="flex gap-2 mb-4">
@@ -255,7 +272,7 @@ export const ModulePosterStudio: React.FC = () => {
               mode === 'single' ? 'bg-slate-900 text-white' : 'bg-slate-50 text-slate-600'
             }`}
           >
-            方案一：单品海报
+            方案一：单品电商长图
           </button>
           <button
             type="button"
@@ -264,7 +281,7 @@ export const ModulePosterStudio: React.FC = () => {
               mode === 'multi' ? 'bg-slate-900 text-white' : 'bg-slate-50 text-slate-600'
             }`}
           >
-            方案二：多品组合
+            方案二：多品系列长图
           </button>
         </div>
 

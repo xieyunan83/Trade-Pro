@@ -37,6 +37,8 @@ export interface GenerateWanImageOptions {
   thinkingMode?: boolean;
   /** 可选参考图 URL（图生图 / 编辑） */
   referenceImages?: string[];
+  /** 请求超时（毫秒），电商长图建议 180000+ */
+  timeoutMs?: number;
 }
 
 export interface WanImageResult {
@@ -200,7 +202,8 @@ export const generateWanImage = async (
   });
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 90_000);
+  const timeoutMs = options.timeoutMs ?? 90_000;
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   let response: Response;
   try {
     response = await fetch(url, {
@@ -211,7 +214,7 @@ export const generateWanImage = async (
     });
   } catch (e: any) {
     if (e?.name === 'AbortError') {
-      throw new Error('万相请求超时（90 秒）。请检查网络或稍后重试。');
+      throw new Error(`万相请求超时（${Math.round(timeoutMs / 1000)} 秒）。长图生成较慢，请稍后重试。`);
     }
     throw e;
   } finally {
