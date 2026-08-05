@@ -111,7 +111,7 @@ const TASK_AI_LS_KEY = 'trade_scout_task_ai_models';
 export const getTaskAIModels = (): TaskAIModels => {
   if (typeof localStorage === 'undefined') return { ...DEFAULT_TASK_AI_MODELS };
   try {
-    // 仅当显式设为 '1' 时强制全链路千问；默认走 Gemini→千问降级
+    // 仅当显式设为 '1' 时强制全链路千问；否则三项各自独立
     if (localStorage.getItem('trade_scout_force_qwen') === '1') {
       return { search: 'qwen', analysis: 'qwen', organize: 'qwen' };
     }
@@ -130,7 +130,20 @@ export const getTaskAIModels = (): TaskAIModels => {
 
 export const saveTaskAIModels = (models: TaskAIModels) => {
   if (typeof localStorage === 'undefined') return;
-  localStorage.setItem(TASK_AI_LS_KEY, JSON.stringify(models));
+  const normalized: TaskAIModels = {
+    search: models.search === 'qwen' ? 'qwen' : 'gemini',
+    analysis: models.analysis === 'qwen' ? 'qwen' : 'gemini',
+    organize: models.organize === 'qwen' ? 'qwen' : 'gemini',
+  };
+  localStorage.setItem(TASK_AI_LS_KEY, JSON.stringify(normalized));
+  localStorage.setItem('trade_scout_task_ai_models_ts', String(Date.now()));
+};
+
+/** 当前三项路由摘要（调试 / 管理后台展示） */
+export const describeTaskAIRouting = (): string => {
+  const m = getTaskAIModels();
+  const label = (e: AIEngineChoice) => (e === 'gemini' ? 'Gemini→千问' : '仅千问');
+  return `搜索=${label(m.search)} · 背调=${label(m.analysis)} · 整理=${label(m.organize)}`;
 };
 
 /** 将任务路由与默认引擎全部切回千问（应急） */
@@ -141,7 +154,7 @@ export const forceQwenTaskRouting = () => {
   saveTaskAIModels({ search: 'qwen', analysis: 'qwen', organize: 'qwen' });
 };
 
-/** 启用 Tavily → Gemini → 千问 降级链（关闭强制千问；仅首次迁移写默认） */
+/** 启用独立任务路由（关闭强制千问；仅首次迁移写默认） */
 export const enableTavilyGeminiQwenCascade = () => {
   if (typeof localStorage === 'undefined') return;
   const migrated = localStorage.getItem('trade_scout_cascade_v20260804n');
@@ -152,17 +165,17 @@ export const enableTavilyGeminiQwenCascade = () => {
     localStorage.setItem('trade_scout_cascade_v20260804n', '1');
     return;
   }
-  // 已迁移：只确保不会误开「强制千问」（除非用户显式设 1）
   if (localStorage.getItem('trade_scout_force_qwen') !== '1') {
     localStorage.setItem('trade_scout_force_qwen', '0');
   }
 };
 
-const resolveEngineForTask = (task: TaskType): AIEngineChoice => {
+/** 按任务类型读取该项路由（search / analysis / organize 各自独立） */
+export const resolveEngineForTask = (task: TaskType): AIEngineChoice => {
   const map = getTaskAIModels();
   if (task === 'search') return map.search;
   if (task === 'analysis') return map.analysis;
-  if (task === 'email' || task === 'keywords' || task === 'chat') return map.organize;
+  // email / keywords / chat / 其他整理类 → organize
   return map.organize;
 };
 
@@ -1685,12 +1698,20 @@ export const hydrateApiConfigsFromCloud = async (): Promise<boolean> => {
             }
             if (c.provider === 'task_ai_models' && c.apiKey?.trim()) {
                 try {
-                    const parsed = JSON.parse(c.apiKey) as TaskAIModels;
-                    saveTaskAIModels({
-                      search: parsed.search === 'gemini' ? 'gemini' : 'qwen',
-                      analysis: parsed.analysis === 'gemini' ? 'gemini' : 'qwen',
-                      organize: parsed.organize === 'gemini' ? 'gemini' : 'qwen',
-                    });
+                    // 本机刚改过路由则不要被云端旧值盖掉
+                    const localTs = Number(localStorage.getItem('trade_scout_task_ai_models_ts') || 0);
+                    const freshLocal = Date.now() - localTs < 7 * 24 * 3600 * 1000 && localTs > 0;
+                    const localRaw = localStorage.getItem('trade_scout_task_ai_models');
+                    if (freshLocal && localRaw) {
+                      /* keep local independent routing */
+                    } else {
+                      const parsed = JSON.parse(c.apiKey) as TaskAIModels;
+                      saveTaskAIModels({
+                        search: parsed.search === 'qwen' ? 'qwen' : 'gemini',
+                        analysis: parsed.analysis === 'qwen' ? 'qwen' : 'gemini',
+                        organize: parsed.organize === 'qwen' ? 'qwen' : 'gemini',
+                      });
+                    }
                 } catch {
                   /* ignore */
                 }
@@ -2234,7 +2255,7 @@ const callQwenChat = async (
   }
 };
 
-// --- Unified Generator：搜索/背调默认 Gemini→千问；Tavily 取证在上层注入 ---
+// --- Unified Generator：按任务各自路由（search / analysis / organize 独立）---
 const generateContentUnified = async (
     task: TaskType, 
     prompt: string, 
@@ -2244,13 +2265,9 @@ const generateContentUnified = async (
     attachments: KnowledgeFile[] = []
 ): Promise<string> => {
     const needsWebSearch = WEB_SEARCH_TASKS.includes(task);
+    const map = getTaskAIModels();
     const engine = resolveEngineForTask(task);
-    const systemText = needsWebSearch
-      ? (systemInfo || QWEN_SYSTEM)
-      : (systemInfo || QWEN_SYSTEM);
-    /** 搜索 / 背调：固定降级链 Gemini → 千问（除非用户显式选「只用千问」） */
-    const useGeminiThenQwen =
-      (task === 'search' || task === 'analysis') && engine !== 'qwen';
+    const systemText = systemInfo || QWEN_SYSTEM;
 
     const runQwen = async () => {
       let userContent = buildQwenUserContent(prompt, images, attachments);
@@ -2278,7 +2295,6 @@ const generateContentUnified = async (
         configs.find((c) => c.id === 'gemini_official') ||
         configs.find((c) => c.baseUrl === 'native') ||
         configs[0];
-      // 有附件/图片时走 failover 完整路径；纯文本用 native
       if (images.length || attachments.length) {
         const text = await tryGeminiFailover(
           task,
@@ -2292,32 +2308,29 @@ const generateContentUnified = async (
         if (!text) throw new Error('Gemini 调用未返回结果');
         return text;
       }
-      const fullPrompt = prompt;
-      return callGeminiNative(fullPrompt, { ...config, baseUrl: 'native' }, {
+      return callGeminiNative(prompt, { ...config, baseUrl: 'native' }, {
         jsonMode,
         enableSearch: needsWebSearch,
         systemInstruction: systemText,
       });
     };
 
-    const cascadeLabel = useGeminiThenQwen
-      ? 'Gemini→千问'
-      : engine === 'gemini'
-        ? 'Gemini→千问'
-        : '千问';
+    const cascadeLabel = engine === 'gemini' ? 'Gemini→千问' : '仅千问';
     console.log(
-      `[AI] Task '${task}' engine=${engine} → ${cascadeLabel}${needsWebSearch ? ' (联网)' : ''}` +
+      `[AI] Task '${task}' → ${cascadeLabel}` +
+        ` | 路由表: 搜索=${map.search}, 背调=${map.analysis}, 整理=${map.organize}` +
+        `${needsWebSearch ? ' (联网)' : ''}` +
         `${hasGeminiOfficialKey() ? '' : ' [无Gemini Key]'}`
     );
 
-    // 搜索/背调默认：Gemini（有 Key）→ 失败/额度尽则千问
-    if (useGeminiThenQwen || engine === 'gemini') {
+    // 该项选「Gemini 优先」：先 Gemini，失败/额度尽再千问
+    if (engine === 'gemini') {
       if (hasGeminiOfficialKey() || getGeminiConfig().length > 0) {
         try {
           return await runGemini();
         } catch (geminiErr: any) {
           console.warn(
-            `[AI] Gemini 失败/额度不足 (${task})，降级千问:`,
+            `[AI] Gemini 失败 (${task})，按路由降级千问:`,
             geminiErr?.message || geminiErr
           );
           try {
@@ -2329,11 +2342,11 @@ const generateContentUnified = async (
           }
         }
       }
-      console.warn(`[AI] 未配置 Gemini，直接使用千问 (${task})`);
+      console.warn(`[AI] 未配置 Gemini，任务 ${task} 改用千问`);
       return await runQwen();
     }
 
-    // 用户显式选千问（或强制 force_qwen）：只用千问
+    // 该项选「仅用千问」
     return await runQwen();
 };
 

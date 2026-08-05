@@ -8,7 +8,7 @@ import {
   Youtube, Music, Video, FileSpreadsheet, FilePieChart, FileCode, Image, Mail, Building2
 } from 'lucide-react';
 import { getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/db';
-import { testApiKey, testQwenApiKey, testAnymailFinderApiKey, testHunterApiKey, testAnysearchApiKey, getTaskAIModels, saveTaskAIModels, sanitizeApiKey, type TaskAIModels, type AIEngineChoice } from '../services/geminiService';
+import { testApiKey, testQwenApiKey, testAnymailFinderApiKey, testHunterApiKey, testAnysearchApiKey, getTaskAIModels, saveTaskAIModels, describeTaskAIRouting, sanitizeApiKey, type TaskAIModels, type AIEngineChoice } from '../services/geminiService';
 import { testTavilyKeyPool, listTavilyKeys, setTavilyKeyPool, getTavilyKeyStatuses, clearTavilyExhausted } from '../services/tavilyService';
 import { testWanImageApi } from '../services/wanImageService';
 import { saveApiConfig, getApiConfig, isSupabaseConfigured, saveKnowledgeFile, getKnowledgeFiles, deleteKnowledgeFile, resetSupabaseClient, testSupabaseConnection } from '../services/supabase';
@@ -545,11 +545,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const patchTaskAI = (role: keyof TaskAIModels, value: AIEngineChoice) => {
     setTaskAIModels((prev) => {
       const next = { ...prev, [role]: value };
-      // 立即写入 localStorage，运行时按此项路由（不必等「保存配置」）
+      // 立即写入本机；三项各自独立生效
       saveTaskAIModels(next);
       if (typeof localStorage !== 'undefined') {
-        // 用户主动选 Gemini 时关掉旧版「强制千问」
-        if (value === 'gemini') localStorage.setItem('trade_scout_force_qwen', '0');
+        // 用户手动改路由时，关掉「强制全链路千问」
+        localStorage.setItem('trade_scout_force_qwen', '0');
+      }
+      // 同步云端，避免下次 hydrate 用旧的三项全相同配置盖掉
+      if (isSupabaseConfigured()) {
+        void saveApiConfig({
+          provider: 'task_ai_models',
+          apiKey: JSON.stringify(next),
+        }).catch((e) => console.warn('task routing cloud sync failed', e));
       }
       return next;
     });
@@ -1023,16 +1030,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     <Settings size={16} /> 任务模型路由（搜索 / 背调 / 整理）
                   </div>
                   <p className="text-[10px] text-slate-500 font-bold leading-relaxed">
-                    三项各自独立、改完<strong>立即生效</strong>（无需等保存）。含义：
-                    「Gemini 优先」= 该任务先 Gemini，失败/额度尽再千问；「仅用千问」= 该任务跳过 Gemini。
-                    搜索/背调另有 Tavily 取证（与下拉无关，有 Key 就先用）。点「保存配置」会同步到云端。
+                    <strong>三项完全独立</strong>：客户搜索只看「搜索」、背调只看「背调」、开发信/关键词/策略只看「整理」。
+                    改完立即生效并同步云端。Gemini 优先 = 该项先 Gemini，失败再千问；仅用千问 = 该项跳过 Gemini。
+                    Tavily 取证与这三项无关（有 Key 就先用）。
+                  </p>
+                  <p className="text-[10px] font-black text-violet-700 bg-white border border-violet-100 rounded-xl px-3 py-2">
+                    生效中：{describeTaskAIRouting()}
                   </p>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     {(
                       [
-                        { key: 'search' as const, label: '客户搜索', hint: '自动化 / 客户搜索' },
-                        { key: 'analysis' as const, label: '背调分析', hint: '单次 / 批量背调' },
-                        { key: 'organize' as const, label: '资料整理', hint: '开发信 / 关键词 / 策略' },
+                        { key: 'search' as const, label: '客户搜索', hint: '仅影响：自动化 / 客户搜索' },
+                        { key: 'analysis' as const, label: '背调分析', hint: '仅影响：单次 / 批量背调' },
+                        { key: 'organize' as const, label: '资料整理', hint: '仅影响：开发信 / 关键词 / 策略' },
                       ] as const
                     ).map((row) => (
                       <div key={row.key} className="bg-white rounded-xl border border-violet-100 p-4">
@@ -1048,8 +1058,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                         </select>
                         <p className="text-[10px] font-bold mt-2 text-violet-700">
                           {taskAIModels[row.key] === 'gemini'
-                            ? '当前：Gemini → 千问'
-                            : '当前：仅千问'}
+                            ? '本项：Gemini → 千问'
+                            : '本项：仅千问'}
                         </p>
                       </div>
                     ))}
