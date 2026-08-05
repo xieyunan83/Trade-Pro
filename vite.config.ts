@@ -39,7 +39,7 @@ export default defineConfig(({ mode }) => {
       'process.env.REACT_APP_QWEN_MODEL': JSON.stringify(env.REACT_APP_QWEN_MODEL || env.REACT_APP_QWEN_MODEL_ID || ''),
       'process.env.REACT_APP_WAN_API_KEY': JSON.stringify(env.REACT_APP_WAN_API_KEY || ''),
       'process.env.REACT_APP_WAN_BASE_URL': JSON.stringify(env.REACT_APP_WAN_BASE_URL || ''),
-      'process.env.REACT_APP_WAN_MODEL': JSON.stringify(env.REACT_APP_WAN_MODEL || 'wan2.7-image'),
+      'process.env.REACT_APP_WAN_MODEL': JSON.stringify(env.REACT_APP_WAN_MODEL || 'wan2.7-image-pro'),
       'process.env.REACT_APP_DEFAULT_AI_MODEL': JSON.stringify(env.REACT_APP_DEFAULT_AI_MODEL || 'auto'),
       'process.env.HUNTER_API_KEY': JSON.stringify(pick('HUNTER_API_KEY', 'REACT_APP_HUNTER_API_KEY')),
       'process.env.REACT_APP_HUNTER_API_KEY': JSON.stringify(pick('REACT_APP_HUNTER_API_KEY', 'HUNTER_API_KEY')),

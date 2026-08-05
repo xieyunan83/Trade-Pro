@@ -1,5 +1,5 @@
-/** 产品海报 / 电商长图提示词（Wan2.7 图生图）
- * 前端表单字段保持不变，仅映射到长图模板占位符。
+/** 产品海报 / 电商长图提示词（Wan2.7-image-pro）
+ * 前端表单字段不变；仅非空字段进入「Exact English Copy」，禁止模型编造文案与包装图。
  */
 
 export interface SinglePosterFields {
@@ -30,278 +30,478 @@ export interface MultiPosterFields {
   contactEmail: string;
 }
 
+/** 默认留空，避免演示样例数据混进长图文案 */
 export const DEFAULT_SINGLE_FIELDS: SinglePosterFields = {
-  productName: 'DIRT TRUCK',
-  modelNo: '28005',
-  seriesName: 'MUSIC TRUCK SERIES',
-  size: '68X43.5X58CM',
-  packingAmount: '24 PCS',
-  grossWeight: '17.5KG',
-  netWeight: '14.5KG',
-  boxSize: '18.5 x 10.5 x 32.5 CM',
-  age: '3+',
-  benefit1: 'COGNITIVE ABILITY',
-  benefit2: 'IMAGINATION AND CREATIVITY',
-  benefit3: 'TACTILE ABILITY',
-  hasLight: true,
-  hasSound: true,
+  productName: '',
+  modelNo: '',
+  seriesName: '',
+  size: '',
+  packingAmount: '',
+  grossWeight: '',
+  netWeight: '',
+  boxSize: '',
+  age: '',
+  benefit1: '',
+  benefit2: '',
+  benefit3: '',
+  hasLight: false,
+  hasSound: false,
 };
 
 export const DEFAULT_MULTI_FIELDS: MultiPosterFields = {
-  collectionTitle: 'Bubble Gun',
-  brandName: 'Bubble Wow',
+  collectionTitle: '',
+  brandName: '',
   year: new Date().getFullYear().toString(),
-  mainModel: 'BW1008',
-  mainFeatures: 'Electric, Output * 60 bubble gun',
-  productSize: '42.3*13*27.4cm',
-  packageSize: '33*14*28cm',
-  contactEmail: 'service@example.com',
+  mainModel: '',
+  mainFeatures: '',
+  productSize: '',
+  packageSize: '',
+  contactEmail: '',
 };
 
-const orDash = (v: string, fallback = 'As shown in the reference image / not specified') =>
-  (v || '').trim() || fallback;
+const t = (v: string) => (v || '').trim();
+
+const line = (label: string, value: string): string | null => {
+  const v = t(value);
+  return v ? `${label}: ${v}` : null;
+};
+
+/** 仅把用户填过的字段拼成「允许出现的英文原文」；空字段一律不写 */
+export const buildApprovedEnglishCopy = (fields: SinglePosterFields): string => {
+  const lines = [
+    line('Brand / Series', fields.seriesName),
+    line('Product Name', fields.productName),
+    line('Model', fields.modelNo),
+    line('Product Dimensions', fields.size),
+    line('Net Weight', fields.netWeight),
+    line('Gross Weight', fields.grossWeight),
+    line('Carton Packing', fields.packingAmount),
+    line('Outer Box Size', fields.boxSize),
+    line('Recommended Age', fields.age),
+    line('Selling Point 1', fields.benefit1),
+    line('Selling Point 2', fields.benefit2),
+    line('Selling Point 3', fields.benefit3),
+  ].filter(Boolean) as string[];
+
+  if (fields.hasLight) lines.push('Feature: Light-up');
+  if (fields.hasSound) lines.push('Feature: Sound / Music');
+
+  if (!lines.length) {
+    return '(No approved marketing copy supplied. Use ZERO text in the image, or only tiny tasteful whitespace — do not invent any words, numbers, brand names, or slogans.)';
+  }
+  return lines.join('\n');
+};
+
+const buildVerifiedFeatures = (fields: SinglePosterFields): string => {
+  const parts = [
+    t(fields.benefit1),
+    t(fields.benefit2),
+    t(fields.benefit3),
+    fields.hasLight ? 'Light-up feature (only if supported by copy)' : '',
+    fields.hasSound ? 'Sound / music feature (only if supported by copy)' : '',
+  ].filter(Boolean);
+  return parts.length
+    ? parts.join('; ')
+    : 'Only features clearly visible on the uploaded product photo. Do not invent functions.';
+};
+
+const buildUsageScenarios = (fields: SinglePosterFields): string => {
+  const age = t(fields.age);
+  const name = t(fields.productName) || 'this product';
+  if (age) {
+    return `Real-life family / kids play and party moments suitable for age ${age}, outdoor lawn, living room playtime, birthday celebration — always with ${name} used naturally in the scene.`;
+  }
+  return `Beautiful real-world usage environments that match the product category visible in the reference photo for ${name}. Prefer outdoor fun, home play, party, or daily-life scenes — never a plain studio backdrop.`;
+};
 
 const logoInstruction = (logoMode: 'builtin' | 'custom' | 'none') => {
   if (logoMode === 'none') {
-    return 'Do NOT place any brand logo, watermark, or marketplace badge.';
+    return 'Do NOT place any brand logo, watermark, marketplace badge, or Buy Now button.';
   }
-  return 'If a brand LOGO reference image is provided, place it tastefully in the hero and closing sections only. Do not invent a different logo.';
+  return 'If a LOGO reference image is provided, place that exact logo only (hero and/or closing). Never invent a different logo or brand mark.';
 };
 
-const NEGATIVE_PROMPT = `
-NEGATIVE PROMPT:
-low resolution, blurry product, distorted product shape, inaccurate product structure, redesigned product, wrong color, wrong material, duplicate product, duplicated accessories, extra buttons, extra ports, extra handles, missing components, warped geometry, melted object, floating object, bad perspective, cluttered composition, poor lighting, cheap marketplace style, inconsistent visual style, unreadable typography, gibberish text, Chinese text, Japanese text, Korean text, spelling mistakes, random logo, competitor logo, watermark, QR code, fake certification badge, fake discount label, fake product data, incorrect dimensions, unsupported claims, excessive text, tiny text, overlapping text, broken infographic, bad anatomy, extra fingers, distorted hands, unrealistic human interaction, blurry face, cropped product, irrelevant props.
+const SHARED_NEGATIVE = `
+plain blue studio background, plain white studio background, empty backdrop, empty gradient background, isolated product cutout as primary background, cheap product listing, two-column layout, split layout, brochure layout, catalog layout, specification sheet, dense parameter table, tiny text, unreadable text, gibberish text, misspelled text, Chinese text, Japanese text, Korean text, random slogans, invented product name, wrong model number, fake product data, fake dimensions, fake certifications, fake logo, watermark, QR code, price tag, discount badge, Buy Now button, virtual packaging, invented box, invented carton, invented accessories, incorrect product structure, incorrect color, wrong material, extra buttons, extra ports, extra handles, missing components, duplicate product, duplicate accessories, distorted product, warped geometry, floating product, bad perspective, cluttered composition, cheap graphic design, unrelated background, unrealistic human interaction, distorted hands, extra fingers, low resolution, blurry product, broken typography.
 `.trim();
 
 /**
- * 方案一：单品电商详情长图
- * 表单字段 → 模板；参考图中第一张产品原图/抠图为 PRIMARY 外观依据。
+ * 方案一：单品 — 严格单列竖排电商故事长图（Wan2.7-image-pro）
  */
 export const buildSingleProductPosterPrompt = (
   fields: SinglePosterFields,
   logoMode: 'builtin' | 'custom' | 'none'
 ): string => {
-  const brand = orDash(fields.seriesName.split(/\s+SERIES/i)[0]?.trim() || fields.seriesName, 'Brand');
-  const functions = [
-    fields.benefit1,
-    fields.benefit2,
-    fields.benefit3,
-    fields.hasLight ? 'Light-up features' : '',
-    fields.hasSound ? 'Sound / music features' : '',
-  ]
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .join('; ');
-
-  const sellingPoints = [fields.benefit1, fields.benefit2, fields.benefit3]
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .join('; ');
-
-  const techSpecs = [
-    fields.packingAmount ? `Packing amount: ${fields.packingAmount}` : '',
-    fields.boxSize ? `Outer / color box size: ${fields.boxSize}` : '',
-    fields.age ? `Recommended age: ${fields.age}` : '',
-    fields.hasLight ? 'Includes lighting features' : '',
-    fields.hasSound ? 'Includes sound features' : '',
-  ]
-    .filter(Boolean)
-    .join('; ');
-
-  const weight = [fields.netWeight && `Net: ${fields.netWeight}`, fields.grossWeight && `Gross: ${fields.grossWeight}`]
-    .filter(Boolean)
-    .join(' / ');
-
-  const targetCustomers = fields.age
-    ? `Parents and gift buyers; children / kids recommended age ${fields.age}`
-    : 'Target retail consumers and gift buyers for this product category';
-
-  const packageContents = [
-    fields.packingAmount ? `Carton packing: ${fields.packingAmount}` : '',
-    fields.boxSize ? `Retail / outer box: ${fields.boxSize}` : '',
-    'Main product unit as shown in reference image',
-  ]
-    .filter(Boolean)
-    .join('; ');
+  const brand = t(fields.seriesName) || t(fields.productName) || 'Brand';
+  const productName = t(fields.productName) || 'Product';
+  const model = t(fields.modelNo) || 'Not supplied';
+  const dimensions = t(fields.size) || 'Not supplied — do not invent measurements';
+  const approved = buildApprovedEnglishCopy(fields);
+  const features = buildVerifiedFeatures(fields);
+  const selling = [t(fields.benefit1), t(fields.benefit2), t(fields.benefit3)].filter(Boolean).join('; ') ||
+    'Only selling points listed in Exact English Copy Allowed. If none, use no selling-point text.';
+  const usage = buildUsageScenarios(fields);
+  const target = t(fields.age)
+    ? `Parents and children; recommended age ${t(fields.age)}`
+    : 'Target customers appropriate to the product category visible in the reference image';
 
   return `
-You are an expert e-commerce art director, premium product photographer, product marketing strategist, and infographic layout designer.
+You are a senior art director for premium e-commerce product storytelling.
 
-TASK:
-FIRST carefully analyze the uploaded reference product image(s) as the PRIMARY visual reference. Identify the product category, product structure, material, color, shape, key components, functional details, target use cases, and likely target customers from the photo itself.
-THEN combine that visual analysis with the IMPORTANT PRODUCT DATA below to create ONE complete vertical e-commerce product detail page / long infographic image for an online marketplace. The result should look like a premium product detail page commonly seen on leading global e-commerce platforms and top-tier marketplace brand stores in this product category.
+Create ONE premium vertical e-commerce product detail page from the uploaded product reference image(s) and the exact product data below.
 
-IMPORTANT PRODUCT DATA:
-- Brand: ${brand}
-- Product name: ${orDash(fields.productName)}
-- Product model: ${orDash(fields.modelNo)}
-- Product series: ${orDash(fields.seriesName)}
-- Product category: Infer from the uploaded reference image (toy / consumer goods / etc.)
-- Main material: Infer from the uploaded reference image; do not invent unsupported materials
-- Product color / finish: Match the uploaded reference image exactly
-- Product dimensions: ${orDash(fields.size)}
-- Product weight: ${orDash(weight)}
-- Technical specifications: ${orDash(techSpecs)}
-- Main functions: ${orDash(functions)}
-- Core selling points: ${orDash(sellingPoints)}
-- Key components / structural details: Infer from the uploaded reference image; highlight only what is visible or listed above
-- Included accessories / package contents: ${orDash(packageContents)}
-- Target customers: ${targetCustomers}
-- Main usage scenarios: Realistic play / daily use scenarios matching the product category and age positioning
-- Brand tone: Premium, trustworthy, conversion-focused commercial
-- Visual style: Modern marketplace detail-page / editorial commercial long image
-- Preferred color palette: Derived from the product colors in the reference image, with clean premium neutrals
-- Reference industry / leading brand style: Leading global marketplace brand stores and top exporters in the same category
-- ${logoInstruction(logoMode)}
+The output must be a single, cohesive, EXTRA-TALL VERTICAL LONG IMAGE.
+It must look like a high-end branded product story, not a catalog, not a flyer, not a specification sheet, and not a two-column marketplace listing.
 
-REFERENCE IMAGE RULES:
-1. Preserve the product’s real and recognizable appearance from the uploaded reference image.
-2. Keep the correct product silhouette, proportions, color, material, component placement, buttons, ports, handles, logos, patterns, and construction details.
-3. Do not redesign, replace, distort, simplify, or invent product features that are not supported by the reference image or product data.
-4. Make the product look refined, clean, premium, realistic, and commercially appealing.
-5. If product information conflicts with the uploaded image, prioritize the uploaded image for physical appearance and use the provided data for text and selling-point structure.
-6. Do not show competing brands, random logos, watermarks, QR codes, or irrelevant objects.
-7. If both an original photo and a cutout are provided, use them as the same product: keep appearance faithful to the photo; use the cutout for clean commercial placement.
+==================================================
+1. PRODUCT REFERENCE AND DATA
+==================================================
 
-OUTPUT FORMAT:
-Create a single extra-tall vertical e-commerce detail-page image.
-- Recommended aspect ratio: 1:6 to 1:10 vertical long image
-- Recommended canvas: about 1440 px wide, very tall vertical composition
-- Build a coherent, scrollable, section-by-section visual narrative
-- Use a clean premium grid layout with clear visual hierarchy
-- All visible text must be in ENGLISH ONLY
-- Use short, polished, readable English marketing copy
-- Use large headlines, short subheadings, concise feature labels, simple specification tables, and clear callout labels
-- Avoid excessive paragraphs, dense text blocks, spelling errors, meaningless pseudo-text, and unreadable tiny typography
-- Reserve enough clean whitespace around all text areas
+UPLOADED REFERENCE IMAGE:
+The uploaded image is the only authoritative visual reference for the physical product.
+If multiple images are given: the product photo is the appearance source of truth; any cutout is only for silhouette fidelity — NEVER use a cutout floating on plain studio color as a finished section background.
 
-DESIGN DIRECTION:
-Create a high-conversion marketplace product detail page with a polished editorial and commercial style:
-- Professional studio product photography combined with premium lifestyle photography
-- High-end product advertising composition
-- Modern, minimal, trustworthy, and conversion-focused
-- Balanced use of product close-ups, feature callouts, real-life scenes, technical diagrams, and specification layouts
-- Strong hierarchy: hero image first, benefits second, evidence and details next, specifications and package content near the end
-- Use subtle shadows, refined gradients, premium lighting, tasteful graphic lines, and clean background surfaces
-- Keep the product as the visual focus in every section
-- Match the design language to the product category and target customers
-- The full page must feel like one unified branded campaign, not a collage of unrelated images
+Brand:
+${brand}
 
-LONG IMAGE CONTENT STRUCTURE:
-Create the following sections in this exact order.
+Product Name:
+${productName}
 
-SECTION 1 — HERO BANNER / FIRST SCREEN
-- Powerful premium opening visual; full product at a strong selling angle.
-- Brand "${brand}", title "${orDash(fields.productName)}", model/series "${orDash(fields.modelNo)} / ${orDash(fields.seriesName)}"
-- One short English slogan from the strongest selling point; 3 concise benefit badges from: ${orDash(sellingPoints)}.
+Model:
+${model}
 
-SECTION 2 — CORE VALUE PROPOSITION
-- Top 3–5 benefits from the selling points / functions above with headline + short support line + visual.
-- Only claim functions supported by data or clearly visible on the product.
+Product Category:
+Infer only from the uploaded photo (e.g. bubble machine / toy). Do not invent a different category name in text unless it appears in Exact English Copy Allowed.
 
-SECTION 3 — LIFESTYLE / REAL USAGE SCENARIO
-- Product used naturally by "${targetCustomers}" in a realistic scenario.
-- Concise English lifestyle headline + short supporting line.
+Product Color and Finish:
+Match the uploaded reference image exactly.
 
-SECTION 4 — FEATURE DETAIL CLOSE-UPS
-- 3–6 macro/close-up panels highlighting visible components and selling points with refined callout labels.
+Material:
+Infer only from the uploaded reference image appearance. Do not invent material claims in text.
 
-SECTION 5 — MATERIALS, CRAFTSMANSHIP, AND QUALITY
-- Highlight materials/finish visible in the reference; tasteful credible English statements only.
-- No unsupported medical, environmental, safety, or certification claims.
+Exact Product Dimensions:
+${dimensions}
 
-SECTION 6 — FUNCTION / PERFORMANCE EXPLANATION
-- Explain main functions (${orDash(functions)}) with simple visual sequence / diagrams consistent with the real product.
+Verified Product Features:
+${features}
 
-SECTION 7 — SIZE AND SPECIFICATIONS
-- Clean specs with dimension lines using ONLY supplied numbers:
-  Dimensions ${orDash(fields.size)}; Weight ${orDash(weight)}; Model ${orDash(fields.modelNo)}; ${orDash(techSpecs)}.
+Verified Selling Points:
+${selling}
 
-SECTION 8 — IDEAL FOR / TARGET CUSTOMER
-- 3–5 concise English customer or scenario labels aligned with ${targetCustomers}.
+Verified Usage Scenarios:
+${usage}
 
-SECTION 9 — PACKAGE CONTENTS / WHAT’S IN THE BOX
-- Flat-lay / organized packaging for: ${orDash(packageContents)}. Label items in clear English.
+Target Customers:
+${target}
 
-SECTION 10 — FINAL BRAND CLOSE / PURCHASE MOTIVATION
-- Clean branded closing with product, "${brand}", "${orDash(fields.productName)}", short credible English close.
-- No fake discounts, urgency, QR codes, contact info, or marketplace logos.
+Exact English Copy Allowed in This Image:
+${approved}
 
-COPYWRITING RULES:
-- All text English only; polished premium American English; concise and scannable.
-- Avoid generic unsupported superlatives and unsupported claims.
-- No Chinese / Japanese / Korean, placeholder, lorem ipsum, or unreadable text.
+Brand Personality:
+Playful, premium, trustworthy family / party fun — commercial but warm.
 
-VISUAL QUALITY REQUIREMENTS:
-Commercial-grade e-commerce design; photorealistic accurate product; crisp cutouts; premium lighting; cohesive sections; legible English; no clutter, warped parts, extra components, or watermarks.
+Preferred Visual Style:
+Editorial lifestyle e-commerce storytelling; cinematic real-world scenes; refined modern display typography suitable for kids/party products (elegant rounded sans or premium geometric sans — beautiful, large, legible).
 
-${NEGATIVE_PROMPT}
+Preferred Color Palette:
+Derived from the real product colors plus soft, lively lifestyle colors (sky, grass, warm indoor light). Never a flat blue seamless studio sweep as the hero background.
 
-FINAL INSTRUCTION:
-Generate one unified, polished, English-only, premium vertical e-commerce long image using the uploaded product image as the physical product reference. Clearly communicate design, core benefits, real-life use cases, functional details, materials, dimensions, specifications, target users, and package contents in a marketplace-ready layout.
+${logoInstruction(logoMode)}
+
+CRITICAL DATA RULE:
+Every visible word in the image MUST be copied EXACTLY from “Exact English Copy Allowed in This Image” (or be empty).
+Do NOT use demo data, training-memory specs, or any numbers/names that are not listed there.
+If a field is “Not supplied”, do not invent a substitute.
+
+==================================================
+2. ABSOLUTE ACCURACY RULES
+==================================================
+
+The uploaded reference image is the source of truth for the physical product.
+
+You MUST preserve the product exactly as shown in the uploaded reference image:
+- identical silhouette and overall proportions
+- identical color, surface finish, material appearance, and product geometry
+- identical openings, buttons, ports, switches, feet, handles, vents, nozzles, lenses, components, and structural details
+- no extra product parts
+- no missing product parts
+- no invented accessories
+- no redesigned shell, no altered shape, no incorrect product color
+- no fictional logo, no competitor branding, no watermark
+
+Do not create a box, retail package, instruction manual, label, carton, shipping box, package contents flat-lay, certification badge, award badge, QR code, price tag, discount badge, or accessory unless it is visibly included in the uploaded reference image.
+
+If packaging images are not supplied, NEVER generate packaging.
+Instead, use another beautiful and relevant real-life usage scene.
+
+Never invent product specifications, dimensions, functions, ratings, safety claims, certifications, compatibility, battery life, capacity, performance values, age grades, or technical data beyond Exact English Copy Allowed.
+
+==================================================
+3. TEXT: STRICT COPY CONTROL
+==================================================
+
+All visible text must be in ENGLISH ONLY.
+
+IMPORTANT:
+Use ONLY the exact wording provided under:
+“Exact English Copy Allowed in This Image”.
+
+Do not rewrite it.
+Do not translate it.
+Do not summarize it.
+Do not invent slogans.
+Do not change model numbers.
+Do not add unsupported claims.
+Do not add random technical specifications.
+Do not create fake tables.
+Do not create placeholder text.
+Do not generate gibberish, misspelled words, Chinese characters, Japanese characters, Korean characters, or meaningless characters.
+
+If there is not enough approved copy for a section:
+use no text in that section, or use a clean text-free visual composition.
+Prioritize beautiful imagery and accurate product presentation over generated text.
+
+Text design requirements:
+- Use large, highly legible English typography only
+- Use a refined modern font style appropriate to the product category and brand personality — beautiful, thematic, premium (not generic ugly system UI font)
+- Use no more than 3 to 10 words per text block where possible
+- Use a maximum of one headline and one short supporting line per scene
+- Keep text away from product edges and important product details
+- Use generous whitespace
+- No tiny text
+- No dense paragraphs
+- No specification table
+- No multi-column text blocks
+- No crowded labels
+
+==================================================
+4. MANDATORY LAYOUT RULES
+==================================================
+
+Create ONE SINGLE-COLUMN VERTICAL STORYTELLING LAYOUT.
+
+The entire long image must flow from top to bottom in one continuous vertical sequence.
+
+Every scene must occupy the full width of the page.
+Every scene must be stacked vertically, one after another.
+
+DO NOT create:
+- two-column layout
+- split-screen layout
+- left-and-right product panels
+- product image on the top with a separate double-column information sheet below
+- brochure layout
+- catalog card layout
+- spreadsheet layout
+- boxed parameter tables
+- multiple unrelated images squeezed together
+- a collage of small thumbnails
+- product listing page layout
+
+Use 6 to 8 full-width visual sections.
+Each section should feel like a premium campaign image, with one clear visual idea and one clear message.
+
+Recommended aspect ratio:
+vertical 1:7 or 1:9.
+
+==================================================
+5. BACKGROUND AND SCENE RULES
+==================================================
+
+Never use a plain studio blue background, plain white background, empty gradient background, cheap seamless backdrop, or isolated product cutout as the primary visual background.
+
+Every major section must use:
+- a beautiful real-world environment, OR
+- a realistic lifestyle setting, OR
+- a premium contextual setting that directly supports the product’s actual usage.
+
+Backgrounds must be relevant to:
+${usage}
+
+Use natural, believable, commercially styled environments:
+- realistic lighting
+- authentic surfaces
+- tasteful props
+- environmental depth
+- premium color coordination
+- clean but lived-in spaces
+- product remains highly visible and recognizable
+
+The product must never look pasted onto the background.
+It must have realistic scale, contact shadows, perspective, and lighting consistent with the scene.
+
+==================================================
+6. VISUAL STORY STRUCTURE
+==================================================
+
+Create the long image in this exact SINGLE-COLUMN order:
+
+SECTION 1 — IMMERSIVE HERO SCENE
+Create a strong full-width lifestyle hero image.
+Show the product in its most attractive and natural real-world usage environment.
+The product is large, clear, and immediately recognizable.
+Use a cinematic but realistic lifestyle background.
+Use only approved text, placed elegantly with generous whitespace.
+No isolated studio product on a plain background.
+
+SECTION 2 — PRIMARY BENEFIT IN ACTION
+Show the single strongest verified product benefit through a real action scene.
+The product must visibly demonstrate its actual function.
+Show a realistic user only if it is relevant to the product.
+The person must match the target customer profile.
+Use one approved short headline only, if supplied.
+
+SECTION 3 — SECOND REAL-LIFE USAGE SCENE
+Show a different practical usage scenario.
+Change the environment, camera angle, and emotional moment.
+The scene should make the customer understand when, where, and why to use the product.
+Keep the product physically accurate.
+
+SECTION 4 — PRODUCT DETAIL AND CRAFTSMANSHIP
+Show one large, refined close-up composition of real product details.
+Highlight only actual visible components and verified features.
+Use elegant macro photography, natural material texture, realistic lighting, and minimal callout lines.
+Use text only from the approved copy.
+
+SECTION 5 — THIRD USE CASE OR EMOTIONAL VALUE SCENE
+Show another authentic lifestyle scenario.
+Focus on the emotional or practical result of using the product:
+joy, convenience, organization, relaxation, family interaction, outdoor fun, productivity, comfort, or confidence.
+Use only an outcome supported by the verified product data.
+Do NOT insert packaging here.
+
+SECTION 6 — FEATURE DEMONSTRATION
+Show the product’s verified operating feature in a visually clear way.
+Use one large image or a seamless full-width sequence within the same scene.
+Do not use tiny panels, diagrams, grids, or technical tables.
+Use subtle visual guidance only when necessary.
+
+SECTION 7 — SIZE OR PRODUCT FORM FACTOR
+Only if exact dimensions are supplied in Exact English Copy Allowed:
+show the product naturally in a realistic scene with a minimal, elegant dimension overlay.
+Display only the exact dimensions provided in the data.
+Do not create a table.
+Do not add any other measurements.
+
+If exact dimensions are not supplied:
+replace this section with another lifestyle scene.
+
+SECTION 8 — PREMIUM CLOSING SCENE
+End with a beautiful full-width real-life or contextual product scene.
+The product should look aspirational, polished, and desirable.
+Use the brand name and product name only if they appear in the approved English copy.
+No “Buy Now” button, no price, no fake promotion, no QR code, and no marketplace logo.
+No packaging.
+
+==================================================
+7. HUMAN AND LIFESTYLE PHOTOGRAPHY RULES
+==================================================
+
+When people are included:
+- show realistic hands, faces, anatomy, and interaction
+- ensure the product is used correctly
+- people must look natural, happy, and authentic rather than posed like stock models
+- match the target audience: ${target}
+- show diverse but contextually appropriate people
+- avoid distorted hands, extra fingers, incorrect grips, or impossible use of the product
+
+==================================================
+8. ART DIRECTION
+==================================================
+
+Overall aesthetic:
+Editorial lifestyle e-commerce storytelling; full-bleed scenes; premium vertical campaign.
+
+Brand personality:
+Playful, premium, trustworthy family / party fun.
+
+Color palette:
+Product colors + lively lifestyle colors. Never flat studio blue sweep as hero.
+
+Create a cohesive premium design with:
+- editorial e-commerce photography
+- authentic lifestyle storytelling
+- refined visual rhythm from top to bottom
+- elegant thematic typography
+- realistic depth and lighting
+- clean spacing
+- subtle premium graphic accents only when needed
+- a harmonious visual identity across all sections
+
+==================================================
+9. NEGATIVE PROMPT
+==================================================
+
+${SHARED_NEGATIVE}
+
+==================================================
+10. FINAL INSTRUCTION
+==================================================
+
+Generate one complete, premium, full-width, single-column, vertically stacked e-commerce long image.
+
+The image must be driven by realistic usage scenarios and beautiful real-world backgrounds.
+Do not make a studio catalog page.
+Do not make a two-column product listing.
+Do not invent product data, product packaging, accessories, text, functions, or specifications.
+
+Use the uploaded product image as the strict visual product reference.
+Use only the exact approved English copy supplied by the user.
+Prioritize product accuracy, premium lifestyle imagery, coherent vertical storytelling, and readable elegant typography.
 `.trim();
 };
 
 /**
- * 方案二：多品系列电商长图 / 目录长图
- * 保持多品表单字段，输出同风格垂直长图叙事。
+ * 方案二：多品系列 — 同样单列竖排、实景优先、禁止虚构包装与乱写规格
  */
 export const buildMultiProductPosterPrompt = (
   fields: MultiPosterFields,
   productCount: number,
   logoMode: 'builtin' | 'custom' | 'none'
 ): string => {
-  const brand = orDash(fields.brandName, 'Brand');
-  const title = orDash(fields.collectionTitle, 'Product Collection');
+  const approved = [
+    line('Brand', fields.brandName),
+    line('Collection', fields.collectionTitle),
+    line('Year', fields.year),
+    line('Main Model', fields.mainModel),
+    line('Features', fields.mainFeatures),
+    line('Product Size', fields.productSize),
+    line('Package Size', fields.packageSize),
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  const brand = t(fields.brandName) || 'Brand';
+  const title = t(fields.collectionTitle) || 'Collection';
 
   return `
-You are an expert e-commerce art director, premium product photographer, product marketing strategist, and infographic layout designer.
+You are a senior art director for premium e-commerce product storytelling.
 
-TASK:
-FIRST analyze ALL uploaded reference product images. Identify shared category, materials, colors, structures, and differences between variants.
-THEN create ONE complete vertical e-commerce collection / multi-SKU detail long image for an online marketplace, in the style of leading global brand stores.
+Create ONE EXTRA-TALL VERTICAL LONG IMAGE for a multi-SKU / collection story.
+Single-column full-width sections only. Lifestyle real-world backgrounds only. No two-column layout. No invented packaging.
 
-IMPORTANT PRODUCT DATA:
-- Brand: ${brand}
-- Collection / product name: ${title}
-- Year: ${orDash(fields.year)}
-- Main model: ${orDash(fields.mainModel)}
-- Main functions / selling points: ${orDash(fields.mainFeatures)}
-- Product dimensions: ${orDash(fields.productSize)}
-- Package dimensions: ${orDash(fields.packageSize)}
-- Number of product variants in references: ${productCount}
-- Footer contact (optional small text only if space and tasteful): ${orDash(fields.contactEmail, 'omit contact if not needed')}
-- Brand tone: Premium wholesale / marketplace catalog
-- Visual style: Clean multi-SKU marketplace detail page, cohesive series layout
-- ${logoInstruction(logoMode)}
+UPLOADED REFERENCES: ${productCount} product photo(s) — appearance source of truth for every SKU.
 
-REFERENCE IMAGE RULES:
-1. Use ONLY the uploaded products as the real products — do not invent different SKUs.
-2. Preserve each variant’s real color, shape, and details.
-3. First uploaded image is the hero / featured SKU; others are series / color variants.
-4. No competing brands, watermarks, QR codes, or irrelevant objects.
+Exact English Copy Allowed in This Image:
+${approved || '(No approved copy — use ZERO invented text.)'}
 
-OUTPUT FORMAT:
-One extra-tall vertical long image (about 1:6 to 1:10), ~1440px wide, English-only text, premium scannable marketing copy, clean whitespace.
+Brand: ${brand}
+Collection: ${title}
+Model: ${t(fields.mainModel) || 'Not supplied'}
+Features: ${t(fields.mainFeatures) || 'Only what is visible / listed above'}
+Product Size: ${t(fields.productSize) || 'Not supplied — do not invent'}
+Package Size text may appear ONLY if listed in Exact English Copy — NEVER draw a virtual box or carton.
 
-LONG IMAGE CONTENT STRUCTURE (exact order):
-SECTION 1 — HERO: Brand ${brand}, title ${title}, year ${orDash(fields.year)}, featured first product, short slogan from main features, 3 benefit badges.
-SECTION 2 — CORE VALUE: 3–5 benefits from "${orDash(fields.mainFeatures)}".
-SECTION 3 — LIFESTYLE: Realistic usage matching the category.
-SECTION 4 — FEATURE CLOSE-UPS: Details of the hero SKU with English callouts.
-SECTION 5 — MATERIALS / QUALITY: Based on visible materials only.
-SECTION 6 — FUNCTION: Visual explanation of main features.
-SECTION 7 — SIZE / SPECS: Product ${orDash(fields.productSize)}; Package ${orDash(fields.packageSize)}; Model ${orDash(fields.mainModel)}.
-SECTION 8 — SERIES / VARIANTS: Neat row/grid of the other uploaded cutouts with short English labels.
-SECTION 9 — PACKAGE / WHAT’S IN THE BOX: Clean flat-lay style if applicable.
-SECTION 10 — BRAND CLOSE: Final hero of the collection, ${brand} + ${title}, confident close. Optional subtle email ${orDash(fields.contactEmail, 'none')}. No fake discounts.
+${logoInstruction(logoMode)}
 
-COPYWRITING / VISUAL QUALITY: Same premium English-only marketplace standards as a flagship brand detail page. No Chinese text, no gibberish, no unsupported claims.
+LAYOUT: 6–8 full-width stacked lifestyle sections (hero → benefit in action → second scene → detail close-up → third scene → feature demo → optional size overlay if size supplied → closing). Every section uses real usage environments. First uploaded product is hero; others appear as series variants inside lifestyle scenes, not as a thumbnail grid collage.
 
-${NEGATIVE_PROMPT}
+TEXT: English only; copy EXACTLY from Exact English Copy Allowed; beautiful thematic typography; no tables; no Buy Now; no gibberish.
 
-FINAL INSTRUCTION:
-Generate one unified premium vertical e-commerce long image for this multi-product collection using the uploaded images as the only product references.
+NEGATIVE PROMPT:
+${SHARED_NEGATIVE}
+
+FINAL: One premium single-column vertical campaign long image. Product-accurate. Lifestyle backgrounds. No packaging invention. No fake specs.
 `.trim();
 };
 

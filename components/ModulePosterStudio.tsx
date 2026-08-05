@@ -185,6 +185,16 @@ export const ModulePosterStudio: React.FC = () => {
       setError('请先上传/拍摄产品图');
       return;
     }
+    if (mode === 'single') {
+      if (!singleFields.productName.trim() && !singleFields.modelNo.trim()) {
+        setError('请至少填写产品名称或型号，否则长图无法使用你的文案');
+        return;
+      }
+    } else if (!multiFields.collectionTitle.trim() && !multiFields.brandName.trim()) {
+      setError('请至少填写系列标题或品牌名');
+      return;
+    }
+
     if (logoMode === 'builtin' && !builtinLogo) {
       const ok = confirm('尚未保存内置 LOGO。是否先上传一个 LOGO？取消则无 LOGO 继续生成。');
       if (ok) {
@@ -202,39 +212,35 @@ export const ModulePosterStudio: React.FC = () => {
     setError(null);
     setResultUrl(null);
     try {
-      let workingCutouts = cutouts;
-      if (!workingCutouts.length) {
-        setStep('先扣除背景，便于长图合成…');
-        workingCutouts = [];
-        for (let i = 0; i < originals.length; i++) {
-          setStep(`扣背景 ${i + 1}/${originals.length}…`);
-          workingCutouts.push(await removeBgOne(originals[i]));
-        }
-        setCutouts(workingCutouts);
-      }
-
-      setStep('分析产品外观与卖点，生成电商长图（约需 1–2 分钟）…');
+      // 长图以原图为外观主参考；抠图仅作轮廓辅助，避免「抠图贴灰底」的目录页观感
+      const workingCutouts = cutouts;
+      setStep('按你填写的资料生成实景电商长图（Wan2.7 Pro，约 1–2 分钟）…');
       const logo = logoForGen();
       const refs = buildReferenceStack(originals, workingCutouts, logo);
+      const effectiveLogoMode =
+        logoMode === 'builtin' && !logo ? 'none' : logoMode;
 
       const prompt =
         mode === 'single'
-          ? buildSingleProductPosterPrompt(singleFields, logoMode === 'builtin' && !logo ? 'none' : logoMode)
+          ? buildSingleProductPosterPrompt(singleFields, effectiveLogoMode)
           : buildMultiProductPosterPrompt(
               multiFields,
-              Math.max(originals.length, workingCutouts.length),
-              logoMode === 'builtin' && !logo ? 'none' : logoMode
+              Math.max(originals.length, workingCutouts.length || 1),
+              effectiveLogoMode
             );
 
-      const res = await generateWanImage({
-        prompt,
-        referenceImages: refs,
-        size: '2K',
-        n: 1,
-        thinkingMode: true,
-        watermark: false,
-        timeoutMs: 180_000,
-      });
+      const res = await generateWanImage(
+        {
+          prompt,
+          referenceImages: refs,
+          size: '2K',
+          n: 1,
+          thinkingMode: true,
+          watermark: false,
+          timeoutMs: 180_000,
+        },
+        { modelId: 'wan2.7-image-pro' }
+      );
       setResultUrl(res.images[0]);
       setStep('');
     } catch (e: any) {
@@ -257,8 +263,9 @@ export const ModulePosterStudio: React.FC = () => {
           <Sparkles className="text-pink-600" /> 产品海报工作室
         </h2>
         <p className="text-sm text-slate-500 font-medium mb-4">
-          {isMobile ? '手机可拍照或上传' : '电脑端请上传产品图'} → 扣背景 → 填资料 → 选 LOGO → 生成电商长图。
-          万相会先分析产品外观，再结合你填写的名称/型号/尺寸/卖点等，生成英文详情页长图（场景、功能、参数、适用人群）。
+          {isMobile ? '手机可拍照或上传' : '电脑端请上传产品图'} → 填资料 → 选 LOGO → 用{' '}
+          <span className="font-bold text-slate-700">wan2.7-image-pro</span> 生成单列竖排实景电商长图。
+          文案只使用你填写的内容；未上传包装图不会生成虚拟包装；禁止双栏目录排版与纯色棚拍底。
         </p>
 
         <div className="flex gap-2 mb-4">

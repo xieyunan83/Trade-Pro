@@ -126,7 +126,7 @@ export const env = {
   qwenModelId: read('REACT_APP_QWEN_MODEL') || read('REACT_APP_QWEN_MODEL_ID'),
   wanApiKey: read('REACT_APP_WAN_API_KEY'),
   wanBaseUrl: read('REACT_APP_WAN_BASE_URL'),
-  wanModelId: read('REACT_APP_WAN_MODEL') || 'wan2.7-image',
+  wanModelId: read('REACT_APP_WAN_MODEL') || 'wan2.7-image-pro',
   defaultAIModel: (read('REACT_APP_DEFAULT_AI_MODEL') || bakedAppConfig.defaultAIModel || 'qwen') as DefaultAIModel,
   hunterApiKey: read('HUNTER_API_KEY') || read('REACT_APP_HUNTER_API_KEY'),
   findymailApiKey: read('FINDYMAIL_API_KEY'),

@@ -11,7 +11,7 @@ const LS_KEY = 'trade_scout_wan_api_key';
 const LS_BASE = 'trade_scout_wan_base_url';
 const LS_MODEL = 'trade_scout_wan_model_id';
 
-const DEFAULT_WAN_MODEL = 'wan2.7-image';
+const DEFAULT_WAN_MODEL = 'wan2.7-image-pro';
 const WAN_PATH = '/api/v1/services/aigc/multimodal-generation/generation';
 
 const sanitizeApiKey = (key: string): string =>
@@ -242,7 +242,7 @@ export const generateWanImage = async (
     }
     if (response.status === 400 && /model|not.?support|不支持|not found/i.test(String(msg))) {
       throw new Error(
-        `万相模型不可用 (${config.modelId})。请确认 Token Plan 已开通 wan2.7-image，或改用控制台列出的图片模型。详情: ${msg}`
+        `万相模型不可用 (${config.modelId})。请确认 Token Plan 已开通 wan2.7-image-pro，或改用控制台列出的图片模型。详情: ${msg}`
       );
     }
     throw new Error(`万相生成失败 (${response.status}): ${msg}`);
@@ -251,7 +251,7 @@ export const generateWanImage = async (
   const images = extractImageUrls(data);
   if (images.length === 0) {
     throw new Error(
-      '万相未返回图片 URL，请检查模型是否为 wan2.7-image / wan2.7-image-pro，以及套餐是否开通万相。'
+      '万相未返回图片 URL，请检查模型是否为 wan2.7-image-pro，以及套餐是否开通万相。'
     );
   }
   return { images, raw: data };

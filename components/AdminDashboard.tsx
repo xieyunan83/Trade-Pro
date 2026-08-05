@@ -80,7 +80,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const [geminiTestMsg, setGeminiTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [wanApiKey, setWanApiKey] = useState('');
   const [wanBaseUrl, setWanBaseUrl] = useState('https://token-plan.cn-beijing.maas.aliyuncs.com');
-  const [wanModelId, setWanModelId] = useState('wan2.7-image');
+  const [wanModelId, setWanModelId] = useState('wan2.7-image-pro');
   const [defaultAIModel, setDefaultAIModel] = useState<'qwen' | 'gemini' | 'auto'>('qwen');
   const [supabaseUrl, setSupabaseUrl] = useState('');
   const [supabaseAnonKey, setSupabaseAnonKey] = useState('');
@@ -449,7 +449,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
               provider: 'wan',
               apiKey: wanKeyToSave,
               baseUrl: (wanBaseUrl.trim() || qwenBaseUrl.trim()) || undefined,
-              modelId: wanModelId.trim() || 'wan2.7-image',
+              modelId: wanModelId.trim() || 'wan2.7-image-pro',
             })
           );
           cloudParts.push(`${r.label}${r.ok ? '✓' : '✗'}`);
@@ -607,7 +607,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     })();
     localStorage.setItem('trade_scout_wan_api_key', key);
     localStorage.setItem('trade_scout_wan_base_url', origin);
-    localStorage.setItem('trade_scout_wan_model_id', wanModelId.trim() || 'wan2.7-image');
+    localStorage.setItem('trade_scout_wan_model_id', wanModelId.trim() || 'wan2.7-image-pro');
     setWanBaseUrl(origin);
     if (!wanApiKey.trim()) setWanApiKey(key);
     setIsTestingWan(true);
@@ -616,7 +616,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
       const result = await testWanImageApi({
         apiKey: key,
         origin,
-        modelId: wanModelId.trim() || 'wan2.7-image',
+        modelId: wanModelId.trim() || 'wan2.7-image-pro',
       });
       setWanTestMsg({ ok: result.success, text: result.message });
     } catch (e: any) {
@@ -1297,11 +1297,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                 {/* 万相图片生成 */}
                 <div className="bg-pink-50/50 border border-pink-100 rounded-2xl p-6 space-y-4">
                   <div className="flex items-center gap-2 text-pink-800 font-black text-sm">
-                    <Image size={16} /> 万相图片生成（wan2.7-image）
+                    <Image size={16} /> 万相图片生成（wan2.7-image-pro）
                   </div>
                   <p className="text-xs text-slate-500 font-medium">
                     与上方千问共用同一把 Token Plan Key（sk-sp-）和域名 token-plan.cn-beijing.maas.aliyuncs.com。
-                    Key 留空则自动用千问 Key。若千问已通而万相仍 401，请到阿里云控制台确认套餐已开通 wan2.7-image。
+                    Key 留空则自动用千问 Key。海报长图默认 wan2.7-image-pro；请确认套餐已开通该模型。
                   </p>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="md:col-span-2">
@@ -1330,7 +1330,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                         type="text"
                         value={wanModelId}
                         onChange={e => setWanModelId(e.target.value)}
-                        placeholder="wan2.7-image"
+                        placeholder="wan2.7-image-pro"
                         className="w-full bg-white border border-pink-100 rounded-xl px-4 py-3 font-bold text-sm"
                       />
                     </div>
