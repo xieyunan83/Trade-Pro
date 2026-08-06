@@ -49,8 +49,18 @@ const sanitize = (str: any) => {
     return str.replace(/\0/g, "").replace(/\r\n/g, "\n").trim();
 };
 
+const formatExportTime = (ms?: number) => {
+    if (!ms || !Number.isFinite(ms)) return '';
+    try {
+        return new Date(ms).toLocaleString('zh-CN', { hour12: false });
+    } catch {
+        return '';
+    }
+};
+
 /**
- * Export Clients to Excel (CRM)
+ * Export Clients to Excel (CRM) — one row per contact (company fields repeated).
+ * Columns: company, type, industry, country, keyword source, contact, email, phone, title, etc.
  */
 export const exportClientsToExcel = (clients: Client[]) => {
     if (typeof XLSX === 'undefined') {
@@ -63,32 +73,104 @@ export const exportClientsToExcel = (clients: Client[]) => {
         return;
     }
 
-    const data = clients.map(c => ({
-        "Company Name": c.name,
-        "Website": c.website || '', // Added Website column
-        "Country": c.country,
-        "Type": c.type,
-        "Status": c.status,
-        "Product Type": c.productType,
-        "Price Range": c.priceRange,
-        "Sample Needed": c.isSampleNeeded ? 'Yes' : 'No',
-        "Analyzed": c.hasAnalyzed ? 'Yes' : 'No',
-        "Next Follow Up": c.nextFollowUpDate,
-        "Last Sent": c.lastContactSent,
-        "Last Received": c.lastContactReceived,
-        "Activity Log": c.activityLog
-    }));
+    const rows: Record<string, string | number>[] = [];
+    for (const c of clients) {
+        const keywordSource = [
+            c.searchKeyword,
+            ...(c.searchedKeywords || []),
+            ...(c.tags || []).filter((t) => typeof t === 'string' && t.startsWith('关键词:')),
+        ]
+            .filter(Boolean)
+            .map((s) => String(s).replace(/^关键词:/, ''))
+            .filter((v, i, arr) => arr.indexOf(v) === i)
+            .join(' | ');
 
-    const ws = XLSX.utils.json_to_sheet(data);
-    
-    // Auto-width columns
-    const wscols = Object.keys(data[0]).map(k => ({ wch: 20 }));
-    ws['!cols'] = wscols;
+        const base = {
+            客户公司名: c.name || '',
+            客户类型: c.type || '',
+            公司所属行业: c.industry || '',
+            所属国家: c.country || '',
+            网址: c.website || '',
+            关键词搜索来源: keywordSource,
+            跟进状态: c.status || '',
+            产品类型: c.productType || '',
+            已背调: c.hasBackgroundCheck || c.hasAnalyzed ? '是' : '否',
+            背调时间: formatExportTime(c.lastBackgroundCheckAt),
+            下次跟进: c.nextFollowUpDate || '',
+            标签: (c.tags || []).join(' | '),
+        };
+
+        const contacts = c.contacts?.filter(Boolean) || [];
+        if (contacts.length === 0) {
+            rows.push({
+                ...base,
+                联系人名称: '',
+                职位: '',
+                邮箱地址: '',
+                电话: '',
+                LinkedIn: '',
+                邮箱来源: '',
+                邮箱状态: '',
+            });
+            continue;
+        }
+        for (const dm of contacts) {
+            rows.push({
+                ...base,
+                联系人名称: dm.name || '',
+                职位: dm.title || '',
+                邮箱地址: dm.emailGuess || '',
+                电话: dm.phone || '',
+                LinkedIn: dm.linkedin || '',
+                邮箱来源: dm.emailSource || dm.source || '',
+                邮箱状态: dm.emailStatus || (dm.isVerified ? 'valid' : ''),
+            });
+        }
+    }
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const keys = Object.keys(rows[0] || {});
+    ws['!cols'] = keys.map((k) => ({ wch: Math.min(36, Math.max(12, k.length + 4)) }));
 
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Clients");
-    
-    XLSX.writeFile(wb, `CRM_Clients_Export_${Date.now()}.xlsx`);
+    XLSX.utils.book_append_sheet(wb, ws, "客户资料");
+    XLSX.writeFile(wb, `CRM_客户资料_${Date.now()}.xlsx`);
+};
+
+/**
+ * Export completed automation / 背调 queue rows to Excel (same column schema as CRM).
+ */
+export const exportAutomationResultsToExcel = (tasks: AutomationResult[]) => {
+    const clients: Client[] = tasks
+        .filter((t) => t.status === 'completed' && t.analysis)
+        .map((t) => {
+            const a = t.analysis!;
+            return {
+                id: t.id,
+                name: a.companyInfo?.name || t.clientName || '',
+                website: a.companyInfo?.website || t.website || '',
+                country: a.searchCountry || t.country || a.companyInfo?.city || '',
+                type: '进口商' as const,
+                status: '新建/潜在' as const,
+                productType: a.searchKeyword || t.keyword || '',
+                industry: a.companyInfo?.nature || '',
+                priceRange: '',
+                isSampleNeeded: false,
+                hasBackgroundCheck: true,
+                hasAnalyzed: true,
+                lastBackgroundCheckAt: t.completedAt || t.createdAt,
+                lastOrderDate: '',
+                lastContactSent: '',
+                lastContactReceived: '',
+                nextFollowUpDate: '',
+                activityLog: '',
+                contacts: a.decisionMakers || [],
+                searchKeyword: a.searchKeyword || t.keyword,
+                searchedKeywords: a.searchKeyword ? [a.searchKeyword] : undefined,
+                tags: a.searchTags || [],
+            } satisfies Client;
+        });
+    exportClientsToExcel(clients);
 };
 
 /**

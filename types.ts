@@ -170,6 +170,8 @@ export interface AutomationResult {
   /** 关联关键词，便于任务归类 */
   keyword?: string;
   createdAt?: number;
+  /** 背调完成时间（ms epoch） */
+  completedAt?: number;
   ownerUsername?: string;
   departmentId?: string;
 }
@@ -261,6 +263,8 @@ export interface Client {
   isSampleNeeded: boolean;
   hasAnalyzed?: boolean;
   hasBackgroundCheck?: boolean; // Added field
+  /** 最近一次背调完成时间（ms epoch） */
+  lastBackgroundCheckAt?: number;
   lastOrderDate: string;
   lastContactSent: string;
   lastContactReceived: string;
@@ -269,6 +273,8 @@ export interface Client {
   contacts?: DecisionMaker[]; // Added contacts list
   /** 搜索来源关键词 */
   searchKeyword?: string;
+  /** 曾用不同关键词搜到过该公司（去重后） */
+  searchedKeywords?: string[];
   /** 管理标签 */
   tags?: string[];
   ownerUsername?: string;
@@ -431,12 +437,16 @@ export interface ClientSearchResult {
   fitReason?: string;
   /** 搜索来源：产品关键词 */
   searchKeyword?: string;
+  /** 曾用不同关键词搜到过该公司（含本次），用于去重提示 */
+  searchedKeywords?: string[];
   /** 搜索来源：目标国家（本次检索选定的国家） */
   searchCountry?: string;
   /** 管理标签，如 关键词:Car toy / 国家:Poland */
   searchTags?: string[];
   /** 所属搜索归档 ID */
   searchId?: string;
+  /** 是否曾出现在历史搜索归档中（同域名） */
+  previouslySearched?: boolean;
 }
 
 export interface EmailTemplateRequest {

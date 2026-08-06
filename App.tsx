@@ -1189,14 +1189,26 @@ const App: React.FC = () => {
 
   // RESTORED: Update CRM status if re-analyzed
   const updateCrmStatus = (analysis: AnalysisResult) => { 
+      const now = Date.now();
+      const kw = (analysis.searchKeyword || '').trim();
       setCrmClients(prev => prev.map(c => {
           if (c.website?.toLowerCase() === analysis.companyInfo.website?.toLowerCase() || c.name === analysis.companyInfo.name) {
+              const searchedKeywords = Array.from(
+                new Set([...(c.searchedKeywords || []), c.searchKeyword, kw].filter(Boolean) as string[])
+              );
               return { 
                   ...c, 
                   hasAnalyzed: true,
                   hasBackgroundCheck: true,
+                  lastBackgroundCheckAt: now,
+                  industry: analysis.companyInfo?.nature || c.industry,
+                  contacts: (analysis.decisionMakers?.length
+                    ? analysis.decisionMakers
+                    : c.contacts) || [],
+                  searchKeyword: kw || c.searchKeyword,
+                  searchedKeywords,
+                  tags: analysis.searchTags || c.tags,
                   activityLog: c.activityLog + ` [Analyzed ${new Date().toLocaleDateString()}]`,
-                  contacts: (c.contacts && c.contacts.length > 0) ? c.contacts : (analysis.decisionMakers || [])
               };
           }
           return c;
@@ -1389,6 +1401,7 @@ const App: React.FC = () => {
         // 保留搜索目标国在任务上；真实 HQ 在 analysis.companyInfo 里查看
         country: task.country,
         status: 'completed',
+        completedAt: Date.now(),
         analysis: {
           ...result,
           searchKeyword: result.searchKeyword || kw || undefined,
@@ -1661,7 +1674,8 @@ const App: React.FC = () => {
                   clientName: result.companyInfo?.name || task.clientName,
                   website: result.companyInfo?.website || task.website,
                   country: result.companyInfo?.headquarters?.split(',').pop()?.trim() || task.country,
-                  status: 'completed', 
+                  status: 'completed',
+                  completedAt: Date.now(),
                   analysis: result, 
                   mailGroup: undefined,
                   keyword: kw || task.keyword || discoveryState.product,
@@ -2154,6 +2168,7 @@ const App: React.FC = () => {
                     <ClientFinder 
                         state={discoveryState} 
                         onStateChange={handleDiscoveryStateChange}
+                        discoveryArchives={discoveryArchives}
                         onSearchArchived={handleSearchArchived}
                         onSelect={(item) => {
                           const domain = typeof item === 'string' ? item : (item.website || item.name);

@@ -17,9 +17,13 @@ import {
   Building2,
   Users,
   ShieldCheck,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { ContinentCountryMultiSelect } from './ContinentCountryMultiSelect';
 import { findCountryByEn } from '../data/countriesByContinent';
+import { exportAutomationResultsToExcel } from '../services/exportService';
+import { formatBackgroundCheckTime } from '../utils/crmHistory';
+import { IndustryMultiSelect } from './IndustryMultiSelect';
 
 interface ModulePromoGeneratorProps {
   onStartAutomation: (config: AutomationPipelineConfig) => void;
@@ -209,14 +213,12 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
 
                   <div>
                     <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
-                      2. 行业词（可留空）
+                      2. 行业（可多选 / 可手动录入，可留空）
                     </label>
-                    <input
-                      type="text"
+                    <IndustryMultiSelect
                       value={draft.industry}
-                      onChange={(e) => patchDraft({ industry: e.target.value })}
-                      className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold"
-                      placeholder="例如: Baby products / Juvenile furniture"
+                      onChange={(v) => patchDraft({ industry: v })}
+                      placeholder="例如: Baby Products / Home Decor"
                     />
                   </div>
 
@@ -479,6 +481,14 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
             )}
           </h3>
           <div className="flex flex-wrap gap-2">
+            {completedCount > 0 && (
+              <button
+                onClick={() => exportAutomationResultsToExcel(automationResults)}
+                className="inline-flex items-center gap-1.5 bg-emerald-600 text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-emerald-700"
+              >
+                <FileSpreadsheet size={14} /> 导出 Excel
+              </button>
+            )}
             {completedCount > 0 && canExportPpt && (
               <button
                 onClick={onDownloadAll}
@@ -525,6 +535,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
               <tr className="bg-slate-50 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">
                 <th className="px-6 py-4">客户信息</th>
                 <th className="px-6 py-4">状态</th>
+                <th className="px-6 py-4">背调时间</th>
                 <th className="px-6 py-4">模式</th>
                 <th className="px-6 py-4 text-right">操作</th>
               </tr>
@@ -532,7 +543,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
             <tbody className="divide-y divide-slate-50">
               {automationResults.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="px-6 py-12 text-center text-slate-400 font-bold">
+                  <td colSpan={5} className="px-6 py-12 text-center text-slate-400 font-bold">
                     暂无任务队列
                   </td>
                 </tr>
@@ -544,6 +555,11 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                       <div className="text-[10px] text-slate-400 font-bold">
                         {task.website} • {task.country}
                       </div>
+                      {task.keyword && (
+                        <div className="mt-1 inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded text-[9px] font-black">
+                          关键词:{task.keyword}
+                        </div>
+                      )}
                     </td>
                     <td className="px-6 py-4">
                       <div
@@ -565,6 +581,13 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                         {task.status === 'pending' ? <Hourglass size={10} /> : null}
                         {task.status.replace('_', ' ')}
                       </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className="text-[11px] font-bold text-slate-600 whitespace-nowrap">
+                        {task.status === 'completed'
+                          ? formatBackgroundCheckTime(task.completedAt || task.createdAt) || '—'
+                          : '—'}
+                      </span>
                     </td>
                     <td className="px-6 py-4">
                       <span className="text-[10px] font-black text-slate-400 uppercase">

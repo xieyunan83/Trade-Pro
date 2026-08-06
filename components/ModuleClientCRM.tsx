@@ -1,7 +1,14 @@
 import React, { useEffect } from 'react';
 import { Client, HistoryItem } from '../types';
-import { Search, CheckCircle2, AlertTriangle, Trash2, ExternalLink } from 'lucide-react';
-import { clientHasBackgroundCheck, findHistoryForClient } from '../utils/crmHistory';
+import { Search, CheckCircle2, AlertTriangle, Trash2, ExternalLink, Download, Tag } from 'lucide-react';
+import {
+  clientHasBackgroundCheck,
+  findHistoryForClient,
+  formatBackgroundCheckTime,
+  resolveBackgroundCheckAt,
+} from '../utils/crmHistory';
+import { exportClientsToExcel } from '../services/exportService';
+import { IndustryMultiSelect } from './IndustryMultiSelect';
 
 interface ModuleClientCRMProps {
   clients: Client[];
@@ -36,15 +43,36 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
       let changed = false;
       const next = prev.map((c) => {
         if (c.hasBackgroundCheck) return c;
-        if (c.hasAnalyzed || findHistoryForClient(c, history)) {
+        const hist = findHistoryForClient(c, history);
+        if (c.hasAnalyzed || hist) {
           changed = true;
-          return { ...c, hasBackgroundCheck: true, hasAnalyzed: true };
+          return {
+            ...c,
+            hasBackgroundCheck: true,
+            hasAnalyzed: true,
+            lastBackgroundCheckAt: c.lastBackgroundCheckAt || hist?.timestamp,
+          };
         }
         return c;
       });
       return changed ? next : prev;
     });
   }, [needsBgFlagHeal, history, setClients]);
+
+  // Backfill 背调时间 from history when missing
+  useEffect(() => {
+    setClients((prev) => {
+      let changed = false;
+      const next = prev.map((c) => {
+        if (c.lastBackgroundCheckAt) return c;
+        const hist = findHistoryForClient(c, history);
+        if (!hist?.timestamp) return c;
+        changed = true;
+        return { ...c, lastBackgroundCheckAt: hist.timestamp, hasBackgroundCheck: true };
+      });
+      return changed ? next : prev;
+    });
+  }, [history, setClients]);
 
   const onDeleteClient = (id: string) => {
     setClients((prev) => prev.filter((c) => c.id !== id));
@@ -65,7 +93,10 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
       (c.website || '').toLowerCase().includes(searchTerm.toLowerCase());
     const matchesCountry = filterCountry === 'all' || c.country === filterCountry;
     const matchesType = filterType === 'all' || c.type === filterType;
-    const matchesIndustry = filterIndustry === 'all' || c.industry === filterIndustry;
+    const matchesIndustry =
+      filterIndustry === 'all' ||
+      !filterIndustry ||
+      (c.industry || '').toLowerCase().includes(filterIndustry.toLowerCase().split(',')[0].trim());
     const matchesBackgroundCheck =
       !filterBackgroundCheck || clientHasBackgroundCheck(c, history);
     return (
@@ -91,25 +122,68 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
 
   const selectedClients = filteredClients.filter((c) => selectedClientIds.has(c.id));
 
+  const handleExport = () => {
+    const list = selectedClients.length > 0 ? selectedClients : filteredClients;
+    if (!list.length) {
+      alert('没有可导出的客户');
+      return;
+    }
+    exportClientsToExcel(list);
+  };
+
+  const KeywordTags: React.FC<{ client: Client }> = ({ client }) => {
+    const kws = Array.from(
+      new Set(
+        [
+          client.searchKeyword,
+          ...(client.searchedKeywords || []),
+          ...(client.tags || [])
+            .filter((t) => t.startsWith('关键词:'))
+            .map((t) => t.replace(/^关键词:/, '')),
+        ].filter(Boolean) as string[]
+      )
+    ).slice(0, 4);
+    if (!kws.length) return null;
+    return (
+      <div className="flex flex-wrap gap-1 mt-1">
+        {kws.map((k) => (
+          <span
+            key={k}
+            className="inline-flex items-center gap-0.5 bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded text-[9px] font-black"
+          >
+            <Tag size={8} /> {k}
+          </span>
+        ))}
+      </div>
+    );
+  };
+
   const BgStatus: React.FC<{ client: Client }> = ({ client }) => {
     const checked = clientHasBackgroundCheck(client, history);
     const canOpen = !!findHistoryForClient(client, history);
+    const at = resolveBackgroundCheckAt(client, history);
+    const timeLabel = formatBackgroundCheckTime(at);
     if (checked) {
       return (
         <button
           type="button"
           onClick={() => openClientReport(client)}
           disabled={!canOpen}
-          title={canOpen ? '查看背调资料' : '已标记背调，但本地无报告'}
-          className={`inline-flex items-center gap-1 ${
+          title={canOpen ? `查看背调资料${timeLabel ? `（${timeLabel}）` : ''}` : '已标记背调，但本地无报告'}
+          className={`inline-flex flex-col items-start gap-0.5 ${
             canOpen
               ? 'text-green-600 hover:text-green-700 cursor-pointer'
               : 'text-green-500 cursor-default'
           }`}
         >
-          <CheckCircle2 size={16} />
-          <span className="md:hidden text-xs font-bold">已背调</span>
-          {canOpen && <ExternalLink size={12} className="opacity-60" />}
+          <span className="inline-flex items-center gap-1">
+            <CheckCircle2 size={16} />
+            <span className="md:hidden text-xs font-bold">已背调</span>
+            {canOpen && <ExternalLink size={12} className="opacity-60" />}
+          </span>
+          {timeLabel && (
+            <span className="text-[10px] font-bold text-slate-500 whitespace-nowrap">{timeLabel}</span>
+          )}
         </button>
       );
     }
@@ -124,15 +198,27 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   return (
     <div className="max-w-7xl mx-auto space-y-4 sm:space-y-8 animate-fade-in">
       <div className="bg-white p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm flex flex-col gap-3 sm:gap-4">
-        <div className="relative w-full">
-          <Search className="absolute left-4 top-3.5 text-slate-400" size={18} />
-          <input
-            type="text"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-12 pr-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold text-sm sm:text-base"
-            placeholder="搜索客户名称或网址..."
-          />
+        <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+          <div className="relative w-full flex-1">
+            <Search className="absolute left-4 top-3.5 text-slate-400" size={18} />
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-12 pr-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold text-sm sm:text-base"
+              placeholder="搜索客户名称或网址..."
+            />
+          </div>
+          <button
+            type="button"
+            onClick={handleExport}
+            className="inline-flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-3 rounded-xl font-bold text-sm shrink-0"
+            title={selectedClients.length ? `导出选中 ${selectedClients.length} 条` : '导出当前筛选结果'}
+          >
+            <Download size={16} />
+            导出 Excel
+            {selectedClients.length > 0 ? ` (${selectedClients.length})` : ''}
+          </button>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-3">
           <select
@@ -158,18 +244,14 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
             <option value="批发商">批发商</option>
             <option value="分销商">分销商</option>
           </select>
-          <select
-            value={filterIndustry}
-            onChange={(e) => setFilterIndustry(e.target.value)}
-            className="px-3 py-2.5 rounded-xl border border-slate-200 font-bold text-sm appearance-none bg-white col-span-2 sm:col-span-1"
-          >
-            <option value="all">所有行业</option>
-            {Array.from(new Set(clients.map((c) => c.industry))).map((i) => (
-              <option key={i} value={i}>
-                {i}
-              </option>
-            ))}
-          </select>
+          <div className="col-span-2 sm:col-span-1">
+            <IndustryMultiSelect
+              compact
+              value={filterIndustry === 'all' ? '' : filterIndustry}
+              onChange={(v) => setFilterIndustry(v || 'all')}
+              placeholder="所有行业"
+            />
+          </div>
           <label className="flex items-center gap-2 font-bold text-xs sm:text-sm text-slate-700 col-span-2 sm:col-span-2 lg:col-span-2">
             <input
               type="checkbox"
@@ -224,6 +306,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                         {client.name}
                       </button>
                       <div className="text-xs text-blue-600 font-bold truncate mt-0.5">{client.website}</div>
+                      <KeywordTags client={client} />
                     </div>
                   </div>
                   <button
@@ -247,7 +330,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
 
       {/* Desktop table */}
       <div className="hidden md:block bg-white rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm overflow-x-auto">
-        <table className="w-full text-left border-collapse min-w-[640px]">
+        <table className="w-full text-left border-collapse min-w-[720px]">
           <thead>
             <tr className="bg-slate-50 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">
               <th className="px-4 lg:px-6 py-4 w-12">
@@ -301,6 +384,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                       >
                         {client.name}
                       </button>
+                      <KeywordTags client={client} />
                     </td>
                     <td className="px-4 lg:px-6 py-4 text-sm font-bold text-slate-600">{client.country}</td>
                     <td className="px-4 lg:px-6 py-4 text-sm font-bold text-slate-600">{client.type}</td>

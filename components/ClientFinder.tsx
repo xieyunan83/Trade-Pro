@@ -1,13 +1,16 @@
 import React, { useMemo, useRef, useState, useEffect } from 'react';
 import { DiscoveryState, ClientSearchResult, CLIENT_TYPE_OPTIONS, DiscoveryArchiveItem } from '../types';
-import { Search, Globe, MapPin, Briefcase, Loader2, Plus, Layers, Star, Building2, ChevronDown, X, Check, Tag } from 'lucide-react';
+import { Search, Globe, MapPin, Briefcase, Loader2, Plus, Layers, Star, ChevronDown, X, Check, Tag } from 'lucide-react';
 import { searchPotentialClients } from '../services/geminiService';
 import { CONTINENTS, countryLabel, countrySearchValue, findCountryByEn, type ContinentGroup } from '../data/countriesByContinent';
-import { stampSearchResults } from '../utils/searchTags';
+import { mergeResultsWithPriorKeywords, stampSearchResults } from '../utils/searchTags';
+import { IndustryMultiSelect } from './IndustryMultiSelect';
 
 interface ClientFinderProps {
   state: DiscoveryState;
   onStateChange: (state: DiscoveryState) => void;
+  /** 历史搜索归档：用于同公司关键词去重标签 */
+  discoveryArchives?: DiscoveryArchiveItem[];
   /** 每次（按国）搜索完成时可靠归档 */
   onSearchArchived?: (archive: DiscoveryArchiveItem) => void;
   onSelect: (result: ClientSearchResult | string) => void;
@@ -31,7 +34,15 @@ const normalizeClientTypes = (state: DiscoveryState): string[] => {
   return [];
 };
 
-export const ClientFinder: React.FC<ClientFinderProps> = ({ state, onStateChange, onSearchArchived, onSelect, onBatchAddToCRM, onBatchAnalyze }) => {
+export const ClientFinder: React.FC<ClientFinderProps> = ({
+  state,
+  onStateChange,
+  discoveryArchives = [],
+  onSearchArchived,
+  onSelect,
+  onBatchAddToCRM,
+  onBatchAnalyze,
+}) => {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
@@ -150,8 +161,11 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({ state, onStateChange
         }
       }
 
+      // 合并同域名 + 叠加历史关键词标签，避免重复背调
+      const merged = mergeResultsWithPriorKeywords(allStamped, discoveryArchives);
+
       patchState({
-        results: allStamped,
+        results: merged,
         hasSearched: true,
         countries: selectedCountries,
         country: selectedCountries.join(', '),
@@ -160,7 +174,7 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({ state, onStateChange
       });
       setSelectedIndices(new Set());
 
-      if (allStamped.length === 0 && errors.length) {
+      if (merged.length === 0 && errors.length) {
         setErrorMsg(errors.join('；'));
       } else if (errors.length) {
         setErrorMsg(`部分市场失败：${errors.join('；')}（已保存成功的结果）`);
@@ -215,17 +229,14 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({ state, onStateChange
             </div>
           </div>
           <div>
-            <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">行业</label>
-            <div className="relative">
-              <Building2 className="absolute left-4 top-3.5 text-signal-500/70" size={18} />
-              <input
-                type="text"
-                value={state.industry}
-                onChange={(e) => patchState({ industry: e.target.value })}
-                className="w-full pl-12 pr-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-cyan-500/30 font-bold"
-                placeholder="例如: Baby Products / Home Decor"
-              />
-            </div>
+            <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
+              行业（可多选 / 可手动录入）
+            </label>
+            <IndustryMultiSelect
+              value={state.industry}
+              onChange={(v) => patchState({ industry: v })}
+              placeholder="例如: Baby Products / Home Decor"
+            />
           </div>
 
           {/* 国家多选：一级大洲 / 二级国家 */}
@@ -503,11 +514,24 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({ state, onStateChange
                   </span>
                 </div>
                 <div className="flex flex-wrap gap-1.5 mb-3">
-                  {res.searchKeyword && (
-                    <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-lg text-[10px] font-black">
-                      <Tag size={10} /> {res.searchKeyword}
+                  {res.previouslySearched && (
+                    <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-800 px-2 py-0.5 rounded-lg text-[10px] font-black border border-amber-100">
+                      曾搜索过 · 注意勿重复背调
                     </span>
                   )}
+                  {(res.searchedKeywords?.length
+                    ? res.searchedKeywords
+                    : res.searchKeyword
+                      ? [res.searchKeyword]
+                      : []
+                  ).map((kw) => (
+                    <span
+                      key={kw}
+                      className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-lg text-[10px] font-black"
+                    >
+                      <Tag size={10} /> {kw}
+                    </span>
+                  ))}
                   {(res.searchCountry || res.country) && (
                     <span className="bg-sky-50 text-sky-700 px-2 py-0.5 rounded-lg text-[10px] font-black">
                       {res.searchCountry || res.country}

@@ -34,9 +34,16 @@ const mapDiscoveryType = (t?: string): Client['type'] => {
 /** Build CRM patch fields from a completed background-check report */
 export const clientPatchFromAnalysis = (
   data: AnalysisResult | undefined,
-  fallbackDomain?: string
+  fallbackDomain?: string,
+  checkedAt?: number
 ): Partial<Client> => {
   const website = data?.companyInfo?.website || fallbackDomain || '';
+  const kw = (data?.searchKeyword || '').trim();
+  const tagKws = (data?.searchTags || [])
+    .filter((t) => typeof t === 'string' && t.startsWith('关键词:'))
+    .map((t) => t.replace(/^关键词:/, '').trim())
+    .filter(Boolean);
+  const searchedKeywords = [...new Set([kw, ...tagKws].filter(Boolean))];
   return {
     name: data?.companyInfo?.name || fallbackDomain || 'Unknown',
     website,
@@ -50,8 +57,10 @@ export const clientPatchFromAnalysis = (
     priceRange: data?.businessScope?.priceSensitivity || 'Medium',
     hasAnalyzed: true,
     hasBackgroundCheck: true,
+    lastBackgroundCheckAt: checkedAt || Date.now(),
     contacts: data?.decisionMakers || [],
     searchKeyword: data?.searchKeyword,
+    searchedKeywords: searchedKeywords.length ? searchedKeywords : undefined,
     tags: data?.searchTags,
   };
 };
@@ -74,12 +83,21 @@ export const mergeHistoryItemsIntoCrm = (
       stats.skipped += 1;
       continue;
     }
-    const patch = clientPatchFromAnalysis(data, item.domain);
+    const patch = clientPatchFromAnalysis(data, item.domain, item.timestamp);
     const idx = findClientIndex(clients, patch.website, patch.name);
     if (idx >= 0) {
+      const prevKws = clients[idx].searchedKeywords || [];
+      const nextKws = [
+        ...new Set([...(patch.searchedKeywords || []), ...prevKws, clients[idx].searchKeyword].filter(Boolean) as string[]),
+      ];
       clients[idx] = {
         ...clients[idx],
         ...patch,
+        searchedKeywords: nextKws,
+        lastBackgroundCheckAt: Math.max(
+          clients[idx].lastBackgroundCheckAt || 0,
+          patch.lastBackgroundCheckAt || 0
+        ),
         activityLog:
           (clients[idx].activityLog || '') +
           ` [Synced from 记录中心 ${new Date().toLocaleDateString()}]`,
@@ -187,6 +205,34 @@ export const clientHasBackgroundCheck = (
 ): boolean => {
   if (client.hasBackgroundCheck || client.hasAnalyzed) return true;
   return !!findHistoryForClient(client, history);
+};
+
+/** Resolve 背调时间：CRM 字段优先，否则取匹配历史记录的 timestamp */
+export const resolveBackgroundCheckAt = (
+  client: Client,
+  history: HistoryItem[] = []
+): number | undefined => {
+  if (client.lastBackgroundCheckAt && client.lastBackgroundCheckAt > 0) {
+    return client.lastBackgroundCheckAt;
+  }
+  const item = findHistoryForClient(client, history);
+  return item?.timestamp;
+};
+
+export const formatBackgroundCheckTime = (ms?: number): string => {
+  if (!ms || !Number.isFinite(ms)) return '';
+  try {
+    return new Date(ms).toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+  } catch {
+    return '';
+  }
 };
 
 /** Whether a history / analysis domain is already in CRM */
