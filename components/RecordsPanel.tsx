@@ -14,6 +14,7 @@ import {
   Pencil,
   Tag,
   ShieldCheck,
+  RefreshCw,
 } from 'lucide-react';
 import { normalizeCountryZh } from '../utils/countryNormalize';
 import {
@@ -58,6 +59,8 @@ interface RecordsPanelProps {
   onPatchHistory?: (id: string, patch: Partial<Pick<HistoryItem, 'keyword' | 'country'>>) => void;
   /** 批量更新 */
   onBulkPatchHistory?: (ids: string[], patch: Partial<Pick<HistoryItem, 'keyword' | 'country'>>) => void;
+  /** 对已有背调记录再次背调 */
+  onReanalyzeHistory?: (item: HistoryItem) => void;
 }
 
 const UNCATEGORIZED = '未分类';
@@ -128,6 +131,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   canImportCrm = false,
   onPatchHistory,
   onBulkPatchHistory,
+  onReanalyzeHistory,
 }) => {
   const [tab, setTab] = useState<RecordTab>('background');
   const [groupBy, setGroupBy] = useState<GroupBy>('keyword');
@@ -750,6 +754,19 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                             </div>
                           </div>
                           <div className="flex justify-end gap-2 mt-2">
+                            {onReanalyzeHistory && (
+                              <button
+                                type="button"
+                                className="text-[10px] font-black text-amber-700"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onReanalyzeHistory(row.item);
+                                }}
+                                title="再次背调"
+                              >
+                                <RefreshCw size={11} className="inline" /> 再次背调
+                              </button>
+                            )}
                             {canExportPpt && (
                               <button
                                 type="button"

@@ -1,6 +1,15 @@
 import React, { useEffect } from 'react';
 import { Client, HistoryItem } from '../types';
-import { Search, CheckCircle2, AlertTriangle, Trash2, ExternalLink, Download, Tag } from 'lucide-react';
+import {
+  Search,
+  CheckCircle2,
+  AlertTriangle,
+  Trash2,
+  ExternalLink,
+  Download,
+  Tag,
+  RefreshCw,
+} from 'lucide-react';
 import {
   clientHasBackgroundCheck,
   findHistoryForClient,
@@ -14,6 +23,8 @@ interface ModuleClientCRMProps {
   clients: Client[];
   setClients: React.Dispatch<React.SetStateAction<Client[]>>;
   onBatchAnalyze: (clients: Client[]) => Promise<void>;
+  /** 单客户再次背调（与批量同一入口） */
+  onReanalyze?: (client: Client) => void;
   history: HistoryItem[];
   onOpenHistory: (item: HistoryItem) => void;
 }
@@ -22,6 +33,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   clients,
   setClients,
   onBatchAnalyze,
+  onReanalyze,
   history,
   onOpenHistory,
 }) => {
@@ -122,6 +134,17 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
 
   const selectedClients = filteredClients.filter((c) => selectedClientIds.has(c.id));
 
+  const triggerReanalyze = (client: Client) => {
+    const at = resolveBackgroundCheckAt(client, history);
+    const timeLabel = formatBackgroundCheckTime(at);
+    const tip = timeLabel
+      ? `该公司已于 ${timeLabel} 完成背调。是否再次背调以更新信息？`
+      : '是否对该客户再次背调？';
+    if (!confirm(tip)) return;
+    if (onReanalyze) onReanalyze(client);
+    else void onBatchAnalyze([client]);
+  };
+
   const handleExport = () => {
     const list = selectedClients.length > 0 ? selectedClients : filteredClients;
     if (!list.length) {
@@ -165,33 +188,49 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
     const timeLabel = formatBackgroundCheckTime(at);
     if (checked) {
       return (
-        <button
-          type="button"
-          onClick={() => openClientReport(client)}
-          disabled={!canOpen}
-          title={canOpen ? `查看背调资料${timeLabel ? `（${timeLabel}）` : ''}` : '已标记背调，但本地无报告'}
-          className={`inline-flex flex-col items-start gap-0.5 ${
-            canOpen
-              ? 'text-green-600 hover:text-green-700 cursor-pointer'
-              : 'text-green-500 cursor-default'
-          }`}
-        >
-          <span className="inline-flex items-center gap-1">
+        <div className="inline-flex flex-col items-start gap-0.5">
+          <button
+            type="button"
+            onClick={() => openClientReport(client)}
+            disabled={!canOpen}
+            title={canOpen ? `查看背调资料${timeLabel ? `（${timeLabel}）` : ''}` : '已标记背调，但本地无报告'}
+            className={`inline-flex items-center gap-1 ${
+              canOpen
+                ? 'text-green-600 hover:text-green-700 cursor-pointer'
+                : 'text-green-500 cursor-default'
+            }`}
+          >
             <CheckCircle2 size={16} />
             <span className="md:hidden text-xs font-bold">已背调</span>
             {canOpen && <ExternalLink size={12} className="opacity-60" />}
-          </span>
+          </button>
           {timeLabel && (
             <span className="text-[10px] font-bold text-slate-500 whitespace-nowrap">{timeLabel}</span>
           )}
-        </button>
+          <button
+            type="button"
+            onClick={() => triggerReanalyze(client)}
+            className="inline-flex items-center gap-0.5 text-[10px] font-black text-amber-600 hover:text-amber-700 hover:underline"
+          >
+            <RefreshCw size={10} /> 再次背调
+          </button>
+        </div>
       );
     }
     return (
-      <span className="inline-flex items-center gap-1 text-slate-300" title="未做背调">
-        <AlertTriangle size={16} />
-        <span className="md:hidden text-xs font-bold">未背调</span>
-      </span>
+      <div className="inline-flex flex-col items-start gap-0.5">
+        <span className="inline-flex items-center gap-1 text-slate-300" title="未做背调">
+          <AlertTriangle size={16} />
+          <span className="md:hidden text-xs font-bold">未背调</span>
+        </span>
+        <button
+          type="button"
+          onClick={() => triggerReanalyze(client)}
+          className="inline-flex items-center gap-0.5 text-[10px] font-black text-blue-600 hover:underline"
+        >
+          <RefreshCw size={10} /> 去背调
+        </button>
+      </div>
     );
   };
 
@@ -309,12 +348,22 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                       <KeywordTags client={client} />
                     </div>
                   </div>
+                <div className="flex items-start gap-1 flex-shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => triggerReanalyze(client)}
+                    className="text-amber-600 hover:text-amber-700 p-1"
+                    title="再次背调"
+                  >
+                    <RefreshCw size={16} />
+                  </button>
                   <button
                     onClick={() => onDeleteClient(client.id)}
-                    className="text-red-400 hover:text-red-600 flex-shrink-0 p-1"
+                    className="text-red-400 hover:text-red-600 p-1"
                   >
                     <Trash2 size={16} />
                   </button>
+                </div>
                 </div>
                 <div className="flex flex-wrap gap-2 text-xs font-bold text-slate-500">
                   <span className="bg-slate-50 px-2 py-1 rounded-lg">{client.country}</span>
@@ -347,7 +396,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
               <th className="px-4 lg:px-6 py-4">网址</th>
               <th className="px-4 lg:px-6 py-4">行业</th>
               <th className="px-4 lg:px-6 py-4">背调</th>
-              <th className="px-4 lg:px-6 py-4 w-20">操作</th>
+              <th className="px-4 lg:px-6 py-4 w-28">操作</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-50">
@@ -396,12 +445,23 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                       <BgStatus client={client} />
                     </td>
                     <td className="px-4 lg:px-6 py-4">
-                      <button
-                        onClick={() => onDeleteClient(client.id)}
-                        className="text-red-400 hover:text-red-600"
-                      >
-                        <Trash2 size={16} />
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => triggerReanalyze(client)}
+                          className="text-amber-600 hover:text-amber-700"
+                          title="再次背调"
+                        >
+                          <RefreshCw size={16} />
+                        </button>
+                        <button
+                          onClick={() => onDeleteClient(client.id)}
+                          className="text-red-400 hover:text-red-600"
+                          title="删除"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );

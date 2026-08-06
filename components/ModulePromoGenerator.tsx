@@ -3,6 +3,7 @@ import { AutomationPipelineConfig, AutomationResult, CLIENT_TYPE_OPTIONS } from 
 import {
   Ruler,
   PlayCircle,
+  RefreshCw,
   Trash2,
   CheckCircle2,
   Loader2,
@@ -31,6 +32,8 @@ interface ModulePromoGeneratorProps {
   isAutomating: boolean;
   onRunPending: () => void;
   onRunSingle: (id: string) => void;
+  /** 对已完成任务再次背调 */
+  onRerunCompleted?: (id: string) => void;
   onDelete: (id: string) => void;
   onViewResult: (task: AutomationResult) => void;
   onDownloadResult: (task: AutomationResult) => void;
@@ -62,6 +65,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   isAutomating,
   onRunPending,
   onRunSingle,
+  onRerunCompleted,
   onDelete,
   onViewResult,
   onDownloadResult,
@@ -612,6 +616,16 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                                 title="下载 PPT"
                               >
                                 <Download size={16} />
+                              </button>
+                            )}
+                            {onRerunCompleted && (
+                              <button
+                                onClick={() => onRerunCompleted(task.id)}
+                                disabled={isAutomating}
+                                className="p-2 text-amber-600 hover:bg-amber-50 rounded-lg transition-colors disabled:opacity-50"
+                                title="再次背调"
+                              >
+                                <RefreshCw size={16} />
                               </button>
                             )}
                           </>

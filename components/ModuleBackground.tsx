@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { getActiveDmJobForDomain, subscribeDmEmailSearchJobs } from '../services/dmEmailSearchQueue';
 import { websiteHref } from '../services/analysisNormalize';
+import { formatBackgroundCheckTime } from '../utils/crmHistory';
 
 interface ModuleBackgroundProps {
   data: AnalysisResult;
@@ -13,6 +14,10 @@ interface ModuleBackgroundProps {
   onEnqueueDmEmailSearch?: () => { ok: boolean; message: string };
   /** 是否已搜索过邮箱（用于按钮文案） */
   hasPriorDmSearch?: boolean;
+  /** 再次背调（刷新报告） */
+  onReanalyze?: () => void;
+  /** 背调完成时间展示 */
+  backgroundCheckedAt?: number;
 }
 
 const Pill: React.FC<{ children: React.ReactNode; tone?: 'slate' | 'blue' | 'green' | 'amber' | 'red' | 'violet' }> = ({ children, tone = 'slate' }) => {
@@ -36,7 +41,14 @@ const SectionCard: React.FC<{ title: string; icon: React.ReactNode; children: Re
   </div>
 );
 
-export const ModuleBackground: React.FC<ModuleBackgroundProps> = ({ data, onAddToCRM, onEnqueueDmEmailSearch, hasPriorDmSearch }) => {
+export const ModuleBackground: React.FC<ModuleBackgroundProps> = ({
+  data,
+  onAddToCRM,
+  onEnqueueDmEmailSearch,
+  hasPriorDmSearch,
+  onReanalyze,
+  backgroundCheckedAt,
+}) => {
   const company = data.companyInfo || ({} as AnalysisResult['companyInfo']);
   const financials = data.financials || { revenueEstimate: '—', paymentTerms: '—', ipInfo: '—' };
   const swot = data.swot || { strengths: [], weaknesses: [], opportunities: [], threats: [] };
@@ -78,9 +90,25 @@ export const ModuleBackground: React.FC<ModuleBackgroundProps> = ({ data, onAddT
               >
                 {company.website || '—'}
               </a>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                <Pill tone="green">已背调</Pill>
+                {backgroundCheckedAt ? (
+                  <Pill tone="slate">{formatBackgroundCheckTime(backgroundCheckedAt)}</Pill>
+                ) : null}
+              </div>
               {queueMsg && <div className="mt-2 text-[11px] font-bold text-emerald-700">{queueMsg}</div>}
             </div>
             <div className="flex flex-col gap-2 w-full sm:w-auto flex-shrink-0">
+              {onReanalyze && (
+                <button
+                  type="button"
+                  onClick={onReanalyze}
+                  className="bg-amber-500 hover:bg-amber-600 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-lg flex items-center justify-center gap-2 touch-manipulation"
+                  title="信息过旧时可再次背调更新"
+                >
+                  <RefreshCw size={14} /> 再次背调
+                </button>
+              )}
               {onEnqueueDmEmailSearch && (
                 <button
                   type="button"

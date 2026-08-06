@@ -1,9 +1,37 @@
 import React, { useMemo, useRef, useState, useEffect } from 'react';
-import { DiscoveryState, ClientSearchResult, CLIENT_TYPE_OPTIONS, DiscoveryArchiveItem } from '../types';
-import { Search, Globe, MapPin, Briefcase, Loader2, Plus, Layers, Star, ChevronDown, X, Check, Tag } from 'lucide-react';
+import {
+  DiscoveryState,
+  ClientSearchResult,
+  CLIENT_TYPE_OPTIONS,
+  DiscoveryArchiveItem,
+  HistoryItem,
+  Client,
+} from '../types';
+import {
+  Search,
+  Globe,
+  MapPin,
+  Briefcase,
+  Loader2,
+  Plus,
+  Layers,
+  Star,
+  ChevronDown,
+  X,
+  Check,
+  Tag,
+  CheckCircle2,
+  RefreshCw,
+  FileText,
+} from 'lucide-react';
 import { searchPotentialClients } from '../services/geminiService';
 import { CONTINENTS, countryLabel, countrySearchValue, findCountryByEn, type ContinentGroup } from '../data/countriesByContinent';
 import { mergeResultsWithPriorKeywords, stampSearchResults } from '../utils/searchTags';
+import {
+  buildBackgroundCheckIndex,
+  formatBackgroundCheckTime,
+  lookupFromBgIndex,
+} from '../utils/crmHistory';
 import { IndustryMultiSelect } from './IndustryMultiSelect';
 
 interface ClientFinderProps {
@@ -11,9 +39,15 @@ interface ClientFinderProps {
   onStateChange: (state: DiscoveryState) => void;
   /** 历史搜索归档：用于同公司关键词去重标签 */
   discoveryArchives?: DiscoveryArchiveItem[];
+  /** 背调历史：用于「已背调」标签 */
+  history?: HistoryItem[];
+  /** CRM 客户：补充已背调状态与关键词 */
+  crmClients?: Client[];
   /** 每次（按国）搜索完成时可靠归档 */
   onSearchArchived?: (archive: DiscoveryArchiveItem) => void;
   onSelect: (result: ClientSearchResult | string) => void;
+  /** 打开已有背调报告（不重新分析） */
+  onOpenExistingReport?: (result: ClientSearchResult) => void;
   onBatchAddToCRM: (results: ClientSearchResult[]) => void;
   onBatchAnalyze: (results: ClientSearchResult[]) => void;
 }
@@ -38,8 +72,11 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
   state,
   onStateChange,
   discoveryArchives = [],
+  history = [],
+  crmClients = [],
   onSearchArchived,
   onSelect,
+  onOpenExistingReport,
   onBatchAddToCRM,
   onBatchAnalyze,
 }) => {
@@ -53,6 +90,11 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
 
   const selectedCountries = normalizeCountries(state);
   const selectedTypes = normalizeClientTypes(state);
+
+  const bgIndex = useMemo(
+    () => buildBackgroundCheckIndex(history, crmClients),
+    [history, crmClients]
+  );
 
   const activeContinent: ContinentGroup =
     CONTINENTS.find((c) => c.id === activeContinentId) || CONTINENTS[0];
@@ -476,7 +518,19 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4">
-            {state.results.map((res, idx) => (
+            {state.results.map((res, idx) => {
+              const bg = lookupFromBgIndex(bgIndex, res.website, res.name);
+              const allKws = Array.from(
+                new Set(
+                  [
+                    ...(res.searchedKeywords || []),
+                    res.searchKeyword,
+                    ...bg.keywords,
+                  ].filter(Boolean) as string[]
+                )
+              );
+              const timeLabel = formatBackgroundCheckTime(bg.checkedAt);
+              return (
               <div
                 key={idx}
                 className={`bg-white p-4 sm:p-6 rounded-2xl sm:rounded-3xl border transition-all cursor-pointer touch-manipulation ${selectedIndices.has(idx) ? 'border-cyan-500 ring-2 ring-cyan-100/80' : 'border-slate-200 hover:border-cyan-200/80'}`}
@@ -492,15 +546,57 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
                         <Star size={12} /> 匹配 {res.fitScore}/5
                       </span>
                     )}
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onSelect(res);
-                      }}
-                      className="text-xs font-black text-blue-600 hover:underline"
-                    >
-                      深度分析 →
-                    </button>
+                    {bg.checked && (
+                      <span
+                        className="inline-flex flex-col items-end gap-0.5 bg-emerald-50 text-emerald-700 px-2 py-1 rounded-lg text-[10px] font-black border border-emerald-100"
+                        title={timeLabel ? `背调时间 ${timeLabel}` : '已完成背调'}
+                      >
+                        <span className="inline-flex items-center gap-1">
+                          <CheckCircle2 size={12} /> 已背调
+                        </span>
+                        {timeLabel && (
+                          <span className="text-[9px] font-bold text-emerald-600/80">{timeLabel}</span>
+                        )}
+                      </span>
+                    )}
+                    <div className="flex flex-wrap justify-end gap-2">
+                      {bg.checked && onOpenExistingReport && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onOpenExistingReport(res);
+                          }}
+                          className="inline-flex items-center gap-1 text-xs font-black text-slate-600 hover:text-slate-900 hover:underline"
+                        >
+                          <FileText size={12} /> 查看报告
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (bg.checked) {
+                            const tip = timeLabel
+                              ? `该公司已于 ${timeLabel} 完成背调。是否再次背调以更新信息？`
+                              : '该公司已完成背调。是否再次背调以更新信息？';
+                            if (!confirm(tip)) return;
+                          }
+                          onSelect(res);
+                        }}
+                        className={`inline-flex items-center gap-1 text-xs font-black hover:underline ${
+                          bg.checked ? 'text-amber-700' : 'text-blue-600'
+                        }`}
+                      >
+                        {bg.checked ? (
+                          <>
+                            <RefreshCw size={12} /> 再次背调 →
+                          </>
+                        ) : (
+                          '深度分析 →'
+                        )}
+                      </button>
+                    </div>
                   </div>
                 </div>
                 <h4 className="text-lg font-black text-slate-800 mb-1">{res.name}</h4>
@@ -519,12 +615,7 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
                       曾搜索过 · 注意勿重复背调
                     </span>
                   )}
-                  {(res.searchedKeywords?.length
-                    ? res.searchedKeywords
-                    : res.searchKeyword
-                      ? [res.searchKeyword]
-                      : []
-                  ).map((kw) => (
+                  {allKws.map((kw) => (
                     <span
                       key={kw}
                       className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-lg text-[10px] font-black"
@@ -565,7 +656,8 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
                   </div>
                 )}
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}

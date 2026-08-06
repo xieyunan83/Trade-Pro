@@ -235,6 +235,166 @@ export const formatBackgroundCheckTime = (ms?: number): string => {
   }
 };
 
+export type BackgroundCheckLookup = {
+  checked: boolean;
+  checkedAt?: number;
+  keywords: string[];
+  historyItem?: HistoryItem;
+};
+
+const collectKeywordsFromHistory = (h: HistoryItem): string[] => {
+  const out: string[] = [];
+  const kw = (h.keyword || h.data?.searchKeyword || '').trim();
+  if (kw) out.push(kw);
+  for (const t of h.data?.searchTags || []) {
+    if (typeof t !== 'string') continue;
+    if (t.startsWith('关键词:')) {
+      const v = t.replace(/^关键词:/, '').trim();
+      if (v) out.push(v);
+    }
+  }
+  return out;
+};
+
+/** Look up whether a website/name already has a background check (history or CRM). */
+export const lookupBackgroundCheck = (
+  website: string | undefined,
+  name: string | undefined,
+  history: HistoryItem[] = [],
+  crmClients: Client[] = []
+): BackgroundCheckLookup => {
+  const host = normalizeCrmHost(website);
+  const nameKey = (name || '').trim().toLowerCase();
+  const keywords = new Set<string>();
+  let latest: HistoryItem | undefined;
+  let checkedAt = 0;
+
+  for (const h of history) {
+    const hHost = normalizeCrmHost(h.domain || h.data?.companyInfo?.website);
+    const hName = (h.data?.companyInfo?.name || '').trim().toLowerCase();
+    const match =
+      (host && hHost && host === hHost) || (nameKey && hName && nameKey === hName);
+    if (!match) continue;
+    for (const k of collectKeywordsFromHistory(h)) keywords.add(k);
+    if (!latest || h.timestamp > latest.timestamp) latest = h;
+    if (h.timestamp > checkedAt) checkedAt = h.timestamp;
+  }
+
+  for (const c of crmClients) {
+    const cHost = normalizeCrmHost(c.website);
+    const cName = (c.name || '').trim().toLowerCase();
+    const match =
+      (host && cHost && host === cHost) || (nameKey && cName && nameKey === cName);
+    if (!match) continue;
+    if (c.searchKeyword) keywords.add(c.searchKeyword);
+    for (const k of c.searchedKeywords || []) if (k?.trim()) keywords.add(k.trim());
+    for (const t of c.tags || []) {
+      if (t.startsWith('关键词:')) {
+        const v = t.replace(/^关键词:/, '').trim();
+        if (v) keywords.add(v);
+      }
+    }
+    if (c.hasBackgroundCheck || c.hasAnalyzed || c.lastBackgroundCheckAt) {
+      const at = c.lastBackgroundCheckAt || 0;
+      if (at > checkedAt) checkedAt = at;
+      if (!latest && (c.hasBackgroundCheck || c.hasAnalyzed || at)) {
+        checkedAt = checkedAt || at || Date.now();
+      }
+    }
+  }
+
+  const checked = !!latest || checkedAt > 0;
+  return {
+    checked,
+    checkedAt: checkedAt || latest?.timestamp,
+    keywords: [...keywords],
+    historyItem: latest,
+  };
+};
+
+/** Build a host → lookup map for batch UI (search results). */
+export const buildBackgroundCheckIndex = (
+  history: HistoryItem[] = [],
+  crmClients: Client[] = []
+): Map<string, BackgroundCheckLookup> => {
+  const map = new Map<string, BackgroundCheckLookup>();
+  const upsert = (key: string, patch: BackgroundCheckLookup) => {
+    if (!key) return;
+    const prev = map.get(key);
+    if (!prev) {
+      map.set(key, patch);
+      return;
+    }
+    map.set(key, {
+      checked: prev.checked || patch.checked,
+      checkedAt: Math.max(prev.checkedAt || 0, patch.checkedAt || 0) || undefined,
+      keywords: [...new Set([...prev.keywords, ...patch.keywords])],
+      historyItem:
+        (prev.historyItem?.timestamp || 0) >= (patch.historyItem?.timestamp || 0)
+          ? prev.historyItem
+          : patch.historyItem,
+    });
+  };
+
+  for (const h of history) {
+    const host = normalizeCrmHost(h.domain || h.data?.companyInfo?.website);
+    const name = (h.data?.companyInfo?.name || '').trim().toLowerCase();
+    const base: BackgroundCheckLookup = {
+      checked: true,
+      checkedAt: h.timestamp,
+      keywords: collectKeywordsFromHistory(h),
+      historyItem: h,
+    };
+    if (host) upsert(host, base);
+    if (name) upsert(`name:${name}`, base);
+  }
+
+  for (const c of crmClients) {
+    if (!(c.hasBackgroundCheck || c.hasAnalyzed || c.lastBackgroundCheckAt)) continue;
+    const host = normalizeCrmHost(c.website);
+    const name = (c.name || '').trim().toLowerCase();
+    const kws = [
+      c.searchKeyword,
+      ...(c.searchedKeywords || []),
+      ...(c.tags || [])
+        .filter((t) => t.startsWith('关键词:'))
+        .map((t) => t.replace(/^关键词:/, '').trim()),
+    ].filter(Boolean) as string[];
+    const base: BackgroundCheckLookup = {
+      checked: true,
+      checkedAt: c.lastBackgroundCheckAt,
+      keywords: kws,
+    };
+    if (host) upsert(host, base);
+    if (name) upsert(`name:${name}`, base);
+  }
+
+  return map;
+};
+
+export const lookupFromBgIndex = (
+  index: Map<string, BackgroundCheckLookup>,
+  website?: string,
+  name?: string
+): BackgroundCheckLookup => {
+  const host = normalizeCrmHost(website);
+  const nameKey = (name || '').trim().toLowerCase();
+  const byHost = host ? index.get(host) : undefined;
+  const byName = nameKey ? index.get(`name:${nameKey}`) : undefined;
+  if (!byHost && !byName) return { checked: false, keywords: [] };
+  if (byHost && !byName) return byHost;
+  if (!byHost && byName) return byName;
+  return {
+    checked: true,
+    checkedAt: Math.max(byHost!.checkedAt || 0, byName!.checkedAt || 0) || undefined,
+    keywords: [...new Set([...(byHost!.keywords || []), ...(byName!.keywords || [])])],
+    historyItem:
+      (byHost!.historyItem?.timestamp || 0) >= (byName!.historyItem?.timestamp || 0)
+        ? byHost!.historyItem
+        : byName!.historyItem,
+  };
+};
+
 /** Whether a history / analysis domain is already in CRM */
 export const isHistoryInCrm = (
   item: Pick<HistoryItem, 'domain' | 'data'>,

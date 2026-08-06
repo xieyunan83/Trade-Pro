@@ -15,7 +15,7 @@ import { isSupabaseConfigured, getKnowledgeFiles, getInvestigationHistory, saveI
 import { addCustomKeyword, addCustomCountry } from './services/taxonomyStore';
 import { normalizeCountryZh } from './utils/countryNormalize';
 import { buildSearchTags, stampSearchResults } from './utils/searchTags';
-import { mergeDiscoveryResultsIntoCrm, mergeHistoryItemsIntoCrm, findCrmIdsForHistoryItem, findCrmIdsForDiscoveryResults } from './utils/crmHistory';
+import { mergeDiscoveryResultsIntoCrm, mergeHistoryItemsIntoCrm, findCrmIdsForHistoryItem, findCrmIdsForDiscoveryResults, lookupBackgroundCheck, formatBackgroundCheckTime } from './utils/crmHistory';
 import { checkLimit, incrementUsage, updateLocalConfig, resetDailyUsage, getDailyUsagePublic } from './services/limitService';
 import { ModuleType, AnalysisResult, DiscoveryState, Client, User, HistoryItem, AutomationResult, ClientSearchResult, DiscoveryArchiveItem, DecisionMaker, Department, AutomationPipelineConfig } from './types';
 import { ModuleBackground } from './components/ModuleBackground';
@@ -1816,6 +1816,105 @@ const App: React.FC = () => {
       if(task) await processBatchQueue([task]);
   };
 
+  /** 已完成任务：重置后再次背调 */
+  const handleRerunCompletedTask = async (id: string) => {
+      const task = automationResults.find((t) => t.id === id);
+      if (!task) return;
+      if (!hasPermission(currentUser, 'feature.batch_analyze') && !hasPermission(currentUser, 'feature.analyze_company')) {
+        alert('你没有背调权限，请联系管理员或部门主管开通。');
+        return;
+      }
+      const timeLabel = formatBackgroundCheckTime(task.completedAt || task.createdAt);
+      const tip = timeLabel
+        ? `该公司已于 ${timeLabel} 完成背调。是否再次背调以更新信息？`
+        : '是否对该客户再次背调？';
+      if (!confirm(tip)) return;
+      const reset: AutomationResult = {
+        ...task,
+        status: 'pending',
+        analysis: undefined,
+        mailGroup: undefined,
+        completedAt: undefined,
+      };
+      await saveAutomationTask(reset);
+      setAutomationResults((prev) => prev.map((t) => (t.id === id ? reset : t)));
+      await processBatchQueue([reset]);
+  };
+
+  /** 当前报告页：再次背调 */
+  const handleReanalyzeCurrent = () => {
+      const data = analysisDataRef.current || analysisData;
+      if (!data) return;
+      if (!hasPermission(currentUser, 'feature.analyze_company')) {
+        alert('你没有「单次背调」权限，请联系管理员或部门主管开通。');
+        return;
+      }
+      const domain = data.companyInfo?.website || domainInput;
+      if (!domain?.trim()) {
+        alert('缺少公司网址，无法再次背调。');
+        return;
+      }
+      const hist =
+        (viewingHistoryId && history.find((h) => h.id === viewingHistoryId)) ||
+        lookupBackgroundCheck(domain, data.companyInfo?.name, history, crmClients).historyItem;
+      const timeLabel = formatBackgroundCheckTime(hist?.timestamp);
+      const tip = timeLabel
+        ? `该公司已于 ${timeLabel} 完成背调。是否再次背调以更新信息？`
+        : '是否再次背调以更新该公司信息？';
+      if (!confirm(tip)) return;
+      const limit = checkLimit('analysis');
+      if (!limit.allowed) {
+        alert(`今日背调次数已达上限（${limit.current}/${limit.max}）。请联系管理员提高限额，或明日再试。`);
+        return;
+      }
+      setDomainInput(domain);
+      performSingleAnalysis(domain, {
+        searchKeyword: data.searchKeyword || discoveryState.product || undefined,
+        searchTags: data.searchTags,
+        searchCountry: data.searchCountry || undefined,
+      });
+  };
+
+  const handleOpenExistingFromSearch = (result: ClientSearchResult) => {
+      const lookup = lookupBackgroundCheck(result.website, result.name, history, crmClients);
+      if (lookup.historyItem) {
+        loadFromHistory(lookup.historyItem);
+        setHistoryOpen(false);
+        setMobileMenuOpen(false);
+        return;
+      }
+      alert('未找到本地背调报告。可点击「再次背调」重新生成。');
+  };
+
+  const handleReanalyzeHistoryItem = (item: HistoryItem) => {
+      const domain = item.domain || item.data?.companyInfo?.website || '';
+      if (!domain) {
+        alert('该记录缺少网址，无法再次背调。');
+        return;
+      }
+      const timeLabel = formatBackgroundCheckTime(item.timestamp);
+      const tip = timeLabel
+        ? `该公司已于 ${timeLabel} 完成背调。是否再次背调以更新信息？`
+        : '是否再次背调？';
+      if (!confirm(tip)) return;
+      if (!hasPermission(currentUser, 'feature.analyze_company')) {
+        alert('你没有「单次背调」权限，请联系管理员或部门主管开通。');
+        return;
+      }
+      const limit = checkLimit('analysis');
+      if (!limit.allowed) {
+        alert(`今日背调次数已达上限（${limit.current}/${limit.max}）。请联系管理员提高限额，或明日再试。`);
+        return;
+      }
+      setHistoryOpen(false);
+      setDomainInput(domain);
+      performSingleAnalysis(domain, {
+        searchKeyword: item.keyword || item.data?.searchKeyword || undefined,
+        searchTags: item.data?.searchTags,
+        searchCountry: item.country || item.data?.searchCountry || undefined,
+      });
+  };
+
   const handleDeleteTask = async (id: string) => { 
       if(confirm("Delete?")) { 
           await deleteAutomationTask(id); 
@@ -2077,6 +2176,7 @@ const App: React.FC = () => {
               return next;
             });
           }}
+          onReanalyzeHistory={handleReanalyzeHistoryItem}
         />
       )}
 
@@ -2169,6 +2269,8 @@ const App: React.FC = () => {
                         state={discoveryState} 
                         onStateChange={handleDiscoveryStateChange}
                         discoveryArchives={discoveryArchives}
+                        history={history}
+                        crmClients={crmClients}
                         onSearchArchived={handleSearchArchived}
                         onSelect={(item) => {
                           const domain = typeof item === 'string' ? item : (item.website || item.name);
@@ -2201,7 +2303,8 @@ const App: React.FC = () => {
                             searchCountry: countryFromItem || undefined,
                             searchTags: tags,
                           });
-                        }} 
+                        }}
+                        onOpenExistingReport={handleOpenExistingFromSearch}
                         onBatchAddToCRM={handleBatchAddToCRM}
                         onBatchAnalyze={handleBatchAnalyzeExisting}
                     />
@@ -2210,7 +2313,8 @@ const App: React.FC = () => {
                     <ModuleClientCRM 
                         clients={crmClients} 
                         setClients={setCrmClients} 
-                        onBatchAnalyze={handleBatchAnalyzeFromCRM} 
+                        onBatchAnalyze={handleBatchAnalyzeFromCRM}
+                        onReanalyze={(client) => void handleBatchAnalyzeFromCRM([client])}
                         history={history}
                         onOpenHistory={loadFromHistory}
                     />
@@ -2228,6 +2332,7 @@ const App: React.FC = () => {
                         isAutomating={isAutomating} 
                         onRunPending={handleRunPending}
                         onRunSingle={handleRunSingle}
+                        onRerunCompleted={handleRerunCompletedTask}
                         onDelete={handleDeleteTask}
                         onViewResult={handleViewAutomationResult}
                         onDownloadResult={handleDownloadAutomationResult}
@@ -2301,22 +2406,67 @@ const App: React.FC = () => {
                               </div>
                             </div>
                             <a href={websiteHref(analysisData.companyInfo?.website)} target="_blank" rel="noreferrer" className="text-cyan-600 font-semibold mt-2 hover:underline text-sm sm:text-base break-all">{analysisData.companyInfo?.website || '—'}</a>
-                            {(analysisData.searchKeyword || analysisData.searchTags?.length) && (
-                              <div className="flex flex-wrap gap-1.5 mt-3">
-                                {analysisData.searchKeyword && (
-                                  <span className="text-[10px] font-black bg-amber-50 text-amber-700 px-2 py-1 rounded-lg">
-                                    搜索来源: {analysisData.searchKeyword}
+                            {(() => {
+                              const bgMeta = lookupBackgroundCheck(
+                                analysisData.companyInfo?.website,
+                                analysisData.companyInfo?.name,
+                                history,
+                                crmClients
+                              );
+                              const histTs =
+                                (viewingHistoryId && history.find((h) => h.id === viewingHistoryId)?.timestamp) ||
+                                bgMeta.checkedAt;
+                              const timeLabel = formatBackgroundCheckTime(histTs);
+                              const kws = Array.from(
+                                new Set(
+                                  [
+                                    analysisData.searchKeyword,
+                                    ...bgMeta.keywords,
+                                    ...(analysisData.searchTags || [])
+                                      .filter((t) => t.startsWith('关键词:'))
+                                      .map((t) => t.replace(/^关键词:/, '')),
+                                  ].filter(Boolean) as string[]
+                                )
+                              );
+                              const otherTags = (analysisData.searchTags || []).filter(
+                                (t) => !t.startsWith('关键词:') && !t.startsWith('搜索来源')
+                              );
+                              return (
+                                <div className="flex flex-wrap gap-1.5 mt-3">
+                                  <span className="text-[10px] font-black bg-emerald-50 text-emerald-700 px-2 py-1 rounded-lg border border-emerald-100">
+                                    已背调{timeLabel ? ` · ${timeLabel}` : ''}
                                   </span>
-                                )}
-                                {(analysisData.searchTags || []).slice(0, 4).map((t) => (
-                                  <span key={t} className="text-[10px] font-black bg-slate-100 text-slate-600 px-2 py-1 rounded-lg">
-                                    {t}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
+                                  {kws.map((kw) => (
+                                    <span
+                                      key={kw}
+                                      className="text-[10px] font-black bg-amber-50 text-amber-700 px-2 py-1 rounded-lg"
+                                    >
+                                      关键词: {kw}
+                                    </span>
+                                  ))}
+                                  {otherTags.slice(0, 6).map((t) => (
+                                    <span
+                                      key={t}
+                                      className="text-[10px] font-black bg-slate-100 text-slate-600 px-2 py-1 rounded-lg"
+                                    >
+                                      {t}
+                                    </span>
+                                  ))}
+                                </div>
+                              );
+                            })()}
                         </div>
                         <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto flex-shrink-0">
+                          {hasPermission(currentUser, 'feature.analyze_company') && (
+                            <button
+                              type="button"
+                              onClick={handleReanalyzeCurrent}
+                              disabled={loading}
+                              className="flex items-center justify-center gap-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 transition-colors text-white px-4 sm:px-6 py-3 rounded-2xl font-semibold shadow-lg touch-manipulation"
+                            >
+                              <RefreshCw size={18} /> 再次背调
+                            </button>
+                          )}
                           {hasPermission(currentUser, 'feature.dm_email_search') && (
                             <button
                               type="button"
@@ -2354,6 +2504,20 @@ const App: React.FC = () => {
                             : undefined
                         }
                         hasPriorDmSearch={!!analysisData.decisionMakerEmailSearchAt}
+                        onReanalyze={
+                          hasPermission(currentUser, 'feature.analyze_company')
+                            ? handleReanalyzeCurrent
+                            : undefined
+                        }
+                        backgroundCheckedAt={
+                          (viewingHistoryId && history.find((h) => h.id === viewingHistoryId)?.timestamp) ||
+                          lookupBackgroundCheck(
+                            analysisData.companyInfo?.website,
+                            analysisData.companyInfo?.name,
+                            history,
+                            crmClients
+                          ).checkedAt
+                        }
                       />
                     )}
                     {activeModule === ModuleType.PRODUCTS && (
