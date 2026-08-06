@@ -501,6 +501,24 @@ export interface ChatMessage {
   timestamp: number;
 }
 
+/** 开发策略对话上下文：单客户背调 + 市场关键词/国家 */
+export interface StrategyChatContext {
+  /** 选中的背调客户报告（可多选，主推第 1 个） */
+  companies?: AnalysisResult[];
+  /** 市场产品关键词 */
+  keywords?: string[];
+  /** 目标国家 / 市场 */
+  countries?: string[];
+  /** 同市场搜索线索摘要（来自历史搜索归档） */
+  marketLeads?: Array<{
+    name: string;
+    website?: string;
+    country?: string;
+    clientType?: string;
+    keyword?: string;
+  }>;
+}
+
 export interface KeywordExtractionResult {
   industryTerms: string[];
   tier1Keywords: string[];

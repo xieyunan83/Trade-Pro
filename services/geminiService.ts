@@ -1,5 +1,5 @@
 
-import { AnalysisResult, ClientSearchResult, DecisionMaker, ChatMessage, KnowledgeFile, KeywordExtractionResult, MailGroup, EmailTemplateRequest, ApiConfig, TaskType } from "../types";
+import { AnalysisResult, ClientSearchResult, DecisionMaker, ChatMessage, KnowledgeFile, KeywordExtractionResult, MailGroup, EmailTemplateRequest, ApiConfig, TaskType, StrategyChatContext } from "../types";
 import { getAllFilesFromDB } from "./db";
 import { getApiConfig as getSupabaseApiConfig, getAllApiConfigs, isSupabaseConfigured } from './supabase';
 import {
@@ -3358,7 +3358,8 @@ export const streamStrategyChat = async function* (
     knowledgeBase: KnowledgeFile[], 
     newMessage: string, 
     newAttachments: KnowledgeFile[],
-    companyData?: AnalysisResult | null
+    companyData?: AnalysisResult | null,
+    strategyContext?: StrategyChatContext | null
 ) {
     const config = await resolveQwenConfig();
     let baseUrl = config.baseUrl.replace(/\/$/, '');
@@ -3378,8 +3379,63 @@ export const streamStrategyChat = async function* (
         baseUrl += '/chat/completions';
     }
 
-    let systemInstruction = `${QWEN_SYSTEM} 你是高级外贸策略顾问。`;
-    if (companyData) systemInstruction += ` 当前分析对象: ${companyData.companyInfo.name}。`;
+    const companies = [
+      ...(strategyContext?.companies || []),
+      ...(companyData ? [companyData] : []),
+    ].filter((c, i, arr) => {
+      const key = (c.companyInfo?.website || c.companyInfo?.name || '').toLowerCase();
+      return key && arr.findIndex((x) => (x.companyInfo?.website || x.companyInfo?.name || '').toLowerCase() === key) === i;
+    });
+    const keywords = Array.from(new Set((strategyContext?.keywords || []).map((k) => k.trim()).filter(Boolean)));
+    const countries = Array.from(new Set((strategyContext?.countries || []).map((c) => c.trim()).filter(Boolean)));
+    const marketLeads = (strategyContext?.marketLeads || []).slice(0, 30);
+
+    let systemInstruction = `${QWEN_SYSTEM} 你是高级外贸策略顾问，擅长开发信撰写、谈判话术与市场进入策略。`;
+    systemInstruction += `\n\n写作要求：\n- 若提供了具体背调客户，策略与开发信必须针对该公司画像、产品与痛点。\n- 若提供了关键词/国家市场上下文，可写面向整个目标市场的通用开发信框架，并说明可如何按客户微调。\n- 用户上传的附件优先作为「我方产品/报价」参考，勿编造未出现的规格与价格。\n- 回复使用中文为主，开发信正文可用英文（外贸常用）。`;
+
+    if (companies.length) {
+      systemInstruction += `\n\n## 已选背调客户（${companies.length}）`;
+      for (const c of companies.slice(0, 5)) {
+        const info = c.companyInfo || ({} as AnalysisResult['companyInfo']);
+        const dms = (c.decisionMakers || [])
+          .slice(0, 5)
+          .map((d) => `${d.name || ''} (${d.title || ''})`)
+          .filter((s) => s.trim() !== '()')
+          .join('; ');
+        systemInstruction += `
+### ${info.name || '未知公司'}
+- 网址: ${info.website || '—'}
+- 总部/城市: ${info.headquarters || '—'} / ${info.city || '—'}
+- 性质/规模: ${info.nature || '—'} / ${info.scale || '—'}
+- 搜索关键词: ${c.searchKeyword || '—'}
+- 目标国家: ${c.searchCountry || '—'}
+- 核心产品: ${(c.businessScope?.coreProducts || []).slice(0, 8).join(', ') || '—'}
+- 营收粗估: ${c.financials?.revenueEstimate || '—'}
+- SWOT弱点: ${(c.swot?.weaknesses || []).slice(0, 4).join('; ') || '—'}
+- 决策人线索: ${dms || '—'}
+`;
+      }
+    }
+
+    if (keywords.length || countries.length) {
+      systemInstruction += `\n\n## 市场上下文（整市场策略）`;
+      if (keywords.length) systemInstruction += `\n- 产品/搜索关键词: ${keywords.join(' | ')}`;
+      if (countries.length) systemInstruction += `\n- 目标国家/市场: ${countries.join(' | ')}`;
+      if (marketLeads.length) {
+        systemInstruction += `\n- 同市场已搜索客户样本（${marketLeads.length}）:\n`;
+        systemInstruction += marketLeads
+          .map(
+            (l) =>
+              `  · ${l.name}${l.website ? ` (${l.website})` : ''}${l.country ? ` · ${l.country}` : ''}${l.clientType ? ` · ${l.clientType}` : ''}${l.keyword ? ` · kw:${l.keyword}` : ''}`
+          )
+          .join('\n');
+      }
+    }
+
+    if (!companies.length && !keywords.length && !countries.length) {
+      systemInstruction += `\n\n当前为通用模式：用户未绑定具体背调客户或市场标签，可先追问目标客户/市场再给策略。`;
+    }
+
     if (knowledgeBase.length > 0) {
         const kbText = knowledgeBase.map(f => `[KB: ${f.name}]\n${f.data.substring(0, 500)}...`).join("\n\n");
         systemInstruction += `\n\n知识库:\n${kbText}`;

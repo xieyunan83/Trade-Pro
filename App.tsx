@@ -2357,10 +2357,52 @@ const App: React.FC = () => {
                         )}
                         <ModuleStrategy
                           data={analysisData}
-                          onSaveGeneratedEmails={async (emails) => {
-                            await patchAnalysisData({
+                          history={history}
+                          discoveryArchives={discoveryArchives}
+                          onSaveGeneratedEmails={async (emails, forCompany) => {
+                            const target = forCompany || analysisDataRef.current;
+                            if (!target) return;
+                            const nextData: AnalysisResult = {
+                              ...target,
                               generatedEmails: emails,
                               generatedEmailsAt: Date.now(),
+                            };
+                            const domainKey = (nextData.companyInfo?.website || '').toLowerCase();
+                            const nameKey = (nextData.companyInfo?.name || '').toLowerCase();
+                            const currentKey = (
+                              analysisDataRef.current?.companyInfo?.website ||
+                              analysisDataRef.current?.companyInfo?.name ||
+                              ''
+                            ).toLowerCase();
+                            const isCurrent =
+                              !!analysisDataRef.current &&
+                              (domainKey ===
+                                (analysisDataRef.current.companyInfo?.website || '').toLowerCase() ||
+                                nameKey ===
+                                  (analysisDataRef.current.companyInfo?.name || '').toLowerCase() ||
+                                domainKey === currentKey ||
+                                nameKey === currentKey);
+
+                            if (isCurrent) {
+                              await persistCurrentAnalysis(nextData);
+                              return;
+                            }
+
+                            setHistory((prev) => {
+                              let updatedItem: HistoryItem | null = null;
+                              const next = prev.map((h) => {
+                                const hit =
+                                  (h.domain || '').toLowerCase() === domainKey ||
+                                  (h.data?.companyInfo?.website || '').toLowerCase() === domainKey ||
+                                  (h.data?.companyInfo?.name || '').toLowerCase() === nameKey;
+                                if (!hit) return h;
+                                updatedItem = { ...h, data: { ...h.data, ...nextData } };
+                                return updatedItem;
+                              });
+                              if (updatedItem) {
+                                persistHistoryItem(updatedItem).catch(console.error);
+                              }
+                              return next;
                             });
                           }}
                         />
