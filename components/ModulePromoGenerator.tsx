@@ -80,7 +80,192 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   const [draft, setDraft] = useState<AutomationPipelineConfig>(emptyDraft);
   const [confirming, setConfirming] = useState(false);
 
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [filterQuery, setFilterQuery] = useState('');
+  const [filterStatus, setFilterStatus] = useState<'all' | AutomationResult['status']>('all');
+  const [filterCountry, setFilterCountry] = useState('all');
+  const [filterKeyword, setFilterKeyword] = useState('all');
+  const [filterMode, setFilterMode] = useState<'all' | 'detailed' | 'economy'>('all');
+  const [filterIndustry, setFilterIndustry] = useState('all');
+
   const completedCount = automationResults.filter((r) => r.status === 'completed' && r.analysis).length;
+
+  const taskKeywords = (task: AutomationResult): string[] => {
+    const tags = (task.analysis?.searchTags || [])
+      .filter((t) => t.startsWith('关键词:'))
+      .map((t) => t.replace(/^关键词:/, '').trim());
+    return Array.from(
+      new Set([task.keyword, task.analysis?.searchKeyword, ...tags].filter(Boolean) as string[])
+    );
+  };
+
+  const taskIndustry = (task: AutomationResult) =>
+    (task.analysis?.companyInfo?.nature || '').trim();
+
+  const taskPrimaryContact = (task: AutomationResult) => {
+    const dms = task.analysis?.decisionMakers || [];
+    const withEmail = dms.find((d) => d.emailGuess?.includes('@'));
+    return withEmail || dms[0] || null;
+  };
+
+  const countryOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          automationResults
+            .map((t) => (t.country || t.analysis?.searchCountry || '').trim())
+            .filter(Boolean)
+        )
+      ).sort((a, b) => a.localeCompare(b)),
+    [automationResults]
+  );
+
+  const keywordOptions = useMemo(
+    () =>
+      Array.from(new Set(automationResults.flatMap((t) => taskKeywords(t)))).sort((a, b) =>
+        a.localeCompare(b)
+      ),
+    [automationResults]
+  );
+
+  const industryOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(automationResults.map((t) => taskIndustry(t)).filter(Boolean))
+      ).sort((a, b) => a.localeCompare(b, 'zh')),
+    [automationResults]
+  );
+
+  const filteredResults = useMemo(() => {
+    const q = filterQuery.trim().toLowerCase();
+    return automationResults.filter((task) => {
+      if (filterStatus !== 'all' && task.status !== filterStatus) return false;
+      if (filterMode !== 'all' && (task.mode || 'economy') !== filterMode) return false;
+      const country = (task.country || task.analysis?.searchCountry || '').trim();
+      if (filterCountry !== 'all' && country !== filterCountry) return false;
+      const kws = taskKeywords(task);
+      if (filterKeyword !== 'all' && !kws.includes(filterKeyword)) return false;
+      const industry = taskIndustry(task);
+      if (filterIndustry !== 'all' && industry !== filterIndustry) return false;
+      if (q) {
+        const contact = taskPrimaryContact(task);
+        const hay = [
+          task.clientName,
+          task.website,
+          task.country,
+          ...kws,
+          industry,
+          contact?.name,
+          contact?.emailGuess,
+          contact?.title,
+          task.analysis?.companyInfo?.name,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [
+    automationResults,
+    filterQuery,
+    filterStatus,
+    filterCountry,
+    filterKeyword,
+    filterMode,
+    filterIndustry,
+  ]);
+
+  const selectedTasks = useMemo(
+    () => filteredResults.filter((t) => selectedIds.has(t.id)),
+    [filteredResults, selectedIds]
+  );
+
+  const allFilteredSelected =
+    filteredResults.length > 0 && filteredResults.every((t) => selectedIds.has(t.id));
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAllFiltered = () => {
+    if (allFilteredSelected) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const t of filteredResults) next.delete(t.id);
+        return next;
+      });
+    } else {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const t of filteredResults) next.add(t.id);
+        return next;
+      });
+    }
+  };
+
+  const clearFilters = () => {
+    setFilterQuery('');
+    setFilterStatus('all');
+    setFilterCountry('all');
+    setFilterKeyword('all');
+    setFilterMode('all');
+    setFilterIndustry('all');
+  };
+
+  const hasActiveFilters =
+    !!filterQuery.trim() ||
+    filterStatus !== 'all' ||
+    filterCountry !== 'all' ||
+    filterKeyword !== 'all' ||
+    filterMode !== 'all' ||
+    filterIndustry !== 'all';
+
+  const handleBatchExport = () => {
+    const list = selectedTasks.length ? selectedTasks : filteredResults.filter((t) => t.status === 'completed');
+    if (!list.length) {
+      alert('没有可导出的已完成任务');
+      return;
+    }
+    exportAutomationResultsToExcel(list);
+  };
+
+  const handleBatchDelete = async () => {
+    if (!selectedTasks.length) return;
+    if (!confirm(`删除选中的 ${selectedTasks.length} 条任务？`)) return;
+    for (const t of selectedTasks) {
+      await onDelete(t.id);
+    }
+    setSelectedIds(new Set());
+  };
+
+  const handleBatchRerun = async () => {
+    if (!onRerunCompleted) return;
+    const targets = selectedTasks.filter((t) => t.status === 'completed');
+    if (!targets.length) {
+      alert('请选择已完成的任务进行再次背调');
+      return;
+    }
+    if (!confirm(`对选中的 ${targets.length} 条已完成任务再次背调？`)) return;
+    for (const t of targets) {
+      await onRerunCompleted(t.id);
+    }
+  };
+
+  const handleBatchDownloadPpt = () => {
+    const targets = selectedTasks.filter((t) => t.status === 'completed' && t.analysis);
+    if (!targets.length) {
+      alert('请选择已完成且有报告的任务');
+      return;
+    }
+    for (const t of targets) onDownloadResult(t);
+  };
 
   const patchDraft = (partial: Partial<AutomationPipelineConfig>) => {
     setDraft((prev) => {
@@ -475,182 +660,407 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
       )}
 
       <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="p-4 sm:p-6 border-b border-slate-100 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 bg-slate-50/50">
-          <h3 className="text-lg font-black text-slate-800 flex items-center gap-2">
-            <Clock className="text-slate-400" /> 任务队列 ({automationResults.length})
-            {completedCount > 0 && (
-              <span className="text-xs font-black text-green-600 bg-green-50 px-2 py-1 rounded-lg">
-                已完成 {completedCount}
-              </span>
-            )}
-          </h3>
-          <div className="flex flex-wrap gap-2">
-            {completedCount > 0 && (
+        <div className="p-4 sm:p-6 border-b border-slate-100 flex flex-col gap-3 bg-slate-50/50">
+          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
+            <h3 className="text-lg font-black text-slate-800 flex items-center gap-2 flex-wrap">
+              <Clock className="text-slate-400" /> 任务队列 ({automationResults.length})
+              {completedCount > 0 && (
+                <span className="text-xs font-black text-green-600 bg-green-50 px-2 py-1 rounded-lg">
+                  已完成 {completedCount}
+                </span>
+              )}
+              {hasActiveFilters && (
+                <span className="text-xs font-black text-blue-600 bg-blue-50 px-2 py-1 rounded-lg">
+                  筛选后 {filteredResults.length}
+                </span>
+              )}
+            </h3>
+            <div className="flex flex-wrap gap-2">
+              {(completedCount > 0 || selectedTasks.length > 0) && (
+                <button
+                  onClick={handleBatchExport}
+                  className="inline-flex items-center gap-1.5 bg-emerald-600 text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-emerald-700"
+                >
+                  <FileSpreadsheet size={14} />
+                  {selectedTasks.length ? `导出选中 (${selectedTasks.length})` : '导出 Excel'}
+                </button>
+              )}
+              {completedCount > 0 && canExportPpt && (
+                <button
+                  onClick={selectedTasks.length ? handleBatchDownloadPpt : onDownloadAll}
+                  className="inline-flex items-center gap-1.5 bg-white border border-slate-200 text-slate-700 px-4 py-2 rounded-xl text-xs font-bold hover:bg-slate-50"
+                >
+                  <Download size={14} />
+                  {selectedTasks.length ? `下载选中 PPT` : '批量下载 PPT'}
+                </button>
+              )}
+              {completedCount > 0 && (
+                <button
+                  onClick={onClearCompleted}
+                  disabled={isAutomating}
+                  className="inline-flex items-center gap-1.5 bg-white border border-amber-200 text-amber-700 px-4 py-2 rounded-xl text-xs font-bold hover:bg-amber-50 disabled:opacity-50"
+                >
+                  <Trash2 size={14} /> 清除已完成
+                </button>
+              )}
+              {automationResults.length > 0 && (
+                <button
+                  onClick={onClearAll}
+                  disabled={isAutomating}
+                  className="inline-flex items-center gap-1.5 bg-white border border-red-200 text-red-600 px-4 py-2 rounded-xl text-xs font-bold hover:bg-red-50 disabled:opacity-50"
+                >
+                  <Trash2 size={14} /> 清空列表
+                </button>
+              )}
               <button
-                onClick={() => exportAutomationResultsToExcel(automationResults)}
-                className="inline-flex items-center gap-1.5 bg-emerald-600 text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-emerald-700"
+                onClick={onRunPending}
+                disabled={
+                  isAutomating ||
+                  automationResults.filter((r) => r.status === 'pending' || r.status === 'failed')
+                    .length === 0
+                }
+                className="bg-slate-900 text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-blue-600 transition-colors disabled:opacity-50"
               >
-                <FileSpreadsheet size={14} /> 导出 Excel
+                继续待处理任务
               </button>
-            )}
-            {completedCount > 0 && canExportPpt && (
-              <button
-                onClick={onDownloadAll}
-                className="inline-flex items-center gap-1.5 bg-white border border-slate-200 text-slate-700 px-4 py-2 rounded-xl text-xs font-bold hover:bg-slate-50"
-              >
-                <Download size={14} /> 批量下载 PPT
-              </button>
-            )}
-            {completedCount > 0 && (
-              <button
-                onClick={onClearCompleted}
-                disabled={isAutomating}
-                className="inline-flex items-center gap-1.5 bg-white border border-amber-200 text-amber-700 px-4 py-2 rounded-xl text-xs font-bold hover:bg-amber-50 disabled:opacity-50"
-              >
-                <Trash2 size={14} /> 清除已完成
-              </button>
-            )}
-            {automationResults.length > 0 && (
-              <button
-                onClick={onClearAll}
-                disabled={isAutomating}
-                className="inline-flex items-center gap-1.5 bg-white border border-red-200 text-red-600 px-4 py-2 rounded-xl text-xs font-bold hover:bg-red-50 disabled:opacity-50"
-              >
-                <Trash2 size={14} /> 清空列表
-              </button>
-            )}
-            <button
-              onClick={onRunPending}
-              disabled={
-                isAutomating ||
-                automationResults.filter((r) => r.status === 'pending' || r.status === 'failed')
-                  .length === 0
-              }
-              className="bg-slate-900 text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-blue-600 transition-colors disabled:opacity-50"
-            >
-              继续待处理任务
-            </button>
+            </div>
           </div>
+
+          {/* Filters */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+            <div className="relative col-span-2 sm:col-span-3 lg:col-span-2">
+              <Search className="absolute left-3 top-2.5 text-slate-400" size={14} />
+              <input
+                value={filterQuery}
+                onChange={(e) => setFilterQuery(e.target.value)}
+                placeholder="搜索公司 / 网址 / 联系人 / 邮箱..."
+                className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 text-sm font-bold bg-white"
+              />
+            </div>
+            <select
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value as typeof filterStatus)}
+              className="px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold bg-white"
+            >
+              <option value="all">所有状态</option>
+              <option value="completed">已完成</option>
+              <option value="pending">待处理</option>
+              <option value="analyzing">分析中</option>
+              <option value="failed">失败</option>
+              <option value="generating_email">生成邮件中</option>
+            </select>
+            <select
+              value={filterCountry}
+              onChange={(e) => setFilterCountry(e.target.value)}
+              className="px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold bg-white"
+            >
+              <option value="all">所有国家</option>
+              {countryOptions.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+            <select
+              value={filterKeyword}
+              onChange={(e) => setFilterKeyword(e.target.value)}
+              className="px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold bg-white"
+            >
+              <option value="all">所有关键词</option>
+              {keywordOptions.map((k) => (
+                <option key={k} value={k}>
+                  {k}
+                </option>
+              ))}
+            </select>
+            <select
+              value={filterMode}
+              onChange={(e) => setFilterMode(e.target.value as typeof filterMode)}
+              className="px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold bg-white"
+            >
+              <option value="all">所有模式</option>
+              <option value="detailed">DETAILED</option>
+              <option value="economy">ECONOMY</option>
+            </select>
+            <select
+              value={filterIndustry}
+              onChange={(e) => setFilterIndustry(e.target.value)}
+              className="px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold bg-white col-span-2 sm:col-span-1 lg:col-span-1"
+            >
+              <option value="all">所有行业</option>
+              {industryOptions.map((i) => (
+                <option key={i} value={i}>
+                  {i.length > 40 ? `${i.slice(0, 40)}…` : i}
+                </option>
+              ))}
+            </select>
+            {hasActiveFilters && (
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-500 hover:bg-slate-100 col-span-2 sm:col-span-1"
+              >
+                清空筛选
+              </button>
+            )}
+          </div>
+
+          {/* Batch selection actions */}
+          {selectedTasks.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 bg-blue-50 border border-blue-100 rounded-xl px-3 py-2">
+              <span className="text-xs font-black text-blue-800">已选 {selectedTasks.length} 条</span>
+              <button
+                type="button"
+                onClick={handleBatchExport}
+                className="text-xs font-bold text-emerald-700 hover:underline"
+              >
+                导出 Excel
+              </button>
+              {canExportPpt && (
+                <button
+                  type="button"
+                  onClick={handleBatchDownloadPpt}
+                  className="text-xs font-bold text-slate-700 hover:underline"
+                >
+                  下载 PPT
+                </button>
+              )}
+              {onRerunCompleted && (
+                <button
+                  type="button"
+                  onClick={() => void handleBatchRerun()}
+                  disabled={isAutomating}
+                  className="text-xs font-bold text-amber-700 hover:underline disabled:opacity-50"
+                >
+                  批量再次背调
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => void handleBatchDelete()}
+                disabled={isAutomating}
+                className="text-xs font-bold text-red-600 hover:underline disabled:opacity-50"
+              >
+                批量删除
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedIds(new Set())}
+                className="text-xs font-bold text-slate-500 hover:underline ml-auto"
+              >
+                取消选择
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
+          <table className="w-full text-left border-collapse min-w-[1100px]">
             <thead>
               <tr className="bg-slate-50 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">
-                <th className="px-6 py-4">客户信息</th>
-                <th className="px-6 py-4">状态</th>
-                <th className="px-6 py-4">背调时间</th>
-                <th className="px-6 py-4">模式</th>
-                <th className="px-6 py-4 text-right">操作</th>
+                <th className="px-4 py-4 w-10">
+                  <input
+                    type="checkbox"
+                    checked={allFilteredSelected}
+                    onChange={toggleSelectAllFiltered}
+                    className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    title="全选当前筛选结果"
+                  />
+                </th>
+                <th className="px-4 py-4">客户信息</th>
+                <th className="px-4 py-4">国家</th>
+                <th className="px-4 py-4">行业</th>
+                <th className="px-4 py-4">关键词</th>
+                <th className="px-4 py-4">联系人</th>
+                <th className="px-4 py-4">状态</th>
+                <th className="px-4 py-4">背调时间</th>
+                <th className="px-4 py-4">模式</th>
+                <th className="px-4 py-4 text-right">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
               {automationResults.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-slate-400 font-bold">
+                  <td colSpan={10} className="px-6 py-12 text-center text-slate-400 font-bold">
                     暂无任务队列
                   </td>
                 </tr>
+              ) : filteredResults.length === 0 ? (
+                <tr>
+                  <td colSpan={10} className="px-6 py-12 text-center text-slate-400 font-bold">
+                    无匹配结果，请调整筛选条件
+                  </td>
+                </tr>
               ) : (
-                automationResults.map((task) => (
-                  <tr key={task.id} className="hover:bg-slate-50/50 transition-colors">
-                    <td className="px-6 py-4">
-                      <div className="font-bold text-slate-800">{task.clientName}</div>
-                      <div className="text-[10px] text-slate-400 font-bold">
-                        {task.website} • {task.country}
-                      </div>
-                      {task.keyword && (
-                        <div className="mt-1 inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded text-[9px] font-black">
-                          关键词:{task.keyword}
+                filteredResults.map((task) => {
+                  const kws = taskKeywords(task);
+                  const industry = taskIndustry(task);
+                  const contact = taskPrimaryContact(task);
+                  const dmCount = task.analysis?.decisionMakers?.length || 0;
+                  return (
+                    <tr
+                      key={task.id}
+                      className={`hover:bg-slate-50/50 transition-colors ${
+                        selectedIds.has(task.id) ? 'bg-blue-50/40' : ''
+                      }`}
+                    >
+                      <td className="px-4 py-4">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(task.id)}
+                          onChange={() => toggleSelect(task.id)}
+                          className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                        />
+                      </td>
+                      <td className="px-4 py-4 max-w-[220px]">
+                        <div className="font-bold text-slate-800 truncate">
+                          {task.analysis?.companyInfo?.name || task.clientName}
                         </div>
-                      )}
-                    </td>
-                    <td className="px-6 py-4">
-                      <div
-                        className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-tighter ${
-                          task.status === 'completed'
-                            ? 'bg-green-100 text-green-600'
-                            : task.status === 'failed'
-                              ? 'bg-red-100 text-red-600'
-                              : task.status === 'pending'
-                                ? 'bg-slate-100 text-slate-400'
-                                : 'bg-blue-100 text-blue-600'
-                        }`}
-                      >
-                        {task.status === 'analyzing' || task.status === 'generating_email' ? (
-                          <Loader2 className="animate-spin" size={10} />
-                        ) : null}
-                        {task.status === 'completed' ? <CheckCircle2 size={10} /> : null}
-                        {task.status === 'failed' ? <AlertTriangle size={10} /> : null}
-                        {task.status === 'pending' ? <Hourglass size={10} /> : null}
-                        {task.status.replace('_', ' ')}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className="text-[11px] font-bold text-slate-600 whitespace-nowrap">
-                        {task.status === 'completed'
-                          ? formatBackgroundCheckTime(task.completedAt || task.createdAt) || '—'
-                          : '—'}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className="text-[10px] font-black text-slate-400 uppercase">
-                        {task.mode || 'economy'}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <div className="flex justify-end gap-1">
-                        {task.status === 'completed' && task.analysis && (
-                          <>
-                            <button
-                              onClick={() => onViewResult(task)}
-                              className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                              title="查看背调结果"
-                            >
-                              <FileText size={16} />
-                            </button>
-                            {canExportPpt && (
-                              <button
-                                onClick={() => onDownloadResult(task)}
-                                className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                                title="下载 PPT"
-                              >
-                                <Download size={16} />
-                              </button>
-                            )}
-                            {onRerunCompleted && (
-                              <button
-                                onClick={() => onRerunCompleted(task.id)}
-                                disabled={isAutomating}
-                                className="p-2 text-amber-600 hover:bg-amber-50 rounded-lg transition-colors disabled:opacity-50"
-                                title="再次背调"
-                              >
-                                <RefreshCw size={16} />
-                              </button>
-                            )}
-                          </>
+                        <div className="text-[10px] text-slate-400 font-bold truncate">
+                          {task.website || task.analysis?.companyInfo?.website || '—'}
+                        </div>
+                        {task.analysis?.companyInfo?.scale && (
+                          <div className="text-[9px] text-slate-400 font-bold mt-0.5">
+                            规模: {task.analysis.companyInfo.scale}
+                          </div>
                         )}
-                        {(task.status === 'pending' || task.status === 'failed') && (
-                          <button
-                            onClick={() => onRunSingle(task.id)}
-                            disabled={isAutomating}
-                            className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors disabled:opacity-50"
-                            title="运行"
-                          >
-                            <PlayCircle size={16} />
-                          </button>
+                      </td>
+                      <td className="px-4 py-4 text-sm font-bold text-slate-600 whitespace-nowrap">
+                        {task.country || task.analysis?.searchCountry || '—'}
+                      </td>
+                      <td className="px-4 py-4 text-xs font-bold text-slate-600 max-w-[160px]">
+                        <span className="line-clamp-2" title={industry || undefined}>
+                          {industry || '—'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-4">
+                        <div className="flex flex-wrap gap-1 max-w-[160px]">
+                          {kws.length ? (
+                            kws.slice(0, 3).map((k) => (
+                              <span
+                                key={k}
+                                className="inline-flex bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded text-[9px] font-black"
+                              >
+                                {k}
+                              </span>
+                            ))
+                          ) : (
+                            <span className="text-slate-300 text-xs">—</span>
+                          )}
+                          {kws.length > 3 && (
+                            <span className="text-[9px] font-bold text-slate-400">+{kws.length - 3}</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-4 max-w-[180px]">
+                        {contact ? (
+                          <div>
+                            <div className="text-xs font-bold text-slate-800 truncate">
+                              {contact.name || '—'}
+                            </div>
+                            <div className="text-[10px] text-slate-500 font-bold truncate">
+                              {contact.title || '职位待补充'}
+                            </div>
+                            <div className="text-[10px] text-blue-600 font-bold truncate">
+                              {contact.emailGuess || '—'}
+                            </div>
+                            {dmCount > 1 && (
+                              <div className="text-[9px] text-slate-400 font-bold mt-0.5">
+                                +{dmCount - 1} 位联系人
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-slate-300 text-xs font-bold">暂无</span>
                         )}
-                        <button
-                          onClick={() => onDelete(task.id)}
-                          className="p-2 text-red-400 hover:bg-red-50 rounded-lg transition-colors"
-                          title="删除"
+                      </td>
+                      <td className="px-4 py-4">
+                        <div
+                          className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-tighter ${
+                            task.status === 'completed'
+                              ? 'bg-green-100 text-green-600'
+                              : task.status === 'failed'
+                                ? 'bg-red-100 text-red-600'
+                                : task.status === 'pending'
+                                  ? 'bg-slate-100 text-slate-400'
+                                  : 'bg-blue-100 text-blue-600'
+                          }`}
                         >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                          {task.status === 'analyzing' || task.status === 'generating_email' ? (
+                            <Loader2 className="animate-spin" size={10} />
+                          ) : null}
+                          {task.status === 'completed' ? <CheckCircle2 size={10} /> : null}
+                          {task.status === 'failed' ? <AlertTriangle size={10} /> : null}
+                          {task.status === 'pending' ? <Hourglass size={10} /> : null}
+                          {task.status.replace('_', ' ')}
+                        </div>
+                      </td>
+                      <td className="px-4 py-4">
+                        <span className="text-[11px] font-bold text-slate-600 whitespace-nowrap">
+                          {task.status === 'completed'
+                            ? formatBackgroundCheckTime(task.completedAt || task.createdAt) || '—'
+                            : '—'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-4">
+                        <span className="text-[10px] font-black text-slate-400 uppercase">
+                          {task.mode || 'economy'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-4 text-right">
+                        <div className="flex justify-end gap-1">
+                          {task.status === 'completed' && task.analysis && (
+                            <>
+                              <button
+                                onClick={() => onViewResult(task)}
+                                className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                title="查看背调结果"
+                              >
+                                <FileText size={16} />
+                              </button>
+                              {canExportPpt && (
+                                <button
+                                  onClick={() => onDownloadResult(task)}
+                                  className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                                  title="下载 PPT"
+                                >
+                                  <Download size={16} />
+                                </button>
+                              )}
+                              {onRerunCompleted && (
+                                <button
+                                  onClick={() => onRerunCompleted(task.id)}
+                                  disabled={isAutomating}
+                                  className="p-2 text-amber-600 hover:bg-amber-50 rounded-lg transition-colors disabled:opacity-50"
+                                  title="再次背调"
+                                >
+                                  <RefreshCw size={16} />
+                                </button>
+                              )}
+                            </>
+                          )}
+                          {(task.status === 'pending' || task.status === 'failed') && (
+                            <button
+                              onClick={() => onRunSingle(task.id)}
+                              disabled={isAutomating}
+                              className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors disabled:opacity-50"
+                              title="运行"
+                            >
+                              <PlayCircle size={16} />
+                            </button>
+                          )}
+                          <button
+                            onClick={() => onDelete(task.id)}
+                            className="p-2 text-red-400 hover:bg-red-50 rounded-lg transition-colors"
+                            title="删除"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
