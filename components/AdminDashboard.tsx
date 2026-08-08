@@ -125,6 +125,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   } | null>(null);
   const [kbConvertDeleteOriginals, setKbConvertDeleteOriginals] = useState(true);
   const [kbConvertReport, setKbConvertReport] = useState<string | null>(null);
+  const [kbConvertConfirmOpen, setKbConvertConfirmOpen] = useState(false);
+  const [kbConvertStatus, setKbConvertStatus] = useState<string | null>(null);
   const [addUserOpen, setAddUserOpen] = useState(false);
   const [resetPwdUser, setResetPwdUser] = useState<string | null>(null);
   const [resetPwdValue, setResetPwdValue] = useState('');
@@ -958,22 +960,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     }
   };
 
+  const yieldToUi = () => new Promise<void>((resolve) => window.setTimeout(() => resolve(), 0));
+
+  const openKbConvertConfirm = () => {
+    const targets = kbFiles.filter(isConvertibleKbFile);
+    if (targets.length === 0) {
+      setKbConvertReport(
+        '没有可转换的文档（支持 Word .docx、PDF、Excel、CSV、TXT、JSON、RTF；已是 Markdown / PPT / 旧版.doc 会跳过）'
+      );
+      setKbConvertStatus(null);
+      return;
+    }
+    setKbConvertReport(null);
+    setKbConvertStatus(`准备转换 ${targets.length} 个文档…`);
+    setKbConvertConfirmOpen(true);
+  };
+
   const handleBatchConvertToMarkdown = async () => {
     const targets = kbFiles.filter(isConvertibleKbFile);
     if (targets.length === 0) {
-      alert('没有可转换的文档（支持 Word .docx、Excel、CSV、TXT、JSON、RTF；已是 Markdown 的会跳过）');
+      setKbConvertConfirmOpen(false);
+      setKbConvertReport('没有可转换的文档');
       return;
     }
-    const okConfirm = confirm(
-      `将把 ${targets.length} 个文档转为 Markdown 并重新入库。\n` +
-        `${kbConvertDeleteOriginals ? '成功后会删除原文件。' : '会保留原文件（可能重复占用）。'}\n\n` +
-        `说明：旧版 .doc / PDF / PPT 需先另存为 .docx 或文本后再转。\n是否继续？`
-    );
-    if (!okConfirm) return;
 
+    setKbConvertConfirmOpen(false);
     setIsConvertingKb(true);
     setKbConvertReport(null);
+    setKbConvertStatus(`开始转换，共 ${targets.length} 个…`);
     setKbConvertProgress({ done: 0, total: targets.length });
+    await yieldToUi();
 
     let okCount = 0;
     let failCount = 0;
@@ -984,11 +1000,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
       for (let i = 0; i < targets.length; i++) {
         const file = targets[i];
         setKbConvertProgress({ done: i, total: targets.length, current: file.name });
+        setKbConvertStatus(`正在转换 ${i + 1}/${targets.length}：${file.name}`);
+        await yieldToUi();
 
         const outcome = await convertKnowledgeFileToMdEntry(file);
         if (!outcome.ok || !outcome.newFile) {
           failCount++;
           errors.push(`${file.name}: ${outcome.error || '转换失败'}`);
+          setKbConvertProgress({ done: i + 1, total: targets.length, current: file.name });
           continue;
         }
 
@@ -1029,15 +1048,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
 
       const report =
         `完成：成功 ${okCount}，失败 ${failCount}` +
-        (errors.length ? `\n\n失败明细：\n${errors.slice(0, 12).join('\n')}${errors.length > 12 ? `\n…另有 ${errors.length - 12} 条` : ''}` : '');
+        (errors.length
+          ? `\n\n失败明细：\n${errors.slice(0, 20).join('\n')}${errors.length > 20 ? `\n…另有 ${errors.length - 20} 条` : ''}`
+          : '');
       setKbConvertReport(report);
-      alert(report);
+      setKbConvertStatus(`转换结束：成功 ${okCount}，失败 ${failCount}`);
     } catch (e: any) {
       console.error('[kb→md] batch failed', e);
-      alert(`批量转换中断：${e?.message || String(e)}`);
+      const msg = `批量转换中断：${e?.message || String(e)}`;
+      setKbConvertReport(msg);
+      setKbConvertStatus(msg);
     } finally {
       setIsConvertingKb(false);
-      setKbConvertProgress(null);
     }
   };
 
@@ -1833,18 +1855,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                           其它文档 → Markdown 一键转换并重新入库
                         </div>
                         <p className="text-xs text-emerald-800/80 font-medium mt-1.5 leading-relaxed">
-                          将 Word（.docx）、Excel、CSV、TXT、JSON、RTF 转为纯文本 Markdown，写入知识库供策略助手高效引用。
+                          将 Word（.docx）、PDF、Excel、CSV、TXT、JSON、RTF 转为纯文本 Markdown（本地转换，不耗 Token）。
                           可转换{' '}
                           <span className="font-black text-emerald-700">
                             {kbFiles.filter(isConvertibleKbFile).length}
                           </span>{' '}
-                          个；已是 .md / 图片音视频 / PDF·PPT·旧版.doc 会跳过。
+                          个；已是 .md / 图片音视频 / PPT / 旧版.doc 会跳过。扫描版 PDF 无文字层时可能失败。
                         </p>
                       </div>
                       <button
                         type="button"
                         disabled={isConvertingKb || isUploading || kbFiles.filter(isConvertibleKbFile).length === 0}
-                        onClick={() => void handleBatchConvertToMarkdown()}
+                        onClick={openKbConvertConfirm}
                         className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-xl font-black text-sm flex items-center justify-center gap-2 transition-all touch-manipulation w-full sm:w-auto flex-shrink-0"
                       >
                         {isConvertingKb ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
@@ -1861,22 +1883,65 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                       />
                       转换成功后删除原文件（推荐，避免重复占用与混淆）
                     </label>
-                    {kbConvertProgress && (
-                      <div className="text-xs font-bold text-emerald-800">
-                        进度 {kbConvertProgress.done}/{kbConvertProgress.total}
-                        {kbConvertProgress.current ? ` · ${kbConvertProgress.current}` : ''}
-                        <div className="mt-1.5 h-1.5 rounded-full bg-emerald-100 overflow-hidden">
-                          <div
-                            className="h-full bg-emerald-500 transition-all"
-                            style={{
-                              width: `${kbConvertProgress.total ? (kbConvertProgress.done / kbConvertProgress.total) * 100 : 0}%`,
+                    {kbConvertConfirmOpen && (
+                      <div className="rounded-xl border border-emerald-200 bg-white p-4 space-y-3">
+                        <p className="text-xs font-bold text-slate-700 leading-relaxed">
+                          将把{' '}
+                          <span className="text-emerald-700">{kbFiles.filter(isConvertibleKbFile).length}</span>{' '}
+                          个文档（含 PDF）转为 Markdown 并重新入库。
+                          {kbConvertDeleteOriginals ? ' 成功后会删除原文件。' : ' 会保留原文件。'}
+                          旧版 .doc / PPT 仍需先另存。是否继续？
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            disabled={isConvertingKb}
+                            onClick={() => void handleBatchConvertToMarkdown()}
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-xs font-black"
+                          >
+                            确认开始转换
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isConvertingKb}
+                            onClick={() => {
+                              setKbConvertConfirmOpen(false);
+                              setKbConvertStatus(null);
                             }}
-                          />
+                            className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-4 py-2 rounded-lg text-xs font-black"
+                          >
+                            取消
+                          </button>
                         </div>
                       </div>
                     )}
-                    {kbConvertReport && !isConvertingKb && (
-                      <pre className="text-[11px] font-medium text-slate-600 whitespace-pre-wrap bg-white/70 border border-emerald-100 rounded-xl p-3 max-h-40 overflow-auto">
+                    {(kbConvertStatus || kbConvertProgress) && (
+                      <div className="text-xs font-bold text-emerald-800 space-y-1.5">
+                        {kbConvertStatus && <div>{kbConvertStatus}</div>}
+                        {kbConvertProgress && (
+                          <>
+                            <div>
+                              进度 {kbConvertProgress.done}/{kbConvertProgress.total}
+                              {kbConvertProgress.current ? ` · ${kbConvertProgress.current}` : ''}
+                            </div>
+                            <div className="h-1.5 rounded-full bg-emerald-100 overflow-hidden">
+                              <div
+                                className="h-full bg-emerald-500 transition-all"
+                                style={{
+                                  width: `${
+                                    kbConvertProgress.total
+                                      ? (kbConvertProgress.done / kbConvertProgress.total) * 100
+                                      : 0
+                                  }%`,
+                                }}
+                              />
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )}
+                    {kbConvertReport && (
+                      <pre className="text-[11px] font-medium text-slate-600 whitespace-pre-wrap bg-white/70 border border-emerald-100 rounded-xl p-3 max-h-48 overflow-auto">
                         {kbConvertReport}
                       </pre>
                     )}
