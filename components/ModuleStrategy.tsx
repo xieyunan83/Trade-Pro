@@ -278,8 +278,7 @@ export const ModuleStrategy: React.FC<Props> = ({
         if (isWord) {
           try {
             const arrayBuffer = await file.arrayBuffer();
-            // @ts-expect-error - Mammoth is loaded via script tag
-            const result = await window.mammoth.extractRawText({ arrayBuffer });
+            const result = await window.mammoth!.extractRawText({ arrayBuffer });
             const text = result.value;
             processed.push({
               id: Date.now() + '-' + i + Math.random().toString(36).substr(2, 9),

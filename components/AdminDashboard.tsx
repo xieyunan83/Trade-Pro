@@ -25,6 +25,10 @@ import {
   setAliyunProxyBase,
   type AliyunProxyMode,
 } from '../services/qwenProxy';
+import {
+  convertKnowledgeFileToMdEntry,
+  isConvertibleKbFile,
+} from '../services/kbMarkdownConvert';
 
 type AdminTab = 'api' | 'users' | 'org' | 'kb';
 
@@ -113,6 +117,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const [saveConfigMsg, setSaveConfigMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [ytLink, setYtLink] = useState('');
   const [isUploading, setIsUploading] = useState(false);
+  const [isConvertingKb, setIsConvertingKb] = useState(false);
+  const [kbConvertProgress, setKbConvertProgress] = useState<{
+    done: number;
+    total: number;
+    current?: string;
+  } | null>(null);
+  const [kbConvertDeleteOriginals, setKbConvertDeleteOriginals] = useState(true);
+  const [kbConvertReport, setKbConvertReport] = useState<string | null>(null);
   const [addUserOpen, setAddUserOpen] = useState(false);
   const [resetPwdUser, setResetPwdUser] = useState<string | null>(null);
   const [resetPwdValue, setResetPwdValue] = useState('');
@@ -946,6 +958,89 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     }
   };
 
+  const handleBatchConvertToMarkdown = async () => {
+    const targets = kbFiles.filter(isConvertibleKbFile);
+    if (targets.length === 0) {
+      alert('没有可转换的文档（支持 Word .docx、Excel、CSV、TXT、JSON、RTF；已是 Markdown 的会跳过）');
+      return;
+    }
+    const okConfirm = confirm(
+      `将把 ${targets.length} 个文档转为 Markdown 并重新入库。\n` +
+        `${kbConvertDeleteOriginals ? '成功后会删除原文件。' : '会保留原文件（可能重复占用）。'}\n\n` +
+        `说明：旧版 .doc / PDF / PPT 需先另存为 .docx 或文本后再转。\n是否继续？`
+    );
+    if (!okConfirm) return;
+
+    setIsConvertingKb(true);
+    setKbConvertReport(null);
+    setKbConvertProgress({ done: 0, total: targets.length });
+
+    let okCount = 0;
+    let failCount = 0;
+    const errors: string[] = [];
+    let catalog = [...kbFiles];
+
+    try {
+      for (let i = 0; i < targets.length; i++) {
+        const file = targets[i];
+        setKbConvertProgress({ done: i, total: targets.length, current: file.name });
+
+        const outcome = await convertKnowledgeFileToMdEntry(file);
+        if (!outcome.ok || !outcome.newFile) {
+          failCount++;
+          errors.push(`${file.name}: ${outcome.error || '转换失败'}`);
+          continue;
+        }
+
+        // 若已有同名 .md，先删旧的再写入，避免重复
+        const existingMd = catalog.find(
+          (f) =>
+            f.id !== file.id &&
+            f.type.toLowerCase() === 'md' &&
+            f.name.toLowerCase() === outcome.newFile!.name.toLowerCase()
+        );
+        if (existingMd) {
+          await deleteFileFromDB(existingMd.id);
+          if (isSupabaseConfigured()) await deleteKnowledgeFile(existingMd.id);
+          catalog = catalog.filter((f) => f.id !== existingMd.id);
+        }
+
+        await saveFileToDB(outcome.newFile);
+        if (isSupabaseConfigured()) {
+          const saved = await saveKnowledgeFile(outcome.newFile);
+          if (!saved.ok) {
+            errors.push(`${outcome.newFile.name}: 本地已入库，云端失败 — ${saved.error || '未知'}`);
+          }
+        }
+        catalog = [...catalog.filter((f) => f.id !== outcome.newFile!.id), outcome.newFile];
+
+        if (kbConvertDeleteOriginals) {
+          await deleteFileFromDB(file.id);
+          if (isSupabaseConfigured()) await deleteKnowledgeFile(file.id);
+          catalog = catalog.filter((f) => f.id !== file.id);
+        }
+
+        okCount++;
+        setKbConvertProgress({ done: i + 1, total: targets.length, current: file.name });
+      }
+
+      const allFiles = await getAllFilesFromDB();
+      setKbFiles(allFiles);
+
+      const report =
+        `完成：成功 ${okCount}，失败 ${failCount}` +
+        (errors.length ? `\n\n失败明细：\n${errors.slice(0, 12).join('\n')}${errors.length > 12 ? `\n…另有 ${errors.length - 12} 条` : ''}` : '');
+      setKbConvertReport(report);
+      alert(report);
+    } catch (e: any) {
+      console.error('[kb→md] batch failed', e);
+      alert(`批量转换中断：${e?.message || String(e)}`);
+    } finally {
+      setIsConvertingKb(false);
+      setKbConvertProgress(null);
+    }
+  };
+
   return (
     <div className="min-h-screen min-h-[100dvh] bg-[#F0F2F5] flex flex-col">
       {/* Header */}
@@ -1709,22 +1804,82 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                       知识库文件: <span className="text-blue-600">{kbFiles.length}</span>
                       <span className="ml-2 text-xs font-bold text-slate-400">（本地缓存；云端在线时自动同步）</span>
                     </div>
-                    <label 
-                      htmlFor="kb-upload-input"
-                      className={`bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl font-black text-sm flex items-center justify-center gap-2 cursor-pointer transition-all touch-manipulation w-full sm:w-auto ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}
-                    >
-                      {isUploading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
-                      {isUploading ? '上传中...' : '上传文件'}
+                    <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+                      <label 
+                        htmlFor="kb-upload-input"
+                        className={`bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl font-black text-sm flex items-center justify-center gap-2 cursor-pointer transition-all touch-manipulation ${isUploading || isConvertingKb ? 'opacity-50 pointer-events-none' : ''}`}
+                      >
+                        {isUploading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+                        {isUploading ? '上传中...' : '上传文件'}
+                      </label>
+                      <input 
+                        id="kb-upload-input"
+                        type="file" 
+                        multiple
+                        onChange={handleFileUpload} 
+                        className="sr-only" 
+                        accept={KB_ACCEPT}
+                        disabled={isUploading || isConvertingKb}
+                      />
+                    </div>
+                  </div>
+
+                  {/* 其它文档 → Markdown 一键转换并重新入库 */}
+                  <div className="bg-emerald-50/80 border border-emerald-100 rounded-2xl p-4 sm:p-5 space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-black text-emerald-900 flex items-center gap-2">
+                          <FileCode size={16} className="text-emerald-600 flex-shrink-0" />
+                          其它文档 → Markdown 一键转换并重新入库
+                        </div>
+                        <p className="text-xs text-emerald-800/80 font-medium mt-1.5 leading-relaxed">
+                          将 Word（.docx）、Excel、CSV、TXT、JSON、RTF 转为纯文本 Markdown，写入知识库供策略助手高效引用。
+                          可转换{' '}
+                          <span className="font-black text-emerald-700">
+                            {kbFiles.filter(isConvertibleKbFile).length}
+                          </span>{' '}
+                          个；已是 .md / 图片音视频 / PDF·PPT·旧版.doc 会跳过。
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={isConvertingKb || isUploading || kbFiles.filter(isConvertibleKbFile).length === 0}
+                        onClick={() => void handleBatchConvertToMarkdown()}
+                        className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-xl font-black text-sm flex items-center justify-center gap-2 transition-all touch-manipulation w-full sm:w-auto flex-shrink-0"
+                      >
+                        {isConvertingKb ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+                        {isConvertingKb ? '转换中…' : '一键转为 Markdown'}
+                      </button>
+                    </div>
+                    <label className="flex items-center gap-2 text-xs font-bold text-emerald-900/90 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={kbConvertDeleteOriginals}
+                        disabled={isConvertingKb}
+                        onChange={(e) => setKbConvertDeleteOriginals(e.target.checked)}
+                        className="rounded border-emerald-300 text-emerald-600 focus:ring-emerald-500"
+                      />
+                      转换成功后删除原文件（推荐，避免重复占用与混淆）
                     </label>
-                    <input 
-                      id="kb-upload-input"
-                      type="file" 
-                      multiple
-                      onChange={handleFileUpload} 
-                      className="sr-only" 
-                      accept={KB_ACCEPT}
-                      disabled={isUploading}
-                    />
+                    {kbConvertProgress && (
+                      <div className="text-xs font-bold text-emerald-800">
+                        进度 {kbConvertProgress.done}/{kbConvertProgress.total}
+                        {kbConvertProgress.current ? ` · ${kbConvertProgress.current}` : ''}
+                        <div className="mt-1.5 h-1.5 rounded-full bg-emerald-100 overflow-hidden">
+                          <div
+                            className="h-full bg-emerald-500 transition-all"
+                            style={{
+                              width: `${kbConvertProgress.total ? (kbConvertProgress.done / kbConvertProgress.total) * 100 : 0}%`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                    {kbConvertReport && !isConvertingKb && (
+                      <pre className="text-[11px] font-medium text-slate-600 whitespace-pre-wrap bg-white/70 border border-emerald-100 rounded-xl p-3 max-h-40 overflow-auto">
+                        {kbConvertReport}
+                      </pre>
+                    )}
                   </div>
 
                   {/* YouTube Link Input */}
