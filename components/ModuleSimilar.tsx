@@ -14,10 +14,15 @@ export const ModuleSimilar: React.FC<ModuleSimilarProps> = ({ data, onAnalyze })
       <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
         <h3 className="text-2xl font-black text-slate-800 mb-6 flex items-center gap-2">
           <Network className="text-blue-600" /> 同类公司推荐 (Similar Companies)
+          {(data.similarCompanies || []).length > 0 && (
+            <span className="text-sm font-black text-blue-600 bg-blue-50 px-2 py-1 rounded-lg">
+              {(data.similarCompanies || []).length} 家
+            </span>
+          )}
         </h3>
-        <p className="text-slate-500 font-medium mb-8">基于当前公司的业务模式、产品线和市场定位，为您推荐以下相似的目标客户。</p>
+        <p className="text-slate-500 font-medium mb-8">基于当前公司的业务模式、产品线和市场定位，为您推荐以下相似的目标客户。该列表已保存在本背调报告中。</p>
         
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
           {(data.similarCompanies || []).length === 0 && (
             <div className="col-span-full py-12 text-center text-slate-400 font-bold">暂无同类公司推荐</div>
           )}

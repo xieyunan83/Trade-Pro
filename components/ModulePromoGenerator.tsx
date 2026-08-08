@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { AutomationPipelineConfig, AutomationResult, CLIENT_TYPE_OPTIONS } from '../types';
 import {
   Ruler,
@@ -25,6 +25,7 @@ import { findCountryByEn } from '../data/countriesByContinent';
 import { exportAutomationResultsToExcel } from '../services/exportService';
 import { formatBackgroundCheckTime } from '../utils/crmHistory';
 import { IndustryMultiSelect } from './IndustryMultiSelect';
+import { maskEmailAddress } from '../services/permissions';
 
 interface ModulePromoGeneratorProps {
   onStartAutomation: (config: AutomationPipelineConfig) => void;
@@ -43,6 +44,8 @@ interface ModulePromoGeneratorProps {
   onClearAll: () => void;
   canDmMine?: boolean;
   canCrmImport?: boolean;
+  /** 普通员工邮箱脱敏 */
+  canViewEmails?: boolean;
 }
 
 const PER_COUNTRY_OPTIONS = [3, 5, 8, 10, 12, 15];
@@ -75,6 +78,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   onClearAll,
   canDmMine = false,
   canCrmImport = false,
+  canViewEmails = false,
 }) => {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [draft, setDraft] = useState<AutomationPipelineConfig>(emptyDraft);
@@ -87,6 +91,8 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   const [filterKeyword, setFilterKeyword] = useState('all');
   const [filterMode, setFilterMode] = useState<'all' | 'detailed' | 'economy'>('all');
   const [filterIndustry, setFilterIndustry] = useState('all');
+  const [pageSize, setPageSize] = useState<10 | 20 | 50>(20);
+  const [page, setPage] = useState(1);
 
   const completedCount = automationResults.filter((r) => r.status === 'completed' && r.analysis).length;
 
@@ -177,13 +183,29 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
     filterIndustry,
   ]);
 
+  const totalPages = Math.max(1, Math.ceil(filteredResults.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const pagedResults = useMemo(() => {
+    const start = (safePage - 1) * pageSize;
+    return filteredResults.slice(start, start + pageSize);
+  }, [filteredResults, safePage, pageSize]);
+
+  // 筛选/页大小变化时回到第一页
+  useEffect(() => {
+    setPage(1);
+  }, [filterQuery, filterStatus, filterCountry, filterKeyword, filterMode, filterIndustry, pageSize]);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
   const selectedTasks = useMemo(
     () => filteredResults.filter((t) => selectedIds.has(t.id)),
     [filteredResults, selectedIds]
   );
 
-  const allFilteredSelected =
-    filteredResults.length > 0 && filteredResults.every((t) => selectedIds.has(t.id));
+  const allPageSelected =
+    pagedResults.length > 0 && pagedResults.every((t) => selectedIds.has(t.id));
 
   const toggleSelect = (id: string) => {
     setSelectedIds((prev) => {
@@ -194,17 +216,17 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
     });
   };
 
-  const toggleSelectAllFiltered = () => {
-    if (allFilteredSelected) {
+  const toggleSelectAllPage = () => {
+    if (allPageSelected) {
       setSelectedIds((prev) => {
         const next = new Set(prev);
-        for (const t of filteredResults) next.delete(t.id);
+        for (const t of pagedResults) next.delete(t.id);
         return next;
       });
     } else {
       setSelectedIds((prev) => {
         const next = new Set(prev);
-        for (const t of filteredResults) next.add(t.id);
+        for (const t of pagedResults) next.add(t.id);
         return next;
       });
     }
@@ -861,10 +883,10 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                 <th className="px-4 py-4 w-10">
                   <input
                     type="checkbox"
-                    checked={allFilteredSelected}
-                    onChange={toggleSelectAllFiltered}
+                    checked={allPageSelected}
+                    onChange={toggleSelectAllPage}
                     className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                    title="全选当前筛选结果"
+                    title="全选本页"
                   />
                 </th>
                 <th className="px-4 py-4">客户信息</th>
@@ -892,7 +914,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                   </td>
                 </tr>
               ) : (
-                filteredResults.map((task) => {
+                pagedResults.map((task) => {
                   const kws = taskKeywords(task);
                   const industry = taskIndustry(task);
                   const contact = taskPrimaryContact(task);
@@ -962,7 +984,11 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                               {contact.title || '职位待补充'}
                             </div>
                             <div className="text-[10px] text-blue-600 font-bold truncate">
-                              {contact.emailGuess || '—'}
+                              {contact.emailGuess
+                                ? canViewEmails
+                                  ? contact.emailGuess
+                                  : maskEmailAddress(contact.emailGuess)
+                                : '—'}
                             </div>
                             {dmCount > 1 && (
                               <div className="text-[9px] text-slate-400 font-bold mt-0.5">
@@ -1065,6 +1091,51 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
             </tbody>
           </table>
         </div>
+
+        {filteredResults.length > 0 && (
+          <div className="px-4 py-3 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/40">
+            <div className="flex items-center gap-2 text-xs font-bold text-slate-500">
+              <span>
+                第 {(safePage - 1) * pageSize + 1}–
+                {Math.min(safePage * pageSize, filteredResults.length)} 条 / 共 {filteredResults.length} 条
+              </span>
+              <span className="text-slate-300">|</span>
+              <label className="inline-flex items-center gap-1.5">
+                每页
+                <select
+                  value={pageSize}
+                  onChange={(e) => setPageSize(Number(e.target.value) as 10 | 20 | 50)}
+                  className="px-2 py-1 rounded-lg border border-slate-200 bg-white font-bold"
+                >
+                  <option value={10}>10</option>
+                  <option value={20}>20</option>
+                  <option value={50}>50</option>
+                </select>
+              </label>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={safePage <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-slate-600 disabled:opacity-40 hover:bg-white"
+              >
+                上一页
+              </button>
+              <span className="text-xs font-black text-slate-600">
+                {safePage} / {totalPages}
+              </span>
+              <button
+                type="button"
+                disabled={safePage >= totalPages}
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-slate-600 disabled:opacity-40 hover:bg-white"
+              >
+                下一页
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

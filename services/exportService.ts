@@ -2,6 +2,7 @@
 import { AnalysisResult, KeywordExtractionResult, AutomationResult, DecisionMaker, Client } from '../types';
 import { generateConsolidatedEmailStrategy } from './geminiService';
 import { getAllFilesFromDB } from './db';
+import { abbreviateEmailPlatform } from './permissions';
 
 declare global {
   interface Window {
@@ -122,7 +123,7 @@ export const exportClientsToExcel = (clients: Client[]) => {
                 邮箱地址: dm.emailGuess || '',
                 电话: dm.phone || '',
                 LinkedIn: dm.linkedin || '',
-                邮箱来源: dm.emailSource || dm.source || '',
+                邮箱来源: abbreviateEmailPlatform(dm.emailSource || dm.source),
                 邮箱状态: dm.emailStatus || (dm.isVerified ? 'valid' : ''),
             });
         }
@@ -188,7 +189,7 @@ export const exportContactsToExcel = (contacts: DecisionMaker[], companyName: st
         Email: c.emailGuess || '',
         Type: c.type,
         ContactSource: c.source,
-        EmailSource: c.emailSource || c.source || '',
+        EmailSource: abbreviateEmailPlatform(c.emailSource || c.source),
         EmailStatus: c.emailStatus || (c.isVerified ? 'valid' : 'unverified'),
         Verified: c.isVerified ? 'Yes' : 'No',
         LinkedIn: c.linkedin || ''
@@ -732,7 +733,7 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
             { text: sanitize(dm.title) },
             { text: sanitize(dm.emailGuess || "待补充") },
             { text: sanitize(dm.type) },
-            { text: sanitize(`${dm.emailSource || dm.source} / ${dm.emailStatus || (dm.isVerified ? 'valid' : '未验证')}${dm.isVerified ? ' ✓' : ''}`) },
+            { text: sanitize(`${abbreviateEmailPlatform(dm.emailSource || dm.source)} / ${dm.emailStatus || (dm.isVerified ? 'valid' : '未验证')}${dm.isVerified ? ' ✓' : ''}`) },
             { text: sanitize(dm.linkedin || "—") },
         ]);
 

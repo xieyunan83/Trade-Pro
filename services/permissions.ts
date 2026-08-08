@@ -12,7 +12,7 @@ export const PERMISSION_CATALOG: Array<{
   { key: 'module.discovery', label: '客户搜索', group: '模块', description: '发现潜在客户列表' },
   { key: 'module.background', label: '背景调查', group: '模块', description: '查看公司背调报告' },
   { key: 'module.products', label: '产品分析', group: '模块', description: '查看产品分析页' },
-  { key: 'module.decision_makers', label: '决策人挖掘', group: '模块', description: '查看决策人与邮箱' },
+  { key: 'module.decision_makers', label: '决策人挖掘', group: '模块', description: '查看决策人；普通员工邮箱脱敏为 *，仅主管/总管/管理员可见完整邮箱' },
   { key: 'module.strategy', label: '开发策略', group: '模块', description: '策略对话与开发信' },
   { key: 'module.similar', label: '同类推荐', group: '模块', description: '相似公司推荐' },
   { key: 'module.client_crm', label: '客户管理 CRM', group: '模块', description: 'CRM 客户列表' },
@@ -22,7 +22,7 @@ export const PERMISSION_CATALOG: Array<{
   { key: 'feature.search_clients', label: '执行客户搜索', group: '功能', description: '发起联网搜索客户' },
   { key: 'feature.analyze_company', label: '单次背调', group: '功能', description: '对单个公司做背调' },
   { key: 'feature.batch_analyze', label: '批量背调', group: '功能', description: '批量/队列背调任务' },
-  { key: 'feature.dm_email_search', label: '决策人邮箱搜索', group: '功能', description: '后台 Anymail 搜索邮箱' },
+  { key: 'feature.dm_email_search', label: '决策人邮箱搜索', group: '功能', description: '后台搜索邮箱（员工可搜索但只能看 *；完整邮箱仅本部门主管及以上可见）' },
   { key: 'feature.export_report', label: '导出 Excel', group: '功能', description: '导出联系人 Excel 等' },
   { key: 'feature.export_ppt', label: '下载 PPT 报告', group: '功能', description: '下载背调 PPT 报告' },
   { key: 'feature.crm_manage', label: 'CRM 编辑', group: '功能', description: '新增/修改 CRM 客户' },
@@ -194,20 +194,35 @@ export const roleLabel = (role: UserRole): string => {
   return '部门员工';
 };
 
-/** 管理员 / 总管 / 部门主管可查看完整决策人邮箱；普通员工显示脱敏 */
+/** 管理员 / 总管 / 部门主管可查看完整决策人邮箱；普通员工一律脱敏为 * */
 export const canViewFullDecisionMakerEmails = (user: User | null | undefined): boolean => {
   if (!user || user.disabled) return false;
   return user.role === 'admin' || user.role === 'director' || user.role === 'manager';
 };
 
-/** 邮箱脱敏：a***@***.com */
+/**
+ * 邮箱脱敏（普通员工）：用 * 表示，不暴露本地名与域名细节。
+ * 例：john.doe@acme.com → ******
+ */
 export const maskEmailAddress = (email?: string): string => {
   const raw = (email || '').trim();
   if (!raw) return '';
-  if (!raw.includes('@')) return '***';
-  const [local, domain] = raw.split('@');
-  const localMask = local.length <= 1 ? '*' : `${local[0]}***`;
-  const domainParts = domain.split('.');
-  const tld = domainParts.length > 1 ? domainParts[domainParts.length - 1] : 'com';
-  return `${localMask}@***.${tld}`;
+  return '******';
+};
+
+/**
+ * 邮箱来源平台缩写：AnymailFinder→A，Hunter→H，Findymail→F，Manual→M，AI→AI
+ */
+export const abbreviateEmailPlatform = (source?: string): string => {
+  const s = (source || '').trim();
+  if (!s) return '?';
+  const lower = s.toLowerCase();
+  if (lower.includes('anymail')) return 'A';
+  if (lower.includes('hunter')) return 'H';
+  if (lower.includes('findy')) return 'F';
+  if (lower === 'manual' || lower.includes('手动')) return 'M';
+  if (lower.includes('pattern') || lower === 'ai' || lower.startsWith('ai ')) return 'AI';
+  // 其它来源：取首个字母/汉字
+  const letter = s.replace(/[^A-Za-z\u4e00-\u9fa5]/g, '').charAt(0);
+  return letter ? letter.toUpperCase() : '?';
 };

@@ -2792,6 +2792,11 @@ ${evidenceBlock}
   5. Products, pricing, SWOT, traffic estimates, competitors, action plan for Chinese suppliers.
 ${productFocusBlock}
   6. Financial trends last 5 years — estimate if needed, never all zeros.
+  7. SIMILAR COMPANIES (required, high volume):
+     - Return 12–15 similarCompanies that are REAL buyers/importers/retailers/distributors in the SAME or closely related market.
+     - Prefer same country as the target; if thin, expand to same region (e.g. DACH / Benelux) but keep trade relevance.
+     - Each must include: name, website (real domain), country, mainProducts (short Chinese or bilingual).
+     - Do NOT return fewer than 10 when public peers exist; avoid inventing fake domains.
 
   IMPORTANT: All descriptive text in Simplified Chinese (简体中文).
   CRITICAL LANGUAGE RULE for productSummary:
@@ -2835,7 +2840,20 @@ ${productFocusBlock}
     "marketTrends": "",
     "decisionMakers": [{ "firstName": "", "lastName": "", "name": "", "title": "", "department": "", "emailGuess": "", "phone": "", "whatsapp": "", "linkedin": "", "yearsActive": "", "type": "Buyer", "source": "AI", "isVerified": false, "influenceScore": 4 }],
     "strategy": { "buyingOfficeLocation": "", "actionPlan": [] },
-    "similarCompanies": [{ "name": "", "website": "", "country": "", "mainProducts": "" }]
+    "similarCompanies": [
+      { "name": "", "website": "", "country": "", "mainProducts": "" },
+      { "name": "", "website": "", "country": "", "mainProducts": "" },
+      { "name": "", "website": "", "country": "", "mainProducts": "" },
+      { "name": "", "website": "", "country": "", "mainProducts": "" },
+      { "name": "", "website": "", "country": "", "mainProducts": "" },
+      { "name": "", "website": "", "country": "", "mainProducts": "" },
+      { "name": "", "website": "", "country": "", "mainProducts": "" },
+      { "name": "", "website": "", "country": "", "mainProducts": "" },
+      { "name": "", "website": "", "country": "", "mainProducts": "" },
+      { "name": "", "website": "", "country": "", "mainProducts": "" },
+      { "name": "", "website": "", "country": "", "mainProducts": "" },
+      { "name": "", "website": "", "country": "", "mainProducts": "" }
+    ]
   }
   `;
 
@@ -2965,7 +2983,17 @@ ${productFocusBlock}
       buyingOfficeLocation: aiResult.strategy?.buyingOfficeLocation || "N/A",
       actionPlan: aiResult.strategy?.actionPlan || []
     },
-    similarCompanies: Array.isArray(aiResult.similarCompanies) ? aiResult.similarCompanies : [],
+    similarCompanies: Array.isArray(aiResult.similarCompanies)
+      ? aiResult.similarCompanies
+          .filter((c: any) => c && (c.name || c.website))
+          .slice(0, 20)
+          .map((c: any) => ({
+            name: String(c.name || '').trim() || 'Unknown',
+            website: String(c.website || '').trim(),
+            country: String(c.country || '').trim(),
+            mainProducts: String(c.mainProducts || '').trim(),
+          }))
+      : [],
     searchKeyword: searchKeyword || undefined,
     searchTags: opts?.searchTags?.length ? opts.searchTags : undefined,
     searchCountry: searchCountry || undefined,

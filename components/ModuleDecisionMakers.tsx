@@ -6,7 +6,7 @@ import {
   getActiveDmJobForDomain,
   subscribeDmEmailSearchJobs,
 } from '../services/dmEmailSearchQueue';
-import { maskEmailAddress } from '../services/permissions';
+import { maskEmailAddress, abbreviateEmailPlatform } from '../services/permissions';
 
 interface ModuleDecisionMakersProps {
   data: AnalysisResult;
@@ -517,7 +517,7 @@ const DecisionMakerCard: React.FC<{
 }> = ({ dm, index, selected, canViewEmails, onToggleSelect, onChange, onDelete }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState<DecisionMaker>(dm);
-  const emailPlatform = dm.emailSource || dm.source || '未知';
+  const emailPlatform = abbreviateEmailPlatform(dm.emailSource || dm.source);
   const verify = statusLabel(dm);
 
   useEffect(() => { setDraft(dm); }, [dm]);
@@ -704,8 +704,10 @@ const DecisionMakerCard: React.FC<{
           <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-violet-50 border border-violet-100">
             <Mail size={12} className="text-violet-500 flex-shrink-0" />
             <div className="min-w-0">
-              <div className="text-[9px] font-black text-violet-400 uppercase">邮箱来源平台</div>
-              <div className="text-[11px] font-black text-violet-800 truncate">{emailPlatform}</div>
+              <div className="text-[9px] font-black text-violet-400 uppercase">邮箱来源</div>
+              <div className="text-[11px] font-black text-violet-800 truncate" title={dm.emailSource || dm.source || ''}>
+                {emailPlatform}
+              </div>
             </div>
           </div>
           <div className={`flex items-center gap-2 px-3 py-2 rounded-xl border ${verify.ok ? 'bg-emerald-50 border-emerald-100' : 'bg-amber-50 border-amber-100'}`}>
@@ -754,7 +756,8 @@ const DecisionMakerCard: React.FC<{
       
       <div className="mt-4 flex items-center justify-between gap-2">
         <div className="text-[10px] font-black text-slate-400 uppercase tracking-tighter truncate">
-          联系人来源: {dm.source}{dm.yearsActive ? ` · ${dm.yearsActive}` : ''}
+          联系人来源: {abbreviateEmailPlatform(dm.source)}
+          {dm.yearsActive ? ` · ${dm.yearsActive}` : ''}
           {dm.influenceScore ? ` · 影响力 ${dm.influenceScore}/5` : ''}
         </div>
         {typeof dm.confidence === 'number' && (

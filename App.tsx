@@ -2342,6 +2342,7 @@ const App: React.FC = () => {
                         canCrmImport={canAccessModule(currentUser, ModuleType.CLIENT_CRM)}
                         onClearCompleted={handleClearCompletedTasks}
                         onClearAll={handleClearAllTasks}
+                        canViewEmails={canViewFullDecisionMakerEmails(currentUser)}
                     />
                 )}
                 {activeModule === ModuleType.STRATEGY && (
@@ -2560,6 +2561,7 @@ const App: React.FC = () => {
                             crmClients
                           ).checkedAt
                         }
+                        onAnalyzeSimilar={(domain) => handleAnalyzeInput(domain)}
                       />
                     )}
                     {activeModule === ModuleType.PRODUCTS && (
