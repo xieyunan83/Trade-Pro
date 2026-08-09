@@ -1,4 +1,4 @@
-import { AnalysisResult, DecisionMaker, HistoryItem } from '../types';
+import { AnalysisResult, DecisionMaker, EvidenceItem, HistoryItem } from '../types';
 
 const asArray = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
 
@@ -119,6 +119,20 @@ export const normalizeAnalysisResult = (raw: unknown): AnalysisResult => {
     similarCompanies: asArray(ai.similarCompanies),
     generatedEmails: ai.generatedEmails,
     generatedEmailsAt: ai.generatedEmailsAt,
+    evidenceChain: asArray(ai.evidenceChain)
+      .filter((e: any) => e && typeof e.url === 'string' && e.url.trim())
+      .map((e: any): EvidenceItem => ({
+        title: asStr(e.title, e.url),
+        url: asStr(e.url),
+        source: (['tavily', 'anysearch', 'official', 'social', 'ai', 'other'].includes(e.source)
+          ? e.source
+          : 'other') as EvidenceItem['source'],
+        snippet: e.snippet ? asStr(e.snippet) : undefined,
+        confidence: typeof e.confidence === 'number' ? e.confidence : undefined,
+      })),
+    evidenceConfidence:
+      typeof ai.evidenceConfidence === 'number' ? ai.evidenceConfidence : undefined,
+    evidenceSummary: ai.evidenceSummary ? asStr(ai.evidenceSummary) : undefined,
   };
 };
 

@@ -6,6 +6,7 @@ import {
   DiscoveryArchiveItem,
   HistoryItem,
   Client,
+  IcpTemplate,
 } from '../types';
 import {
   Search,
@@ -23,6 +24,8 @@ import {
   CheckCircle2,
   RefreshCw,
   FileText,
+  Bookmark,
+  Trash2,
 } from 'lucide-react';
 import { searchPotentialClients } from '../services/geminiService';
 import { CONTINENTS, countryLabel, countrySearchValue, findCountryByEn, type ContinentGroup } from '../data/countriesByContinent';
@@ -33,10 +36,19 @@ import {
   lookupFromBgIndex,
 } from '../utils/crmHistory';
 import { IndustryMultiSelect } from './IndustryMultiSelect';
+import {
+  applyIcpToDiscoveryState,
+  deleteIcpTemplate,
+  icpFromDiscoveryState,
+  loadIcpTemplates,
+  upsertIcpTemplate,
+} from '../services/icpStore';
 
 interface ClientFinderProps {
   state: DiscoveryState;
   onStateChange: (state: DiscoveryState) => void;
+  /** 当前登录用户名（ICP 模板按用户隔离） */
+  username?: string;
   /** 历史搜索归档：用于同公司关键词去重标签 */
   discoveryArchives?: DiscoveryArchiveItem[];
   /** 背调历史：用于「已背调」标签 */
@@ -71,6 +83,7 @@ const normalizeClientTypes = (state: DiscoveryState): string[] => {
 export const ClientFinder: React.FC<ClientFinderProps> = ({
   state,
   onStateChange,
+  username = 'default',
   discoveryArchives = [],
   history = [],
   crmClients = [],
@@ -87,6 +100,38 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
   const [activeContinentId, setActiveContinentId] = useState(CONTINENTS[0].id);
   const [countryFilter, setCountryFilter] = useState('');
   const countryPanelRef = useRef<HTMLDivElement>(null);
+  const [icpTemplates, setIcpTemplates] = useState<IcpTemplate[]>(() => loadIcpTemplates(username));
+  const [icpNameDraft, setIcpNameDraft] = useState('');
+
+  useEffect(() => {
+    setIcpTemplates(loadIcpTemplates(username));
+  }, [username]);
+
+  const handleSaveIcp = () => {
+    const name =
+      icpNameDraft.trim() ||
+      [state.product, selectedCountries.slice(0, 2).map((en) => findCountryByEn(en)?.zh || en).join('/')]
+        .filter(Boolean)
+        .join(' · ') ||
+      `ICP ${icpTemplates.length + 1}`;
+    if (!state.product.trim() && selectedCountries.length === 0) {
+      alert('请先填写产品关键词或选择国家，再保存 ICP');
+      return;
+    }
+    const next = upsertIcpTemplate(username, icpFromDiscoveryState(state, name));
+    setIcpTemplates(next);
+    setIcpNameDraft('');
+  };
+
+  const handleApplyIcp = (icp: IcpTemplate) => {
+    onStateChange(applyIcpToDiscoveryState(state, icp));
+    setSelectedIndices(new Set());
+  };
+
+  const handleDeleteIcp = (id: string) => {
+    if (!confirm('删除该 ICP 模板？')) return;
+    setIcpTemplates(deleteIcpTemplate(username, id));
+  };
 
   const selectedCountries = normalizeCountries(state);
   const selectedTypes = normalizeClientTypes(state);
@@ -254,6 +299,68 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
               多选客户类型与国家；建议填写行业以提高命中率。
             </p>
           </div>
+        </div>
+
+        {/* ICP 画像模板 */}
+        <div className="mt-5 sm:mt-6 rounded-2xl border border-cyan-100 bg-cyan-50/50 p-3 sm:p-4 space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <div className="text-xs font-black text-cyan-900 flex items-center gap-1.5">
+              <Bookmark size={14} className="text-cyan-600" />
+              ICP 画像模板
+              <span className="font-medium text-cyan-800/70">保存当前搜索条件，一键复用</span>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+              <input
+                type="text"
+                value={icpNameDraft}
+                onChange={(e) => setIcpNameDraft(e.target.value)}
+                placeholder="模板名称（可选）"
+                className="flex-1 sm:w-44 px-3 py-2 rounded-xl border border-cyan-200 bg-white text-xs font-bold"
+              />
+              <button
+                type="button"
+                onClick={handleSaveIcp}
+                className="inline-flex items-center justify-center gap-1.5 bg-cyan-600 hover:bg-cyan-700 text-white px-3 py-2 rounded-xl text-xs font-black"
+              >
+                <Plus size={14} /> 保存为 ICP
+              </button>
+            </div>
+          </div>
+          {icpTemplates.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {icpTemplates.map((icp) => (
+                <div
+                  key={icp.id}
+                  className="inline-flex items-center gap-1 bg-white border border-cyan-100 rounded-xl pl-2.5 pr-1 py-1 shadow-sm"
+                >
+                  <button
+                    type="button"
+                    onClick={() => handleApplyIcp(icp)}
+                    className="text-left min-w-0"
+                    title={`应用：${icp.product || '—'} · ${icp.countries.length} 国`}
+                  >
+                    <div className="text-xs font-black text-slate-800 truncate max-w-[140px]">{icp.name}</div>
+                    <div className="text-[10px] font-bold text-slate-400 truncate max-w-[140px]">
+                      {icp.product || '无关键词'}
+                      {icp.countries.length ? ` · ${icp.countries.length}国` : ''}
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteIcp(icp.id)}
+                    className="p-1.5 text-slate-300 hover:text-red-500"
+                    title="删除"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-[11px] font-bold text-cyan-800/60">
+              尚无模板。填好关键词/国家/行业后点「保存为 ICP」，下次一键套用。
+            </p>
+          )}
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 mt-5 sm:mt-6">

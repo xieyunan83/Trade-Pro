@@ -1,12 +1,19 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { AnalysisResult } from '../types';
 import {
   LayoutDashboard, Globe, MapPin, Calendar, Users, Briefcase, TrendingUp, ShieldCheck,
-  Lightbulb, Target, Ship, Award, AlertTriangle, Store, Network, Linkedin, Package, Building2, RefreshCw, Loader2, Search
+  Lightbulb, Target, Ship, Award, AlertTriangle, Store, Network, Linkedin, Package, Building2, RefreshCw, Loader2, Search,
+  Link2, ExternalLink
 } from 'lucide-react';
 import { getActiveDmJobForDomain, subscribeDmEmailSearchJobs } from '../services/dmEmailSearchQueue';
 import { websiteHref } from '../services/analysisNormalize';
 import { formatBackgroundCheckTime } from '../utils/crmHistory';
+import {
+  buildFallbackEvidenceFromReport,
+  mergeEvidenceItems,
+  scoreEvidenceConfidence,
+  summarizeEvidence,
+} from '../utils/evidenceChain';
 
 interface ModuleBackgroundProps {
   data: AnalysisResult;
@@ -66,6 +73,20 @@ export const ModuleBackground: React.FC<ModuleBackgroundProps> = ({
   const [jobActive, setJobActive] = useState(false);
   const [queueMsg, setQueueMsg] = useState('');
 
+  const evidenceItems = useMemo(() => {
+    const stored = data.evidenceChain || [];
+    return mergeEvidenceItems(stored, buildFallbackEvidenceFromReport(data));
+  }, [data]);
+  const evidenceConfidence =
+    typeof data.evidenceConfidence === 'number'
+      ? data.evidenceConfidence
+      : scoreEvidenceConfidence(data, evidenceItems);
+  const evidenceSummary =
+    data.evidenceSummary || summarizeEvidence(evidenceItems, evidenceConfidence);
+  const confidencePct = Math.round(evidenceConfidence * 100);
+  const confidenceTone =
+    confidencePct >= 70 ? 'green' : confidencePct >= 45 ? 'amber' : 'red';
+
   useEffect(() => {
     const domain = company.website || '';
     return subscribeDmEmailSearchJobs(() => {
@@ -75,6 +96,63 @@ export const ModuleBackground: React.FC<ModuleBackgroundProps> = ({
 
   return (
     <div className="space-y-4 sm:space-y-6 animate-fade-in">
+      {/* 证据链 */}
+      <SectionCard
+        title="证据链 · 公开来源"
+        icon={<Link2 className="text-cyan-600" size={20} />}
+      >
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+          <p className="text-sm text-slate-600 font-medium leading-relaxed">{evidenceSummary}</p>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">可信度粗估</span>
+            <Pill tone={confidenceTone}>{confidencePct}%</Pill>
+          </div>
+        </div>
+        <div className="h-2 rounded-full bg-slate-100 overflow-hidden mb-4">
+          <div
+            className={`h-full transition-all ${
+              confidenceTone === 'green' ? 'bg-emerald-500' : confidenceTone === 'amber' ? 'bg-amber-500' : 'bg-red-500'
+            }`}
+            style={{ width: `${confidencePct}%` }}
+          />
+        </div>
+        {evidenceItems.length > 0 ? (
+          <ul className="space-y-2 max-h-64 overflow-auto pr-1">
+            {evidenceItems.map((item) => (
+              <li
+                key={item.url}
+                className="flex items-start gap-3 p-3 rounded-xl bg-slate-50 border border-slate-100"
+              >
+                <ExternalLink size={14} className="text-cyan-600 mt-0.5 flex-shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <a
+                    href={item.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-sm font-bold text-blue-700 hover:underline break-all"
+                  >
+                    {item.title || item.url}
+                  </a>
+                  <div className="flex flex-wrap gap-1.5 mt-1">
+                    <Pill tone="blue">{item.source}</Pill>
+                    {typeof item.confidence === 'number' && (
+                      <Pill>{Math.round(item.confidence * 100)}%</Pill>
+                    )}
+                  </div>
+                  {item.snippet && (
+                    <p className="text-[11px] text-slate-500 font-medium mt-1 line-clamp-2">{item.snippet}</p>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="text-sm text-slate-400 font-bold py-4 text-center">
+            暂无来源链接。点击「再次背调」可采集官网与检索证据。
+          </div>
+        )}
+      </SectionCard>
+
       {/* Hero profile */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
         <div className="lg:col-span-2 bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm relative overflow-hidden">

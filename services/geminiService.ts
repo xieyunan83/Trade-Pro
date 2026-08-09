@@ -25,9 +25,17 @@ import {
 import { filterExcludedSearchResults } from './excludedCompanies';
 import {
   gatherTavilyLeadEvidence,
-  gatherTavilyCompanyEvidence,
+  gatherTavilyCompanyEvidenceBundle,
   hasTavilyKey,
 } from './tavilyService';
+import {
+  buildFallbackEvidenceFromReport,
+  evidenceItemsFromTavilyResults,
+  mergeEvidenceItems,
+  parseEvidenceItemsFromText,
+  scoreEvidenceConfidence,
+  summarizeEvidence,
+} from '../utils/evidenceChain';
 import {
   getCooldownRemainingSec,
   noteRateLimited,
@@ -2722,6 +2730,7 @@ export const analyzeCompany = async (
 
   // AnySearch + Tavily 身份证据；失败则软跳过
   let identityEvidence = '';
+  let collectedEvidenceItems = evidenceItemsFromTavilyResults([]);
   if (hasDomain) {
     try {
       identityEvidence = await gatherIdentityEvidence(canonicalDomain, {
@@ -2730,23 +2739,31 @@ export const analyzeCompany = async (
       });
       if (identityEvidence) {
         console.log('[analyzeCompany] AnySearch identity evidence chars:', identityEvidence.length);
+        collectedEvidenceItems = mergeEvidenceItems(
+          collectedEvidenceItems,
+          parseEvidenceItemsFromText(identityEvidence, 'anysearch')
+        );
       }
     } catch (e) {
       console.warn('[analyzeCompany] AnySearch evidence skipped', e);
     }
     try {
-      const tavilyEv = await gatherTavilyCompanyEvidence({
+      const tavilyBundle = await gatherTavilyCompanyEvidenceBundle({
         domain: canonicalDomain,
         companyHint: rawInput,
         searchKeyword: searchKeyword || undefined,
         searchCountry: searchCountry || undefined,
       });
-      if (tavilyEv) {
+      if (tavilyBundle.text) {
         identityEvidence = identityEvidence
-          ? `${identityEvidence}\n\n${tavilyEv}`
-          : tavilyEv;
-        console.log('[analyzeCompany] Tavily evidence chars:', tavilyEv.length);
+          ? `${identityEvidence}\n\n${tavilyBundle.text}`
+          : tavilyBundle.text;
+        console.log('[analyzeCompany] Tavily evidence chars:', tavilyBundle.text.length);
       }
+      collectedEvidenceItems = mergeEvidenceItems(
+        collectedEvidenceItems,
+        evidenceItemsFromTavilyResults(tavilyBundle.items)
+      );
     } catch (e) {
       console.warn('[analyzeCompany] Tavily evidence skipped', e);
     }
@@ -3040,6 +3057,15 @@ ${productFocusBlock}
 
   // 3. 背调阶段不调用 Anymail、不自动生成开发信（开发信由用户在策略模块按需手动生成）
   result.decisionMakers = rankDecisionMakers(result.decisionMakers);
+
+  // 4. 证据链：检索链接 + 官网/社媒回退
+  const evidenceChain = mergeEvidenceItems(
+    collectedEvidenceItems,
+    buildFallbackEvidenceFromReport(result)
+  );
+  result.evidenceChain = evidenceChain;
+  result.evidenceConfidence = scoreEvidenceConfidence(result, evidenceChain);
+  result.evidenceSummary = summarizeEvidence(evidenceChain, result.evidenceConfidence);
 
   return result;
 };

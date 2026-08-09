@@ -2268,6 +2268,7 @@ const App: React.FC = () => {
                     <ClientFinder 
                         state={discoveryState} 
                         onStateChange={handleDiscoveryStateChange}
+                        username={currentUser.username}
                         discoveryArchives={discoveryArchives}
                         history={history}
                         crmClients={crmClients}

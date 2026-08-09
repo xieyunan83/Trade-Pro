@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react';
-import { Client, HistoryItem } from '../types';
+import React, { useEffect, useMemo } from 'react';
+import { Client, CRM_FUNNEL_STAGES, HistoryItem } from '../types';
 import {
   Search,
   CheckCircle2,
@@ -9,6 +9,7 @@ import {
   Download,
   Tag,
   RefreshCw,
+  CalendarClock,
 } from 'lucide-react';
 import {
   clientHasBackgroundCheck,
@@ -29,6 +30,27 @@ interface ModuleClientCRMProps {
   onOpenHistory: (item: HistoryItem) => void;
 }
 
+const todayYmd = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+const isOverdueFollowUp = (client: Client) => {
+  const d = (client.nextFollowUpDate || '').trim();
+  if (!d || !/^\d{4}-\d{2}-\d{2}/.test(d)) return false;
+  if (client.status === '已成交' || client.status === '流失/搁置') return false;
+  return d.slice(0, 10) < todayYmd();
+};
+
+const funnelToneClass: Record<(typeof CRM_FUNNEL_STAGES)[number]['tone'], string> = {
+  slate: 'bg-slate-100 text-slate-700 border-slate-200',
+  blue: 'bg-blue-50 text-blue-700 border-blue-100',
+  amber: 'bg-amber-50 text-amber-800 border-amber-100',
+  violet: 'bg-violet-50 text-violet-700 border-violet-100',
+  green: 'bg-emerald-50 text-emerald-700 border-emerald-100',
+  red: 'bg-red-50 text-red-700 border-red-100',
+};
+
 export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   clients,
   setClients,
@@ -42,13 +64,13 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   const [filterType, setFilterType] = React.useState<string>('all');
   const [filterIndustry, setFilterIndustry] = React.useState<string>('all');
   const [filterBackgroundCheck, setFilterBackgroundCheck] = React.useState<boolean>(false);
+  const [filterStatus, setFilterStatus] = React.useState<Client['status'] | 'all' | 'overdue'>('all');
   const [selectedClientIds, setSelectedClientIds] = React.useState<Set<string>>(new Set());
 
   const needsBgFlagHeal = clients.some(
     (c) => !c.hasBackgroundCheck && (c.hasAnalyzed || !!findHistoryForClient(c, history))
   );
 
-  // Heal legacy CRM rows: import used hasAnalyzed but filter checked hasBackgroundCheck
   useEffect(() => {
     if (!needsBgFlagHeal) return;
     setClients((prev) => {
@@ -71,7 +93,6 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
     });
   }, [needsBgFlagHeal, history, setClients]);
 
-  // Backfill 背调时间 from history when missing
   useEffect(() => {
     setClients((prev) => {
       let changed = false;
@@ -86,8 +107,26 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
     });
   }, [history, setClients]);
 
+  const funnelCounts = useMemo(() => {
+    const map = Object.fromEntries(CRM_FUNNEL_STAGES.map((s) => [s.value, 0])) as Record<
+      Client['status'],
+      number
+    >;
+    for (const c of clients) {
+      if (map[c.status] != null) map[c.status] += 1;
+      else map['新建/潜在'] += 1;
+    }
+    return map;
+  }, [clients]);
+
+  const overdueCount = useMemo(() => clients.filter(isOverdueFollowUp).length, [clients]);
+
   const onDeleteClient = (id: string) => {
     setClients((prev) => prev.filter((c) => c.id !== id));
+  };
+
+  const patchClient = (id: string, patch: Partial<Client>) => {
+    setClients((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
   };
 
   const openClientReport = (client: Client) => {
@@ -111,12 +150,19 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
       (c.industry || '').toLowerCase().includes(filterIndustry.toLowerCase().split(',')[0].trim());
     const matchesBackgroundCheck =
       !filterBackgroundCheck || clientHasBackgroundCheck(c, history);
+    const matchesStatus =
+      filterStatus === 'all'
+        ? true
+        : filterStatus === 'overdue'
+          ? isOverdueFollowUp(c)
+          : c.status === filterStatus;
     return (
       matchesSearch &&
       matchesCountry &&
       matchesType &&
       matchesIndustry &&
-      matchesBackgroundCheck
+      matchesBackgroundCheck &&
+      matchesStatus
     );
   });
 
@@ -234,8 +280,92 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
     );
   };
 
+  const StageControls: React.FC<{ client: Client }> = ({ client }) => {
+    const overdue = isOverdueFollowUp(client);
+    return (
+      <div className="flex flex-col gap-1.5 min-w-[140px]">
+        <select
+          value={client.status}
+          onChange={(e) => patchClient(client.id, { status: e.target.value as Client['status'] })}
+          className="w-full px-2 py-1.5 rounded-lg border border-slate-200 text-[11px] font-bold bg-white"
+        >
+          {CRM_FUNNEL_STAGES.map((s) => (
+            <option key={s.value} value={s.value}>
+              {s.label}
+            </option>
+          ))}
+        </select>
+        <label className="flex items-center gap-1 text-[10px] font-bold text-slate-400">
+          <CalendarClock size={11} className={overdue ? 'text-red-500' : ''} />
+          <input
+            type="date"
+            value={(client.nextFollowUpDate || '').slice(0, 10)}
+            onChange={(e) => patchClient(client.id, { nextFollowUpDate: e.target.value })}
+            className={`flex-1 min-w-0 px-1.5 py-1 rounded-lg border text-[11px] font-bold ${
+              overdue ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'
+            }`}
+          />
+        </label>
+      </div>
+    );
+  };
+
   return (
     <div className="max-w-7xl mx-auto space-y-4 sm:space-y-8 animate-fade-in">
+      {/* 漏斗 */}
+      <div className="bg-white p-4 sm:p-5 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-black text-slate-800">CRM 商机漏斗</h3>
+          <div className="text-[11px] font-bold text-slate-400">
+            共 {clients.length} 家
+            {overdueCount > 0 ? (
+              <button
+                type="button"
+                onClick={() => setFilterStatus('overdue')}
+                className="ml-2 text-red-600 hover:underline"
+              >
+                · {overdueCount} 家跟进逾期
+              </button>
+            ) : (
+              ' · 暂无逾期跟进'
+            )}
+          </div>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+          <button
+            type="button"
+            onClick={() => setFilterStatus('all')}
+            className={`rounded-xl border px-3 py-2.5 text-left transition-all ${
+              filterStatus === 'all'
+                ? 'bg-slate-900 text-white border-slate-900'
+                : 'bg-slate-50 text-slate-600 border-slate-100 hover:border-slate-300'
+            }`}
+          >
+            <div className="text-[10px] font-black uppercase tracking-widest opacity-70">全部</div>
+            <div className="text-lg font-black mt-0.5">{clients.length}</div>
+          </button>
+          {CRM_FUNNEL_STAGES.map((stage) => (
+            <button
+              key={stage.value}
+              type="button"
+              onClick={() =>
+                setFilterStatus((prev) => (prev === stage.value ? 'all' : stage.value))
+              }
+              className={`rounded-xl border px-3 py-2.5 text-left transition-all ${
+                filterStatus === stage.value
+                  ? 'ring-2 ring-offset-1 ring-slate-900 ' + funnelToneClass[stage.tone]
+                  : funnelToneClass[stage.tone]
+              }`}
+            >
+              <div className="text-[10px] font-black uppercase tracking-widest opacity-70">
+                {stage.label}
+              </div>
+              <div className="text-lg font-black mt-0.5">{funnelCounts[stage.value] || 0}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="bg-white p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm flex flex-col gap-3 sm:gap-4">
         <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
           <div className="relative w-full flex-1">
@@ -348,29 +478,30 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                       <KeywordTags client={client} />
                     </div>
                   </div>
-                <div className="flex items-start gap-1 flex-shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => triggerReanalyze(client)}
-                    className="text-amber-600 hover:text-amber-700 p-1"
-                    title="再次背调"
-                  >
-                    <RefreshCw size={16} />
-                  </button>
-                  <button
-                    onClick={() => onDeleteClient(client.id)}
-                    className="text-red-400 hover:text-red-600 p-1"
-                  >
-                    <Trash2 size={16} />
-                  </button>
+                  <div className="flex items-start gap-1 flex-shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => triggerReanalyze(client)}
+                      className="text-amber-600 hover:text-amber-700 p-1"
+                      title="再次背调"
+                    >
+                      <RefreshCw size={16} />
+                    </button>
+                    <button
+                      onClick={() => onDeleteClient(client.id)}
+                      className="text-red-400 hover:text-red-600 p-1"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
                 </div>
-                </div>
-                <div className="flex flex-wrap gap-2 text-xs font-bold text-slate-500">
+                <div className="flex flex-wrap gap-2 text-xs font-bold text-slate-500 mb-3">
                   <span className="bg-slate-50 px-2 py-1 rounded-lg">{client.country}</span>
                   <span className="bg-slate-50 px-2 py-1 rounded-lg">{client.type}</span>
                   <span className="bg-slate-50 px-2 py-1 rounded-lg">{client.industry}</span>
                   <BgStatus client={client} />
                 </div>
+                <StageControls client={client} />
               </div>
             );
           })
@@ -379,7 +510,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
 
       {/* Desktop table */}
       <div className="hidden md:block bg-white rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm overflow-x-auto">
-        <table className="w-full text-left border-collapse min-w-[720px]">
+        <table className="w-full text-left border-collapse min-w-[920px]">
           <thead>
             <tr className="bg-slate-50 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">
               <th className="px-4 lg:px-6 py-4 w-12">
@@ -394,7 +525,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
               <th className="px-4 lg:px-6 py-4">国家</th>
               <th className="px-4 lg:px-6 py-4">类型</th>
               <th className="px-4 lg:px-6 py-4">网址</th>
-              <th className="px-4 lg:px-6 py-4">行业</th>
+              <th className="px-4 lg:px-6 py-4">阶段 / 跟进</th>
               <th className="px-4 lg:px-6 py-4">背调</th>
               <th className="px-4 lg:px-6 py-4 w-28">操作</th>
             </tr>
@@ -437,10 +568,12 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                     </td>
                     <td className="px-4 lg:px-6 py-4 text-sm font-bold text-slate-600">{client.country}</td>
                     <td className="px-4 lg:px-6 py-4 text-sm font-bold text-slate-600">{client.type}</td>
-                    <td className="px-4 lg:px-6 py-4 text-sm font-bold text-blue-600 max-w-[180px] truncate">
+                    <td className="px-4 lg:px-6 py-4 text-sm font-bold text-blue-600 max-w-[160px] truncate">
                       {client.website}
                     </td>
-                    <td className="px-4 lg:px-6 py-4 text-sm font-bold text-slate-600">{client.industry}</td>
+                    <td className="px-4 lg:px-6 py-4">
+                      <StageControls client={client} />
+                    </td>
                     <td className="px-4 lg:px-6 py-4">
                       <BgStatus client={client} />
                     </td>

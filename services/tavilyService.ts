@@ -313,15 +313,31 @@ export const gatherTavilyLeadEvidence = async (opts: {
   return chunks.join('\n\n').slice(0, MAX_EVIDENCE_CHARS);
 };
 
+export type TavilyCompanyEvidenceBundle = {
+  text: string;
+  items: Array<{ title: string; url: string; snippet?: string; score?: number }>;
+};
+
 export const gatherTavilyCompanyEvidence = async (opts: {
   domain: string;
   companyHint?: string;
   searchKeyword?: string;
   searchCountry?: string;
 }): Promise<string> => {
-  if (!hasTavilyKey()) return '';
+  const bundle = await gatherTavilyCompanyEvidenceBundle(opts);
+  return bundle.text;
+};
+
+/** 带结构化链接的公司证据（供背调证据链） */
+export const gatherTavilyCompanyEvidenceBundle = async (opts: {
+  domain: string;
+  companyHint?: string;
+  searchKeyword?: string;
+  searchCountry?: string;
+}): Promise<TavilyCompanyEvidenceBundle> => {
+  if (!hasTavilyKey()) return { text: '', items: [] };
   const domain = (opts.domain || '').replace(/^https?:\/\//i, '').replace(/\/.*$/, '').trim();
-  if (!domain) return '';
+  if (!domain) return { text: '', items: [] };
   const name = (opts.companyHint || domain).trim();
   const kw = (opts.searchKeyword || '').trim();
   const country = (opts.searchCountry || '').trim();
@@ -333,6 +349,8 @@ export const gatherTavilyCompanyEvidence = async (opts: {
   if (kw) queries.push(`"${name}" ${kw} ${country}`.replace(/\s+/g, ' ').trim());
 
   const chunks: string[] = [];
+  const items: TavilyCompanyEvidenceBundle['items'] = [];
+  const seenUrls = new Set<string>();
   let topUrls: string[] = [];
   for (const q of queries.slice(0, 2)) {
     try {
@@ -340,14 +358,24 @@ export const gatherTavilyCompanyEvidence = async (opts: {
       const block = formatTavilyEvidence(data, `TAVILY:${q.slice(0, 40)}`);
       if (block) chunks.push(block);
       for (const r of data.results || []) {
-        if (r.url && /https?:\/\//i.test(r.url) && topUrls.length < 3) {
-          if (!topUrls.includes(r.url)) topUrls.push(r.url);
+        const url = (r.url || '').trim();
+        if (url && /https?:\/\//i.test(url) && !seenUrls.has(url)) {
+          seenUrls.add(url);
+          items.push({
+            title: (r.title || '').trim() || url,
+            url,
+            snippet: (r.content || '').trim().slice(0, 180),
+            score: typeof r.score === 'number' ? r.score : undefined,
+          });
+        }
+        if (url && /https?:\/\//i.test(url) && topUrls.length < 3) {
+          if (!topUrls.includes(url)) topUrls.push(url);
         }
       }
     } catch (e) {
       if (String((e as any)?.message || e).includes('TAVILY_POOL_EXHAUSTED')) {
         console.warn('[tavily] pool exhausted, fall back to Qwen web search');
-        return '';
+        return { text: '', items: [] };
       }
       console.warn('[tavily] company search failed', q, e);
     }
@@ -355,6 +383,10 @@ export const gatherTavilyCompanyEvidence = async (opts: {
 
   const official = `https://${domain}`;
   if (!topUrls.some((u) => u.includes(domain))) topUrls = [official, ...topUrls].slice(0, 3);
+  if (!seenUrls.has(official)) {
+    seenUrls.add(official);
+    items.unshift({ title: `官方网站 ${domain}`, url: official });
+  }
   try {
     const extracted = await tavilyExtract(topUrls);
     const results = extracted?.results || extracted?.data || [];
@@ -369,11 +401,13 @@ export const gatherTavilyCompanyEvidence = async (opts: {
       if (parts.length) chunks.push(`=== TAVILY EXTRACT ===\n${parts.join('\n\n')}\n=== END EXTRACT ===`);
     }
   } catch (e) {
-    if (String((e as any)?.message || e).includes('TAVILY_POOL_EXHAUSTED')) return chunks.join('\n\n').slice(0, MAX_EVIDENCE_CHARS);
+    if (String((e as any)?.message || e).includes('TAVILY_POOL_EXHAUSTED')) {
+      return { text: chunks.join('\n\n').slice(0, MAX_EVIDENCE_CHARS), items };
+    }
     console.warn('[tavily] extract skipped', e);
   }
 
-  return chunks.join('\n\n').slice(0, MAX_EVIDENCE_CHARS);
+  return { text: chunks.join('\n\n').slice(0, MAX_EVIDENCE_CHARS), items };
 };
 
 /** 测试单把 Key（不写入耗尽状态以外的池顺序） */

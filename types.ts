@@ -281,6 +281,19 @@ export interface Client {
   departmentId?: string;
 }
 
+/** CRM 漏斗阶段（与 Client.status 一致） */
+export const CRM_FUNNEL_STAGES: Array<{
+  value: Client['status'];
+  label: string;
+  tone: 'slate' | 'blue' | 'amber' | 'violet' | 'green' | 'red';
+}> = [
+  { value: '新建/潜在', label: '新建/潜在', tone: 'slate' },
+  { value: '已寄样', label: '已寄样', tone: 'blue' },
+  { value: '谈判中', label: '谈判中', tone: 'amber' },
+  { value: '已成交', label: '已成交', tone: 'green' },
+  { value: '流失/搁置', label: '流失/搁置', tone: 'red' },
+];
+
 // ... existing interfaces ...
 
 export interface SwotAnalysis {
@@ -325,6 +338,31 @@ export interface ProductAnalysis {
 export interface WebsiteCategory {
   categoryName: string;
   items: string[];
+}
+
+/** 背调证据链条目（公开网页来源） */
+export interface EvidenceItem {
+  title: string;
+  url: string;
+  /** 来源渠道 */
+  source: 'tavily' | 'anysearch' | 'official' | 'social' | 'ai' | 'other';
+  snippet?: string;
+  /** 0–1，条目可信度粗估 */
+  confidence?: number;
+}
+
+/** 客户开发 ICP 画像模板（搜索条件快捷复用） */
+export interface IcpTemplate {
+  id: string;
+  name: string;
+  product: string;
+  industry: string;
+  countries: string[];
+  clientTypes: string[];
+  /** 排除词（可选，逗号分隔） */
+  excludeNotes?: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface AnalysisResult {
@@ -407,6 +445,12 @@ export interface AnalysisResult {
   generatedEmails?: MailGroup;
   /** 开发信生成并保存到报告的时间 */
   generatedEmailsAt?: number;
+  /** 公开网页证据链（背调依据） */
+  evidenceChain?: EvidenceItem[];
+  /** 报告整体可信度粗估 0–1 */
+  evidenceConfidence?: number;
+  /** 证据说明（一句话） */
+  evidenceSummary?: string;
 }
 
 export interface SimilarCompany {
