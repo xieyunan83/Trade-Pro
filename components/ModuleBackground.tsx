@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AnalysisResult } from '../types';
+import { AnalysisResult, SimilarCompany } from '../types';
 import {
   LayoutDashboard, Globe, MapPin, Calendar, Users, Briefcase, TrendingUp, ShieldCheck,
-  Lightbulb, Target, Ship, Award, AlertTriangle, Store, Network, Linkedin, Package, Building2, RefreshCw, Loader2, Search,
+  Lightbulb, Target, Ship, Award, AlertTriangle, Store, Network, Linkedin, Package, Building2, RefreshCw, Loader2,
   Link2, ExternalLink
 } from 'lucide-react';
 import { getActiveDmJobForDomain, subscribeDmEmailSearchJobs } from '../services/dmEmailSearchQueue';
@@ -14,6 +14,7 @@ import {
   scoreEvidenceConfidence,
   summarizeEvidence,
 } from '../utils/evidenceChain';
+import { SimilarCompaniesPanel } from './SimilarCompaniesPanel';
 
 interface ModuleBackgroundProps {
   data: AnalysisResult;
@@ -27,6 +28,8 @@ interface ModuleBackgroundProps {
   backgroundCheckedAt?: number;
   /** 打开同类公司深度调查 */
   onAnalyzeSimilar?: (domain: string) => void;
+  /** 同类公司批量背调 */
+  onBatchAnalyzeSimilar?: (companies: SimilarCompany[]) => void;
 }
 
 const Pill: React.FC<{ children: React.ReactNode; tone?: 'slate' | 'blue' | 'green' | 'amber' | 'red' | 'violet' }> = ({ children, tone = 'slate' }) => {
@@ -58,6 +61,7 @@ export const ModuleBackground: React.FC<ModuleBackgroundProps> = ({
   onReanalyze,
   backgroundCheckedAt,
   onAnalyzeSimilar,
+  onBatchAnalyzeSimilar,
 }) => {
   const company = data.companyInfo || ({} as AnalysisResult['companyInfo']);
   const financials = data.financials || { revenueEstimate: '—', paymentTerms: '—', ipInfo: '—' };
@@ -451,41 +455,13 @@ export const ModuleBackground: React.FC<ModuleBackgroundProps> = ({
           title={`同类公司推荐 (${data.similarCompanies!.length})`}
           icon={<Network className="text-blue-600" />}
         >
-          <p className="text-sm text-slate-500 font-medium mb-4">
-            本背调报告关联的同类目标客户，可直接发起深度调查。
-          </p>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {data.similarCompanies!.map((comp, i) => (
-              <div
-                key={`${comp.website || comp.name}-${i}`}
-                className="bg-slate-50 p-4 rounded-2xl border border-slate-100 hover:border-blue-200 transition-all"
-              >
-                <div className="flex justify-between items-start gap-2 mb-2">
-                  <div className="min-w-0">
-                    <div className="font-black text-slate-800 truncate">{comp.name}</div>
-                    <div className="text-[11px] font-bold text-slate-400 truncate">
-                      {comp.website || '—'}
-                      {comp.country ? ` · ${comp.country}` : ''}
-                    </div>
-                  </div>
-                  {onAnalyzeSimilar && comp.website && (
-                    <button
-                      type="button"
-                      onClick={() => onAnalyzeSimilar(comp.website)}
-                      className="shrink-0 inline-flex items-center gap-1 bg-slate-900 text-white px-3 py-1.5 rounded-xl text-[10px] font-bold hover:bg-blue-600"
-                    >
-                      <Search size={11} /> 深度调查
-                    </button>
-                  )}
-                </div>
-                {comp.mainProducts && (
-                  <div className="text-xs font-bold text-slate-600 bg-white border border-slate-100 rounded-xl px-3 py-2">
-                    {comp.mainProducts}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
+          <SimilarCompaniesPanel
+            compact
+            companies={data.similarCompanies!}
+            onAnalyze={onAnalyzeSimilar}
+            onBatchAnalyze={onBatchAnalyzeSimilar}
+            description="本背调报告关联的同类目标客户：可单家深度调查，或勾选后批量背调。"
+          />
         </SectionCard>
       )}
 

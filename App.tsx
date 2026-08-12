@@ -17,7 +17,7 @@ import { normalizeCountryZh } from './utils/countryNormalize';
 import { buildSearchTags, stampSearchResults } from './utils/searchTags';
 import { mergeDiscoveryResultsIntoCrm, mergeHistoryItemsIntoCrm, findCrmIdsForHistoryItem, findCrmIdsForDiscoveryResults, lookupBackgroundCheck, formatBackgroundCheckTime } from './utils/crmHistory';
 import { checkLimit, incrementUsage, updateLocalConfig, resetDailyUsage, getDailyUsagePublic } from './services/limitService';
-import { ModuleType, AnalysisResult, DiscoveryState, Client, User, HistoryItem, AutomationResult, ClientSearchResult, DiscoveryArchiveItem, DecisionMaker, Department, AutomationPipelineConfig } from './types';
+import { ModuleType, AnalysisResult, DiscoveryState, Client, User, HistoryItem, AutomationResult, ClientSearchResult, DiscoveryArchiveItem, DecisionMaker, Department, AutomationPipelineConfig, SimilarCompany } from './types';
 import { ModuleBackground } from './components/ModuleBackground';
 import { ModuleProducts } from './components/ModuleProducts';
 import { ModuleDecisionMakers } from './components/ModuleDecisionMakers';
@@ -1767,6 +1767,43 @@ const App: React.FC = () => {
       setBatchModalOpen(true); 
   };
 
+  /** 同类公司多选 → 批量背调队列 */
+  const handleBatchAnalyzeSimilar = (companies: SimilarCompany[]) => {
+      if (!companies?.length) return;
+      if (!hasPermission(currentUser, 'feature.batch_analyze')) {
+        alert('你没有「批量背调」权限，请联系管理员或部门主管开通。');
+        return;
+      }
+      const targets = companies
+        .map((c) => (c.website || c.name || '').trim())
+        .filter(Boolean);
+      if (!targets.length) {
+        alert('所选同类公司缺少有效网址/名称');
+        return;
+      }
+      const kw =
+        analysisData?.searchKeyword ||
+        discoveryState.product ||
+        analysisData?.companyInfo?.name ||
+        'Similar Batch';
+      setPendingBatch(targets);
+      setPendingBatchContext(kw);
+      const countryMap: Record<string, string> = {};
+      for (const c of companies) {
+        const key = (c.website || c.name || '').toLowerCase();
+        const country = (c.country || '').trim();
+        if (key && country && !/^(global|worldwide|international|国际|全球|不限)$/i.test(country)) {
+          countryMap[key] = country;
+        }
+      }
+      setPendingBatchCountries(countryMap);
+      if (kw && !['Similar Batch', 'CRM Batch', 'Discovery Batch', 'Manual Input'].includes(kw)) {
+        setDiscoveryState((prev) => ({ ...prev, product: kw }));
+        addCustomKeyword(kw);
+      }
+      setBatchModalOpen(true);
+  };
+
   const confirmBatchStart = async (mode: 'detailed' | 'economy') => { 
       if (!hasPermission(currentUser, 'feature.batch_analyze')) {
         alert('你没有「批量背调」权限，请联系管理员或部门主管开通。');
@@ -2563,6 +2600,7 @@ const App: React.FC = () => {
                           ).checkedAt
                         }
                         onAnalyzeSimilar={(domain) => handleAnalyzeInput(domain)}
+                        onBatchAnalyzeSimilar={handleBatchAnalyzeSimilar}
                       />
                     )}
                     {activeModule === ModuleType.PRODUCTS && (
@@ -2601,7 +2639,13 @@ const App: React.FC = () => {
                         }
                       />
                     )}
-                    {activeModule === ModuleType.SIMILAR && <ModuleSimilar data={analysisData} onAnalyze={handleAnalyzeInput} />}
+                    {activeModule === ModuleType.SIMILAR && (
+                      <ModuleSimilar
+                        data={analysisData}
+                        onAnalyze={handleAnalyzeInput}
+                        onBatchAnalyze={handleBatchAnalyzeSimilar}
+                      />
+                    )}
                     </div>
                     </ErrorBoundary>
                 )}
