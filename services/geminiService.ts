@@ -36,6 +36,7 @@ import {
   scoreEvidenceConfidence,
   summarizeEvidence,
 } from '../utils/evidenceChain';
+import { normalizeAnalysisResult } from './analysisNormalize';
 import {
   getCooldownRemainingSec,
   noteRateLimited,
@@ -3067,7 +3068,7 @@ ${productFocusBlock}
   result.evidenceConfidence = scoreEvidenceConfidence(result, evidenceChain);
   result.evidenceSummary = summarizeEvidence(evidenceChain, result.evidenceConfidence);
 
-  return result;
+  return normalizeAnalysisResult(result);
 };
 
 /** 检测文本是否主要为英文（用于已有报告译成中文） */

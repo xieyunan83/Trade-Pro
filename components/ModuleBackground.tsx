@@ -14,6 +14,7 @@ import {
   scoreEvidenceConfidence,
   summarizeEvidence,
 } from '../utils/evidenceChain';
+import { toDisplayString } from '../services/analysisNormalize';
 import { SimilarCompaniesPanel } from './SimilarCompaniesPanel';
 
 interface ModuleBackgroundProps {
@@ -280,7 +281,7 @@ export const ModuleBackground: React.FC<ModuleBackgroundProps> = ({
                 <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">近期公开进口线索</div>
                 <ul className="space-y-2">
                   {trade.recentShipments.map((s, i) => (
-                    <li key={i} className="text-sm font-bold text-slate-700 bg-slate-50 rounded-xl px-3 py-2 border border-slate-100">• {s}</li>
+                    <li key={i} className="text-sm font-bold text-slate-700 bg-slate-50 rounded-xl px-3 py-2 border border-slate-100">• {toDisplayString(s)}</li>
                   ))}
                 </ul>
               </div>

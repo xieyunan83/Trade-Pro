@@ -43,7 +43,7 @@ import {
 import { ModuleStrategy } from './components/ModuleStrategy';
 import { ReportEnrichmentPanel } from './components/ReportEnrichmentPanel';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { extractHistoryAnalysis, websiteHref } from './services/analysisNormalize';
+import { extractHistoryAnalysis, normalizeAnalysisResult, websiteHref } from './services/analysisNormalize';
 import { ModuleSimilar } from './components/ModuleSimilar';
 import { ModulePromoGenerator } from './components/ModulePromoGenerator';
 import { ModuleClientCRM } from './components/ModuleClientCRM';
@@ -1260,7 +1260,7 @@ const App: React.FC = () => {
           alert('该任务尚无完整分析数据，请重新运行。');
           return;
       }
-      setAnalysisData(task.analysis);
+      setAnalysisData(normalizeAnalysisResult(task.analysis));
       const domainKey = (task.analysis.companyInfo?.website || task.website || '')
         .toLowerCase()
         .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')

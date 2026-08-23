@@ -5,6 +5,46 @@ const asArray = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
 const asStr = (v: unknown, fallback = ''): string =>
   typeof v === 'string' ? v : v == null ? fallback : String(v);
 
+/** 将 AI 可能返回的对象/数组转为可安全在 React 中渲染的字符串 */
+export const toDisplayString = (v: unknown): string => {
+  if (v == null) return '';
+  if (typeof v === 'string') return v;
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  if (Array.isArray(v)) {
+    return v.map(toDisplayString).filter(Boolean).join(' · ');
+  }
+  if (typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    const date = o.date ?? o.shipmentDate ?? o.time ?? o.year;
+    const origin = o.origin ?? o.sourceCountry ?? o.from ?? o.country;
+    const product = o.product ?? o.goods ?? o.description ?? o.category ?? o.hsCode;
+    if (date != null || origin != null || product != null) {
+      const parts: string[] = [];
+      if (date != null && String(date).trim()) parts.push(String(date).trim());
+      if (origin != null && String(origin).trim()) parts.push(`来源 ${String(origin).trim()}`);
+      if (product != null && String(product).trim()) parts.push(String(product).trim());
+      if (parts.length) return parts.join(' · ');
+    }
+    const vals = Object.values(o)
+      .filter((x) => x != null && x !== '')
+      .map((x) => toDisplayString(x))
+      .filter(Boolean);
+    if (vals.length) return vals.join(' · ');
+    try {
+      return JSON.stringify(o);
+    } catch {
+      return '';
+    }
+  }
+  return String(v);
+};
+
+const asStringList = (v: unknown): string[] =>
+  asArray(v)
+    .map(toDisplayString)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
 /** 从历史条目取出可渲染的 AnalysisResult（兼容双重包裹 / 缺字段） */
 export const extractHistoryAnalysis = (item: HistoryItem | null | undefined): AnalysisResult | null => {
   if (!item) return null;
@@ -36,17 +76,20 @@ export const normalizeAnalysisResult = (raw: unknown): AnalysisResult => {
       city: asStr(company.city),
     },
     swot: {
-      strengths: asArray(ai.swot?.strengths),
-      weaknesses: asArray(ai.swot?.weaknesses),
-      opportunities: asArray(ai.swot?.opportunities),
-      threats: asArray(ai.swot?.threats),
+      strengths: asStringList(ai.swot?.strengths),
+      weaknesses: asStringList(ai.swot?.weaknesses),
+      opportunities: asStringList(ai.swot?.opportunities),
+      threats: asStringList(ai.swot?.threats),
     },
     financialTrends: asArray(ai.financialTrends),
     trafficAnalysis: asArray(ai.trafficAnalysis),
-    websiteCategories: asArray(ai.websiteCategories),
+    websiteCategories: asArray(ai.websiteCategories).map((cat: any) => ({
+      categoryName: asStr(cat?.categoryName, '未分类'),
+      items: asStringList(cat?.items),
+    })),
     businessScope: {
-      coreProducts: asArray(ai.businessScope?.coreProducts),
-      relevantProducts: asArray(ai.businessScope?.relevantProducts),
+      coreProducts: asStringList(ai.businessScope?.coreProducts),
+      relevantProducts: asStringList(ai.businessScope?.relevantProducts),
       brandPositioning: asStr(ai.businessScope?.brandPositioning, 'N/A'),
       consumerGroup: asStr(ai.businessScope?.consumerGroup, 'N/A'),
       productVariety: (ai.businessScope?.productVariety as AnalysisResult['businessScope']['productVariety']) || 'Medium',
@@ -54,10 +97,10 @@ export const normalizeAnalysisResult = (raw: unknown): AnalysisResult => {
       websiteStructure: asStr(ai.businessScope?.websiteStructure, 'N/A'),
     },
     businessModel: {
-      channels: asArray(ai.businessModel?.channels),
+      channels: asStringList(ai.businessModel?.channels),
       hasDistributors: !!ai.businessModel?.hasDistributors,
-      exhibitionHistory: asArray(ai.businessModel?.exhibitionHistory),
-      ecommercePresence: asArray(ai.businessModel?.ecommercePresence),
+      exhibitionHistory: asStringList(ai.businessModel?.exhibitionHistory),
+      ecommercePresence: asStringList(ai.businessModel?.ecommercePresence),
       procurementInfo: asStr(ai.businessModel?.procurementInfo, 'N/A'),
     },
     supplyChain: {
@@ -66,13 +109,13 @@ export const normalizeAnalysisResult = (raw: unknown): AnalysisResult => {
     },
     tradeIntelligence: ai.tradeIntelligence
       ? {
-          hsCodes: asArray(ai.tradeIntelligence.hsCodes),
-          importCategories: asArray(ai.tradeIntelligence.importCategories),
+          hsCodes: asStringList(ai.tradeIntelligence.hsCodes),
+          importCategories: asStringList(ai.tradeIntelligence.importCategories),
           customsSummary: asStr(ai.tradeIntelligence.customsSummary, '公开信息未找到'),
-          recentShipments: asArray(ai.tradeIntelligence.recentShipments),
-          topSourceCountries: asArray(ai.tradeIntelligence.topSourceCountries),
+          recentShipments: asStringList(ai.tradeIntelligence.recentShipments),
+          topSourceCountries: asStringList(ai.tradeIntelligence.topSourceCountries),
           estimatedAnnualImport: asStr(ai.tradeIntelligence.estimatedAnnualImport, '公开信息未找到'),
-          certifications: asArray(ai.tradeIntelligence.certifications),
+          certifications: asStringList(ai.tradeIntelligence.certifications),
           complianceNotes: asStr(ai.tradeIntelligence.complianceNotes),
           preferredIncoterms: asStr(ai.tradeIntelligence.preferredIncoterms, '公开信息未找到'),
           typicalMoq: asStr(ai.tradeIntelligence.typicalMoq, '公开信息未找到'),
@@ -83,7 +126,7 @@ export const normalizeAnalysisResult = (raw: unknown): AnalysisResult => {
           riskNotes: asStr(ai.tradeIntelligence.riskNotes),
         }
       : undefined,
-    targetAudience: asArray(ai.targetAudience),
+    targetAudience: asStringList(ai.targetAudience),
     financials: {
       revenueEstimate: asStr(ai.financials?.revenueEstimate, 'N/A'),
       paymentTerms: asStr(ai.financials?.paymentTerms, 'N/A'),
@@ -114,7 +157,7 @@ export const normalizeAnalysisResult = (raw: unknown): AnalysisResult => {
     searchCountry: ai.searchCountry,
     strategy: {
       buyingOfficeLocation: asStr(ai.strategy?.buyingOfficeLocation, 'N/A'),
-      actionPlan: asArray(ai.strategy?.actionPlan),
+      actionPlan: asStringList(ai.strategy?.actionPlan),
     },
     similarCompanies: asArray(ai.similarCompanies),
     generatedEmails: ai.generatedEmails,
