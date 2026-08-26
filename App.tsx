@@ -10,6 +10,11 @@ import {
 } from './services/rateLimitGate';
 import { exportToPPT, exportAutomationReportToPPT, exportBatchAutomationReportsToPPT } from './services/exportService';
 import { saveHistory, getHistory, getAllFilesFromDB, saveAutomationTask, getAutomationQueue, deleteAutomationTask, saveFileToDB, saveDiscoveryArchive, getDiscoveryArchives, deleteDiscoveryArchive, deleteHistoryItem } from './services/db';
+import {
+  loadAndRepairAutomationQueue,
+  mergeDecisionMakersIntoAutomationTasks,
+  newAutomationTaskId,
+} from './services/automationQueueRepair';
 import { fetchGlobalConfig, fetchDocumentsFromRepo, backupUserHistory, fetchCRMFromCloud, saveCRMToCloud, fetchUserHistoryFromCloud, checkGitHubStatus, fetchApiConfigsFromCloud, setManualGitHubConfig } from './services/githubService';
 import { isSupabaseConfigured, getKnowledgeFiles, getInvestigationHistory, saveInvestigationHistory, saveDiscoverySearch, getCrmClients, syncCrmClients, deleteCrmClient, getDiscoverySearchArchives, deleteInvestigationHistory, deleteDiscoverySearchFromCloud, deleteDiscoverySearchesByMeta } from './services/supabase';
 import { addCustomKeyword, addCustomCountry } from './services/taxonomyStore';
@@ -325,8 +330,13 @@ const App: React.FC = () => {
         try {
             // 1. Load Local DB Data First
             const h = await getHistory();
-            const q = await getAutomationQueue();
-            const scopedQueue = scope(q);
+            const repaired = await loadAndRepairAutomationQueue(currentUser);
+            if (repaired.repaired || repaired.claimed) {
+              console.info(
+                `[automation] repaired ids=${repaired.repaired}, claimed orphans=${repaired.claimed}, total=${repaired.tasks.length}`
+              );
+            }
+            const scopedQueue = scope(repaired.tasks);
             if (!cancelled) setAutomationResults(scopedQueue);
             const files = await getAllFilesFromDB();
             if (!cancelled) setKbCount(files.length);
@@ -595,11 +605,21 @@ const App: React.FC = () => {
   }, [currentUser?.username]);
 
   // 组织架构变化后，按最新权限重过滤内存中的业务数据（不重新拉库，避免闪屏）
+  // 注意：不得在过滤时丢掉「刚写入、尚未带归属字段」的本地新增；无归属项对非管理员会被隐藏，
+  // 因此加载阶段已做认领修复。此处仅过滤，不写库。
   useEffect(() => {
     if (!currentUser || !userDataReadyRef.current) return;
     const depts = departments.length ? departments : loadDepartmentsFromStorage();
     setHistory((prev) => filterOwnedRecords(currentUser, prev, users, depts));
-    setAutomationResults((prev) => filterOwnedRecords(currentUser, prev, users, depts));
+    setAutomationResults((prev) => {
+      // 先给无归属的内存项打上当前用户，避免重过滤后「突然消失」
+      const stamped = prev.map((t) =>
+        !t.ownerUsername && !t.departmentId
+          ? { ...t, ownerUsername: currentUser.username, departmentId: currentUser.departmentId }
+          : t
+      );
+      return filterOwnedRecords(currentUser, stamped, users, depts);
+    });
     setDiscoveryArchives((prev) => filterOwnedRecords(currentUser, prev, users, depts));
     setCrmClients((prev) => filterOwnedRecords(currentUser, prev, users, depts));
   }, [users, departments, currentUser]);
@@ -851,6 +871,18 @@ const App: React.FC = () => {
         );
       }
       return next;
+    });
+
+    // 同步写回营销工具任务队列（IndexedDB），避免刷新后联系人变「暂无」
+    setAutomationResults((prev) => {
+      void mergeDecisionMakersIntoAutomationTasks(prev, {
+        domain: domainKey || undefined,
+        companyName: nameKey || undefined,
+        decisionMakers: patch.decisionMakers,
+        searchedAt: patch.decisionMakerEmailSearchAt,
+        searchHistory: patch.decisionMakerEmailSearchHistory,
+      }).then((merged) => setAutomationResults(merged));
+      return prev;
     });
   };
 
@@ -1458,20 +1490,18 @@ const App: React.FC = () => {
               },
               { historyId: job.historyId, domain: job.domain, companyName: job.companyName }
             );
-            setAutomationResults((prev) =>
-              prev.map((t) =>
-                t.id === task.id && t.analysis
-                  ? {
-                      ...t,
-                      analysis: {
-                        ...t.analysis,
-                        decisionMakers: job.resultDecisionMakers,
-                        decisionMakerEmailSearchAt: job.searchedAt,
-                      },
-                    }
-                  : t
-              )
-            );
+            // 明确按 taskId 写回队列并落盘（persistDecisionMakerResearch 也会按域名再合并一次）
+            setAutomationResults((prev) => {
+              void mergeDecisionMakersIntoAutomationTasks(prev, {
+                taskId: task.id,
+                domain: job.domain,
+                companyName: job.companyName,
+                decisionMakers: job.resultDecisionMakers!,
+                searchedAt: job.searchedAt!,
+                searchHistory,
+              }).then((merged) => setAutomationResults(merged));
+              return prev;
+            });
             if (
               opts.doCrmImport &&
               job.resultDecisionMakers.some((d) => d.name || d.emailGuess?.includes('@'))
@@ -1571,7 +1601,7 @@ const App: React.FC = () => {
           }
           const newTasks: AutomationResult[] = qualified.map((res) =>
             stampOwnership({
-              id: Math.random().toString(36).substr(2, 9),
+              id: newAutomationTaskId(),
               clientName: res.name,
               website: res.website,
               // 任务国家固定为「本次搜索目标国」，避免模型乱填其它国家带偏背调
@@ -1822,7 +1852,7 @@ const App: React.FC = () => {
           ? discoveryCountry
           : '';
       const newTasks: AutomationResult[] = pendingBatch.map(target => stampOwnership({ 
-          id: Math.random().toString(36).substr(2, 9), 
+          id: newAutomationTaskId(), 
           clientName: target, 
           website: target, 
           country: pendingBatchCountries[target.toLowerCase()] || fallbackCountry || '', 
@@ -1957,6 +1987,29 @@ const App: React.FC = () => {
           await deleteAutomationTask(id); 
           setAutomationResults(prev => prev.filter(t => t.id !== id)); 
       } 
+  };
+
+  const handleReloadAutomationQueue = async () => {
+    if (!currentUser) return;
+    try {
+      const repaired = await loadAndRepairAutomationQueue(currentUser);
+      const scoped = filterOwnedRecords(
+        currentUser,
+        repaired.tasks,
+        users,
+        departments.length ? departments : loadDepartmentsFromStorage()
+      );
+      setAutomationResults(scoped);
+      alert(
+        `已从本机重新加载任务队列：可见 ${scoped.length} 条` +
+          (repaired.repaired || repaired.claimed
+            ? `（修复短ID ${repaired.repaired}，认领无归属 ${repaired.claimed}）`
+            : '') +
+          `\n提示：被「清空列表/清除已完成」删掉的无法恢复；背调正文仍在「记录中心」。`
+      );
+    } catch (e: any) {
+      alert(`重新加载失败：${e?.message || String(e)}`);
+    }
   };
 
   const handleClearCompletedTasks = async () => {
@@ -2380,6 +2433,7 @@ const App: React.FC = () => {
                         canCrmImport={canAccessModule(currentUser, ModuleType.CLIENT_CRM)}
                         onClearCompleted={handleClearCompletedTasks}
                         onClearAll={handleClearAllTasks}
+                        onReloadQueue={handleReloadAutomationQueue}
                         canViewEmails={canViewFullDecisionMakerEmails(currentUser)}
                     />
                 )}

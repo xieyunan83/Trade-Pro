@@ -42,6 +42,8 @@ interface ModulePromoGeneratorProps {
   canExportPpt?: boolean;
   onClearCompleted: () => void;
   onClearAll: () => void;
+  /** 从本机 IndexedDB 重新加载并修复队列 */
+  onReloadQueue?: () => void;
   canDmMine?: boolean;
   canCrmImport?: boolean;
   /** 普通员工邮箱脱敏 */
@@ -76,6 +78,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   canExportPpt = false,
   onClearCompleted,
   onClearAll,
+  onReloadQueue,
   canDmMine = false,
   canCrmImport = false,
   canViewEmails = false,
@@ -734,6 +737,17 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                   <Trash2 size={14} /> 清空列表
                 </button>
               )}
+              {onReloadQueue && (
+                <button
+                  type="button"
+                  onClick={() => onReloadQueue()}
+                  disabled={isAutomating}
+                  className="inline-flex items-center gap-1.5 bg-white border border-slate-200 text-slate-700 px-4 py-2 rounded-xl text-xs font-bold hover:bg-slate-50 disabled:opacity-50"
+                  title="从本机重新加载任务，修复短ID冲突与无归属导致的列表变少"
+                >
+                  <RefreshCw size={14} /> 重新加载队列
+                </button>
+              )}
               <button
                 onClick={onRunPending}
                 disabled={
@@ -1094,10 +1108,11 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
 
         {filteredResults.length > 0 && (
           <div className="px-4 py-3 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/40">
-            <div className="flex items-center gap-2 text-xs font-bold text-slate-500">
+            <div className="flex flex-wrap items-center gap-2 text-xs font-bold text-slate-500">
               <span>
                 第 {(safePage - 1) * pageSize + 1}–
                 {Math.min(safePage * pageSize, filteredResults.length)} 条 / 共 {filteredResults.length} 条
+                {hasActiveFilters ? `（已筛选，队列总计 ${automationResults.length}）` : ''}
               </span>
               <span className="text-slate-300">|</span>
               <label className="inline-flex items-center gap-1.5">
@@ -1112,8 +1127,17 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                   <option value={50}>50</option>
                 </select>
               </label>
+              {hasActiveFilters && (
+                <button
+                  type="button"
+                  onClick={clearFilters}
+                  className="text-blue-600 hover:underline font-black"
+                >
+                  清除筛选
+                </button>
+              )}
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 flex-wrap">
               <button
                 type="button"
                 disabled={safePage <= 1}
@@ -1122,9 +1146,39 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
               >
                 上一页
               </button>
-              <span className="text-xs font-black text-slate-600">
-                {safePage} / {totalPages}
-              </span>
+              {Array.from({ length: totalPages }, (_, i) => i + 1)
+                .filter((n) => {
+                  if (totalPages <= 7) return true;
+                  if (n === 1 || n === totalPages) return true;
+                  return Math.abs(n - safePage) <= 1;
+                })
+                .reduce<(number | 'gap')[]>((acc, n, idx, arr) => {
+                  if (idx > 0 && typeof arr[idx - 1] === 'number' && n - (arr[idx - 1] as number) > 1) {
+                    acc.push('gap');
+                  }
+                  acc.push(n);
+                  return acc;
+                }, [])
+                .map((n, idx) =>
+                  n === 'gap' ? (
+                    <span key={`gap-${idx}`} className="px-1 text-slate-400 text-xs font-bold">
+                      …
+                    </span>
+                  ) : (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => setPage(n)}
+                      className={`min-w-[32px] px-2 py-1.5 rounded-lg border text-xs font-black ${
+                        n === safePage
+                          ? 'bg-slate-900 text-white border-slate-900'
+                          : 'border-slate-200 text-slate-600 hover:bg-white'
+                      }`}
+                    >
+                      {n}
+                    </button>
+                  )
+                )}
               <button
                 type="button"
                 disabled={safePage >= totalPages}
