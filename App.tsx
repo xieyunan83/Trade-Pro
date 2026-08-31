@@ -50,6 +50,8 @@ import {
   mergeSaveCrmClients,
   migrateLegacyCrmOwnership,
   purgeAllCrmClientsBeforeDate,
+  purgeCrmListBeforeDate,
+  saveAllCrmClients,
   saveUserDiscoveryState,
 } from './utils/workspaceScope';
 import { ModuleStrategy } from './components/ModuleStrategy';
@@ -473,26 +475,6 @@ const App: React.FC = () => {
 
             let nextCrm: Client[] = loadAllCrmClients();
 
-            // 一次性清理 2026-06-01 之前的 CRM（本地库；云端由脚本/删除同步）
-            try {
-              const purgeFlag = 'trade_scout_crm_purged_202606_v1';
-              if (!localStorage.getItem(purgeFlag)) {
-                const { removedIds } = purgeAllCrmClientsBeforeDate(CRM_JUNE_2026_CUTOFF_MS);
-                if (removedIds.length) {
-                  nextCrm = loadAllCrmClients();
-                  if (isSupabaseConfigured()) {
-                    void deleteCrmClientsBulk(removedIds).catch((e) =>
-                      console.warn('[CRM] cloud purge failed', e)
-                    );
-                  }
-                  console.info(`[CRM] purged ${removedIds.length} records before 2026-06-01`);
-                }
-                localStorage.setItem(purgeFlag, String(removedIds.length));
-              }
-            } catch (e) {
-              console.warn('[CRM] local purge skipped', e);
-            }
-
             if (currentUser && isSupabaseConfigured()) {
                 if (currentUser.role !== 'admin') {
                     const apiReady = await hydrateApiConfigsFromCloud();
@@ -634,6 +616,26 @@ const App: React.FC = () => {
                 } catch (e) {
                   console.warn('GitHub API config sync failed', e);
                 }
+            }
+
+            // 云端 + GitHub 全部合并后再清理 2026-06 前旧 CRM（避免云数据把本地 purge 冲掉）
+            try {
+              const purgeFlag = 'trade_scout_crm_purged_202606_v3';
+              if (localStorage.getItem(purgeFlag) !== 'done') {
+                const { kept, removedIds } = purgeCrmListBeforeDate(
+                  nextCrm,
+                  CRM_JUNE_2026_CUTOFF_MS
+                );
+                nextCrm = kept;
+                if (removedIds.length && isSupabaseConfigured()) {
+                  await deleteCrmClientsBulk(removedIds);
+                }
+                console.info(`[CRM] purged ${removedIds.length} records before 2026-06-01 (post-merge)`);
+                localStorage.setItem(purgeFlag, 'done');
+                localStorage.removeItem('trade_scout_crm_purged_202606_v1');
+              }
+            } catch (e) {
+              console.warn('[CRM] post-merge purge failed', e);
             }
 
             if (!cancelled) {
@@ -1870,7 +1872,7 @@ const App: React.FC = () => {
     }
     if (
       !confirm(
-        `将对 ${clients.length} 家「已背调」客户联网深挖产品品类与价格区间，并写入产品匹配库。不会删除原有背调正文。继续？`
+        `将对 ${clients.length} 家客户联网深挖/更新产品品类与价格区间，并写入产品匹配库。继续？`
       )
     ) {
       return;
@@ -1881,8 +1883,12 @@ const App: React.FC = () => {
     try {
       for (const client of clients) {
         try {
+          const domain = (client.website || client.name || '').trim();
+          if (!domain) {
+            fail += 1;
+            continue;
+          }
           const hist = findHistoryForClient(client, history);
-          const domain = client.website || hist?.domain || client.name;
           const merged = await withRateLimitRetry(() =>
             digProductIntelligence(domain, hist?.data || null, {
               searchKeyword: client.searchKeyword || hist?.data?.searchKeyword || discoveryState.product,
@@ -2184,6 +2190,119 @@ const App: React.FC = () => {
     for (const id of ids) {
       void deleteCrmClient(id).catch((e) => console.warn('[CRM] cloud delete failed', id, e));
     }
+  };
+
+  /** 手动清理 2026-06 前 CRM（本地 + 云端） */
+  const handlePurgeCrmBeforeJune2026 = async () => {
+    if (!hasPermission(currentUser, 'feature.crm_manage')) {
+      alert('你没有 CRM 编辑权限。');
+      return;
+    }
+    const all = loadAllCrmClients();
+    const { kept, removedIds } = purgeCrmListBeforeDate(all, CRM_JUNE_2026_CUTOFF_MS);
+    if (!removedIds.length) {
+      alert('没有找到 2026年6月之前的 CRM 记录（或已全部清理）。');
+      return;
+    }
+    if (
+      !confirm(
+        `将永久删除 ${removedIds.length} 条 2026年6月前的客户（本地 + 云端同步删除）。\n背调历史仍保留在记录中心。继续？`
+      )
+    ) {
+      return;
+    }
+    if (isSupabaseConfigured()) {
+      await deleteCrmClientsBulk(removedIds);
+    }
+    const depts = departments.length ? departments : loadDepartmentsFromStorage();
+    const scoped = filterOwnedRecords(currentUser, kept, users, depts);
+    setCrmClients(scoped);
+    mergeSaveCrmClients(currentUser, scoped, users, depts);
+    alert(`已清理 ${removedIds.length} 条旧记录，全库剩余 ${kept.length} 条。`);
+  };
+
+  /** CRM 多选：批量决策人邮箱深挖（后台队列） */
+  const handleBatchDmSearchFromCRM = (clients: Client[]) => {
+    if (!clients?.length) return;
+    if (!hasPermission(currentUser, 'feature.dm_email_search')) {
+      alert('你没有「决策人邮箱搜索」权限，请联系管理员或部门主管开通。');
+      return;
+    }
+    if (
+      !confirm(
+        `将为 ${clients.length} 家客户加入「决策人邮箱深挖」后台队列（并行运行，可继续浏览页面）。\n已有结果的客户会更新联系人。继续？`
+      )
+    ) {
+      return;
+    }
+    let queued = 0;
+    let skipped = 0;
+    const skipSamples: string[] = [];
+    for (const client of clients) {
+      const hist = findHistoryForClient(client, historyRef.current);
+      const domain = (
+        client.website ||
+        hist?.domain ||
+        hist?.data?.companyInfo?.website ||
+        ''
+      ).trim();
+      if (!domain || !domain.includes('.')) {
+        skipped += 1;
+        continue;
+      }
+      const res = enqueueDmEmailSearch({
+        domain,
+        companyName: client.name || domain,
+        historyId: hist?.id || null,
+        companyLinkedin:
+          hist?.data?.socials?.linkedin ||
+          hist?.data?.tradeIntelligence?.companyLinkedin,
+        deepDig: true,
+        authorized: true,
+        existingDecisionMakers: hist?.data?.decisionMakers || client.contacts || [],
+        resolveExisting: () => {
+          const h = findHistoryForClient(client, historyRef.current);
+          return h?.data?.decisionMakers || client.contacts || [];
+        },
+        onComplete: async (job: DmEmailSearchJob) => {
+          if (job.status !== 'completed' || !job.resultDecisionMakers || !job.searchedAt) return;
+          const list = historyRef.current;
+          let prevHistory: number[] = [];
+          const matchId = job.historyId;
+          if (matchId) {
+            const item = list.find((h) => h.id === matchId);
+            prevHistory = item?.data?.decisionMakerEmailSearchHistory || [];
+          } else {
+            const item = list.find(
+              (h) => (h.domain || '').toLowerCase() === job.domain.toLowerCase()
+            );
+            prevHistory = item?.data?.decisionMakerEmailSearchHistory || [];
+          }
+          const searchHistory = [...prevHistory, job.searchedAt].slice(-30);
+          await persistDecisionMakerResearch(
+            {
+              decisionMakers: job.resultDecisionMakers,
+              decisionMakerEmailSearchAt: job.searchedAt,
+              decisionMakerEmailSearchHistory: searchHistory,
+            },
+            { historyId: job.historyId, domain: job.domain, companyName: job.companyName }
+          );
+        },
+      });
+      if (res.ok) queued += 1;
+      else {
+        skipped += 1;
+        if (skipSamples.length < 4) {
+          skipSamples.push(`${client.name}: ${'reason' in res ? res.reason : '跳过'}`);
+        }
+      }
+    }
+    alert(
+      `决策人挖掘：已加入队列 ${queued} 家` +
+        (skipped ? `，跳过 ${skipped} 家` : '') +
+        (skipSamples.length ? `\n\n${skipSamples.join('\n')}` : '') +
+        `\n\n可在「决策人挖掘」页查看进度。`
+    );
   };
 
   if (!currentUser) {
@@ -2553,8 +2672,10 @@ const App: React.FC = () => {
                         clients={crmClients} 
                         setClients={setCrmClients} 
                         onBatchAnalyze={handleBatchAnalyzeFromCRM}
+                        onBatchDmSearch={handleBatchDmSearchFromCRM}
                         onBatchDelete={handleBatchDeleteClients}
                         onBatchProductDig={handleBatchProductDigFromCRM}
+                        onPurgeBeforeJune2026={handlePurgeCrmBeforeJune2026}
                         productDigBusy={productDigBusy}
                         onReanalyze={(client) => void handleBatchAnalyzeFromCRM([client])}
                         history={history}

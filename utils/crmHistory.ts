@@ -312,7 +312,7 @@ export const formatBackgroundCheckTime = (ms?: number): string => {
 /** 2026-06-01 00:00:00 UTC+8 — CRM 历史清理分界 */
 export const CRM_JUNE_2026_CUTOFF_MS = new Date('2026-06-01T00:00:00+08:00').getTime();
 
-/** 推断 CRM 客户记录时间（背调时间 > id 前缀时间戳 > activityLog） */
+/** 推断 CRM 客户记录时间（背调时间 > id 前缀时间戳 > activityLog > 跟进日） */
 export const resolveClientRecordTime = (client: Client): number | undefined => {
   if (client.lastBackgroundCheckAt && client.lastBackgroundCheckAt > 0) {
     return client.lastBackgroundCheckAt;
@@ -335,12 +335,38 @@ export const resolveClientRecordTime = (client: Client): number | undefined => {
     const d = new Date(iso[1]);
     if (!Number.isNaN(d.getTime())) return d.getTime();
   }
+  for (const raw of [client.lastContactSent, client.lastContactReceived, client.lastOrderDate]) {
+    const s = (raw || '').trim().slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+      const d = new Date(`${s}T12:00:00`);
+      if (!Number.isNaN(d.getTime())) return d.getTime();
+    }
+  }
+  const fu = (client.nextFollowUpDate || '').trim().slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(fu)) {
+    const d = new Date(`${fu}T12:00:00`);
+    if (!Number.isNaN(d.getTime())) return d.getTime();
+  }
   return undefined;
 };
 
 export const isClientRecordBefore = (client: Client, cutoffMs: number): boolean => {
   const t = resolveClientRecordTime(client);
   return t != null && t < cutoffMs;
+};
+
+/** 按 cutoff 拆分 CRM 列表 */
+export const splitCrmClientsByCutoff = (
+  clients: Client[],
+  cutoffMs: number
+): { kept: Client[]; removed: Client[] } => {
+  const kept: Client[] = [];
+  const removed: Client[] = [];
+  for (const c of clients) {
+    if (isClientRecordBefore(c, cutoffMs)) removed.push(c);
+    else kept.push(c);
+  }
+  return { kept, removed };
 };
 
 export type BackgroundCheckLookup = {

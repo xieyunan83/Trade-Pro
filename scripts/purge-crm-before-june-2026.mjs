@@ -41,6 +41,23 @@ function resolveClientTime(client) {
     const d = new Date(analyzed[1]);
     if (!Number.isNaN(d.getTime())) return d.getTime();
   }
+  const iso = log.match(/(\d{4}-\d{2}-\d{2})/);
+  if (iso) {
+    const d = new Date(iso[1]);
+    if (!Number.isNaN(d.getTime())) return d.getTime();
+  }
+  for (const raw of [client.lastContactSent, client.lastContactReceived, client.lastOrderDate]) {
+    const s = (raw || '').trim().slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+      const d = new Date(`${s}T12:00:00`);
+      if (!Number.isNaN(d.getTime())) return d.getTime();
+    }
+  }
+  const fu = (client.nextFollowUpDate || '').trim().slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(fu)) {
+    const d = new Date(`${fu}T12:00:00`);
+    if (!Number.isNaN(d.getTime())) return d.getTime();
+  }
   return undefined;
 }
 

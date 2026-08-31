@@ -1,7 +1,7 @@
 import type { Client, DiscoveryState, User } from '../types';
 import { canViewOwnedRecord, type OwnedRecordMeta } from '../services/permissions';
 import type { Department } from '../types';
-import { isClientRecordBefore } from './crmHistory';
+import { splitCrmClientsByCutoff } from './crmHistory';
 
 export const emptyDiscoveryState = (): DiscoveryState => ({
   product: '',
@@ -127,27 +127,34 @@ export const mergeSaveCrmClients = (
   return merged;
 };
 
+/** 写入全库 CRM（不过滤部门，用于清理后整库覆盖） */
+export const saveAllCrmClients = (clients: Client[]): void => {
+  try {
+    localStorage.setItem(CRM_ALL_KEY, JSON.stringify(clients));
+  } catch {
+    /* ignore */
+  }
+};
+
 /** 从全库 localStorage 删除早于 cutoff 的 CRM 客户（返回被删 id 列表） */
 export const purgeAllCrmClientsBeforeDate = (
   cutoffMs: number
 ): { kept: Client[]; removedIds: string[] } => {
   const existing = loadAllCrmClients();
-  const kept: Client[] = [];
-  const removedIds: string[] = [];
-  for (const c of existing) {
-    if (isClientRecordBefore(c, cutoffMs)) {
-      removedIds.push(c.id);
-    } else {
-      kept.push(c);
-    }
-  }
-  if (removedIds.length) {
-    try {
-      localStorage.setItem(CRM_ALL_KEY, JSON.stringify(kept));
-    } catch {
-      /* ignore */
-    }
-  }
+  const { kept, removed } = splitCrmClientsByCutoff(existing, cutoffMs);
+  const removedIds = removed.map((c) => c.id);
+  if (removedIds.length) saveAllCrmClients(kept);
+  return { kept, removedIds };
+};
+
+/** 对任意 CRM 列表按 cutoff 清理并写回全库 */
+export const purgeCrmListBeforeDate = (
+  allClients: Client[],
+  cutoffMs: number
+): { kept: Client[]; removedIds: string[] } => {
+  const { kept, removed } = splitCrmClientsByCutoff(allClients, cutoffMs);
+  const removedIds = removed.map((c) => c.id);
+  if (removedIds.length) saveAllCrmClients(kept);
   return { kept, removedIds };
 };
 

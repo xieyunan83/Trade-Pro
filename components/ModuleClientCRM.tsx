@@ -11,6 +11,7 @@ import {
   RefreshCw,
   CalendarClock,
   PackageSearch,
+  Users,
 } from 'lucide-react';
 import {
   buildHistoryLookupIndex,
@@ -27,7 +28,11 @@ interface ModuleClientCRMProps {
   setClients: React.Dispatch<React.SetStateAction<Client[]>>;
   onBatchAnalyze: (clients: Client[]) => Promise<void>;
   onBatchDelete?: (clients: Client[]) => void | Promise<void>;
+  /** 批量决策人邮箱深挖（后台队列） */
+  onBatchDmSearch?: (clients: Client[]) => void;
   onBatchProductDig?: (clients: Client[]) => Promise<void>;
+  /** 手动清理 2026-06 前旧 CRM */
+  onPurgeBeforeJune2026?: () => void | Promise<void>;
   onReanalyze?: (client: Client) => void;
   history: HistoryItem[];
   onOpenHistory: (item: HistoryItem) => void;
@@ -214,7 +219,9 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   setClients,
   onBatchAnalyze,
   onBatchDelete,
+  onBatchDmSearch,
   onBatchProductDig,
+  onPurgeBeforeJune2026,
   onReanalyze,
   history,
   onOpenHistory,
@@ -355,11 +362,6 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
 
   const selectedClients = useMemo(
     () => filteredEnriched.filter((e) => selectedClientIds.has(e.client.id)).map((e) => e.client),
-    [filteredEnriched, selectedClientIds]
-  );
-
-  const selectedBgCount = useMemo(
-    () => filteredEnriched.filter((e) => selectedClientIds.has(e.client.id) && e.hasBg).length,
     [filteredEnriched, selectedClientIds]
   );
 
@@ -546,6 +548,16 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
             导出 Excel
             {selectedClients.length > 0 ? ` (${selectedClients.length})` : ''}
           </button>
+          {onPurgeBeforeJune2026 && (
+            <button
+              type="button"
+              onClick={() => void onPurgeBeforeJune2026()}
+              className="inline-flex items-center justify-center gap-2 bg-amber-50 border border-amber-200 text-amber-800 hover:bg-amber-100 px-4 py-3 rounded-xl font-bold text-xs shrink-0"
+              title="删除 2026年6月之前的 CRM 记录（本地+云端）"
+            >
+              清理6月前旧数据
+            </button>
+          )}
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-2 sm:gap-3">
@@ -634,32 +646,36 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
         </div>
 
         {selectedClientIds.size > 0 && (
-          <div className="flex flex-col sm:flex-row flex-wrap gap-2 w-full sm:w-auto">
+          <div className="flex flex-col sm:flex-row flex-wrap gap-2 w-full">
             <button
               onClick={() => onBatchAnalyze(selectedClients)}
-              className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 rounded-xl font-bold text-sm touch-manipulation"
+              className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm touch-manipulation inline-flex items-center justify-center gap-2"
+              title="批量背调：新增或更新公司背调报告"
             >
-              批量分析 ({selectedClientIds.size})
+              <RefreshCw size={16} />
+              批量背调 ({selectedClientIds.size})
             </button>
+            {onBatchDmSearch && (
+              <button
+                type="button"
+                onClick={() => onBatchDmSearch(selectedClients)}
+                className="w-full sm:w-auto bg-violet-600 hover:bg-violet-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm touch-manipulation inline-flex items-center justify-center gap-2"
+                title="后台队列并行挖掘/更新决策人邮箱"
+              >
+                <Users size={16} />
+                批量挖掘决策人 ({selectedClientIds.size})
+              </button>
+            )}
             {onBatchProductDig && (
               <button
                 type="button"
-                disabled={productDigBusy || selectedBgCount === 0}
-                onClick={() => {
-                  const diggable = filteredEnriched
-                    .filter((e) => selectedClientIds.has(e.client.id) && e.hasBg)
-                    .map((e) => e.client);
-                  if (!diggable.length) {
-                    alert('所选客户中没有「已做背调」的记录。请先完成背调，或勾选已背调客户。');
-                    return;
-                  }
-                  void onBatchProductDig(diggable);
-                }}
-                className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2.5 rounded-xl font-bold text-sm touch-manipulation disabled:opacity-50 inline-flex items-center justify-center gap-2"
-                title="仅针对已背调客户：联网深挖品类与价格，写入产品匹配库"
+                disabled={productDigBusy}
+                onClick={() => void onBatchProductDig(selectedClients)}
+                className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm touch-manipulation disabled:opacity-50 inline-flex items-center justify-center gap-2"
+                title="联网深挖/更新产品品类与价格，写入产品匹配库"
               >
                 <PackageSearch size={16} />
-                {productDigBusy ? '产品深挖中…' : `产品深挖 (${selectedBgCount})`}
+                {productDigBusy ? '产品深挖中…' : `批量产品深挖 (${selectedClientIds.size})`}
               </button>
             )}
             {onBatchDelete && (
@@ -669,7 +685,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                   await onBatchDelete(selectedClients);
                   setSelectedClientIds(new Set());
                 }}
-                className="w-full sm:w-auto bg-red-50 border border-red-200 text-red-600 hover:bg-red-100 px-6 py-2.5 rounded-xl font-bold text-sm touch-manipulation inline-flex items-center justify-center gap-2"
+                className="w-full sm:w-auto bg-red-50 border border-red-200 text-red-600 hover:bg-red-100 px-5 py-2.5 rounded-xl font-bold text-sm touch-manipulation inline-flex items-center justify-center gap-2"
               >
                 <Trash2 size={16} />
                 批量删除 ({selectedClientIds.size})
