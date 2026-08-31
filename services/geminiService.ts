@@ -28,6 +28,7 @@ import {
   gatherTavilyCompanyEvidenceBundle,
   hasTavilyKey,
 } from './tavilyService';
+import { hasRichProductCatalog } from './productCatalog';
 import {
   buildFallbackEvidenceFromReport,
   evidenceItemsFromTavilyResults,
@@ -3086,11 +3087,26 @@ ${productFocusBlock}
   result.evidenceConfidence = scoreEvidenceConfidence(result, evidenceChain);
   result.evidenceSummary = summarizeEvidence(evidenceChain, result.evidenceConfidence);
 
-  return normalizeAnalysisResult(result);
+  let normalized = normalizeAnalysisResult(result);
+
+  // 新背调必须带上品类与价格：若首轮不足，自动再跑一轮产品深挖并合并
+  if (!hasRichProductCatalog(normalized)) {
+    try {
+      console.info('[analyzeCompany] product catalog incomplete → auto digProductIntelligence');
+      normalized = await digProductIntelligence(hasDomain ? canonicalDomain : rawInput, normalized, {
+        searchKeyword: searchKeyword || undefined,
+        searchCountry: searchCountry || undefined,
+      });
+    } catch (e) {
+      console.warn('[analyzeCompany] auto product dig failed, keeping first-pass report', e);
+    }
+  }
+
+  return normalized;
 };
 
 /**
- * 仅深挖产品品类与价格（供 CRM 批量重整理，不重跑整份背调身份/决策人）
+ * 仅深挖产品品类与价格（供「旧背调缺品类」补做；新背调已在 analyzeCompany 内自动完成）
  * 合并回 existing，保留决策人、证据链等既有字段。
  */
 export const digProductIntelligence = async (

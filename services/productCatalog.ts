@@ -443,3 +443,40 @@ export const removeProductProfile = async (id: string): Promise<void> => {
 };
 
 export { domainKey as productCatalogDomainKey };
+
+/**
+ * 报告是否已含「全站品类 + 价格」可用数据。
+ * 新背调应达到此标准；未达标的旧报告才需要「产品深挖」补做。
+ */
+export const hasRichProductCatalog = (analysis?: AnalysisResult | null): boolean => {
+  if (!analysis) return false;
+  const cats = analysis.websiteCategories || [];
+  const products = analysis.products || [];
+
+  const catsWithPrice = cats.filter((c) => {
+    const band = (c.priceBand || '').trim();
+    if (band && band !== '待补价格' && !/^n\/?a$/i.test(band)) return true;
+    return (
+      (typeof c.priceMinCNY === 'number' && c.priceMinCNY > 0) ||
+      (typeof c.priceMaxCNY === 'number' && c.priceMaxCNY > 0)
+    );
+  });
+
+  const productsPriced = products.filter((p) => {
+    const hasCat = !!(p.category || '').trim();
+    const hasPrice =
+      (typeof p.priceMinCNY === 'number' && p.priceMinCNY > 0) ||
+      (typeof p.priceMaxCNY === 'number' && p.priceMaxCNY > 0) ||
+      (typeof p.retailPriceCNY === 'number' && p.retailPriceCNY > 0) ||
+      (typeof p.estimatedFOBPriceCNY === 'number' && p.estimatedFOBPriceCNY > 0) ||
+      !!(p.retailPrice || '').trim();
+    return hasCat && hasPrice;
+  });
+
+  if (catsWithPrice.length >= 3) return true;
+  if (productsPriced.length >= 5) return true;
+  if (cats.length >= 4 && productsPriced.length >= 3) return true;
+  if (catsWithPrice.length >= 2 && productsPriced.length >= 4) return true;
+  return false;
+};
+

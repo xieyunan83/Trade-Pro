@@ -21,6 +21,7 @@ import {
   indexAnalysisIntoProductCatalog,
   rebuildProductCatalogFromHistory,
   loadProductCatalog,
+  hasRichProductCatalog,
 } from './services/productCatalog';
 import { saveProductProfilesBulk } from './services/db';
 import { addCustomKeyword, addCustomCountry } from './services/taxonomyStore';
@@ -2017,14 +2018,44 @@ const App: React.FC = () => {
       alert('你没有「产品品类深挖」权限，请联系管理员开通。');
       return;
     }
+
+    // 仅补做「已背调但缺少全站品类/价格」的旧报告；新背调已在背调流程内自动采集
+    const needRedig: Client[] = [];
+    const alreadyRich: string[] = [];
+    const noHistory: string[] = [];
+    for (const c of clients) {
+      const hist = findHistoryForClient(c, historyRef.current);
+      if (!hist?.data) {
+        noHistory.push(c.name || c.website || c.id);
+        continue;
+      }
+      if (hasRichProductCatalog(hist.data)) {
+        alreadyRich.push(c.name || c.website || c.id);
+        continue;
+      }
+      needRedig.push(c);
+    }
+
+    if (!needRedig.length) {
+      const parts: string[] = [];
+      if (alreadyRich.length) parts.push(`${alreadyRich.length} 家已有完整品类数据（新背调已含，无需再挖）`);
+      if (noHistory.length) parts.push(`${noHistory.length} 家尚无背调报告，请先做背调`);
+      alert(parts.join('\n') || '所选客户均无需补做产品品类。');
+      return;
+    }
+
+    const skipNote =
+      alreadyRich.length || noHistory.length
+        ? `\n（已跳过：已有品类 ${alreadyRich.length} 家，无背调 ${noHistory.length} 家）`
+        : '';
     if (
       !confirm(
-        `将对 ${clients.length} 家客户在后台爬取全部品类与价格区间（可与批量背调同时进行）。继续？`
+        `将对 ${needRedig.length} 家「旧背调缺品类」客户在后台补采全站品类与价格区间。${skipNote}\n新背调无需此项——背调时已自动采集。继续？`
       )
     ) {
       return;
     }
-    const { queued, skipped, reasons } = enqueueProductDigBatch(clients, {
+    const { queued, skipped, reasons } = enqueueProductDigBatch(needRedig, {
       authorized: true,
       onComplete: handleProductDigComplete,
     });
@@ -2034,8 +2065,8 @@ const App: React.FC = () => {
     }
     alert(
       skipped > 0
-        ? `已加入后台产品深挖 ${queued} 家（跳过 ${skipped}）。可继续其它操作，左下角查看进度。`
-        : `已加入后台产品深挖 ${queued} 家。可继续其它操作，左下角查看进度。`
+        ? `已加入后台补做品类 ${queued} 家（跳过 ${skipped}）。左下角可看进度。`
+        : `已加入后台补做品类 ${queued} 家。左下角可看进度。`
     );
   };
 
@@ -2613,7 +2644,7 @@ const App: React.FC = () => {
                   <div>
                     <div className="flex justify-between items-center mb-2">
                         <span className="text-xs font-bold text-emerald-400 flex items-center gap-1">
-                          <Loader2 className="animate-spin" size={10}/> 产品深挖进行中
+                          <Loader2 className="animate-spin" size={10}/> 品类补做进行中
                         </span>
                         <span className="text-[10px] text-slate-400">后台运行</span>
                     </div>

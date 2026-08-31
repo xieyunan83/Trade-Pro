@@ -696,12 +696,12 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                 type="button"
                 onClick={() => void onBatchProductDig(selectedClients)}
                 className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm touch-manipulation inline-flex items-center justify-center gap-2"
-                title="后台联网深挖全部品类与价格（不阻塞页面，可与批量背调同时进行）"
+                title="仅补做旧背调缺品类的客户；新背调已在背调流程内自动采集品类与价格"
               >
                 <PackageSearch size={16} />
                 {productDigBusy
-                  ? `继续加入产品深挖 (${selectedClientIds.size})`
-                  : `批量产品深挖 (${selectedClientIds.size})`}
+                  ? `继续补做品类 (${selectedClientIds.size})`
+                  : `补做产品品类 (${selectedClientIds.size})`}
               </button>
             )}
             {onBatchDelete && (

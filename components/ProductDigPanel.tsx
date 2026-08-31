@@ -49,7 +49,7 @@ export const ProductDigPanel: React.FC = () => {
         >
           <span className="flex items-center gap-2 text-sm font-bold">
             <PackageSearch size={16} />
-            产品深挖后台任务
+            产品品类补做
             {active.length > 0 && (
               <span className="bg-white/20 px-2 py-0.5 rounded-lg text-[10px]">
                 {progressDone}/{progressTotal}

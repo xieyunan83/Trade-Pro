@@ -21,7 +21,7 @@ export const PERMISSION_CATALOG: Array<{
   { key: 'module.promo_generator', label: '营销工具', group: '模块', description: '营销辅助工具' },
   { key: 'module.product_match', label: '新品匹配', group: '模块', description: '用我方新品匹配已背调客户产品库' },
   { key: 'feature.search_clients', label: '执行客户搜索', group: '功能', description: '发起联网搜索客户' },
-  { key: 'feature.product_redig', label: '产品品类深挖', group: '功能', description: '对已背调客户批量重新整理品类与价格' },
+  { key: 'feature.product_redig', label: '产品品类补做', group: '功能', description: '仅对旧背调缺品类/价格的客户补采；新背调已自动含品类' },
   { key: 'feature.analyze_company', label: '单次背调', group: '功能', description: '对单个公司做背调' },
   { key: 'feature.batch_analyze', label: '批量背调', group: '功能', description: '批量/队列背调任务' },
   { key: 'feature.dm_email_search', label: '决策人邮箱搜索', group: '功能', description: '后台搜索邮箱（员工可搜索但只能看 *；完整邮箱仅本部门主管及以上可见）' },

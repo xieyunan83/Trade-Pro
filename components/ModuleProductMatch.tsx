@@ -222,7 +222,7 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
           </span>
           <span className="inline-flex items-center gap-1.5 text-slate-400">
             <Sparkles size={12} />
-            背调完成后会自动入库；CRM 可对已背调客户批量「产品深挖」
+            背调时会自动采集全站品类与价格并入库；「补做产品品类」只用于旧背调缺数据的客户。
           </span>
         </div>
       </div>
@@ -236,7 +236,7 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
           </div>
           {!hits?.length ? (
             <div className="p-10 text-center text-slate-400 font-bold text-sm">
-              未找到足够匹配的客户。可放宽品类/价格，或先在 CRM 对已背调客户做「产品深挖」充实库。
+              未找到足够匹配的客户。可放宽品类/价格，或对旧背调缺品类的客户在 CRM 点「补做产品品类」。
             </div>
           ) : (
             <ul className="divide-y divide-slate-100">
