@@ -136,26 +136,35 @@ export const saveAllCrmClients = (clients: Client[]): void => {
   }
 };
 
-/** 从全库 localStorage 删除早于 cutoff 的 CRM 客户（返回被删 id 列表） */
+/** 从全库 localStorage 删除早于 cutoff 的 CRM 客户（保守规则，返回被删 id 列表） */
 export const purgeAllCrmClientsBeforeDate = (
   cutoffMs: number
 ): { kept: Client[]; removedIds: string[] } => {
   const existing = loadAllCrmClients();
-  const { kept, removed } = splitCrmClientsByCutoff(existing, cutoffMs);
+  const { kept, removed } = splitCrmClientsByCutoff(existing, cutoffMs, true);
   const removedIds = removed.map((c) => c.id);
   if (removedIds.length) saveAllCrmClients(kept);
   return { kept, removedIds };
 };
 
-/** 对任意 CRM 列表按 cutoff 清理并写回全库 */
+/** 对任意 CRM 列表按 cutoff 清理（forPurge=true 保守规则） */
 export const purgeCrmListBeforeDate = (
   allClients: Client[],
   cutoffMs: number
 ): { kept: Client[]; removedIds: string[] } => {
-  const { kept, removed } = splitCrmClientsByCutoff(allClients, cutoffMs);
+  const { kept, removed } = splitCrmClientsByCutoff(allClients, cutoffMs, true);
   const removedIds = removed.map((c) => c.id);
   if (removedIds.length) saveAllCrmClients(kept);
   return { kept, removedIds };
+};
+
+/** 预览将删除多少条（不写库） */
+export const previewPurgeCrmBeforeDate = (
+  allClients: Client[],
+  cutoffMs: number
+): { kept: number; removed: number } => {
+  const { kept, removed } = splitCrmClientsByCutoff(allClients, cutoffMs, true);
+  return { kept: kept.length, removed: removed.length };
 };
 
 /** 当前用户是否「拥有」该任务（用于删除/清空时避免删掉别人的队列） */

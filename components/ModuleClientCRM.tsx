@@ -33,6 +33,8 @@ interface ModuleClientCRMProps {
   onBatchProductDig?: (clients: Client[]) => Promise<void>;
   /** 手动清理 2026-06 前旧 CRM */
   onPurgeBeforeJune2026?: () => void | Promise<void>;
+  /** 从 GitHub / Supabase / 背调历史恢复 CRM */
+  onRecoverCrm?: () => void | Promise<void>;
   onReanalyze?: (client: Client) => void;
   history: HistoryItem[];
   onOpenHistory: (item: HistoryItem) => void;
@@ -222,6 +224,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   onBatchDmSearch,
   onBatchProductDig,
   onPurgeBeforeJune2026,
+  onRecoverCrm,
   onReanalyze,
   history,
   onOpenHistory,
@@ -525,6 +528,28 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
           ))}
         </div>
       </div>
+
+      {clients.length === 0 && onRecoverCrm && (
+        <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
+          <div>
+            <div className="font-black text-blue-900 text-sm">CRM 数据为空</div>
+            <p className="text-xs text-blue-800/80 mt-1 leading-relaxed">
+              若因误删导致数据丢失，可尝试从 GitHub 云端备份、Supabase 或背调历史自动重建客户列表。
+              {history.length > 0 && (
+                <span className="block mt-1">本地背调历史仍有 {history.length} 条记录可用。</span>
+              )}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void onRecoverCrm()}
+            className="inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-3 rounded-xl font-bold text-sm shrink-0"
+          >
+            <RefreshCw size={16} />
+            从云端/背调恢复 CRM
+          </button>
+        </div>
+      )}
 
       <div className="bg-white p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm flex flex-col gap-3 sm:gap-4">
         <div className="flex flex-col sm:flex-row gap-2 sm:items-center">

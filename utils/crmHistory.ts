@@ -312,7 +312,7 @@ export const formatBackgroundCheckTime = (ms?: number): string => {
 /** 2026-06-01 00:00:00 UTC+8 — CRM 历史清理分界 */
 export const CRM_JUNE_2026_CUTOFF_MS = new Date('2026-06-01T00:00:00+08:00').getTime();
 
-/** 推断 CRM 客户记录时间（背调时间 > id 前缀时间戳 > activityLog > 跟进日） */
+/** 推断 CRM 客户记录时间（用于展示/筛选） */
 export const resolveClientRecordTime = (client: Client): number | undefined => {
   if (client.lastBackgroundCheckAt && client.lastBackgroundCheckAt > 0) {
     return client.lastBackgroundCheckAt;
@@ -350,20 +350,55 @@ export const resolveClientRecordTime = (client: Client): number | undefined => {
   return undefined;
 };
 
+/**
+ * 仅用于「6月前清理」：只用背调时间 / 创建 id / activityLog，不用跟进日（跟进日≠建档日，误删全部）
+ */
+export const resolveClientRecordTimeForPurge = (client: Client): number | undefined => {
+  if (client.lastBackgroundCheckAt && client.lastBackgroundCheckAt > 0) {
+    return client.lastBackgroundCheckAt;
+  }
+  const id = (client.id || '').trim();
+  const idMatch = id.match(/^(\d{10,13})/);
+  if (idMatch) {
+    let ts = Number(idMatch[1]);
+    if (ts > 0 && ts < 1e12) ts *= 1000;
+    if (ts > 1e11 && ts < 2e13) return ts;
+  }
+  const log = client.activityLog || '';
+  const analyzed = log.match(/Analyzed\s+(\d{1,2}\/\d{1,2}\/\d{4})/i);
+  if (analyzed) {
+    const d = new Date(analyzed[1]);
+    if (!Number.isNaN(d.getTime())) return d.getTime();
+  }
+  const iso = log.match(/(\d{4}-\d{2}-\d{2})/);
+  if (iso) {
+    const d = new Date(iso[1]);
+    if (!Number.isNaN(d.getTime())) return d.getTime();
+  }
+  return undefined;
+};
+
 export const isClientRecordBefore = (client: Client, cutoffMs: number): boolean => {
   const t = resolveClientRecordTime(client);
   return t != null && t < cutoffMs;
 };
 
-/** 按 cutoff 拆分 CRM 列表 */
+export const isClientRecordBeforeForPurge = (client: Client, cutoffMs: number): boolean => {
+  const t = resolveClientRecordTimeForPurge(client);
+  return t != null && t < cutoffMs;
+};
+
+/** 按 cutoff 拆分 CRM 列表；forPurge=true 时用保守规则，无明确时间的记录保留 */
 export const splitCrmClientsByCutoff = (
   clients: Client[],
-  cutoffMs: number
+  cutoffMs: number,
+  forPurge = false
 ): { kept: Client[]; removed: Client[] } => {
   const kept: Client[] = [];
   const removed: Client[] = [];
+  const isBefore = forPurge ? isClientRecordBeforeForPurge : isClientRecordBefore;
   for (const c of clients) {
-    if (isClientRecordBefore(c, cutoffMs)) removed.push(c);
+    if (isBefore(c, cutoffMs)) removed.push(c);
     else kept.push(c);
   }
   return { kept, removed };

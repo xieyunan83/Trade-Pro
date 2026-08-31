@@ -16,7 +16,7 @@ import {
   newAutomationTaskId,
 } from './services/automationQueueRepair';
 import { fetchGlobalConfig, fetchDocumentsFromRepo, backupUserHistory, fetchCRMFromCloud, saveCRMToCloud, fetchUserHistoryFromCloud, checkGitHubStatus, fetchApiConfigsFromCloud, setManualGitHubConfig } from './services/githubService';
-import { isSupabaseConfigured, getKnowledgeFiles, getInvestigationHistory, saveInvestigationHistory, saveDiscoverySearch, getCrmClients, syncCrmClients, deleteCrmClient, deleteCrmClientsBulk, getDiscoverySearchArchives, deleteInvestigationHistory, deleteDiscoverySearchFromCloud, deleteDiscoverySearchesByMeta, getProductProfilesCloud } from './services/supabase';
+import { isSupabaseConfigured, getKnowledgeFiles, getInvestigationHistory, saveInvestigationHistory, saveDiscoverySearch, getCrmClients, syncCrmClients, saveCrmClientsBulk, deleteCrmClient, deleteCrmClientsBulk, getDiscoverySearchArchives, deleteInvestigationHistory, deleteDiscoverySearchFromCloud, deleteDiscoverySearchesByMeta, getProductProfilesCloud } from './services/supabase';
 import {
   indexAnalysisIntoProductCatalog,
   rebuildProductCatalogFromHistory,
@@ -51,6 +51,7 @@ import {
   migrateLegacyCrmOwnership,
   purgeAllCrmClientsBeforeDate,
   purgeCrmListBeforeDate,
+  previewPurgeCrmBeforeDate,
   saveAllCrmClients,
   saveUserDiscoveryState,
 } from './utils/workspaceScope';
@@ -618,24 +619,49 @@ const App: React.FC = () => {
                 }
             }
 
-            // 云端 + GitHub 全部合并后再清理 2026-06 前旧 CRM（避免云数据把本地 purge 冲掉）
-            try {
-              const purgeFlag = 'trade_scout_crm_purged_202606_v3';
-              if (localStorage.getItem(purgeFlag) !== 'done') {
-                const { kept, removedIds } = purgeCrmListBeforeDate(
-                  nextCrm,
-                  CRM_JUNE_2026_CUTOFF_MS
-                );
-                nextCrm = kept;
-                if (removedIds.length && isSupabaseConfigured()) {
-                  await deleteCrmClientsBulk(removedIds);
+            // 已禁用登录时自动清理（曾误用跟进日期导致全库被删）
+
+            if (nextCrm.length === 0) {
+              try {
+                let recovered: Client[] = [];
+                let source = '';
+                try {
+                  const ghCrm = await fetchCRMFromCloud();
+                  if (ghCrm.length > 0) {
+                    recovered = ghCrm;
+                    source = 'GitHub 云端备份';
+                  }
+                } catch (e) {
+                  console.warn('[CRM] GitHub recovery fetch failed', e);
                 }
-                console.info(`[CRM] purged ${removedIds.length} records before 2026-06-01 (post-merge)`);
-                localStorage.setItem(purgeFlag, 'done');
-                localStorage.removeItem('trade_scout_crm_purged_202606_v1');
+                if (!recovered.length && isSupabaseConfigured()) {
+                  try {
+                    const sbCrm = await getCrmClients();
+                    if (sbCrm.length > 0) {
+                      recovered = sbCrm;
+                      source = 'Supabase 云端';
+                    }
+                  } catch (e) {
+                    console.warn('[CRM] Supabase recovery fetch failed', e);
+                  }
+                }
+                if (!recovered.length) {
+                  const histNow = await getHistory();
+                  if (histNow.length > 0) {
+                    const rebuilt = mergeHistoryItemsIntoCrm([], histNow, stampOwnership);
+                    if (rebuilt.clients.length > 0) {
+                      recovered = rebuilt.clients;
+                      source = '背调历史记录';
+                    }
+                  }
+                }
+                if (recovered.length > 0) {
+                  console.info(`[CRM] auto-recovered ${recovered.length} clients from ${source}`);
+                  nextCrm = recovered;
+                }
+              } catch (e) {
+                console.warn('[CRM] auto recovery failed', e);
               }
-            } catch (e) {
-              console.warn('[CRM] post-merge purge failed', e);
             }
 
             if (!cancelled) {
@@ -2192,25 +2218,26 @@ const App: React.FC = () => {
     }
   };
 
-  /** 手动清理 2026-06 前 CRM（本地 + 云端） */
+  /** 手动清理 2026-06 前 CRM（本地 + 云端，保守日期规则） */
   const handlePurgeCrmBeforeJune2026 = async () => {
     if (!hasPermission(currentUser, 'feature.crm_manage')) {
       alert('你没有 CRM 编辑权限。');
       return;
     }
     const all = loadAllCrmClients();
-    const { kept, removedIds } = purgeCrmListBeforeDate(all, CRM_JUNE_2026_CUTOFF_MS);
-    if (!removedIds.length) {
+    const preview = previewPurgeCrmBeforeDate(all, CRM_JUNE_2026_CUTOFF_MS);
+    if (!preview.removed) {
       alert('没有找到 2026年6月之前的 CRM 记录（或已全部清理）。');
       return;
     }
     if (
       !confirm(
-        `将永久删除 ${removedIds.length} 条 2026年6月前的客户（本地 + 云端同步删除）。\n背调历史仍保留在记录中心。继续？`
+        `将永久删除 ${preview.removed} 条 2026年6月前的客户（保留 ${preview.kept} 条）。\n仅依据背调/入库时间，不含跟进日期。\n背调历史仍保留在记录中心。继续？`
       )
     ) {
       return;
     }
+    const { kept, removedIds } = purgeCrmListBeforeDate(all, CRM_JUNE_2026_CUTOFF_MS);
     if (isSupabaseConfigured()) {
       await deleteCrmClientsBulk(removedIds);
     }
@@ -2219,6 +2246,64 @@ const App: React.FC = () => {
     setCrmClients(scoped);
     mergeSaveCrmClients(currentUser, scoped, users, depts);
     alert(`已清理 ${removedIds.length} 条旧记录，全库剩余 ${kept.length} 条。`);
+  };
+
+  /** 从 GitHub / Supabase / 背调历史恢复 CRM */
+  const handleRecoverCrm = async () => {
+    if (!hasPermission(currentUser, 'feature.crm_manage')) {
+      alert('你没有 CRM 编辑权限。');
+      return;
+    }
+    let recovered: Client[] = [];
+    let source = '';
+    try {
+      const ghCrm = await fetchCRMFromCloud();
+      if (ghCrm.length > 0) {
+        recovered = ghCrm;
+        source = 'GitHub 云端备份 (crm.json)';
+      }
+    } catch (e) {
+      console.warn('[CRM] GitHub recovery failed', e);
+    }
+    if (!recovered.length && isSupabaseConfigured()) {
+      try {
+        const sbCrm = await getCrmClients();
+        if (sbCrm.length > 0) {
+          recovered = sbCrm;
+          source = 'Supabase 云端';
+        }
+      } catch (e) {
+        console.warn('[CRM] Supabase recovery failed', e);
+      }
+    }
+    if (!recovered.length) {
+      const histNow = await getHistory();
+      if (histNow.length > 0) {
+        const rebuilt = mergeHistoryItemsIntoCrm([], histNow, stampOwnership);
+        recovered = rebuilt.clients;
+        if (recovered.length > 0) source = '背调历史记录';
+      }
+    }
+    if (!recovered.length) {
+      alert('未找到可恢复的 CRM 数据（GitHub、Supabase、背调历史均无可用记录）。');
+      return;
+    }
+    if (!confirm(`从「${source}」恢复 ${recovered.length} 条客户到 CRM？\n将覆盖当前空列表并同步到云端。`)) {
+      return;
+    }
+    const depts = departments.length ? departments : loadDepartmentsFromStorage();
+    const migrated = migrateLegacyCrmOwnership(recovered, users, depts);
+    saveAllCrmClients(migrated.clients);
+    const scoped = filterOwnedRecords(currentUser, migrated.clients, users, depts);
+    setCrmClients(scoped);
+    mergeSaveCrmClients(currentUser, scoped, users, depts);
+    if (isSupabaseConfigured()) {
+      await saveCrmClientsBulk(migrated.clients);
+    }
+    if (isGitHubConnected) {
+      await saveCRMToCloud(migrated.clients);
+    }
+    alert(`已从「${source}」恢复 ${migrated.clients.length} 条客户（您可见 ${scoped.length} 条）。`);
   };
 
   /** CRM 多选：批量决策人邮箱深挖（后台队列） */
@@ -2676,6 +2761,7 @@ const App: React.FC = () => {
                         onBatchDelete={handleBatchDeleteClients}
                         onBatchProductDig={handleBatchProductDigFromCRM}
                         onPurgeBeforeJune2026={handlePurgeCrmBeforeJune2026}
+                        onRecoverCrm={handleRecoverCrm}
                         productDigBusy={productDigBusy}
                         onReanalyze={(client) => void handleBatchAnalyzeFromCRM([client])}
                         history={history}
