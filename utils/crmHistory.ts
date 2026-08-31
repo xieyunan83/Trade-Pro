@@ -52,9 +52,27 @@ export const clientPatchFromAnalysis = (
       data?.companyInfo?.headquarters?.split(',').pop()?.trim() ||
       data?.companyInfo?.city ||
       'Global',
-    productType: data?.businessScope?.coreProducts?.[0] || data?.searchKeyword || 'N/A',
+    productType:
+      data?.businessScope?.coreProducts?.[0] ||
+      data?.products?.find((p) => p.category)?.category ||
+      data?.products?.[0]?.name ||
+      data?.searchKeyword ||
+      'N/A',
     industry: data?.companyInfo?.nature || 'N/A',
-    priceRange: data?.businessScope?.priceSensitivity || 'Medium',
+    priceRange: (() => {
+      const mins = (data?.products || [])
+        .map((p) => p.priceMinCNY ?? p.retailPriceCNY ?? p.estimatedFOBPriceCNY)
+        .filter((n): n is number => typeof n === 'number' && n > 0);
+      const maxs = (data?.products || [])
+        .map((p) => p.priceMaxCNY ?? p.retailPriceCNY ?? p.estimatedFOBPriceCNY)
+        .filter((n): n is number => typeof n === 'number' && n > 0);
+      if (mins.length || maxs.length) {
+        const lo = mins.length ? Math.min(...mins) : Math.min(...maxs);
+        const hi = maxs.length ? Math.max(...maxs) : Math.max(...mins);
+        return `¥${lo}–${hi}`;
+      }
+      return data?.businessScope?.priceSensitivity || 'Medium';
+    })(),
     hasAnalyzed: true,
     hasBackgroundCheck: true,
     lastBackgroundCheckAt: checkedAt || Date.now(),

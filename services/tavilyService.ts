@@ -9,7 +9,7 @@ import { isLocalDevHost } from './qwenProxy';
 import { getApiConfig, isSupabaseConfigured } from './supabase';
 
 const TIMEOUT_MS = 40_000;
-const MAX_EVIDENCE_CHARS = 10_000;
+const MAX_EVIDENCE_CHARS = 14_000;
 const LS_EXHAUSTED = 'trade_scout_tavily_exhausted';
 const LS_ACTIVE_IDX = 'trade_scout_tavily_active_idx';
 
@@ -346,13 +346,19 @@ export const gatherTavilyCompanyEvidenceBundle = async (opts: {
     `site:${domain} about OR contact OR company`,
     `"${name}" ${country} headquarters OR company`.replace(/\s+/g, ' ').trim(),
   ];
-  if (kw) queries.push(`"${name}" ${kw} ${country}`.replace(/\s+/g, ' ').trim());
+  if (kw) {
+    queries.push(`"${name}" ${kw} ${country}`.replace(/\s+/g, ' ').trim());
+    queries.push(`site:${domain} ${kw} price OR shop OR product OR catalog OR buy`);
+  }
+  // 产品深挖：官网商品/目录/价格页
+  queries.push(`site:${domain} (product OR products OR shop OR catalog OR collection OR price OR buy OR 产品 OR 价格)`);
+  queries.push(`"${name}" (product range OR catalog OR wholesale OR import) ${kw || ''} ${country}`.replace(/\s+/g, ' ').trim());
 
   const chunks: string[] = [];
   const items: TavilyCompanyEvidenceBundle['items'] = [];
   const seenUrls = new Set<string>();
   let topUrls: string[] = [];
-  for (const q of queries.slice(0, 2)) {
+  for (const q of queries.slice(0, 4)) {
     try {
       const data = await tavilySearch(q, { maxResults: 6, searchDepth: 'basic', includeAnswer: true });
       const block = formatTavilyEvidence(data, `TAVILY:${q.slice(0, 40)}`);
@@ -382,7 +388,12 @@ export const gatherTavilyCompanyEvidenceBundle = async (opts: {
   }
 
   const official = `https://${domain}`;
-  if (!topUrls.some((u) => u.includes(domain))) topUrls = [official, ...topUrls].slice(0, 3);
+  // 优先抽取商品相关路径
+  const productPathHints = ['/shop', '/products', '/catalog', '/collections', '/product', '/store', '/buy'];
+  const productish = [...seenUrls].filter((u) =>
+    productPathHints.some((h) => u.toLowerCase().includes(h))
+  );
+  topUrls = [...new Set([official, ...productish, ...topUrls])].slice(0, 5);
   if (!seenUrls.has(official)) {
     seenUrls.add(official);
     items.unshift({ title: `官方网站 ${domain}`, url: official });
@@ -394,11 +405,11 @@ export const gatherTavilyCompanyEvidenceBundle = async (opts: {
       const parts = results
         .map((r: any) => {
           const url = r.url || '';
-          const raw = String(r.raw_content || r.content || r.text || '').slice(0, 2500);
+          const raw = String(r.raw_content || r.content || r.text || '').slice(0, 3200);
           return raw ? `EXTRACT ${url}:\n${raw}` : '';
         })
         .filter(Boolean);
-      if (parts.length) chunks.push(`=== TAVILY EXTRACT ===\n${parts.join('\n\n')}\n=== END EXTRACT ===`);
+      if (parts.length) chunks.push(`=== TAVILY EXTRACT (prefer product/catalog pages) ===\n${parts.join('\n\n')}\n=== END EXTRACT ===`);
     }
   } catch (e) {
     if (String((e as any)?.message || e).includes('TAVILY_POOL_EXHAUSTED')) {

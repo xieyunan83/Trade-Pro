@@ -1,8 +1,8 @@
 
-import { HistoryItem, AutomationResult, KnowledgeFile, DiscoveryArchiveItem } from '../types';
+import { HistoryItem, AutomationResult, KnowledgeFile, DiscoveryArchiveItem, CustomerProductProfile } from '../types';
 
 const DB_NAME = 'TradeScoutDB';
-const DB_VERSION = 6;
+const DB_VERSION = 7;
 const DISCOVERY_LS_KEY = 'trade_scout_discovery_archives';
 
 export const initDB = (): Promise<IDBDatabase> => {
@@ -25,6 +25,9 @@ export const initDB = (): Promise<IDBDatabase> => {
       }
       if (!db.objectStoreNames.contains('discovery')) {
         db.createObjectStore('discovery', { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains('product_profiles')) {
+        db.createObjectStore('product_profiles', { keyPath: 'id' });
       }
     };
   });
@@ -225,6 +228,73 @@ export const deleteFileFromDB = async (id: string): Promise<void> => {
   return new Promise((resolve, reject) => {
     const transaction = db.transaction('files', 'readwrite');
     const store = transaction.objectStore('files');
+    const request = store.delete(id);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+};
+
+// ==================== 客户产品画像库 ====================
+
+export const saveProductProfile = async (profile: CustomerProductProfile): Promise<void> => {
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    if (!db.objectStoreNames.contains('product_profiles')) {
+      reject(new Error('product_profiles store missing — refresh to upgrade DB'));
+      return;
+    }
+    const transaction = db.transaction('product_profiles', 'readwrite');
+    const store = transaction.objectStore('product_profiles');
+    const request = store.put(profile);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+};
+
+export const saveProductProfilesBulk = async (profiles: CustomerProductProfile[]): Promise<void> => {
+  if (!profiles.length) return;
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    if (!db.objectStoreNames.contains('product_profiles')) {
+      reject(new Error('product_profiles store missing'));
+      return;
+    }
+    const transaction = db.transaction('product_profiles', 'readwrite');
+    const store = transaction.objectStore('product_profiles');
+    for (const p of profiles) store.put(p);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+  });
+};
+
+export const getProductProfiles = async (): Promise<CustomerProductProfile[]> => {
+  try {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+      if (!db.objectStoreNames.contains('product_profiles')) {
+        resolve([]);
+        return;
+      }
+      const transaction = db.transaction('product_profiles', 'readonly');
+      const store = transaction.objectStore('product_profiles');
+      const request = store.getAll();
+      request.onsuccess = () => resolve(request.result || []);
+      request.onerror = () => reject(request.error);
+    });
+  } catch {
+    return [];
+  }
+};
+
+export const deleteProductProfile = async (id: string): Promise<void> => {
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    if (!db.objectStoreNames.contains('product_profiles')) {
+      resolve();
+      return;
+    }
+    const transaction = db.transaction('product_profiles', 'readwrite');
+    const store = transaction.objectStore('product_profiles');
     const request = store.delete(id);
     request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error);

@@ -2707,16 +2707,23 @@ export const analyzeCompany = async (
     ? `
   PRODUCT FOCUS (CRITICAL — user found this client via keyword search "${searchKeyword}"):
   - Prioritize products related to "${searchKeyword}" across website, catalogs, and trade clues.
-  - In products[]: put keyword-related items FIRST (aim for 4–8 matched SKUs if they exist).
+  - In products[]: put keyword-related items FIRST (aim for 6–12 matched SKUs if they exist).
   - Set keywordMatch=true for products clearly related to "${searchKeyword}"; false otherwise.
+  - EVERY product MUST include: category (标准化品类，如「合金/回力车玩具」「毛绒玩具」), retailPrice, retailPriceCNY, estimatedFOBPriceCNY, priceMinCNY, priceMaxCNY.
+  - priceMinCNY / priceMaxCNY = 该 SKU 或同系列的终端价区间（人民币）；若只有单点价，min=max=该价。
   - productSummary.recommendedProducts / marketPreference / featureAnalysis MUST center on "${searchKeyword}" opportunity for Chinese exporters.
   - businessScope.relevantProducts should list SKUs or categories matching "${searchKeyword}".
+  - websiteCategories: 拆解官网导航/目录的真实品类树（至少 3–8 个 categoryName）。
+  - tradeIntelligence.importCategories + hsCodes 尽量填实，便于后续「新品反查客户」。
   - If the company barely sells this keyword category, still analyze adjacent/related lines and say so clearly.
   ${searchCountry && !isVagueMarketCountry(searchCountry) ? `- Search target market context: ${searchCountry}.` : ''}
 `
     : `
-  PRODUCT FOCUS:
-  - Analyze the company's main sellable / importable product lines for Chinese exporters.
+  PRODUCT FOCUS (CRITICAL for exporter matching DB):
+  - Deep-dive the company's sellable / importable product lines from official shop/catalog pages in the web evidence.
+  - Return 8–15 concrete products[] with REAL names from the site when possible (not vague "toys").
+  - EVERY product MUST include category, retailPrice, retailPriceCNY, estimatedFOBPriceCNY, priceMinCNY, priceMaxCNY.
+  - Fill websiteCategories from site navigation; coreProducts = top selling lines; importCategories for trade.
   - Set keywordMatch=false (no active search keyword).
 `;
 
@@ -2807,7 +2814,10 @@ ${evidenceBlock}
      - If no verifiable contacts, return decisionMakers: [].
      - NEVER invent emails. Leave emailGuess empty unless publicly listed.
      - phone / whatsapp only when publicly listed; otherwise leave empty.
-  5. Products, pricing, SWOT, traffic estimates, competitors, action plan for Chinese suppliers.
+  5. PRODUCTS & PRICING (HIGHEST PRIORITY for catalog DB — do NOT skip):
+     - Crawl/use official product, shop, catalog, collection pages from web evidence.
+     - Extract concrete SKU/product names + category + retail/FOB price band in CNY.
+     - Fill websiteCategories, businessScope.coreProducts/relevantProducts, priceSensitivity.
 ${productFocusBlock}
   6. Financial trends last 5 years — estimate if needed, never all zeros.
   7. SIMILAR COMPANIES (required, high volume):
@@ -2854,7 +2864,7 @@ ${productFocusBlock}
     "financials": { "revenueEstimate": "", "paymentTerms": "", "ipInfo": "" },
     "productSummary": { "marketPreference": "", "recommendedProducts": "", "packagingAnalysis": "", "colorPreference": "", "featureAnalysis": "" },
     "socials": { "linkedin": "", "facebook": "", "instagram": "", "youtube": "" },
-    "products": [{ "name": "", "retailPrice": "", "retailPriceCNY": 0, "estimatedFOBPriceCNY": 0, "imageUrl": "", "competitorLink": "", "pricingStrategy": "", "pitchPoint": "", "techSpecs": "", "features": "", "colors": "", "packaging": "", "keywordMatch": false }],
+    "products": [{ "name": "", "category": "", "retailPrice": "", "retailPriceCNY": 0, "estimatedFOBPriceCNY": 0, "priceMinCNY": 0, "priceMaxCNY": 0, "imageUrl": "", "competitorLink": "", "pricingStrategy": "", "pitchPoint": "", "techSpecs": "", "features": "", "colors": "", "packaging": "", "keywordMatch": false }],
     "marketTrends": "",
     "decisionMakers": [{ "firstName": "", "lastName": "", "name": "", "title": "", "department": "", "emailGuess": "", "phone": "", "whatsapp": "", "linkedin": "", "yearsActive": "", "type": "Buyer", "source": "AI", "isVerified": false, "influenceScore": 4 }],
     "strategy": { "buyingOfficeLocation": "", "actionPlan": [] },
@@ -2956,6 +2966,9 @@ ${productFocusBlock}
     socials: aiResult.socials || {},
     products: (Array.isArray(aiResult.products) ? aiResult.products : []).map((p: any) => ({
         ...p,
+        category: p.category || '',
+        priceMinCNY: typeof p.priceMinCNY === 'number' ? p.priceMinCNY : undefined,
+        priceMaxCNY: typeof p.priceMaxCNY === 'number' ? p.priceMaxCNY : undefined,
         features: p.features || "N/A",
         colors: p.colors || "N/A",
         packaging: p.packaging || "N/A",
@@ -3069,6 +3082,200 @@ ${productFocusBlock}
   result.evidenceSummary = summarizeEvidence(evidenceChain, result.evidenceConfidence);
 
   return normalizeAnalysisResult(result);
+};
+
+/**
+ * 仅深挖产品品类与价格（供 CRM 批量重整理，不重跑整份背调身份/决策人）
+ * 合并回 existing，保留决策人、证据链等既有字段。
+ */
+export const digProductIntelligence = async (
+  domainOrName: string,
+  existing?: AnalysisResult | null,
+  opts?: { searchKeyword?: string; searchCountry?: string }
+): Promise<AnalysisResult> => {
+  const searchKeyword = (opts?.searchKeyword || existing?.searchKeyword || '').trim();
+  const searchCountry = (opts?.searchCountry || existing?.searchCountry || '').trim();
+  const rawInput = (domainOrName || existing?.companyInfo?.website || existing?.companyInfo?.name || '').trim();
+  const canonicalDomain = cleanDomain(rawInput).toLowerCase();
+  const hasDomain = Boolean(canonicalDomain && canonicalDomain.includes('.') && !/\s/.test(canonicalDomain));
+  const companyName = existing?.companyInfo?.name || rawInput;
+
+  let productEvidence = '';
+  if (hasDomain) {
+    try {
+      const tavilyBundle = await gatherTavilyCompanyEvidenceBundle({
+        domain: canonicalDomain,
+        companyHint: companyName,
+        searchKeyword: searchKeyword || undefined,
+        searchCountry: searchCountry || undefined,
+      });
+      productEvidence = tavilyBundle.text || '';
+    } catch (e) {
+      console.warn('[digProductIntelligence] Tavily skipped', e);
+    }
+  }
+
+  const prompt = `
+Target company: "${companyName}" / domain: "${hasDomain ? canonicalDomain : rawInput}".
+Task: PRODUCT CATEGORY & PRICE DEEP-DIVE ONLY for Chinese exporters' matching database.
+${searchKeyword ? `Focus keyword: "${searchKeyword}".` : ''}
+${searchCountry ? `Market: ${searchCountry}.` : ''}
+
+${productEvidence ? `=== WEB PRODUCT EVIDENCE ===\n${productEvidence}\n=== END ===` : 'Use web search on official shop/catalog/product pages.'}
+
+Requirements (简体中文描述字段):
+1. Extract 8–15 concrete products with name, category, retailPrice, retailPriceCNY, estimatedFOBPriceCNY, priceMinCNY, priceMaxCNY.
+2. websiteCategories: real nav/catalog tree (3–10 categories).
+3. businessScope.coreProducts / relevantProducts / priceSensitivity / brandPositioning / consumerGroup / productVariety.
+4. tradeIntelligence.importCategories + hsCodes (short).
+5. productSummary entirely in Simplified Chinese.
+6. Do NOT invent customs IDs. Unknown → "公开信息未找到".
+
+Output JSON only:
+{
+  "websiteCategories": [{ "categoryName": "", "items": [] }],
+  "businessScope": { "coreProducts": [], "relevantProducts": [], "brandPositioning": "", "consumerGroup": "", "productVariety": "Medium", "priceSensitivity": "", "websiteStructure": "" },
+  "tradeIntelligence": { "hsCodes": [], "importCategories": [] },
+  "productSummary": { "marketPreference": "", "recommendedProducts": "", "packagingAnalysis": "", "colorPreference": "", "featureAnalysis": "" },
+  "products": [{ "name": "", "category": "", "retailPrice": "", "retailPriceCNY": 0, "estimatedFOBPriceCNY": 0, "priceMinCNY": 0, "priceMaxCNY": 0, "pricingStrategy": "", "pitchPoint": "", "features": "", "colors": "", "packaging": "", "keywordMatch": false }]
+}
+`;
+
+  const text = await generateContentUnified('analysis', prompt, SYSTEM_INSTRUCTION, true);
+  const ai = extractJson(text) || {};
+
+  const products = (Array.isArray(ai.products) ? ai.products : []).map((p: any) => ({
+    name: String(p.name || '').trim(),
+    category: String(p.category || '').trim(),
+    retailPrice: String(p.retailPrice || ''),
+    retailPriceCNY: Number(p.retailPriceCNY) || 0,
+    estimatedFOBPriceCNY: Number(p.estimatedFOBPriceCNY) || 0,
+    priceMinCNY: typeof p.priceMinCNY === 'number' ? p.priceMinCNY : undefined,
+    priceMaxCNY: typeof p.priceMaxCNY === 'number' ? p.priceMaxCNY : undefined,
+    pricingStrategy: p.pricingStrategy || '',
+    pitchPoint: p.pitchPoint || '',
+    techSpecs: p.techSpecs || '',
+    features: p.features || '',
+    colors: p.colors || '',
+    packaging: p.packaging || '',
+    imageUrl: p.imageUrl || '',
+    competitorLink: p.competitorLink || '',
+    keywordMatch: !!p.keywordMatch,
+  })).filter((p: { name: string }) => p.name);
+
+  const base: AnalysisResult = existing
+    ? { ...existing }
+    : ({
+        companyInfo: {
+          name: companyName,
+          headquarters: 'N/A',
+          foundedYear: 'N/A',
+          nature: 'N/A',
+          scale: 'N/A',
+          website: hasDomain ? canonicalDomain : rawInput,
+          description: 'N/A',
+        },
+        swot: { strengths: [], weaknesses: [], opportunities: [], threats: [] },
+        financialTrends: [],
+        trafficAnalysis: [],
+        websiteCategories: [],
+        businessScope: {
+          coreProducts: [],
+          relevantProducts: [],
+          brandPositioning: 'N/A',
+          consumerGroup: 'N/A',
+          productVariety: 'Medium',
+          priceSensitivity: 'N/A',
+          websiteStructure: 'N/A',
+        },
+        businessModel: {
+          channels: [],
+          hasDistributors: false,
+          exhibitionHistory: [],
+          ecommercePresence: [],
+          procurementInfo: 'N/A',
+        },
+        supplyChain: { role: 'N/A', serviceType: 'N/A' },
+        targetAudience: [],
+        financials: { revenueEstimate: 'N/A', paymentTerms: 'N/A', ipInfo: 'N/A' },
+        socials: {},
+        products: [],
+        marketTrends: 'N/A',
+        decisionMakers: [],
+        strategy: { buyingOfficeLocation: 'N/A', actionPlan: [] },
+        similarCompanies: [],
+      } as AnalysisResult);
+
+  const merged: AnalysisResult = {
+    ...base,
+    websiteCategories: Array.isArray(ai.websiteCategories) && ai.websiteCategories.length
+      ? ai.websiteCategories
+      : base.websiteCategories,
+    businessScope: {
+      ...base.businessScope,
+      ...(ai.businessScope || {}),
+      coreProducts: ai.businessScope?.coreProducts?.length
+        ? ai.businessScope.coreProducts
+        : base.businessScope.coreProducts,
+      relevantProducts: ai.businessScope?.relevantProducts?.length
+        ? ai.businessScope.relevantProducts
+        : base.businessScope.relevantProducts,
+    },
+    tradeIntelligence: {
+      ...(base.tradeIntelligence || {
+        hsCodes: [],
+        importCategories: [],
+        customsSummary: '',
+        recentShipments: [],
+        topSourceCountries: [],
+        estimatedAnnualImport: '',
+        certifications: [],
+        complianceNotes: '',
+        preferredIncoterms: '',
+        typicalMoq: '',
+        buyingSeasons: '',
+        registrationId: '',
+        companyLinkedin: '',
+        riskLevel: '未知' as const,
+        riskNotes: '',
+      }),
+      hsCodes: ai.tradeIntelligence?.hsCodes?.length
+        ? ai.tradeIntelligence.hsCodes
+        : base.tradeIntelligence?.hsCodes || [],
+      importCategories: ai.tradeIntelligence?.importCategories?.length
+        ? ai.tradeIntelligence.importCategories
+        : base.tradeIntelligence?.importCategories || [],
+    },
+    productSummary: ai.productSummary
+      ? {
+          marketPreference: ai.productSummary.marketPreference || base.productSummary?.marketPreference || '',
+          recommendedProducts: ai.productSummary.recommendedProducts || base.productSummary?.recommendedProducts || '',
+          packagingAnalysis: ai.productSummary.packagingAnalysis || base.productSummary?.packagingAnalysis || '',
+          colorPreference: ai.productSummary.colorPreference || base.productSummary?.colorPreference || '',
+          featureAnalysis: ai.productSummary.featureAnalysis || base.productSummary?.featureAnalysis || '',
+        }
+      : base.productSummary,
+    products: products.length ? products : base.products,
+    searchKeyword: searchKeyword || base.searchKeyword,
+    searchCountry: searchCountry || base.searchCountry,
+  };
+
+  if (searchKeyword && merged.products?.length) {
+    const tokens = searchKeyword
+      .toLowerCase()
+      .split(/[\s,/|+\-，、]+/)
+      .map((t) => t.trim())
+      .filter((t) => t.length >= 2);
+    merged.products = merged.products
+      .map((p) => {
+        if (p.keywordMatch) return p;
+        const blob = `${p.name || ''} ${p.category || ''} ${p.features || ''}`.toLowerCase();
+        return tokens.some((t) => blob.includes(t)) ? { ...p, keywordMatch: true } : p;
+      })
+      .sort((a, b) => Number(!!b.keywordMatch) - Number(!!a.keywordMatch));
+  }
+
+  return normalizeAnalysisResult(merged);
 };
 
 /** 检测文本是否主要为英文（用于已有报告译成中文） */

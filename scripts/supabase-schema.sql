@@ -98,6 +98,30 @@ DROP POLICY IF EXISTS "crm_clients_all" ON crm_clients;
 CREATE POLICY "crm_clients_all" ON crm_clients
   FOR ALL USING (true) WITH CHECK (true);
 
+-- ==================== 客户产品画像（品类 + 价格区间，供新品反查） ====================
+CREATE TABLE IF NOT EXISTS product_profiles (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id text NOT NULL DEFAULT 'default',
+  local_id text NOT NULL,
+  website text DEFAULT '',
+  company_name text DEFAULT '',
+  profile_data jsonb NOT NULL,
+  updated_at timestamptz DEFAULT now(),
+  UNIQUE(user_id, local_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_product_profiles_user_updated
+  ON product_profiles (user_id, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_product_profiles_website
+  ON product_profiles (website);
+
+ALTER TABLE product_profiles ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "product_profiles_all" ON product_profiles;
+CREATE POLICY "product_profiles_all" ON product_profiles
+  FOR ALL USING (true) WITH CHECK (true);
+
 -- ==================== 应用用户账号（可选；当前实现复用 api_configs.__app_users__） ====================
 -- 手机端与电脑端共用同一套账号密码。若要用独立表，可执行下方 SQL；
 -- 现有代码已通过 api_configs 的 provider=__app_users__ 同步，无需必须建表。

@@ -189,9 +189,16 @@ const ProductCard: React.FC<{ p: ProductAnalysis; highlight: boolean }> = ({ p, 
     <div className="flex justify-between items-start mb-4 gap-2">
       <div className="min-w-0">
         <h4 className="text-lg font-black text-slate-800 group-hover:text-blue-600 transition-colors">{p.name}</h4>
-        {highlight && (
-          <span className="inline-block mt-1 text-[10px] font-black bg-violet-600 text-white px-2 py-0.5 rounded-lg">关键词相关</span>
-        )}
+        <div className="flex flex-wrap gap-1.5 mt-1">
+          {p.category && (
+            <span className="inline-block text-[10px] font-black bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-lg">
+              {p.category}
+            </span>
+          )}
+          {highlight && (
+            <span className="inline-block text-[10px] font-black bg-violet-600 text-white px-2 py-0.5 rounded-lg">关键词相关</span>
+          )}
+        </div>
       </div>
       <div className="bg-blue-600 text-white px-3 py-1 rounded-full text-[10px] font-black shadow-md flex-shrink-0">{p.retailPrice}</div>
     </div>
@@ -202,8 +209,14 @@ const ProductCard: React.FC<{ p: ProductAnalysis; highlight: boolean }> = ({ p, 
         <div className="text-sm font-black text-slate-800">¥{p.estimatedFOBPriceCNY}</div>
       </div>
       <div className="bg-white p-3 rounded-xl border border-slate-100">
-        <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">利润空间</div>
-        <div className={`text-sm font-black ${p.marginSpace === 'High' ? 'text-green-600' : p.marginSpace === 'Medium' ? 'text-blue-600' : 'text-yellow-600'}`}>{p.marginSpace}</div>
+        <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+          {(p.priceMinCNY != null || p.priceMaxCNY != null) ? '价格区间 ¥' : '利润空间'}
+        </div>
+        <div className={`text-sm font-black ${(p.priceMinCNY != null || p.priceMaxCNY != null) ? 'text-slate-800' : p.marginSpace === 'High' ? 'text-green-600' : p.marginSpace === 'Medium' ? 'text-blue-600' : 'text-yellow-600'}`}>
+          {(p.priceMinCNY != null || p.priceMaxCNY != null)
+            ? `${p.priceMinCNY ?? '?'}–${p.priceMaxCNY ?? '?'}`
+            : p.marginSpace}
+        </div>
       </div>
     </div>
 

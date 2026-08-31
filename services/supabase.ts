@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { KnowledgeFile, HistoryItem, DiscoveryState, Client, DiscoveryArchiveItem } from '../types'
+import { KnowledgeFile, HistoryItem, DiscoveryState, Client, DiscoveryArchiveItem, CustomerProductProfile } from '../types'
 import { getSupabaseConfig, isSupabaseConfigured } from './env'
 
 export { isSupabaseConfigured }
@@ -745,6 +745,73 @@ export const deleteCrmClient = async (localId: string): Promise<boolean> => {
     return true
   } catch (error) {
     console.error('删除 CRM 客户失败:', error)
+    return false
+  }
+}
+
+// ==================== 客户产品画像库 ====================
+
+export const saveProductProfileCloud = async (profile: CustomerProductProfile): Promise<boolean> => {
+  if (!isSupabaseConfigured()) return false
+  try {
+    const { error } = await supabase
+      .from('product_profiles')
+      .upsert({
+        user_id: 'default',
+        local_id: profile.id,
+        website: profile.website || '',
+        company_name: profile.companyName || '',
+        profile_data: profile,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'user_id,local_id' })
+
+    if (error) throw error
+    return true
+  } catch (error) {
+    console.error('保存产品画像失败:', error)
+    return false
+  }
+}
+
+export const syncProductProfilesCloud = async (profiles: CustomerProductProfile[]): Promise<number> => {
+  if (!isSupabaseConfigured() || !profiles.length) return 0
+  let ok = 0
+  for (const p of profiles) {
+    if (await saveProductProfileCloud(p)) ok += 1
+  }
+  return ok
+}
+
+export const getProductProfilesCloud = async (): Promise<CustomerProductProfile[]> => {
+  if (!isSupabaseConfigured()) return []
+  try {
+    const { data, error } = await supabase
+      .from('product_profiles')
+      .select('profile_data, updated_at')
+      .order('updated_at', { ascending: false })
+
+    if (error) throw error
+    return (data || [])
+      .map((row) => row.profile_data as CustomerProductProfile)
+      .filter(Boolean)
+  } catch (error) {
+    console.error('获取产品画像失败:', error)
+    return []
+  }
+}
+
+export const deleteProductProfileCloud = async (localId: string): Promise<boolean> => {
+  if (!isSupabaseConfigured()) return false
+  try {
+    const { error } = await supabase
+      .from('product_profiles')
+      .delete()
+      .eq('local_id', localId)
+
+    if (error) throw error
+    return true
+  } catch (error) {
+    console.error('删除产品画像失败:', error)
     return false
   }
 }

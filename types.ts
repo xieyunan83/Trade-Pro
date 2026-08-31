@@ -10,6 +10,8 @@ export enum ModuleType {
   CLIENT_CRM = 'client_crm',
   EMAIL_CAMPAIGN = 'email_campaign',
   IMAGE_GENERATOR = 'image_generator',
+  /** 新品反查：用我方新品匹配已背调客户产品库 */
+  PRODUCT_MATCH = 'product_match',
 }
 
 /** 系统角色：管理员 / 总管 / 部门主管 / 部门员工 */
@@ -27,7 +29,9 @@ export type PermissionKey =
   | 'module.client_crm'
   | 'module.email_campaign'
   | 'module.image_generator'
+  | 'module.product_match'
   | 'feature.search_clients'
+  | 'feature.product_redig'
   | 'feature.analyze_company'
   | 'feature.batch_analyze'
   | 'feature.dm_email_search'
@@ -127,7 +131,7 @@ export interface HistoryItem {
   /** 目标国家 */
   country?: string;
   /** 来源标记 */
-  source?: 'single' | 'batch' | 'discovery' | 'crm' | 'recover';
+  source?: 'single' | 'batch' | 'discovery' | 'crm' | 'recover' | 'product_redig';
   /** 操作者用户名（用于权限隔离） */
   ownerUsername?: string;
   /** 操作者当时所属部门 */
@@ -321,6 +325,12 @@ export interface ProductAnalysis {
   retailPrice: string;
   retailPriceCNY: number;
   estimatedFOBPriceCNY: number;
+  /** 标准化品类（中英均可，入库时会再归一） */
+  category?: string;
+  /** 该 SKU 零售/终端价区间下限（人民币） */
+  priceMinCNY?: number;
+  /** 该 SKU 零售/终端价区间上限（人民币） */
+  priceMaxCNY?: number;
   marginSpace?: 'High' | 'Medium' | 'Low';
   ratio?: string;
   pricingStrategy?: string;
@@ -333,6 +343,61 @@ export interface ProductAnalysis {
   competitorLink?: string;
   /** 是否与搜索关键词强相关（产品分析优先展示） */
   keywordMatch?: boolean;
+}
+
+/** 客户产品库中的单条 SKU / 品类线索 */
+export interface CustomerProductSku {
+  id: string;
+  name: string;
+  category: string;
+  categoryRaw?: string;
+  priceMinCny?: number;
+  priceMaxCny?: number;
+  retailPrice?: string;
+  retailPriceCNY?: number;
+  estimatedFOBPriceCNY?: number;
+  source: 'sku' | 'category' | 'trade' | 'core' | 'website';
+  keywordMatch?: boolean;
+}
+
+/** 按公司聚合的客户产品画像（背调入库） */
+export interface CustomerProductProfile {
+  id: string;
+  companyName: string;
+  website: string;
+  country?: string;
+  historyId?: string;
+  crmClientId?: string;
+  categories: string[];
+  priceMinCny?: number;
+  priceMaxCny?: number;
+  priceBand?: string;
+  skus: CustomerProductSku[];
+  importCategories?: string[];
+  hsCodes?: string[];
+  coreProducts?: string[];
+  searchKeywords?: string[];
+  updatedAt: number;
+  ownerUsername?: string;
+  departmentId?: string;
+}
+
+/** 我方新品匹配查询 */
+export interface OurProductMatchQuery {
+  name: string;
+  category?: string;
+  priceMinCny?: number;
+  priceMaxCny?: number;
+  countries?: string[];
+}
+
+/** 新品 → 客户匹配结果 */
+export interface ProductMatchHit {
+  profile: CustomerProductProfile;
+  score: number;
+  reasons: string[];
+  matchedCategories: string[];
+  priceOverlap: boolean;
 }
 
 export interface WebsiteCategory {

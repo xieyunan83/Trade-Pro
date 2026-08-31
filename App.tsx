@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { analyzeCompany, hasApiKeyConfigured, checkApiKeyAvailability, hydrateApiConfigsFromCloud, searchPotentialClients, enableTavilyGeminiQwenCascade } from './services/geminiService';
+import { analyzeCompany, digProductIntelligence, hasApiKeyConfigured, checkApiKeyAvailability, hydrateApiConfigsFromCloud, searchPotentialClients, enableTavilyGeminiQwenCascade } from './services/geminiService';
 import {
   subscribeCooldown,
   withRateLimitRetry,
@@ -16,11 +16,17 @@ import {
   newAutomationTaskId,
 } from './services/automationQueueRepair';
 import { fetchGlobalConfig, fetchDocumentsFromRepo, backupUserHistory, fetchCRMFromCloud, saveCRMToCloud, fetchUserHistoryFromCloud, checkGitHubStatus, fetchApiConfigsFromCloud, setManualGitHubConfig } from './services/githubService';
-import { isSupabaseConfigured, getKnowledgeFiles, getInvestigationHistory, saveInvestigationHistory, saveDiscoverySearch, getCrmClients, syncCrmClients, deleteCrmClient, getDiscoverySearchArchives, deleteInvestigationHistory, deleteDiscoverySearchFromCloud, deleteDiscoverySearchesByMeta } from './services/supabase';
+import { isSupabaseConfigured, getKnowledgeFiles, getInvestigationHistory, saveInvestigationHistory, saveDiscoverySearch, getCrmClients, syncCrmClients, deleteCrmClient, getDiscoverySearchArchives, deleteInvestigationHistory, deleteDiscoverySearchFromCloud, deleteDiscoverySearchesByMeta, getProductProfilesCloud } from './services/supabase';
+import {
+  indexAnalysisIntoProductCatalog,
+  rebuildProductCatalogFromHistory,
+  loadProductCatalog,
+} from './services/productCatalog';
+import { saveProductProfilesBulk } from './services/db';
 import { addCustomKeyword, addCustomCountry } from './services/taxonomyStore';
 import { normalizeCountryZh } from './utils/countryNormalize';
 import { buildSearchTags, stampSearchResults } from './utils/searchTags';
-import { mergeDiscoveryResultsIntoCrm, mergeHistoryItemsIntoCrm, findCrmIdsForHistoryItem, findCrmIdsForDiscoveryResults, lookupBackgroundCheck, formatBackgroundCheckTime } from './utils/crmHistory';
+import { mergeDiscoveryResultsIntoCrm, mergeHistoryItemsIntoCrm, findCrmIdsForHistoryItem, findCrmIdsForDiscoveryResults, lookupBackgroundCheck, formatBackgroundCheckTime, findHistoryForClient, clientPatchFromAnalysis } from './utils/crmHistory';
 import { checkLimit, incrementUsage, updateLocalConfig, resetDailyUsage, getDailyUsagePublic } from './services/limitService';
 import { ModuleType, AnalysisResult, DiscoveryState, Client, User, HistoryItem, AutomationResult, ClientSearchResult, DiscoveryArchiveItem, DecisionMaker, Department, AutomationPipelineConfig, SimilarCompany } from './types';
 import { ModuleBackground } from './components/ModuleBackground';
@@ -52,6 +58,7 @@ import { extractHistoryAnalysis, normalizeAnalysisResult, websiteHref } from './
 import { ModuleSimilar } from './components/ModuleSimilar';
 import { ModulePromoGenerator } from './components/ModulePromoGenerator';
 import { ModuleClientCRM } from './components/ModuleClientCRM';
+import { ModuleProductMatch } from './components/ModuleProductMatch';
 import { ModuleEmailCampaign } from './components/ModuleEmailCampaign'; 
 import { ModuleImageGenerator } from './components/ModuleImageGenerator';
 import { ClientFinder } from './components/ClientFinder';
@@ -61,7 +68,7 @@ import { AccessGate } from './components/AccessGate';
 import { loadUsersWithMigration, loadUsersFromStorage, saveUsersToStorage, getUsersUpdatedAt } from './services/auth';
 import { AdminDashboard } from './components/AdminDashboard';
 import { 
-  LayoutDashboard, PackageSearch, Users, PenTool, Network, Search, Loader2, Menu, Globe, Zap, FileSpreadsheet, History, Clock, ChevronRight, AlertTriangle, RefreshCw, LogOut, Briefcase, Ruler, CheckCircle2, Hourglass, StopCircle, PlayCircle, Layers, Mail, Cloud, Download, Info, Link2, X, Database, Github, Image, Trash2, Ban
+  LayoutDashboard, PackageSearch, Users, PenTool, Network, Search, Loader2, Menu, Globe, Zap, FileSpreadsheet, History, Clock, ChevronRight, AlertTriangle, RefreshCw, LogOut, Briefcase, Ruler, CheckCircle2, Hourglass, StopCircle, PlayCircle, Layers, Mail, Cloud, Download, Info, Link2, X, Database, Github, Image, Trash2, Ban, Target
 } from 'lucide-react';
 import {
   addExcludedCompany,
@@ -121,6 +128,7 @@ const App: React.FC = () => {
     message: string;
   }>(null);
   const [reportActionBusy, setReportActionBusy] = useState(false);
+  const [productDigBusy, setProductDigBusy] = useState(false);
   
   const [cloudModalOpen, setCloudModalOpen] = useState(false);
   const [manualToken, setManualToken] = useState('');
@@ -504,6 +512,15 @@ const App: React.FC = () => {
                     console.error("Supabase history sync failed", e);
                 }
 
+                try {
+                  const cloudProfiles = await getProductProfilesCloud();
+                  if (cloudProfiles.length > 0) {
+                    await saveProductProfilesBulk(cloudProfiles);
+                  }
+                } catch (e) {
+                  console.warn('product profiles cloud sync failed', e);
+                }
+
                 // 注意：不再调用 getLatestDiscoverySearch()——那是全局最新一条，会造成跨用户串数据
 
                 try {
@@ -517,6 +534,22 @@ const App: React.FC = () => {
                 } catch (e) {
                     console.error("Supabase CRM sync failed", e);
                 }
+            }
+
+            // 产品库为空时，用本机背调历史静默重建一次
+            try {
+              const existingProfiles = await loadProductCatalog();
+              if (existingProfiles.length === 0) {
+                const histNow = await getHistory();
+                if (histNow.length) {
+                  await rebuildProductCatalogFromHistory(histNow, {
+                    ownerUsername: currentUser.username,
+                    departmentId: currentUser.departmentId,
+                  });
+                }
+              }
+            } catch (e) {
+              console.warn('product catalog bootstrap failed', e);
             }
 
             if (ghStatus.ok && currentUser) {
@@ -813,6 +846,11 @@ const App: React.FC = () => {
         persistHistoryItem(updatedItem).catch((e) =>
           console.error('persist analysis patch failed', e)
         );
+        void indexAnalysisIntoProductCatalog(nextData, {
+          historyId: updatedItem.id,
+          ownerUsername: updatedItem.ownerUsername,
+          departmentId: updatedItem.departmentId,
+        }).catch((e) => console.warn('[productCatalog] reindex failed', e));
       } else if (matchId || domainKey) {
         // 无匹配历史时仍保留内存中的 analysisData；可选新建一条
         console.warn('[History] no matching report to update for decision maker research');
@@ -1279,6 +1317,11 @@ const App: React.FC = () => {
           );
           return [historyItem, ...filtered];
       });
+      void indexAnalysisIntoProductCatalog(historyItem.data, {
+        historyId: historyItem.id,
+        ownerUsername: historyItem.ownerUsername,
+        departmentId: historyItem.departmentId,
+      }).catch((e) => console.warn('[productCatalog] index after history save failed', e));
       console.log(`[History] saved (${source}):`, domain, 'keyword=', keyword);
       return historyItem;
   };
@@ -1797,6 +1840,73 @@ const App: React.FC = () => {
       setBatchModalOpen(true); 
   };
 
+  /** CRM：对已背调客户批量产品品类/价格深挖并入库 */
+  const handleBatchProductDigFromCRM = async (clients: Client[]) => {
+    if (!clients?.length) return;
+    if (!hasPermission(currentUser, 'feature.product_redig') && !hasPermission(currentUser, 'feature.analyze_company')) {
+      alert('你没有「产品品类深挖」权限，请联系管理员开通。');
+      return;
+    }
+    if (
+      !confirm(
+        `将对 ${clients.length} 家「已背调」客户联网深挖产品品类与价格区间，并写入产品匹配库。不会删除原有背调正文。继续？`
+      )
+    ) {
+      return;
+    }
+    setProductDigBusy(true);
+    let ok = 0;
+    let fail = 0;
+    try {
+      for (const client of clients) {
+        try {
+          const hist = findHistoryForClient(client, history);
+          const domain = client.website || hist?.domain || client.name;
+          const merged = await withRateLimitRetry(() =>
+            digProductIntelligence(domain, hist?.data || null, {
+              searchKeyword: client.searchKeyword || hist?.data?.searchKeyword || discoveryState.product,
+              searchCountry: client.country || hist?.data?.searchCountry,
+            })
+          );
+          const historyItem: HistoryItem = stampOwnership({
+            id: hist?.id || `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+            type: ModuleType.BACKGROUND,
+            data: merged,
+            timestamp: Date.now(),
+            domain: merged.companyInfo?.website || domain,
+            keyword: merged.searchKeyword || hist?.keyword,
+            country: merged.searchCountry || hist?.country || client.country,
+            source: 'product_redig',
+          });
+          await persistHistoryItem(historyItem);
+          setHistory((prev) => {
+            const rest = prev.filter((h) => h.id !== historyItem.id);
+            return [historyItem, ...rest];
+          });
+          await indexAnalysisIntoProductCatalog(merged, {
+            historyId: historyItem.id,
+            crmClientId: client.id,
+            ownerUsername: historyItem.ownerUsername,
+            departmentId: historyItem.departmentId,
+          });
+          const patch = clientPatchFromAnalysis(merged, domain, Date.now());
+          setCrmClients((prev) =>
+            prev.map((c) => (c.id !== client.id ? c : { ...c, ...patch }))
+          );
+          ok += 1;
+        } catch (e) {
+          console.error('[productDig] failed for', client.name, e);
+          fail += 1;
+          if (isRateLimitError(e)) noteRateLimited();
+        }
+      }
+      alert(`产品深挖完成：成功 ${ok}，失败 ${fail}。可在「新品匹配」中按新品反查客户。`);
+      setActiveModule(ModuleType.PRODUCT_MATCH);
+    } finally {
+      setProductDigBusy(false);
+    }
+  };
+
   /** 同类公司多选 → 批量背调队列 */
   const handleBatchAnalyzeSimilar = (companies: SimilarCompany[]) => {
       if (!companies?.length) return;
@@ -2073,7 +2183,7 @@ const App: React.FC = () => {
       );
   }
 
-  const alwaysActiveModules = [ModuleType.DISCOVERY, ModuleType.PROMO_GENERATOR, ModuleType.CLIENT_CRM, ModuleType.STRATEGY, ModuleType.EMAIL_CAMPAIGN, ModuleType.IMAGE_GENERATOR];
+  const alwaysActiveModules = [ModuleType.DISCOVERY, ModuleType.PROMO_GENERATOR, ModuleType.CLIENT_CRM, ModuleType.PRODUCT_MATCH, ModuleType.STRATEGY, ModuleType.EMAIL_CAMPAIGN, ModuleType.IMAGE_GENERATOR];
   const navModules = [
             { id: ModuleType.DISCOVERY, label: '客户搜索', sub: 'Discovery', icon: Globe },
             { id: ModuleType.BACKGROUND, label: '背景调查', sub: 'Background', icon: LayoutDashboard },
@@ -2081,6 +2191,7 @@ const App: React.FC = () => {
             { id: ModuleType.DECISION_MAKERS, label: '决策人挖掘', sub: 'Contacts', icon: Users },
             { id: ModuleType.STRATEGY, label: '开发策略', sub: 'Strategy', icon: PenTool },
             { id: ModuleType.SIMILAR, label: '同类推荐', sub: 'Similar', icon: Network },
+            { id: ModuleType.PRODUCT_MATCH, label: '新品匹配', sub: 'Match', icon: Target },
             { id: ModuleType.CLIENT_CRM, label: '客户管理', sub: 'CRM', icon: Briefcase },
             { id: ModuleType.EMAIL_CAMPAIGN, label: '邮件营销', sub: 'DirectMail', icon: Mail }, 
             { id: ModuleType.IMAGE_GENERATOR, label: '海报/生图', sub: 'Poster', icon: Image },
@@ -2405,9 +2516,18 @@ const App: React.FC = () => {
                         clients={crmClients} 
                         setClients={setCrmClients} 
                         onBatchAnalyze={handleBatchAnalyzeFromCRM}
+                        onBatchProductDig={handleBatchProductDigFromCRM}
+                        productDigBusy={productDigBusy}
                         onReanalyze={(client) => void handleBatchAnalyzeFromCRM([client])}
                         history={history}
                         onOpenHistory={loadFromHistory}
+                    />
+                )}
+                {activeModule === ModuleType.PRODUCT_MATCH && (
+                    <ModuleProductMatch
+                        history={history}
+                        onOpenHistory={loadFromHistory}
+                        onGoCrm={() => setActiveModule(ModuleType.CLIENT_CRM)}
                     />
                 )}
                 {activeModule === ModuleType.EMAIL_CAMPAIGN && (

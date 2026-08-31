@@ -10,6 +10,7 @@ import {
   Tag,
   RefreshCw,
   CalendarClock,
+  PackageSearch,
 } from 'lucide-react';
 import {
   clientHasBackgroundCheck,
@@ -24,10 +25,13 @@ interface ModuleClientCRMProps {
   clients: Client[];
   setClients: React.Dispatch<React.SetStateAction<Client[]>>;
   onBatchAnalyze: (clients: Client[]) => Promise<void>;
+  /** 对已背调客户批量产品品类深挖 */
+  onBatchProductDig?: (clients: Client[]) => Promise<void>;
   /** 单客户再次背调（与批量同一入口） */
   onReanalyze?: (client: Client) => void;
   history: HistoryItem[];
   onOpenHistory: (item: HistoryItem) => void;
+  productDigBusy?: boolean;
 }
 
 const todayYmd = () => {
@@ -55,9 +59,11 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   clients,
   setClients,
   onBatchAnalyze,
+  onBatchProductDig,
   onReanalyze,
   history,
   onOpenHistory,
+  productDigBusy,
 }) => {
   const [searchTerm, setSearchTerm] = React.useState('');
   const [filterCountry, setFilterCountry] = React.useState<string>('all');
@@ -432,12 +438,33 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
           </label>
         </div>
         {selectedClientIds.size > 0 && (
-          <button
-            onClick={() => onBatchAnalyze(selectedClients)}
-            className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 rounded-xl font-bold text-sm touch-manipulation"
-          >
-            批量分析 ({selectedClientIds.size})
-          </button>
+          <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+            <button
+              onClick={() => onBatchAnalyze(selectedClients)}
+              className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 rounded-xl font-bold text-sm touch-manipulation"
+            >
+              批量分析 ({selectedClientIds.size})
+            </button>
+            {onBatchProductDig && (
+              <button
+                type="button"
+                disabled={productDigBusy || !selectedClients.some((c) => clientHasBackgroundCheck(c, history))}
+                onClick={() => {
+                  const diggable = selectedClients.filter((c) => clientHasBackgroundCheck(c, history));
+                  if (!diggable.length) {
+                    alert('所选客户中没有「已做背调」的记录。请先完成背调，或勾选已背调客户。');
+                    return;
+                  }
+                  void onBatchProductDig(diggable);
+                }}
+                className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2.5 rounded-xl font-bold text-sm touch-manipulation disabled:opacity-50 inline-flex items-center justify-center gap-2"
+                title="仅针对已背调客户：联网深挖品类与价格，写入产品匹配库"
+              >
+                <PackageSearch size={16} />
+                {productDigBusy ? '产品深挖中…' : `产品深挖 (${selectedClients.filter((c) => clientHasBackgroundCheck(c, history)).length})`}
+              </button>
+            )}
+          </div>
         )}
       </div>
 

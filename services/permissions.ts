@@ -19,7 +19,9 @@ export const PERMISSION_CATALOG: Array<{
   { key: 'module.email_campaign', label: '邮件营销', group: '模块', description: '邮件群发/开发信' },
   { key: 'module.image_generator', label: '海报/生图', group: '模块', description: '海报与万相生图' },
   { key: 'module.promo_generator', label: '营销工具', group: '模块', description: '营销辅助工具' },
+  { key: 'module.product_match', label: '新品匹配', group: '模块', description: '用我方新品匹配已背调客户产品库' },
   { key: 'feature.search_clients', label: '执行客户搜索', group: '功能', description: '发起联网搜索客户' },
+  { key: 'feature.product_redig', label: '产品品类深挖', group: '功能', description: '对已背调客户批量重新整理品类与价格' },
   { key: 'feature.analyze_company', label: '单次背调', group: '功能', description: '对单个公司做背调' },
   { key: 'feature.batch_analyze', label: '批量背调', group: '功能', description: '批量/队列背调任务' },
   { key: 'feature.dm_email_search', label: '决策人邮箱搜索', group: '功能', description: '后台搜索邮箱（员工可搜索但只能看 *；完整邮箱仅本部门主管及以上可见）' },
@@ -41,6 +43,7 @@ const MODULE_TO_PERM: Record<ModuleType, PermissionKey> = {
   [ModuleType.EMAIL_CAMPAIGN]: 'module.email_campaign',
   [ModuleType.IMAGE_GENERATOR]: 'module.image_generator',
   [ModuleType.PROMO_GENERATOR]: 'module.promo_generator',
+  [ModuleType.PRODUCT_MATCH]: 'module.product_match',
 };
 
 /** 新员工默认权限：不含邮箱搜索、PPT 下载等需管理员显式开通的功能 */
@@ -55,8 +58,10 @@ const USER_BASELINE: PermissionKey[] = [
   'module.email_campaign',
   'module.image_generator',
   'module.promo_generator',
+  'module.product_match',
   'feature.search_clients',
   'feature.analyze_company',
+  'feature.product_redig',
   'feature.records_center',
 ];
 
