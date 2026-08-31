@@ -216,6 +216,62 @@ export const findHistoryForClient = (
   return matches.reduce((a, b) => (a.timestamp >= b.timestamp ? a : b));
 };
 
+/** O(1) 背调历史索引（避免 CRM 列表每行 O(n) 扫描 history） */
+export type HistoryLookupIndex = {
+  byHost: Map<string, HistoryItem>;
+  byName: Map<string, HistoryItem>;
+};
+
+export const buildHistoryLookupIndex = (history: HistoryItem[]): HistoryLookupIndex => {
+  const byHost = new Map<string, HistoryItem>();
+  const byName = new Map<string, HistoryItem>();
+  for (const h of history) {
+    const host = normalizeCrmHost(h.domain || h.data?.companyInfo?.website);
+    const name = (h.data?.companyInfo?.name || '').trim().toLowerCase();
+    if (host) {
+      const prev = byHost.get(host);
+      if (!prev || h.timestamp >= prev.timestamp) byHost.set(host, h);
+    }
+    if (name) {
+      const prev = byName.get(name);
+      if (!prev || h.timestamp >= prev.timestamp) byName.set(name, h);
+    }
+  }
+  return { byHost, byName };
+};
+
+export const lookupHistoryForClient = (
+  client: Client,
+  index: HistoryLookupIndex
+): HistoryItem | undefined => {
+  const host = normalizeCrmHost(client.website);
+  const name = (client.name || '').trim().toLowerCase();
+  if (host) {
+    const hit = index.byHost.get(host);
+    if (hit) return hit;
+  }
+  if (name) return index.byName.get(name);
+  return undefined;
+};
+
+export const clientHasBackgroundCheckIndexed = (
+  client: Client,
+  index: HistoryLookupIndex
+): boolean => {
+  if (client.hasBackgroundCheck || client.hasAnalyzed) return true;
+  return !!lookupHistoryForClient(client, index);
+};
+
+export const resolveBackgroundCheckAtIndexed = (
+  client: Client,
+  index: HistoryLookupIndex
+): number | undefined => {
+  if (client.lastBackgroundCheckAt && client.lastBackgroundCheckAt > 0) {
+    return client.lastBackgroundCheckAt;
+  }
+  return lookupHistoryForClient(client, index)?.timestamp;
+};
+
 /** Whether this CRM client has a completed background check (flag or linked history) */
 export const clientHasBackgroundCheck = (
   client: Client,

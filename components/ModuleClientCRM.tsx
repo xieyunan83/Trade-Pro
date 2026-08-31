@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Client, CRM_FUNNEL_STAGES, HistoryItem } from '../types';
 import {
   Search,
@@ -13,10 +13,11 @@ import {
   PackageSearch,
 } from 'lucide-react';
 import {
-  clientHasBackgroundCheck,
-  findHistoryForClient,
+  buildHistoryLookupIndex,
+  clientHasBackgroundCheckIndexed,
   formatBackgroundCheckTime,
-  resolveBackgroundCheckAt,
+  lookupHistoryForClient,
+  resolveBackgroundCheckAtIndexed,
 } from '../utils/crmHistory';
 import { exportClientsToExcel } from '../services/exportService';
 import { IndustryMultiSelect } from './IndustryMultiSelect';
@@ -25,14 +26,22 @@ interface ModuleClientCRMProps {
   clients: Client[];
   setClients: React.Dispatch<React.SetStateAction<Client[]>>;
   onBatchAnalyze: (clients: Client[]) => Promise<void>;
-  /** 对已背调客户批量产品品类深挖 */
   onBatchProductDig?: (clients: Client[]) => Promise<void>;
-  /** 单客户再次背调（与批量同一入口） */
   onReanalyze?: (client: Client) => void;
   history: HistoryItem[];
   onOpenHistory: (item: HistoryItem) => void;
   productDigBusy?: boolean;
 }
+
+type EnrichedClient = {
+  client: Client;
+  historyItem?: HistoryItem;
+  hasBg: boolean;
+  bgAt?: number;
+  canOpenReport: boolean;
+};
+
+const PAGE_SIZE = 40;
 
 const todayYmd = () => {
   const d = new Date();
@@ -55,195 +64,106 @@ const funnelToneClass: Record<(typeof CRM_FUNNEL_STAGES)[number]['tone'], string
   red: 'bg-red-50 text-red-700 border-red-100',
 };
 
-export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
-  clients,
-  setClients,
-  onBatchAnalyze,
-  onBatchProductDig,
-  onReanalyze,
-  history,
-  onOpenHistory,
-  productDigBusy,
-}) => {
-  const [searchTerm, setSearchTerm] = React.useState('');
-  const [filterCountry, setFilterCountry] = React.useState<string>('all');
-  const [filterType, setFilterType] = React.useState<string>('all');
-  const [filterIndustry, setFilterIndustry] = React.useState<string>('all');
-  const [filterBackgroundCheck, setFilterBackgroundCheck] = React.useState<boolean>(false);
-  const [filterStatus, setFilterStatus] = React.useState<Client['status'] | 'all' | 'overdue'>('all');
-  const [selectedClientIds, setSelectedClientIds] = React.useState<Set<string>>(new Set());
+function useDebouncedValue<T>(value: T, ms = 250): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return debounced;
+}
 
-  const needsBgFlagHeal = clients.some(
-    (c) => !c.hasBackgroundCheck && (c.hasAnalyzed || !!findHistoryForClient(c, history))
+const KeywordTags = React.memo(({ client }: { client: Client }) => {
+  const kws = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          [
+            client.searchKeyword,
+            ...(client.searchedKeywords || []),
+            ...(client.tags || [])
+              .filter((t) => t.startsWith('关键词:'))
+              .map((t) => t.replace(/^关键词:/, '')),
+          ].filter(Boolean) as string[]
+        )
+      ).slice(0, 4),
+    [client.searchKeyword, client.searchedKeywords, client.tags]
   );
+  if (!kws.length) return null;
+  return (
+    <div className="flex flex-wrap gap-1 mt-1">
+      {kws.map((k) => (
+        <span
+          key={k}
+          className="inline-flex items-center gap-0.5 bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded text-[9px] font-black"
+        >
+          <Tag size={8} /> {k}
+        </span>
+      ))}
+    </div>
+  );
+});
+KeywordTags.displayName = 'KeywordTags';
 
-  useEffect(() => {
-    if (!needsBgFlagHeal) return;
-    setClients((prev) => {
-      let changed = false;
-      const next = prev.map((c) => {
-        if (c.hasBackgroundCheck) return c;
-        const hist = findHistoryForClient(c, history);
-        if (c.hasAnalyzed || hist) {
-          changed = true;
-          return {
-            ...c,
-            hasBackgroundCheck: true,
-            hasAnalyzed: true,
-            lastBackgroundCheckAt: c.lastBackgroundCheckAt || hist?.timestamp,
-          };
-        }
-        return c;
-      });
-      return changed ? next : prev;
-    });
-  }, [needsBgFlagHeal, history, setClients]);
-
-  useEffect(() => {
-    setClients((prev) => {
-      let changed = false;
-      const next = prev.map((c) => {
-        if (c.lastBackgroundCheckAt) return c;
-        const hist = findHistoryForClient(c, history);
-        if (!hist?.timestamp) return c;
-        changed = true;
-        return { ...c, lastBackgroundCheckAt: hist.timestamp, hasBackgroundCheck: true };
-      });
-      return changed ? next : prev;
-    });
-  }, [history, setClients]);
-
-  const funnelCounts = useMemo(() => {
-    const map = Object.fromEntries(CRM_FUNNEL_STAGES.map((s) => [s.value, 0])) as Record<
-      Client['status'],
-      number
-    >;
-    for (const c of clients) {
-      if (map[c.status] != null) map[c.status] += 1;
-      else map['新建/潜在'] += 1;
-    }
-    return map;
-  }, [clients]);
-
-  const overdueCount = useMemo(() => clients.filter(isOverdueFollowUp).length, [clients]);
-
-  const onDeleteClient = (id: string) => {
-    setClients((prev) => prev.filter((c) => c.id !== id));
-  };
-
-  const patchClient = (id: string, patch: Partial<Client>) => {
-    setClients((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
-  };
-
-  const openClientReport = (client: Client) => {
-    const item = findHistoryForClient(client, history);
-    if (!item) {
-      alert('未找到该客户的背调报告。请先对该网站重新做一次深度调查。');
-      return;
-    }
-    onOpenHistory(item);
-  };
-
-  const filteredClients = clients.filter((c) => {
-    const matchesSearch =
-      c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (c.website || '').toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesCountry = filterCountry === 'all' || c.country === filterCountry;
-    const matchesType = filterType === 'all' || c.type === filterType;
-    const matchesIndustry =
-      filterIndustry === 'all' ||
-      !filterIndustry ||
-      (c.industry || '').toLowerCase().includes(filterIndustry.toLowerCase().split(',')[0].trim());
-    const matchesBackgroundCheck =
-      !filterBackgroundCheck || clientHasBackgroundCheck(c, history);
-    const matchesStatus =
-      filterStatus === 'all'
-        ? true
-        : filterStatus === 'overdue'
-          ? isOverdueFollowUp(c)
-          : c.status === filterStatus;
+const StageControls = React.memo(
+  ({
+    client,
+    onPatch,
+  }: {
+    client: Client;
+    onPatch: (id: string, patch: Partial<Client>) => void;
+  }) => {
+    const overdue = isOverdueFollowUp(client);
     return (
-      matchesSearch &&
-      matchesCountry &&
-      matchesType &&
-      matchesIndustry &&
-      matchesBackgroundCheck &&
-      matchesStatus
-    );
-  });
-
-  const toggleClient = (id: string) => {
-    const next = new Set(selectedClientIds);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    setSelectedClientIds(next);
-  };
-
-  const toggleAll = () => {
-    if (selectedClientIds.size === filteredClients.length) setSelectedClientIds(new Set());
-    else setSelectedClientIds(new Set(filteredClients.map((c) => c.id)));
-  };
-
-  const selectedClients = filteredClients.filter((c) => selectedClientIds.has(c.id));
-
-  const triggerReanalyze = (client: Client) => {
-    const at = resolveBackgroundCheckAt(client, history);
-    const timeLabel = formatBackgroundCheckTime(at);
-    const tip = timeLabel
-      ? `该公司已于 ${timeLabel} 完成背调。是否再次背调以更新信息？`
-      : '是否对该客户再次背调？';
-    if (!confirm(tip)) return;
-    if (onReanalyze) onReanalyze(client);
-    else void onBatchAnalyze([client]);
-  };
-
-  const handleExport = () => {
-    const list = selectedClients.length > 0 ? selectedClients : filteredClients;
-    if (!list.length) {
-      alert('没有可导出的客户');
-      return;
-    }
-    exportClientsToExcel(list);
-  };
-
-  const KeywordTags: React.FC<{ client: Client }> = ({ client }) => {
-    const kws = Array.from(
-      new Set(
-        [
-          client.searchKeyword,
-          ...(client.searchedKeywords || []),
-          ...(client.tags || [])
-            .filter((t) => t.startsWith('关键词:'))
-            .map((t) => t.replace(/^关键词:/, '')),
-        ].filter(Boolean) as string[]
-      )
-    ).slice(0, 4);
-    if (!kws.length) return null;
-    return (
-      <div className="flex flex-wrap gap-1 mt-1">
-        {kws.map((k) => (
-          <span
-            key={k}
-            className="inline-flex items-center gap-0.5 bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded text-[9px] font-black"
-          >
-            <Tag size={8} /> {k}
-          </span>
-        ))}
+      <div className="flex flex-col gap-1.5 min-w-[140px]">
+        <select
+          value={client.status}
+          onChange={(e) => onPatch(client.id, { status: e.target.value as Client['status'] })}
+          className="w-full px-2 py-1.5 rounded-lg border border-slate-200 text-[11px] font-bold bg-white"
+        >
+          {CRM_FUNNEL_STAGES.map((s) => (
+            <option key={s.value} value={s.value}>
+              {s.label}
+            </option>
+          ))}
+        </select>
+        <label className="flex items-center gap-1 text-[10px] font-bold text-slate-400">
+          <CalendarClock size={11} className={overdue ? 'text-red-500' : ''} />
+          <input
+            type="date"
+            value={(client.nextFollowUpDate || '').slice(0, 10)}
+            onChange={(e) => onPatch(client.id, { nextFollowUpDate: e.target.value })}
+            className={`flex-1 min-w-0 px-1.5 py-1 rounded-lg border text-[11px] font-bold ${
+              overdue ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'
+            }`}
+          />
+        </label>
       </div>
     );
-  };
+  }
+);
+StageControls.displayName = 'StageControls';
 
-  const BgStatus: React.FC<{ client: Client }> = ({ client }) => {
-    const checked = clientHasBackgroundCheck(client, history);
-    const canOpen = !!findHistoryForClient(client, history);
-    const at = resolveBackgroundCheckAt(client, history);
-    const timeLabel = formatBackgroundCheckTime(at);
-    if (checked) {
+const BgStatus = React.memo(
+  ({
+    hasBg,
+    canOpen,
+    timeLabel,
+    onOpenReport,
+    onReanalyze,
+  }: {
+    hasBg: boolean;
+    canOpen: boolean;
+    timeLabel: string;
+    onOpenReport: () => void;
+    onReanalyze: () => void;
+  }) => {
+    if (hasBg) {
       return (
         <div className="inline-flex flex-col items-start gap-0.5">
           <button
             type="button"
-            onClick={() => openClientReport(client)}
+            onClick={onOpenReport}
             disabled={!canOpen}
             title={canOpen ? `查看背调资料${timeLabel ? `（${timeLabel}）` : ''}` : '已标记背调，但本地无报告'}
             className={`inline-flex items-center gap-1 ${
@@ -261,7 +181,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
           )}
           <button
             type="button"
-            onClick={() => triggerReanalyze(client)}
+            onClick={onReanalyze}
             className="inline-flex items-center gap-0.5 text-[10px] font-black text-amber-600 hover:text-amber-700 hover:underline"
           >
             <RefreshCw size={10} /> 再次背调
@@ -277,44 +197,271 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
         </span>
         <button
           type="button"
-          onClick={() => triggerReanalyze(client)}
+          onClick={onReanalyze}
           className="inline-flex items-center gap-0.5 text-[10px] font-black text-blue-600 hover:underline"
         >
           <RefreshCw size={10} /> 去背调
         </button>
       </div>
     );
+  }
+);
+BgStatus.displayName = 'BgStatus';
+
+export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
+  clients,
+  setClients,
+  onBatchAnalyze,
+  onBatchProductDig,
+  onReanalyze,
+  history,
+  onOpenHistory,
+  productDigBusy,
+}) => {
+  const [searchTerm, setSearchTerm] = useState('');
+  const debouncedSearch = useDebouncedValue(searchTerm);
+  const [filterCountry, setFilterCountry] = useState<string>('all');
+  const [filterType, setFilterType] = useState<string>('all');
+  const [filterIndustry, setFilterIndustry] = useState<string>('all');
+  const [filterProductType, setFilterProductType] = useState<string>('all');
+  const [filterDateFrom, setFilterDateFrom] = useState('');
+  const [filterDateTo, setFilterDateTo] = useState('');
+  const [filterBackgroundCheck, setFilterBackgroundCheck] = useState<boolean>(false);
+  const [filterStatus, setFilterStatus] = useState<Client['status'] | 'all' | 'overdue'>('all');
+  const [selectedClientIds, setSelectedClientIds] = useState<Set<string>>(new Set());
+  const [page, setPage] = useState(1);
+
+  const historyIndex = useMemo(() => buildHistoryLookupIndex(history), [history]);
+
+  const enrichedClients = useMemo((): EnrichedClient[] => {
+    return clients.map((client) => {
+      const historyItem = lookupHistoryForClient(client, historyIndex);
+      const bgAt = resolveBackgroundCheckAtIndexed(client, historyIndex);
+      const hasBg = clientHasBackgroundCheckIndexed(client, historyIndex);
+      return {
+        client,
+        historyItem,
+        hasBg,
+        bgAt,
+        canOpenReport: !!historyItem,
+      };
+    });
+  }, [clients, historyIndex]);
+
+  const filterOptions = useMemo(() => {
+    const countries = new Set<string>();
+    const productTypes = new Set<string>();
+    for (const c of clients) {
+      if (c.country) countries.add(c.country);
+      const pt = (c.productType || '').trim();
+      if (pt && pt !== 'N/A') productTypes.add(pt);
+    }
+    return {
+      countries: [...countries].sort((a, b) => a.localeCompare(b, 'zh-CN')),
+      productTypes: [...productTypes].sort((a, b) => a.localeCompare(b, 'zh-CN')),
+    };
+  }, [clients]);
+
+  const dateFromMs = filterDateFrom ? new Date(filterDateFrom).getTime() : undefined;
+  const dateToMs = filterDateTo
+    ? new Date(filterDateTo).getTime() + 24 * 60 * 60 * 1000 - 1
+    : undefined;
+
+  const filteredEnriched = useMemo(() => {
+    const q = debouncedSearch.trim().toLowerCase();
+    return enrichedClients.filter(({ client, hasBg, bgAt }) => {
+      if (q) {
+        const hit =
+          client.name.toLowerCase().includes(q) ||
+          (client.website || '').toLowerCase().includes(q) ||
+          (client.productType || '').toLowerCase().includes(q);
+        if (!hit) return false;
+      }
+      if (filterCountry !== 'all' && client.country !== filterCountry) return false;
+      if (filterType !== 'all' && client.type !== filterType) return false;
+      if (filterProductType !== 'all') {
+        const pt = (client.productType || '').trim();
+        if (pt !== filterProductType && !pt.toLowerCase().includes(filterProductType.toLowerCase())) {
+          return false;
+        }
+      }
+      if (filterIndustry !== 'all' && filterIndustry) {
+        const ind = (client.industry || '').toLowerCase();
+        const needle = filterIndustry.toLowerCase().split(',')[0].trim();
+        if (!ind.includes(needle)) return false;
+      }
+      if (filterBackgroundCheck && !hasBg) return false;
+      if (filterStatus === 'overdue' && !isOverdueFollowUp(client)) return false;
+      if (filterStatus !== 'all' && filterStatus !== 'overdue' && client.status !== filterStatus) {
+        return false;
+      }
+      if (dateFromMs != null || dateToMs != null) {
+        const t = bgAt || 0;
+        if (!t) return false;
+        if (dateFromMs != null && t < dateFromMs) return false;
+        if (dateToMs != null && t > dateToMs) return false;
+      }
+      return true;
+    });
+  }, [
+    enrichedClients,
+    debouncedSearch,
+    filterCountry,
+    filterType,
+    filterIndustry,
+    filterProductType,
+    filterBackgroundCheck,
+    filterStatus,
+    dateFromMs,
+    dateToMs,
+  ]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredEnriched.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const pagedEnriched = useMemo(() => {
+    const start = (safePage - 1) * PAGE_SIZE;
+    return filteredEnriched.slice(start, start + PAGE_SIZE);
+  }, [filteredEnriched, safePage]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [
+    debouncedSearch,
+    filterCountry,
+    filterType,
+    filterIndustry,
+    filterProductType,
+    filterDateFrom,
+    filterDateTo,
+    filterBackgroundCheck,
+    filterStatus,
+  ]);
+
+  const funnelCounts = useMemo(() => {
+    const map = Object.fromEntries(CRM_FUNNEL_STAGES.map((s) => [s.value, 0])) as Record<
+      Client['status'],
+      number
+    >;
+    for (const c of clients) {
+      if (map[c.status] != null) map[c.status] += 1;
+      else map['新建/潜在'] += 1;
+    }
+    return map;
+  }, [clients]);
+
+  const overdueCount = useMemo(() => clients.filter(isOverdueFollowUp).length, [clients]);
+
+  const selectedClients = useMemo(
+    () => filteredEnriched.filter((e) => selectedClientIds.has(e.client.id)).map((e) => e.client),
+    [filteredEnriched, selectedClientIds]
+  );
+
+  const selectedBgCount = useMemo(
+    () => filteredEnriched.filter((e) => selectedClientIds.has(e.client.id) && e.hasBg).length,
+    [filteredEnriched, selectedClientIds]
+  );
+
+  const patchClient = useCallback(
+    (id: string, patch: Partial<Client>) => {
+      setClients((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+    },
+    [setClients]
+  );
+
+  const onDeleteClient = useCallback(
+    (id: string) => {
+      setClients((prev) => prev.filter((c) => c.id !== id));
+      setSelectedClientIds((prev) => {
+        if (!prev.has(id)) return prev;
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    },
+    [setClients]
+  );
+
+  const openClientReport = useCallback(
+    (item?: HistoryItem) => {
+      if (!item) {
+        alert('未找到该客户的背调报告。请先对该网站重新做一次深度调查。');
+        return;
+      }
+      onOpenHistory(item);
+    },
+    [onOpenHistory]
+  );
+
+  const triggerReanalyze = useCallback(
+    (client: Client, bgAt?: number) => {
+      const timeLabel = formatBackgroundCheckTime(bgAt);
+      const tip = timeLabel
+        ? `该公司已于 ${timeLabel} 完成背调。是否再次背调以更新信息？`
+        : '是否对该客户再次背调？';
+      if (!confirm(tip)) return;
+      if (onReanalyze) onReanalyze(client);
+      else void onBatchAnalyze([client]);
+    },
+    [onReanalyze, onBatchAnalyze]
+  );
+
+  const toggleClient = useCallback((id: string) => {
+    setSelectedClientIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleAllOnPage = useCallback(() => {
+    const pageIds = pagedEnriched.map((e) => e.client.id);
+    const allSelected = pageIds.length > 0 && pageIds.every((id) => selectedClientIds.has(id));
+    setSelectedClientIds((prev) => {
+      const next = new Set(prev);
+      if (allSelected) pageIds.forEach((id) => next.delete(id));
+      else pageIds.forEach((id) => next.add(id));
+      return next;
+    });
+  }, [pagedEnriched, selectedClientIds]);
+
+  const clearFilters = () => {
+    setSearchTerm('');
+    setFilterCountry('all');
+    setFilterType('all');
+    setFilterIndustry('all');
+    setFilterProductType('all');
+    setFilterDateFrom('');
+    setFilterDateTo('');
+    setFilterBackgroundCheck(false);
+    setFilterStatus('all');
   };
 
-  const StageControls: React.FC<{ client: Client }> = ({ client }) => {
-    const overdue = isOverdueFollowUp(client);
-    return (
-      <div className="flex flex-col gap-1.5 min-w-[140px]">
-        <select
-          value={client.status}
-          onChange={(e) => patchClient(client.id, { status: e.target.value as Client['status'] })}
-          className="w-full px-2 py-1.5 rounded-lg border border-slate-200 text-[11px] font-bold bg-white"
-        >
-          {CRM_FUNNEL_STAGES.map((s) => (
-            <option key={s.value} value={s.value}>
-              {s.label}
-            </option>
-          ))}
-        </select>
-        <label className="flex items-center gap-1 text-[10px] font-bold text-slate-400">
-          <CalendarClock size={11} className={overdue ? 'text-red-500' : ''} />
-          <input
-            type="date"
-            value={(client.nextFollowUpDate || '').slice(0, 10)}
-            onChange={(e) => patchClient(client.id, { nextFollowUpDate: e.target.value })}
-            className={`flex-1 min-w-0 px-1.5 py-1 rounded-lg border text-[11px] font-bold ${
-              overdue ? 'border-red-300 bg-red-50 text-red-700' : 'border-slate-200 bg-white text-slate-600'
-            }`}
-          />
-        </label>
-      </div>
-    );
+  const hasActiveFilters =
+    !!debouncedSearch ||
+    filterCountry !== 'all' ||
+    filterType !== 'all' ||
+    filterIndustry !== 'all' ||
+    filterProductType !== 'all' ||
+    !!filterDateFrom ||
+    !!filterDateTo ||
+    filterBackgroundCheck ||
+    filterStatus !== 'all';
+
+  const handleExport = () => {
+    const list =
+      selectedClients.length > 0
+        ? selectedClients
+        : filteredEnriched.map((e) => e.client);
+    if (!list.length) {
+      alert('没有可导出的客户');
+      return;
+    }
+    exportClientsToExcel(list);
   };
+
+  const pageIds = pagedEnriched.map((e) => e.client.id);
+  const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selectedClientIds.has(id));
 
   return (
     <div className="max-w-7xl mx-auto space-y-4 sm:space-y-8 animate-fade-in">
@@ -324,6 +471,9 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
           <h3 className="text-sm font-black text-slate-800">CRM 商机漏斗</h3>
           <div className="text-[11px] font-bold text-slate-400">
             共 {clients.length} 家
+            {filteredEnriched.length !== clients.length && (
+              <span className="text-blue-600 ml-1">· 筛选 {filteredEnriched.length} 家</span>
+            )}
             {overdueCount > 0 ? (
               <button
                 type="button"
@@ -381,7 +531,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full pl-12 pr-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold text-sm sm:text-base"
-              placeholder="搜索客户名称或网址..."
+              placeholder="搜索客户名称、网址或产品类型..."
             />
           </div>
           <button
@@ -395,16 +545,29 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
             {selectedClients.length > 0 ? ` (${selectedClients.length})` : ''}
           </button>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-3">
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-2 sm:gap-3">
           <select
             value={filterCountry}
             onChange={(e) => setFilterCountry(e.target.value)}
             className="px-3 py-2.5 rounded-xl border border-slate-200 font-bold text-sm appearance-none bg-white"
           >
             <option value="all">所有国家</option>
-            {Array.from(new Set(clients.map((c) => c.country))).map((c) => (
+            {filterOptions.countries.map((c) => (
               <option key={c} value={c}>
                 {c}
+              </option>
+            ))}
+          </select>
+          <select
+            value={filterProductType}
+            onChange={(e) => setFilterProductType(e.target.value)}
+            className="px-3 py-2.5 rounded-xl border border-slate-200 font-bold text-sm appearance-none bg-white"
+          >
+            <option value="all">所有产品类型</option>
+            {filterOptions.productTypes.map((p) => (
+              <option key={p} value={p}>
+                {p.length > 28 ? `${p.slice(0, 26)}…` : p}
               </option>
             ))}
           </select>
@@ -427,16 +590,47 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
               placeholder="所有行业"
             />
           </div>
-          <label className="flex items-center gap-2 font-bold text-xs sm:text-sm text-slate-700 col-span-2 sm:col-span-2 lg:col-span-2">
+          <label className="flex flex-col gap-0.5 text-[10px] font-black text-slate-400 uppercase tracking-widest">
+            背调时间起
+            <input
+              type="date"
+              value={filterDateFrom}
+              onChange={(e) => setFilterDateFrom(e.target.value)}
+              className="px-2 py-2 rounded-xl border border-slate-200 font-bold text-sm text-slate-700 bg-white normal-case tracking-normal"
+            />
+          </label>
+          <label className="flex flex-col gap-0.5 text-[10px] font-black text-slate-400 uppercase tracking-widest">
+            背调时间止
+            <input
+              type="date"
+              value={filterDateTo}
+              onChange={(e) => setFilterDateTo(e.target.value)}
+              className="px-2 py-2 rounded-xl border border-slate-200 font-bold text-sm text-slate-700 bg-white normal-case tracking-normal"
+            />
+          </label>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 font-bold text-xs sm:text-sm text-slate-700">
             <input
               type="checkbox"
               checked={filterBackgroundCheck}
               onChange={(e) => setFilterBackgroundCheck(e.target.checked)}
               className="w-5 h-5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
             />
-            已做背调
+            仅已做背调
           </label>
+          {hasActiveFilters && (
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="text-xs font-black text-blue-600 hover:underline"
+            >
+              清除全部筛选
+            </button>
+          )}
         </div>
+
         {selectedClientIds.size > 0 && (
           <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
             <button
@@ -448,9 +642,11 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
             {onBatchProductDig && (
               <button
                 type="button"
-                disabled={productDigBusy || !selectedClients.some((c) => clientHasBackgroundCheck(c, history))}
+                disabled={productDigBusy || selectedBgCount === 0}
                 onClick={() => {
-                  const diggable = selectedClients.filter((c) => clientHasBackgroundCheck(c, history));
+                  const diggable = filteredEnriched
+                    .filter((e) => selectedClientIds.has(e.client.id) && e.hasBg)
+                    .map((e) => e.client);
                   if (!diggable.length) {
                     alert('所选客户中没有「已做背调」的记录。请先完成背调，或勾选已背调客户。');
                     return;
@@ -461,7 +657,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                 title="仅针对已背调客户：联网深挖品类与价格，写入产品匹配库"
               >
                 <PackageSearch size={16} />
-                {productDigBusy ? '产品深挖中…' : `产品深挖 (${selectedClients.filter((c) => clientHasBackgroundCheck(c, history)).length})`}
+                {productDigBusy ? '产品深挖中…' : `产品深挖 (${selectedBgCount})`}
               </button>
             )}
           </div>
@@ -470,86 +666,95 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
 
       {/* Mobile card view */}
       <div className="md:hidden space-y-3">
-        {filteredClients.length === 0 ? (
+        {pagedEnriched.length === 0 ? (
           <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center text-slate-400 font-bold text-sm">
-            暂无客户数据
+            {clients.length === 0 ? '暂无客户数据' : '没有符合筛选条件的客户'}
           </div>
         ) : (
-          filteredClients.map((client) => {
-            const canOpen = !!findHistoryForClient(client, history);
-            return (
-              <div key={client.id} className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-                <div className="flex items-start justify-between gap-3 mb-3">
-                  <div className="flex items-start gap-3 min-w-0">
-                    <input
-                      type="checkbox"
-                      checked={selectedClientIds.has(client.id)}
-                      onChange={() => toggleClient(client.id)}
-                      className="mt-1 rounded border-slate-300 text-blue-600 focus:ring-blue-500 flex-shrink-0"
-                    />
-                    <div className="min-w-0">
-                      <button
-                        type="button"
-                        onClick={() => canOpen && openClientReport(client)}
-                        disabled={!canOpen}
-                        className={`font-bold text-left truncate block w-full ${
-                          canOpen
-                            ? 'text-blue-700 hover:underline cursor-pointer'
-                            : 'text-slate-800 cursor-default'
-                        }`}
-                        title={canOpen ? '查看背调资料' : undefined}
-                      >
-                        {client.name}
-                      </button>
-                      <div className="text-xs text-blue-600 font-bold truncate mt-0.5">{client.website}</div>
-                      <KeywordTags client={client} />
-                    </div>
-                  </div>
-                  <div className="flex items-start gap-1 flex-shrink-0">
+          pagedEnriched.map(({ client, historyItem, hasBg, bgAt, canOpenReport }) => (
+            <div key={client.id} className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+              <div className="flex items-start justify-between gap-3 mb-3">
+                <div className="flex items-start gap-3 min-w-0">
+                  <input
+                    type="checkbox"
+                    checked={selectedClientIds.has(client.id)}
+                    onChange={() => toggleClient(client.id)}
+                    className="mt-1 rounded border-slate-300 text-blue-600 focus:ring-blue-500 flex-shrink-0"
+                  />
+                  <div className="min-w-0">
                     <button
                       type="button"
-                      onClick={() => triggerReanalyze(client)}
-                      className="text-amber-600 hover:text-amber-700 p-1"
-                      title="再次背调"
+                      onClick={() => canOpenReport && openClientReport(historyItem)}
+                      disabled={!canOpenReport}
+                      className={`font-bold text-left truncate block w-full ${
+                        canOpenReport
+                          ? 'text-blue-700 hover:underline cursor-pointer'
+                          : 'text-slate-800 cursor-default'
+                      }`}
+                      title={canOpenReport ? '查看背调资料' : undefined}
                     >
-                      <RefreshCw size={16} />
+                      {client.name}
                     </button>
-                    <button
-                      onClick={() => onDeleteClient(client.id)}
-                      className="text-red-400 hover:text-red-600 p-1"
-                    >
-                      <Trash2 size={16} />
-                    </button>
+                    <div className="text-xs text-blue-600 font-bold truncate mt-0.5">{client.website}</div>
+                    {client.productType && client.productType !== 'N/A' && (
+                      <div className="text-[10px] font-bold text-violet-600 mt-0.5 truncate">
+                        {client.productType}
+                      </div>
+                    )}
+                    <KeywordTags client={client} />
                   </div>
                 </div>
-                <div className="flex flex-wrap gap-2 text-xs font-bold text-slate-500 mb-3">
-                  <span className="bg-slate-50 px-2 py-1 rounded-lg">{client.country}</span>
-                  <span className="bg-slate-50 px-2 py-1 rounded-lg">{client.type}</span>
-                  <span className="bg-slate-50 px-2 py-1 rounded-lg">{client.industry}</span>
-                  <BgStatus client={client} />
+                <div className="flex items-start gap-1 flex-shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => triggerReanalyze(client, bgAt)}
+                    className="text-amber-600 hover:text-amber-700 p-1"
+                    title="再次背调"
+                  >
+                    <RefreshCw size={16} />
+                  </button>
+                  <button
+                    onClick={() => onDeleteClient(client.id)}
+                    className="text-red-400 hover:text-red-600 p-1"
+                  >
+                    <Trash2 size={16} />
+                  </button>
                 </div>
-                <StageControls client={client} />
               </div>
-            );
-          })
+              <div className="flex flex-wrap gap-2 text-xs font-bold text-slate-500 mb-3">
+                <span className="bg-slate-50 px-2 py-1 rounded-lg">{client.country}</span>
+                <span className="bg-slate-50 px-2 py-1 rounded-lg">{client.type}</span>
+                <span className="bg-slate-50 px-2 py-1 rounded-lg">{client.industry}</span>
+                <BgStatus
+                  hasBg={hasBg}
+                  canOpen={canOpenReport}
+                  timeLabel={formatBackgroundCheckTime(bgAt)}
+                  onOpenReport={() => openClientReport(historyItem)}
+                  onReanalyze={() => triggerReanalyze(client, bgAt)}
+                />
+              </div>
+              <StageControls client={client} onPatch={patchClient} />
+            </div>
+          ))
         )}
       </div>
 
       {/* Desktop table */}
       <div className="hidden md:block bg-white rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm overflow-x-auto">
-        <table className="w-full text-left border-collapse min-w-[920px]">
+        <table className="w-full text-left border-collapse min-w-[980px]">
           <thead>
             <tr className="bg-slate-50 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">
               <th className="px-4 lg:px-6 py-4 w-12">
                 <input
                   type="checkbox"
-                  checked={selectedClientIds.size === filteredClients.length && filteredClients.length > 0}
-                  onChange={toggleAll}
+                  checked={allPageSelected}
+                  onChange={toggleAllOnPage}
                   className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                 />
               </th>
               <th className="px-4 lg:px-6 py-4">客户名称</th>
               <th className="px-4 lg:px-6 py-4">国家</th>
+              <th className="px-4 lg:px-6 py-4">产品类型</th>
               <th className="px-4 lg:px-6 py-4">类型</th>
               <th className="px-4 lg:px-6 py-4">网址</th>
               <th className="px-4 lg:px-6 py-4">阶段 / 跟进</th>
@@ -558,78 +763,115 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-50">
-            {filteredClients.length === 0 ? (
+            {pagedEnriched.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-6 py-12 text-center text-slate-400 font-bold text-sm">
-                  暂无客户数据
+                <td colSpan={9} className="px-6 py-12 text-center text-slate-400 font-bold text-sm">
+                  {clients.length === 0 ? '暂无客户数据' : '没有符合筛选条件的客户'}
                 </td>
               </tr>
             ) : (
-              filteredClients.map((client) => {
-                const canOpen = !!findHistoryForClient(client, history);
-                return (
-                  <tr key={client.id} className="hover:bg-slate-50/50 transition-colors">
-                    <td className="px-4 lg:px-6 py-4">
-                      <input
-                        type="checkbox"
-                        checked={selectedClientIds.has(client.id)}
-                        onChange={() => toggleClient(client.id)}
-                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                      />
-                    </td>
-                    <td className="px-4 lg:px-6 py-4">
+              pagedEnriched.map(({ client, historyItem, hasBg, bgAt, canOpenReport }) => (
+                <tr key={client.id} className="hover:bg-slate-50/50 transition-colors">
+                  <td className="px-4 lg:px-6 py-4">
+                    <input
+                      type="checkbox"
+                      checked={selectedClientIds.has(client.id)}
+                      onChange={() => toggleClient(client.id)}
+                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                  </td>
+                  <td className="px-4 lg:px-6 py-4">
+                    <button
+                      type="button"
+                      onClick={() => canOpenReport && openClientReport(historyItem)}
+                      disabled={!canOpenReport}
+                      className={`font-bold text-left ${
+                        canOpenReport
+                          ? 'text-blue-700 hover:underline cursor-pointer'
+                          : 'text-slate-800 cursor-default'
+                      }`}
+                      title={canOpenReport ? '点击查看背调资料' : '暂无背调报告'}
+                    >
+                      {client.name}
+                    </button>
+                    <KeywordTags client={client} />
+                  </td>
+                  <td className="px-4 lg:px-6 py-4 text-sm font-bold text-slate-600">{client.country}</td>
+                  <td className="px-4 lg:px-6 py-4 text-xs font-bold text-violet-700 max-w-[120px] truncate" title={client.productType}>
+                    {client.productType && client.productType !== 'N/A' ? client.productType : '—'}
+                  </td>
+                  <td className="px-4 lg:px-6 py-4 text-sm font-bold text-slate-600">{client.type}</td>
+                  <td className="px-4 lg:px-6 py-4 text-sm font-bold text-blue-600 max-w-[160px] truncate">
+                    {client.website}
+                  </td>
+                  <td className="px-4 lg:px-6 py-4">
+                    <StageControls client={client} onPatch={patchClient} />
+                  </td>
+                  <td className="px-4 lg:px-6 py-4">
+                    <BgStatus
+                      hasBg={hasBg}
+                      canOpen={canOpenReport}
+                      timeLabel={formatBackgroundCheckTime(bgAt)}
+                      onOpenReport={() => openClientReport(historyItem)}
+                      onReanalyze={() => triggerReanalyze(client, bgAt)}
+                    />
+                  </td>
+                  <td className="px-4 lg:px-6 py-4">
+                    <div className="flex items-center gap-2">
                       <button
                         type="button"
-                        onClick={() => canOpen && openClientReport(client)}
-                        disabled={!canOpen}
-                        className={`font-bold text-left ${
-                          canOpen
-                            ? 'text-blue-700 hover:underline cursor-pointer'
-                            : 'text-slate-800 cursor-default'
-                        }`}
-                        title={canOpen ? '点击查看背调资料' : '暂无背调报告'}
+                        onClick={() => triggerReanalyze(client, bgAt)}
+                        className="text-amber-600 hover:text-amber-700"
+                        title="再次背调"
                       >
-                        {client.name}
+                        <RefreshCw size={16} />
                       </button>
-                      <KeywordTags client={client} />
-                    </td>
-                    <td className="px-4 lg:px-6 py-4 text-sm font-bold text-slate-600">{client.country}</td>
-                    <td className="px-4 lg:px-6 py-4 text-sm font-bold text-slate-600">{client.type}</td>
-                    <td className="px-4 lg:px-6 py-4 text-sm font-bold text-blue-600 max-w-[160px] truncate">
-                      {client.website}
-                    </td>
-                    <td className="px-4 lg:px-6 py-4">
-                      <StageControls client={client} />
-                    </td>
-                    <td className="px-4 lg:px-6 py-4">
-                      <BgStatus client={client} />
-                    </td>
-                    <td className="px-4 lg:px-6 py-4">
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => triggerReanalyze(client)}
-                          className="text-amber-600 hover:text-amber-700"
-                          title="再次背调"
-                        >
-                          <RefreshCw size={16} />
-                        </button>
-                        <button
-                          onClick={() => onDeleteClient(client.id)}
-                          className="text-red-400 hover:text-red-600"
-                          title="删除"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })
+                      <button
+                        onClick={() => onDeleteClient(client.id)}
+                        className="text-red-400 hover:text-red-600"
+                        title="删除"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))
             )}
           </tbody>
         </table>
       </div>
+
+      {filteredEnriched.length > 0 && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-1 pb-4">
+          <span className="text-xs font-bold text-slate-500">
+            第 {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filteredEnriched.length)} 条
+            / 共 {filteredEnriched.length} 条
+            {selectedClientIds.size > 0 ? ` · 已选 ${selectedClientIds.size}` : ''}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={safePage <= 1}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold disabled:opacity-40"
+            >
+              上一页
+            </button>
+            <span className="text-xs font-black text-slate-600">
+              {safePage} / {totalPages}
+            </span>
+            <button
+              type="button"
+              disabled={safePage >= totalPages}
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold disabled:opacity-40"
+            >
+              下一页
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
