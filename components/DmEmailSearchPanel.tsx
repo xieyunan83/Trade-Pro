@@ -35,7 +35,7 @@ export const DmEmailSearchPanel: React.FC = () => {
   if (recent.length === 0) return null;
 
   return (
-    <div className="fixed bottom-4 right-4 z-[60] w-[min(100vw-2rem,22rem)] shadow-signal">
+    <div className="w-full shadow-signal">
       <div className="rounded-2xl border border-cyan-200/70 bg-white/90 backdrop-blur-xl overflow-hidden">
         <button
           type="button"

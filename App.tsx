@@ -3275,8 +3275,11 @@ const App: React.FC = () => {
           </div>
       )}
 
-      {hasPermission(currentUser, 'feature.dm_email_search') && <DmEmailSearchPanel />}
-      <ProductDigPanel />
+      {/* 后台任务条统一放左下，避免挡住 CRM 右下角翻页 */}
+      <div className="fixed bottom-4 left-4 md:left-[17.5rem] z-[60] flex flex-col-reverse gap-3 w-[min(100vw-2rem,22rem)] pointer-events-none [&>*]:pointer-events-auto">
+        {hasPermission(currentUser, 'feature.dm_email_search') && <DmEmailSearchPanel />}
+        <ProductDigPanel />
+      </div>
 
       {reportConfirm && (
         <div className="fixed inset-0 z-[90] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">

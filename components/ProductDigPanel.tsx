@@ -40,7 +40,7 @@ export const ProductDigPanel: React.FC = () => {
   const progressDone = done + failed;
 
   return (
-    <div className="fixed bottom-4 left-4 z-[60] w-[min(100vw-2rem,22rem)] shadow-lg">
+    <div className="w-full shadow-lg">
       <div className="rounded-2xl border border-emerald-200/80 bg-white/95 backdrop-blur-xl overflow-hidden">
         <button
           type="button"
