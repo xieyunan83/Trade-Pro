@@ -1,6 +1,7 @@
 import type { Client, DiscoveryState, User } from '../types';
 import { canViewOwnedRecord, type OwnedRecordMeta } from '../services/permissions';
 import type { Department } from '../types';
+import { isClientRecordBefore } from './crmHistory';
 
 export const emptyDiscoveryState = (): DiscoveryState => ({
   product: '',
@@ -124,6 +125,30 @@ export const mergeSaveCrmClients = (
     /* ignore */
   }
   return merged;
+};
+
+/** 从全库 localStorage 删除早于 cutoff 的 CRM 客户（返回被删 id 列表） */
+export const purgeAllCrmClientsBeforeDate = (
+  cutoffMs: number
+): { kept: Client[]; removedIds: string[] } => {
+  const existing = loadAllCrmClients();
+  const kept: Client[] = [];
+  const removedIds: string[] = [];
+  for (const c of existing) {
+    if (isClientRecordBefore(c, cutoffMs)) {
+      removedIds.push(c.id);
+    } else {
+      kept.push(c);
+    }
+  }
+  if (removedIds.length) {
+    try {
+      localStorage.setItem(CRM_ALL_KEY, JSON.stringify(kept));
+    } catch {
+      /* ignore */
+    }
+  }
+  return { kept, removedIds };
 };
 
 /** 当前用户是否「拥有」该任务（用于删除/清空时避免删掉别人的队列） */

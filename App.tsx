@@ -16,7 +16,7 @@ import {
   newAutomationTaskId,
 } from './services/automationQueueRepair';
 import { fetchGlobalConfig, fetchDocumentsFromRepo, backupUserHistory, fetchCRMFromCloud, saveCRMToCloud, fetchUserHistoryFromCloud, checkGitHubStatus, fetchApiConfigsFromCloud, setManualGitHubConfig } from './services/githubService';
-import { isSupabaseConfigured, getKnowledgeFiles, getInvestigationHistory, saveInvestigationHistory, saveDiscoverySearch, getCrmClients, syncCrmClients, deleteCrmClient, getDiscoverySearchArchives, deleteInvestigationHistory, deleteDiscoverySearchFromCloud, deleteDiscoverySearchesByMeta, getProductProfilesCloud } from './services/supabase';
+import { isSupabaseConfigured, getKnowledgeFiles, getInvestigationHistory, saveInvestigationHistory, saveDiscoverySearch, getCrmClients, syncCrmClients, deleteCrmClient, deleteCrmClientsBulk, getDiscoverySearchArchives, deleteInvestigationHistory, deleteDiscoverySearchFromCloud, deleteDiscoverySearchesByMeta, getProductProfilesCloud } from './services/supabase';
 import {
   indexAnalysisIntoProductCatalog,
   rebuildProductCatalogFromHistory,
@@ -26,7 +26,7 @@ import { saveProductProfilesBulk } from './services/db';
 import { addCustomKeyword, addCustomCountry } from './services/taxonomyStore';
 import { normalizeCountryZh } from './utils/countryNormalize';
 import { buildSearchTags, stampSearchResults } from './utils/searchTags';
-import { mergeDiscoveryResultsIntoCrm, mergeHistoryItemsIntoCrm, findCrmIdsForHistoryItem, findCrmIdsForDiscoveryResults, lookupBackgroundCheck, formatBackgroundCheckTime, findHistoryForClient, clientPatchFromAnalysis } from './utils/crmHistory';
+import { mergeDiscoveryResultsIntoCrm, mergeHistoryItemsIntoCrm, findCrmIdsForHistoryItem, findCrmIdsForDiscoveryResults, lookupBackgroundCheck, formatBackgroundCheckTime, findHistoryForClient, clientPatchFromAnalysis, CRM_JUNE_2026_CUTOFF_MS } from './utils/crmHistory';
 import { checkLimit, incrementUsage, updateLocalConfig, resetDailyUsage, getDailyUsagePublic } from './services/limitService';
 import { ModuleType, AnalysisResult, DiscoveryState, Client, User, HistoryItem, AutomationResult, ClientSearchResult, DiscoveryArchiveItem, DecisionMaker, Department, AutomationPipelineConfig, SimilarCompany } from './types';
 import { ModuleBackground } from './components/ModuleBackground';
@@ -49,6 +49,7 @@ import {
   loadUserDiscoveryState,
   mergeSaveCrmClients,
   migrateLegacyCrmOwnership,
+  purgeAllCrmClientsBeforeDate,
   saveUserDiscoveryState,
 } from './utils/workspaceScope';
 import { ModuleStrategy } from './components/ModuleStrategy';
@@ -471,6 +472,26 @@ const App: React.FC = () => {
             if (!cancelled) setIsGitHubConnected(ghStatus.ok);
 
             let nextCrm: Client[] = loadAllCrmClients();
+
+            // 一次性清理 2026-06-01 之前的 CRM（本地库；云端由脚本/删除同步）
+            try {
+              const purgeFlag = 'trade_scout_crm_purged_202606_v1';
+              if (!localStorage.getItem(purgeFlag)) {
+                const { removedIds } = purgeAllCrmClientsBeforeDate(CRM_JUNE_2026_CUTOFF_MS);
+                if (removedIds.length) {
+                  nextCrm = loadAllCrmClients();
+                  if (isSupabaseConfigured()) {
+                    void deleteCrmClientsBulk(removedIds).catch((e) =>
+                      console.warn('[CRM] cloud purge failed', e)
+                    );
+                  }
+                  console.info(`[CRM] purged ${removedIds.length} records before 2026-06-01`);
+                }
+                localStorage.setItem(purgeFlag, String(removedIds.length));
+              }
+            } catch (e) {
+              console.warn('[CRM] local purge skipped', e);
+            }
 
             if (currentUser && isSupabaseConfigured()) {
                 if (currentUser.role !== 'admin') {
@@ -2149,6 +2170,22 @@ const App: React.FC = () => {
   const handleSyncToGitHub = async () => { if(!currentUser) return; setIsSyncing(true); try { await backupUserHistory(currentUser.username, history); await saveCRMToCloud(crmClients); alert("数据同步成功!"); } catch (e: any) { alert("同步失败: " + e.message); } finally { setIsSyncing(false); } };
   const handleAddClients = (newClients: Client[]) => { setCrmClients(prev => [...prev, ...newClients.map(stampOwnership)]); alert(`已成功导入 ${newClients.length} 个客户资料！`); };
 
+  const handleBatchDeleteClients = async (clients: Client[]) => {
+    if (!clients?.length) return;
+    if (!hasPermission(currentUser, 'feature.crm_manage')) {
+      alert('你没有 CRM 编辑权限，无法删除客户。');
+      return;
+    }
+    if (!confirm(`确定删除选中的 ${clients.length} 个客户？\n此操作不可恢复（仅删 CRM 条目，背调历史仍保留在记录中心）。`)) {
+      return;
+    }
+    const ids = new Set(clients.map((c) => c.id));
+    setCrmClients((prev) => prev.filter((c) => !ids.has(c.id)));
+    for (const id of ids) {
+      void deleteCrmClient(id).catch((e) => console.warn('[CRM] cloud delete failed', id, e));
+    }
+  };
+
   if (!currentUser) {
     if (!authReady) return <div className="h-screen flex items-center justify-center bg-slate-50"><Loader2 className="animate-spin text-blue-600" size={40} /></div>;
     return (
@@ -2516,6 +2553,7 @@ const App: React.FC = () => {
                         clients={crmClients} 
                         setClients={setCrmClients} 
                         onBatchAnalyze={handleBatchAnalyzeFromCRM}
+                        onBatchDelete={handleBatchDeleteClients}
                         onBatchProductDig={handleBatchProductDigFromCRM}
                         productDigBusy={productDigBusy}
                         onReanalyze={(client) => void handleBatchAnalyzeFromCRM([client])}

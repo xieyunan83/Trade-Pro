@@ -26,6 +26,7 @@ interface ModuleClientCRMProps {
   clients: Client[];
   setClients: React.Dispatch<React.SetStateAction<Client[]>>;
   onBatchAnalyze: (clients: Client[]) => Promise<void>;
+  onBatchDelete?: (clients: Client[]) => void | Promise<void>;
   onBatchProductDig?: (clients: Client[]) => Promise<void>;
   onReanalyze?: (client: Client) => void;
   history: HistoryItem[];
@@ -212,6 +213,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   clients,
   setClients,
   onBatchAnalyze,
+  onBatchDelete,
   onBatchProductDig,
   onReanalyze,
   history,
@@ -632,7 +634,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
         </div>
 
         {selectedClientIds.size > 0 && (
-          <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+          <div className="flex flex-col sm:flex-row flex-wrap gap-2 w-full sm:w-auto">
             <button
               onClick={() => onBatchAnalyze(selectedClients)}
               className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 rounded-xl font-bold text-sm touch-manipulation"
@@ -658,6 +660,19 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
               >
                 <PackageSearch size={16} />
                 {productDigBusy ? '产品深挖中…' : `产品深挖 (${selectedBgCount})`}
+              </button>
+            )}
+            {onBatchDelete && (
+              <button
+                type="button"
+                onClick={async () => {
+                  await onBatchDelete(selectedClients);
+                  setSelectedClientIds(new Set());
+                }}
+                className="w-full sm:w-auto bg-red-50 border border-red-200 text-red-600 hover:bg-red-100 px-6 py-2.5 rounded-xl font-bold text-sm touch-manipulation inline-flex items-center justify-center gap-2"
+              >
+                <Trash2 size={16} />
+                批量删除 ({selectedClientIds.size})
               </button>
             )}
           </div>

@@ -749,6 +749,16 @@ export const deleteCrmClient = async (localId: string): Promise<boolean> => {
   }
 }
 
+/** 批量删除 CRM（云端） */
+export const deleteCrmClientsBulk = async (localIds: string[]): Promise<number> => {
+  if (!isSupabaseConfigured() || !localIds.length) return 0
+  let ok = 0
+  for (const id of localIds) {
+    if (await deleteCrmClient(id)) ok += 1
+  }
+  return ok
+}
+
 // ==================== 客户产品画像库 ====================
 
 export const saveProductProfileCloud = async (profile: CustomerProductProfile): Promise<boolean> => {
