@@ -403,6 +403,12 @@ export interface ProductMatchHit {
 export interface WebsiteCategory {
   categoryName: string;
   items: string[];
+  /** 该品类终端/零售价区间下限（人民币） */
+  priceMinCNY?: number;
+  /** 该品类终端/零售价区间上限（人民币） */
+  priceMaxCNY?: number;
+  /** 展示用价格带，如 ¥15–45 或 $4–12 CAD */
+  priceBand?: string;
 }
 
 /** 背调证据链条目（公开网页来源） */

@@ -113,19 +113,34 @@ export const buildProductProfileFromAnalysis = (
     if (hi != null && hi > 0) priceMax = priceMax == null ? hi : Math.max(priceMax, hi);
   };
 
-  const pushCat = (raw?: string, source: CustomerProductSku['source'] = 'category') => {
+  const pushCat = (
+    raw?: string,
+    source: CustomerProductSku['source'] = 'category',
+    price?: { min?: number; max?: number }
+  ) => {
     const cat = normalizeCategoryLabel(raw);
     if (!cat) return;
     categorySet.add(cat);
-    if (!skus.some((s) => s.source === source && s.category === cat && s.name === cat)) {
-      skus.push({
-        id: skuId(id, cat, skus.length),
-        name: cat,
-        category: cat,
-        categoryRaw: raw,
-        source,
-      });
+    bumpPrice(price?.min, price?.max);
+    const existing = skus.find((s) => s.source === source && s.category === cat && s.name === cat);
+    if (existing) {
+      if (price?.min != null && (existing.priceMinCny == null || price.min < existing.priceMinCny)) {
+        existing.priceMinCny = price.min;
+      }
+      if (price?.max != null && (existing.priceMaxCny == null || price.max > existing.priceMaxCny)) {
+        existing.priceMaxCny = price.max;
+      }
+      return;
     }
+    skus.push({
+      id: skuId(id, cat, skus.length),
+      name: cat,
+      category: cat,
+      categoryRaw: raw,
+      priceMinCny: price?.min,
+      priceMaxCny: price?.max,
+      source,
+    });
   };
 
   (analysis.products || []).forEach((p, idx) => {
@@ -157,8 +172,10 @@ export const buildProductProfileFromAnalysis = (
   (analysis.businessScope?.relevantProducts || []).forEach((c) => pushCat(c, 'core'));
   (analysis.tradeIntelligence?.importCategories || []).forEach((c) => pushCat(c, 'trade'));
   (analysis.websiteCategories || []).forEach((wc) => {
-    pushCat(wc.categoryName, 'website');
-    (wc.items || []).slice(0, 8).forEach((item) => pushCat(item, 'website'));
+    const lo = parseMoney(wc.priceMinCNY);
+    const hi = parseMoney(wc.priceMaxCNY);
+    pushCat(wc.categoryName, 'website', { min: lo, max: hi });
+    (wc.items || []).slice(0, 8).forEach((item) => pushCat(item, 'website', { min: lo, max: hi }));
   });
 
   if (analysis.searchKeyword) pushCat(analysis.searchKeyword, 'category');

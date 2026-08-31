@@ -343,22 +343,23 @@ export const gatherTavilyCompanyEvidenceBundle = async (opts: {
   const country = (opts.searchCountry || '').trim();
 
   const queries = [
+    // 优先全站品类/目录/商城页（先全量，再关键词）
+    `site:${domain} (shop OR products OR catalog OR collections OR category OR categories OR 产品 OR 目录 OR 分类)`,
+    `site:${domain} (menu OR departments OR browse OR buy OR store OR wholesale OR price OR 价格)`,
     `site:${domain} about OR contact OR company`,
-    `"${name}" ${country} headquarters OR company`.replace(/\s+/g, ' ').trim(),
+    `"${name}" ${country} (product range OR catalog OR assortment OR wholesale OR import OR distributor)`.replace(/\s+/g, ' ').trim(),
   ];
   if (kw) {
+    // 关键词查询仅作补充匹配，不替代全站品类采集
+    queries.push(`site:${domain} ${kw} (price OR shop OR product OR catalog OR buy)`);
     queries.push(`"${name}" ${kw} ${country}`.replace(/\s+/g, ' ').trim());
-    queries.push(`site:${domain} ${kw} price OR shop OR product OR catalog OR buy`);
   }
-  // 产品深挖：官网商品/目录/价格页
-  queries.push(`site:${domain} (product OR products OR shop OR catalog OR collection OR price OR buy OR 产品 OR 价格)`);
-  queries.push(`"${name}" (product range OR catalog OR wholesale OR import) ${kw || ''} ${country}`.replace(/\s+/g, ' ').trim());
 
   const chunks: string[] = [];
   const items: TavilyCompanyEvidenceBundle['items'] = [];
   const seenUrls = new Set<string>();
   let topUrls: string[] = [];
-  for (const q of queries.slice(0, 4)) {
+  for (const q of queries.slice(0, 5)) {
     try {
       const data = await tavilySearch(q, { maxResults: 6, searchDepth: 'basic', includeAnswer: true });
       const block = formatTavilyEvidence(data, `TAVILY:${q.slice(0, 40)}`);
@@ -389,11 +390,22 @@ export const gatherTavilyCompanyEvidenceBundle = async (opts: {
 
   const official = `https://${domain}`;
   // 优先抽取商品相关路径
-  const productPathHints = ['/shop', '/products', '/catalog', '/collections', '/product', '/store', '/buy'];
+  const productPathHints = [
+    '/shop',
+    '/products',
+    '/catalog',
+    '/collections',
+    '/product',
+    '/store',
+    '/buy',
+    '/category',
+    '/categories',
+    '/department',
+  ];
   const productish = [...seenUrls].filter((u) =>
     productPathHints.some((h) => u.toLowerCase().includes(h))
   );
-  topUrls = [...new Set([official, ...productish, ...topUrls])].slice(0, 5);
+  topUrls = [...new Set([official, ...productish, ...topUrls])].slice(0, 6);
   if (!seenUrls.has(official)) {
     seenUrls.add(official);
     items.unshift({ title: `官方网站 ${domain}`, url: official });

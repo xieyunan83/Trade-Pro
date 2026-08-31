@@ -417,9 +417,17 @@ export const ModuleBackground: React.FC<ModuleBackgroundProps> = ({
 
         <SectionCard title="官网品类与社交" icon={<Package className="text-pink-600" />}>
           <div className="space-y-4">
-            {(data.websiteCategories || []).slice(0, 6).map((cat, i) => (
+            {(data.websiteCategories || []).slice(0, 8).map((cat, i) => (
               <div key={i}>
-                <div className="text-xs font-black text-slate-800 mb-1">{cat.categoryName}</div>
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <div className="text-xs font-black text-slate-800">{cat.categoryName}</div>
+                  {(cat.priceBand || cat.priceMinCNY != null || cat.priceMaxCNY != null) && (
+                    <span className="text-[10px] font-black text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-lg shrink-0">
+                      {cat.priceBand ||
+                        `¥${cat.priceMinCNY ?? '?'}–${cat.priceMaxCNY ?? '?'}`}
+                    </span>
+                  )}
+                </div>
                 <div className="flex flex-wrap gap-1.5">
                   {(cat.items || []).slice(0, 8).map((it, j) => <Pill key={j}>{it}</Pill>)}
                 </div>

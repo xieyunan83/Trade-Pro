@@ -1,6 +1,18 @@
 import React, { useMemo, useState } from 'react';
-import { AnalysisResult, ProductAnalysis } from '../types';
-import { PackageSearch, Tag, Info, ShoppingCart, BarChart3, PieChart, Sparkles, Languages, Loader2 } from 'lucide-react';
+import { AnalysisResult, ProductAnalysis, WebsiteCategory } from '../types';
+import {
+  PackageSearch,
+  Tag,
+  Info,
+  ShoppingCart,
+  BarChart3,
+  PieChart,
+  Sparkles,
+  Languages,
+  Loader2,
+  Layers,
+  Filter,
+} from 'lucide-react';
 import {
   looksLikeEnglishParagraph,
   translateProductSummaryToZh,
@@ -16,8 +28,91 @@ const productMatchesKeyword = (p: ProductAnalysis, keyword?: string): boolean =>
   const kw = (keyword || '').trim().toLowerCase();
   if (!kw) return false;
   const tokens = kw.split(/[\s,/|+\-，、]+/).map((t) => t.trim()).filter((t) => t.length >= 2);
-  const blob = `${p.name || ''} ${p.features || ''} ${p.pitchPoint || ''} ${p.techSpecs || ''}`.toLowerCase();
+  const blob = `${p.name || ''} ${p.category || ''} ${p.features || ''} ${p.pitchPoint || ''} ${p.techSpecs || ''}`.toLowerCase();
   return tokens.some((t) => blob.includes(t));
+};
+
+const formatPriceBand = (
+  min?: number | null,
+  max?: number | null,
+  fallback?: string
+): string => {
+  if (fallback?.trim()) return fallback.trim();
+  if (min != null && max != null && min > 0 && max > 0) {
+    return min === max ? `¥${min}` : `¥${min}–${max}`;
+  }
+  if (min != null && min > 0) return `¥${min}+`;
+  if (max != null && max > 0) return `至 ¥${max}`;
+  return '待补价格';
+};
+
+type CategoryRow = {
+  name: string;
+  items: string[];
+  priceBand: string;
+  skuCount: number;
+  keywordHit: boolean;
+};
+
+/** 合并官网品类树 + 产品 SKU 聚合，补齐价格区间 */
+const buildCategoryRows = (
+  websiteCategories: WebsiteCategory[] | undefined,
+  products: ProductAnalysis[],
+  keyword?: string
+): CategoryRow[] => {
+  const map = new Map<string, CategoryRow & { min?: number; max?: number }>();
+
+  const ensure = (name: string) => {
+    const key = name.trim() || '未分类';
+    let row = map.get(key);
+    if (!row) {
+      row = { name: key, items: [], priceBand: '待补价格', skuCount: 0, keywordHit: false };
+      map.set(key, row);
+    }
+    return row;
+  };
+
+  (websiteCategories || []).forEach((wc) => {
+    const row = ensure(wc.categoryName || '未分类');
+    (wc.items || []).forEach((it) => {
+      if (it && !row.items.includes(it)) row.items.push(it);
+    });
+    if (typeof wc.priceMinCNY === 'number' && wc.priceMinCNY > 0) {
+      row.min = row.min == null ? wc.priceMinCNY : Math.min(row.min, wc.priceMinCNY);
+    }
+    if (typeof wc.priceMaxCNY === 'number' && wc.priceMaxCNY > 0) {
+      row.max = row.max == null ? wc.priceMaxCNY : Math.max(row.max, wc.priceMaxCNY);
+    }
+    if (wc.priceBand?.trim()) row.priceBand = wc.priceBand.trim();
+  });
+
+  products.forEach((p) => {
+    const cat = (p.category || '').trim() || '未分类';
+    const row = ensure(cat);
+    row.skuCount += 1;
+    if (p.name && !row.items.includes(p.name) && row.items.length < 12) {
+      row.items.push(p.name);
+    }
+    const lo = p.priceMinCNY ?? p.retailPriceCNY ?? p.estimatedFOBPriceCNY;
+    const hi = p.priceMaxCNY ?? p.retailPriceCNY ?? p.estimatedFOBPriceCNY;
+    if (typeof lo === 'number' && lo > 0) {
+      row.min = row.min == null ? lo : Math.min(row.min, lo);
+    }
+    if (typeof hi === 'number' && hi > 0) {
+      row.max = row.max == null ? hi : Math.max(row.max, hi);
+    }
+    if (productMatchesKeyword(p, keyword)) row.keywordHit = true;
+  });
+
+  return [...map.values()]
+    .map((r) => ({
+      name: r.name,
+      items: r.items,
+      skuCount: r.skuCount,
+      keywordHit: r.keywordHit,
+      priceBand: formatPriceBand(r.min, r.max, r.priceBand !== '待补价格' ? r.priceBand : undefined),
+    }))
+    .sort((a, b) => Number(b.keywordHit) - Number(a.keywordHit) || a.name.localeCompare(b.name, 'zh'));
 };
 
 export const ModuleProducts: React.FC<ModuleProductsProps> = ({ data, onUpdateProductSummary }) => {
@@ -25,6 +120,8 @@ export const ModuleProducts: React.FC<ModuleProductsProps> = ({ data, onUpdatePr
   const [summary, setSummary] = useState(data.productSummary);
   const [translating, setTranslating] = useState(false);
   const [translateMsg, setTranslateMsg] = useState('');
+  /** 默认展示全部品类/产品；可切到仅关键词相关 */
+  const [viewMode, setViewMode] = useState<'all' | 'keyword'>('all');
 
   React.useEffect(() => {
     setSummary(data.productSummary);
@@ -41,17 +138,32 @@ export const ModuleProducts: React.FC<ModuleProductsProps> = ({ data, onUpdatePr
     );
   }, [summary]);
 
-  const { focused, others } = useMemo(() => {
-    const list = data.products || [];
-    if (!keyword) return { focused: list, others: [] as ProductAnalysis[] };
-    const f: ProductAnalysis[] = [];
-    const o: ProductAnalysis[] = [];
-    for (const p of list) {
-      if (productMatchesKeyword(p, keyword)) f.push(p);
-      else o.push(p);
+  const allProducts = data.products || [];
+  const categoryRows = useMemo(
+    () => buildCategoryRows(data.websiteCategories, allProducts, keyword),
+    [data.websiteCategories, allProducts, keyword]
+  );
+
+  const keywordProductCount = useMemo(
+    () => allProducts.filter((p) => productMatchesKeyword(p, keyword)).length,
+    [allProducts, keyword]
+  );
+
+  const displayedProducts = useMemo(() => {
+    if (viewMode === 'keyword' && keyword) {
+      const matched = allProducts.filter((p) => productMatchesKeyword(p, keyword));
+      return matched.length ? matched : allProducts;
     }
-    return { focused: f.length ? f : list, others: f.length ? o : [] };
-  }, [data.products, keyword]);
+    return allProducts;
+  }, [allProducts, viewMode, keyword]);
+
+  const displayedCategories = useMemo(() => {
+    if (viewMode === 'keyword' && keyword) {
+      const matched = categoryRows.filter((c) => c.keywordHit);
+      return matched.length ? matched : categoryRows;
+    }
+    return categoryRows;
+  }, [categoryRows, viewMode, keyword]);
 
   const handleTranslate = async () => {
     if (!summary) return;
@@ -71,12 +183,50 @@ export const ModuleProducts: React.FC<ModuleProductsProps> = ({ data, onUpdatePr
 
   return (
     <div className="space-y-8 animate-fade-in">
-      {keyword && (
+      <div className="bg-emerald-50 border border-emerald-100 rounded-2xl px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
+        <div className="flex items-start gap-2 min-w-0">
+          <Layers size={16} className="text-emerald-700 mt-0.5 shrink-0" />
+          <div className="text-sm text-emerald-900">
+            <span className="font-black">全站品类采集</span>
+            <span className="font-medium text-emerald-800/90">
+              ：先爬取客户官网及其它平台的全部品类与价格区间，再标注与搜索关键词的匹配。
+            </span>
+            {keyword ? (
+              <span className="block mt-1 text-xs font-bold text-violet-700">
+                当前关键词「{keyword}」已匹配 {keywordProductCount}/{allProducts.length} 个 SKU · 品类 {categoryRows.filter((c) => c.keywordHit).length}/{categoryRows.length}
+              </span>
+            ) : null}
+          </div>
+        </div>
+        {keyword && (
+          <div className="flex items-center gap-1 bg-white rounded-xl border border-emerald-100 p-1 shrink-0">
+            <button
+              type="button"
+              onClick={() => setViewMode('all')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-black transition-colors ${
+                viewMode === 'all' ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              全部品类
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('keyword')}
+              className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-black transition-colors ${
+                viewMode === 'keyword' ? 'bg-violet-600 text-white' : 'text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              <Filter size={12} />
+              仅关键词
+            </button>
+          </div>
+        )}
+      </div>
+
+      {keyword && viewMode === 'keyword' && (
         <div className="bg-violet-50 border border-violet-100 rounded-2xl px-4 py-3 flex flex-wrap items-center gap-2">
           <Sparkles size={16} className="text-violet-600" />
-          <span className="text-sm font-black text-violet-800">
-            产品分析已按搜索关键词聚焦：{keyword}
-          </span>
+          <span className="text-sm font-black text-violet-800">当前筛选：与「{keyword}」相关</span>
           {data.searchTags?.slice(0, 4).map((t) => (
             <span key={t} className="text-[10px] font-black bg-white text-violet-600 px-2 py-0.5 rounded-lg border border-violet-100">
               {t}
@@ -90,7 +240,6 @@ export const ModuleProducts: React.FC<ModuleProductsProps> = ({ data, onUpdatePr
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
             <h3 className="text-2xl font-black text-slate-800 flex items-center gap-2 flex-wrap">
               <PieChart className="text-blue-600" /> 市场喜好与产品策略
-              {keyword ? <span className="text-sm font-bold text-violet-600">· {keyword}</span> : null}
             </h3>
             <button
               type="button"
@@ -146,40 +295,98 @@ export const ModuleProducts: React.FC<ModuleProductsProps> = ({ data, onUpdatePr
         </div>
       )}
 
+      {/* 全站品类 + 价格区间 */}
       <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
-        <h3 className="text-2xl font-black text-slate-800 mb-2 flex items-center gap-2">
-          <PackageSearch className="text-blue-600" />
-          {keyword ? `与「${keyword}」相关的产品` : '核心产品线分析'}
+        <h3 className="text-2xl font-black text-slate-800 mb-1 flex items-center gap-2">
+          <Layers className="text-emerald-600" />
+          全站品类一览
         </h3>
-        {keyword && (
-          <p className="text-sm font-medium text-slate-500 mb-6">
-            优先展示与搜索关键词匹配的产品（共 {focused.length} 条）
-            {others.length > 0 ? `；其余 ${others.length} 条为其它品类` : ''}
-          </p>
-        )}
-        {!keyword && <div className="mb-6" />}
+        <p className="text-sm font-medium text-slate-500 mb-6">
+          共 {displayedCategories.length} 个品类
+          {viewMode === 'all' && categoryRows.length !== displayedCategories.length
+            ? ''
+            : ''}
+          ，每条标有价格区间（来自官网目录与 SKU 汇总）
+        </p>
 
-        {focused.length === 0 ? (
-          <div className="py-10 text-center text-slate-400 font-bold">暂无产品分析数据</div>
+        {displayedCategories.length === 0 ? (
+          <div className="py-8 text-center text-slate-400 font-bold">暂无品类数据，请重新背调或使用「产品品类深挖」</div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {focused.map((p, i) => (
-              <ProductCard key={`f-${i}`} p={p} highlight={!!keyword} />
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+            {displayedCategories.map((cat) => (
+              <div
+                key={cat.name}
+                className={`rounded-2xl border p-4 ${
+                  cat.keywordHit
+                    ? 'bg-violet-50/70 border-violet-100'
+                    : 'bg-slate-50 border-slate-100'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <div className="font-black text-slate-800 text-sm leading-snug">{cat.name}</div>
+                  <div className="shrink-0 bg-emerald-600 text-white text-[10px] font-black px-2.5 py-1 rounded-full">
+                    {cat.priceBand}
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {cat.keywordHit && keyword && (
+                    <span className="text-[10px] font-black bg-violet-600 text-white px-2 py-0.5 rounded-lg">
+                      关键词相关
+                    </span>
+                  )}
+                  {cat.skuCount > 0 && (
+                    <span className="text-[10px] font-bold text-slate-500 bg-white border border-slate-100 px-2 py-0.5 rounded-lg">
+                      {cat.skuCount} SKU
+                    </span>
+                  )}
+                </div>
+                {cat.items.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {cat.items.slice(0, 6).map((it) => (
+                      <span
+                        key={it}
+                        className="text-[10px] font-bold text-slate-600 bg-white border border-slate-100 px-1.5 py-0.5 rounded"
+                      >
+                        {it.length > 22 ? `${it.slice(0, 20)}…` : it}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
             ))}
           </div>
         )}
       </div>
 
-      {others.length > 0 && (
-        <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
-          <h3 className="text-lg font-black text-slate-700 mb-4">其它产品线</h3>
+      {/* 全部产品 SKU */}
+      <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
+        <h3 className="text-2xl font-black text-slate-800 mb-2 flex items-center gap-2">
+          <PackageSearch className="text-blue-600" />
+          {viewMode === 'keyword' && keyword
+            ? `与「${keyword}」相关的产品`
+            : '全部产品清单'}
+        </h3>
+        <p className="text-sm font-medium text-slate-500 mb-6">
+          共 {displayedProducts.length} 条
+          {keyword && viewMode === 'all'
+            ? `（其中 ${keywordProductCount} 条与「${keyword}」相关，已打标）`
+            : ''}
+        </p>
+
+        {displayedProducts.length === 0 ? (
+          <div className="py-10 text-center text-slate-400 font-bold">暂无产品分析数据</div>
+        ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {others.map((p, i) => (
-              <ProductCard key={`o-${i}`} p={p} highlight={false} />
+            {displayedProducts.map((p, i) => (
+              <ProductCard
+                key={`p-${i}-${p.name}`}
+                p={p}
+                highlight={!!keyword && productMatchesKeyword(p, keyword)}
+              />
             ))}
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 };
@@ -200,22 +407,24 @@ const ProductCard: React.FC<{ p: ProductAnalysis; highlight: boolean }> = ({ p, 
           )}
         </div>
       </div>
-      <div className="bg-blue-600 text-white px-3 py-1 rounded-full text-[10px] font-black shadow-md flex-shrink-0">{p.retailPrice}</div>
+      <div className="bg-blue-600 text-white px-3 py-1 rounded-full text-[10px] font-black shadow-md flex-shrink-0">{p.retailPrice || '—'}</div>
     </div>
-    
+
     <div className="grid grid-cols-2 gap-4 mb-4">
       <div className="bg-white p-3 rounded-xl border border-slate-100">
         <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">建议 FOB 价</div>
-        <div className="text-sm font-black text-slate-800">¥{p.estimatedFOBPriceCNY}</div>
+        <div className="text-sm font-black text-slate-800">
+          {p.estimatedFOBPriceCNY ? `¥${p.estimatedFOBPriceCNY}` : '—'}
+        </div>
       </div>
       <div className="bg-white p-3 rounded-xl border border-slate-100">
-        <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-          {(p.priceMinCNY != null || p.priceMaxCNY != null) ? '价格区间 ¥' : '利润空间'}
-        </div>
-        <div className={`text-sm font-black ${(p.priceMinCNY != null || p.priceMaxCNY != null) ? 'text-slate-800' : p.marginSpace === 'High' ? 'text-green-600' : p.marginSpace === 'Medium' ? 'text-blue-600' : 'text-yellow-600'}`}>
-          {(p.priceMinCNY != null || p.priceMaxCNY != null)
+        <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">价格区间 ¥</div>
+        <div className="text-sm font-black text-slate-800">
+          {p.priceMinCNY != null || p.priceMaxCNY != null
             ? `${p.priceMinCNY ?? '?'}–${p.priceMaxCNY ?? '?'}`
-            : p.marginSpace}
+            : p.retailPriceCNY
+              ? String(p.retailPriceCNY)
+              : p.marginSpace || '—'}
         </div>
       </div>
     </div>

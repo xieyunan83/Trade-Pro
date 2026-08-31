@@ -2705,25 +2705,30 @@ export const analyzeCompany = async (
 
   const productFocusBlock = searchKeyword
     ? `
-  PRODUCT FOCUS (CRITICAL — user found this client via keyword search "${searchKeyword}"):
-  - Prioritize products related to "${searchKeyword}" across website, catalogs, and trade clues.
-  - In products[]: put keyword-related items FIRST (aim for 6–12 matched SKUs if they exist).
-  - Set keywordMatch=true for products clearly related to "${searchKeyword}"; false otherwise.
-  - EVERY product MUST include: category (标准化品类，如「合金/回力车玩具」「毛绒玩具」), retailPrice, retailPriceCNY, estimatedFOBPriceCNY, priceMinCNY, priceMaxCNY.
-  - priceMinCNY / priceMaxCNY = 该 SKU 或同系列的终端价区间（人民币）；若只有单点价，min=max=该价。
-  - productSummary.recommendedProducts / marketPreference / featureAnalysis MUST center on "${searchKeyword}" opportunity for Chinese exporters.
-  - businessScope.relevantProducts should list SKUs or categories matching "${searchKeyword}".
-  - websiteCategories: 拆解官网导航/目录的真实品类树（至少 3–8 个 categoryName）。
-  - tradeIntelligence.importCategories + hsCodes 尽量填实，便于后续「新品反查客户」。
-  - If the company barely sells this keyword category, still analyze adjacent/related lines and say so clearly.
+  PRODUCT CATALOG COLLECTION (CRITICAL — FULL ASSORTMENT FIRST, keyword match SECOND):
+  - User discovered this client via "${searchKeyword}", but you MUST first inventory their ENTIRE sellable catalog
+    from official website + shop/catalog pages + other platforms (Amazon/Allegro/eBay/wholesale dirs if present).
+  - Do NOT only collect products related to "${searchKeyword}". Non-matching categories/SKUs are REQUIRED.
+  - websiteCategories: complete nav/catalog tree (aim 5–15 categoryName). EACH category MUST include
+    priceMinCNY, priceMaxCNY (CNY terminal/retail band for that category) and priceBand (e.g. "¥15–45" or "$4–12 CAD").
+  - products[]: 12–20 concrete SKUs spanning MULTIPLE categories across the full assortment (real names from site).
+    Cover breadth: at least several categories, not a single keyword niche.
+  - AFTER full collection: set keywordMatch=true ONLY for items clearly related to "${searchKeyword}"; false otherwise.
+    UI will highlight matches — never omit non-matching lines to "focus".
+  - EVERY product MUST include: category (标准化品类), retailPrice, retailPriceCNY, estimatedFOBPriceCNY, priceMinCNY, priceMaxCNY.
+  - priceMinCNY / priceMaxCNY = 该 SKU 或同系列终端价区间（人民币）；单点价则 min=max。
+  - businessScope.coreProducts = 全站主营品类；relevantProducts 可另列与 "${searchKeyword}" 相关的项。
+  - productSummary 可兼顾全站定位，并点出 "${searchKeyword}" 机会；不要只写关键词相关。
+  - tradeIntelligence.importCategories + hsCodes 尽量覆盖全品类进口线索。
   ${searchCountry && !isVagueMarketCountry(searchCountry) ? `- Search target market context: ${searchCountry}.` : ''}
 `
     : `
-  PRODUCT FOCUS (CRITICAL for exporter matching DB):
-  - Deep-dive the company's sellable / importable product lines from official shop/catalog pages in the web evidence.
-  - Return 8–15 concrete products[] with REAL names from the site when possible (not vague "toys").
+  PRODUCT CATALOG COLLECTION (CRITICAL — full assortment for exporter matching DB):
+  - Crawl official shop/catalog/collection pages + other retail/wholesale platforms; inventory ALL major sellable categories.
+  - websiteCategories: 5–15 categories from real nav; EACH with priceMinCNY, priceMaxCNY, priceBand.
+  - products[]: 12–20 concrete SKUs spanning multiple categories (real site names, not vague "toys").
   - EVERY product MUST include category, retailPrice, retailPriceCNY, estimatedFOBPriceCNY, priceMinCNY, priceMaxCNY.
-  - Fill websiteCategories from site navigation; coreProducts = top selling lines; importCategories for trade.
+  - coreProducts = top lines across the whole catalog; importCategories for trade.
   - Set keywordMatch=false (no active search keyword).
 `;
 
@@ -2839,7 +2844,7 @@ ${productFocusBlock}
     "swot": { "strengths": [], "weaknesses": [], "opportunities": [], "threats": [] },
     "financialTrends": [{ "year": "2020", "revenue": 0, "procurement": 0 }],
     "trafficAnalysis": [{ "category": "", "trafficType": "Organic (SEO)", "topKeywords": "", "volumeEst": "Medium" }],
-    "websiteCategories": [{ "categoryName": "", "items": [] }],
+    "websiteCategories": [{ "categoryName": "", "items": [], "priceMinCNY": 0, "priceMaxCNY": 0, "priceBand": "" }],
     "businessScope": { "coreProducts": [], "relevantProducts": [], "brandPositioning": "", "consumerGroup": "", "productVariety": "Medium", "priceSensitivity": "", "websiteStructure": "" },
     "businessModel": { "channels": [], "hasDistributors": false, "exhibitionHistory": [], "ecommercePresence": [], "procurementInfo": "" },
     "supplyChain": { "role": "", "serviceType": "" },
@@ -3117,23 +3122,25 @@ export const digProductIntelligence = async (
 
   const prompt = `
 Target company: "${companyName}" / domain: "${hasDomain ? canonicalDomain : rawInput}".
-Task: PRODUCT CATEGORY & PRICE DEEP-DIVE ONLY for Chinese exporters' matching database.
-${searchKeyword ? `Focus keyword: "${searchKeyword}".` : ''}
+Task: FULL PRODUCT CATALOG & PRICE DEEP-DIVE for Chinese exporters' matching database.
+${searchKeyword ? `Discovery keyword (match AFTER full catalog): "${searchKeyword}".` : ''}
 ${searchCountry ? `Market: ${searchCountry}.` : ''}
 
-${productEvidence ? `=== WEB PRODUCT EVIDENCE ===\n${productEvidence}\n=== END ===` : 'Use web search on official shop/catalog/product pages.'}
+${productEvidence ? `=== WEB PRODUCT EVIDENCE ===\n${productEvidence}\n=== END ===` : 'Use web search on official shop/catalog/product pages AND other platforms (Amazon/Allegro/wholesale dirs if present).'}
 
 Requirements (简体中文描述字段):
-1. Extract 8–15 concrete products with name, category, retailPrice, retailPriceCNY, estimatedFOBPriceCNY, priceMinCNY, priceMaxCNY.
-2. websiteCategories: real nav/catalog tree (3–10 categories).
-3. businessScope.coreProducts / relevantProducts / priceSensitivity / brandPositioning / consumerGroup / productVariety.
-4. tradeIntelligence.importCategories + hsCodes (short).
-5. productSummary entirely in Simplified Chinese.
-6. Do NOT invent customs IDs. Unknown → "公开信息未找到".
+1. FIRST inventory the company's ENTIRE assortment — all major categories from website nav + shop + other platforms. Do NOT only collect "${searchKeyword || 'keyword'}"-related items.
+2. websiteCategories: 5–15 real nav/catalog categories. EACH MUST include priceMinCNY, priceMaxCNY, priceBand (CNY terminal/retail band for that category).
+3. products[]: 12–20 concrete SKUs spanning MULTIPLE categories (breadth of full catalog). Each with name, category, retailPrice, retailPriceCNY, estimatedFOBPriceCNY, priceMinCNY, priceMaxCNY.
+4. AFTER full collection: keywordMatch=true only if clearly related to "${searchKeyword || ''}"; otherwise false. Never drop non-matching SKUs.
+5. businessScope.coreProducts = 全站主营品类；relevantProducts 可列与关键词相关项；priceSensitivity / brandPositioning / consumerGroup / productVariety.
+6. tradeIntelligence.importCategories + hsCodes (cover full lines, short).
+7. productSummary entirely in Simplified Chinese (全站定位 + 可选关键词机会).
+8. Do NOT invent customs IDs. Unknown → "公开信息未找到".
 
 Output JSON only:
 {
-  "websiteCategories": [{ "categoryName": "", "items": [] }],
+  "websiteCategories": [{ "categoryName": "", "items": [], "priceMinCNY": 0, "priceMaxCNY": 0, "priceBand": "" }],
   "businessScope": { "coreProducts": [], "relevantProducts": [], "brandPositioning": "", "consumerGroup": "", "productVariety": "Medium", "priceSensitivity": "", "websiteStructure": "" },
   "tradeIntelligence": { "hsCodes": [], "importCategories": [] },
   "productSummary": { "marketPreference": "", "recommendedProducts": "", "packagingAnalysis": "", "colorPreference": "", "featureAnalysis": "" },
@@ -3209,7 +3216,24 @@ Output JSON only:
   const merged: AnalysisResult = {
     ...base,
     websiteCategories: Array.isArray(ai.websiteCategories) && ai.websiteCategories.length
-      ? ai.websiteCategories
+      ? ai.websiteCategories.map((cat: any) => {
+          const priceMinCNY =
+            typeof cat?.priceMinCNY === 'number' && cat.priceMinCNY > 0 ? cat.priceMinCNY : undefined;
+          const priceMaxCNY =
+            typeof cat?.priceMaxCNY === 'number' && cat.priceMaxCNY > 0 ? cat.priceMaxCNY : undefined;
+          const priceBand = String(cat?.priceBand || '').trim() || undefined;
+          return {
+            categoryName: String(cat?.categoryName || '未分类').trim(),
+            items: Array.isArray(cat?.items) ? cat.items.map(String).filter(Boolean) : [],
+            priceMinCNY,
+            priceMaxCNY,
+            priceBand:
+              priceBand ||
+              (priceMinCNY != null || priceMaxCNY != null
+                ? `¥${priceMinCNY ?? '?'}–${priceMaxCNY ?? '?'}`
+                : undefined),
+          };
+        })
       : base.websiteCategories,
     businessScope: {
       ...base.businessScope,

@@ -83,10 +83,24 @@ export const normalizeAnalysisResult = (raw: unknown): AnalysisResult => {
     },
     financialTrends: asArray(ai.financialTrends),
     trafficAnalysis: asArray(ai.trafficAnalysis),
-    websiteCategories: asArray(ai.websiteCategories).map((cat: any) => ({
-      categoryName: asStr(cat?.categoryName, '未分类'),
-      items: asStringList(cat?.items),
-    })),
+    websiteCategories: asArray(ai.websiteCategories).map((cat: any) => {
+      const priceMinCNY =
+        typeof cat?.priceMinCNY === 'number' && cat.priceMinCNY > 0 ? cat.priceMinCNY : undefined;
+      const priceMaxCNY =
+        typeof cat?.priceMaxCNY === 'number' && cat.priceMaxCNY > 0 ? cat.priceMaxCNY : undefined;
+      const priceBand = asStr(cat?.priceBand, '') || undefined;
+      return {
+        categoryName: asStr(cat?.categoryName, '未分类'),
+        items: asStringList(cat?.items),
+        priceMinCNY,
+        priceMaxCNY,
+        priceBand:
+          priceBand ||
+          (priceMinCNY != null || priceMaxCNY != null
+            ? `¥${priceMinCNY ?? '?'}–${priceMaxCNY ?? '?'}`
+            : undefined),
+      };
+    }),
     businessScope: {
       coreProducts: asStringList(ai.businessScope?.coreProducts),
       relevantProducts: asStringList(ai.businessScope?.relevantProducts),
