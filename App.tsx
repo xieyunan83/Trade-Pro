@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { analyzeCompany, digProductIntelligence, hasApiKeyConfigured, checkApiKeyAvailability, hydrateApiConfigsFromCloud, searchPotentialClients, enableTavilyGeminiQwenCascade } from './services/geminiService';
+import { analyzeCompany, hasApiKeyConfigured, checkApiKeyAvailability, hydrateApiConfigsFromCloud, searchPotentialClients, enableTavilyGeminiQwenCascade } from './services/geminiService';
 import {
   subscribeCooldown,
   withRateLimitRetry,
@@ -33,7 +33,17 @@ import { ModuleBackground } from './components/ModuleBackground';
 import { ModuleProducts } from './components/ModuleProducts';
 import { ModuleDecisionMakers } from './components/ModuleDecisionMakers';
 import { DmEmailSearchPanel } from './components/DmEmailSearchPanel';
+import { ProductDigPanel } from './components/ProductDigPanel';
 import { enqueueDmEmailSearch, type DmEmailSearchJob } from './services/dmEmailSearchQueue';
+import {
+  enqueueProductDigBatch,
+  setProductDigHistoryResolver,
+  stopProductDigQueue,
+  subscribeProductDigJobs,
+  getProductDigProgress,
+  isProductDigQueueBusy,
+} from './services/productDigQueue';
+import type { ProductDigCompletePayload } from './services/productDigQueue';
 import { OrgPermissionPanel } from './components/OrgPermissionPanel';
 import { loadDepartmentsFromStorage } from './services/orgStore';
 import {
@@ -132,7 +142,13 @@ const App: React.FC = () => {
     message: string;
   }>(null);
   const [reportActionBusy, setReportActionBusy] = useState(false);
-  const [productDigBusy, setProductDigBusy] = useState(false);
+  const [productDigProgress, setProductDigProgress] = useState({
+    total: 0,
+    completed: 0,
+    failed: 0,
+    active: 0,
+    runningName: '',
+  });
   
   const [cloudModalOpen, setCloudModalOpen] = useState(false);
   const [manualToken, setManualToken] = useState('');
@@ -140,7 +156,11 @@ const App: React.FC = () => {
   const [manualRepo, setManualRepo] = useState('');
   const [authReady, setAuthReady] = useState(false);
   const shouldStopRef = useRef(false);
+  const batchRunnerActiveRef = useRef(false);
+  const batchSessionIdsRef = useRef<Set<string>>(new Set());
   const historyRef = useRef<HistoryItem[]>([]);
+  const automationResultsRef = useRef<AutomationResult[]>([]);
+  const crmClientsRef = useRef<Client[]>([]);
   const viewingHistoryIdRef = useRef<string | null>(null);
   const analysisDataRef = useRef<AnalysisResult | null>(null);
   const userDataReadyRef = useRef(false);
@@ -148,6 +168,29 @@ const App: React.FC = () => {
   useEffect(() => {
     historyRef.current = history;
   }, [history]);
+
+  useEffect(() => {
+    automationResultsRef.current = automationResults;
+  }, [automationResults]);
+
+  useEffect(() => {
+    crmClientsRef.current = crmClients;
+  }, [crmClients]);
+
+  useEffect(() => {
+    setProductDigHistoryResolver((clientId) => {
+      const client = crmClientsRef.current.find((c) => c.id === clientId);
+      if (!client) return undefined;
+      return findHistoryForClient(client, historyRef.current);
+    });
+    return () => setProductDigHistoryResolver(null);
+  }, []);
+
+  useEffect(() => {
+    return subscribeProductDigJobs(() => {
+      setProductDigProgress(getProductDigProgress());
+    });
+  }, []);
   useEffect(() => {
     viewingHistoryIdRef.current = viewingHistoryId;
   }, [viewingHistoryId]);
@@ -1433,7 +1476,11 @@ const App: React.FC = () => {
       await exportBatchAutomationReportsToPPT(completed);
   };
 
-  const stopAutomation = () => { shouldStopRef.current = true; setIsAutomating(false); };
+  const stopAutomation = () => {
+    shouldStopRef.current = true;
+    stopProductDigQueue();
+    setIsAutomating(false);
+  };
 
   /** 限制背调并行度，避免打爆限额 */
   const withConcurrency = <T,>(limit: number) => {
@@ -1753,35 +1800,64 @@ const App: React.FC = () => {
     }
   };
 
-  // RESTORED: Process Automation Queue
-  const processBatchQueue = async (tasksToRun: AutomationResult[]) => { 
-      if (tasksToRun.length === 0) return;
+  // RESTORED: Process Automation Queue（后台 drain，可与产品深挖并行）
+  const processBatchQueue = async (tasksToRun?: AutomationResult[]) => {
+      if (tasksToRun?.length) {
+        for (const t of tasksToRun) {
+          batchSessionIdsRef.current.add(t.id);
+        }
+      }
+      if (batchRunnerActiveRef.current) {
+        // 已有后台 runner：新任务保持 pending，循环末尾会继续捞取
+        setIsAutomating(true);
+        return;
+      }
+
+      batchRunnerActiveRef.current = true;
       setIsAutomating(true);
       shouldStopRef.current = false;
 
-      for (const task of tasksToRun) {
-          if (shouldStopRef.current) break;
-          
-          // Check limits before running
+      try {
+        while (!shouldStopRef.current) {
+          const fromMem = automationResultsRef.current.find(
+            (t) =>
+              t.status === 'pending' &&
+              (batchSessionIdsRef.current.size === 0 || batchSessionIdsRef.current.has(t.id))
+          );
+          let task = fromMem;
+          if (!task) {
+            try {
+              const q = await getAutomationQueue();
+              task = q.find(
+                (t) =>
+                  t.status === 'pending' &&
+                  (batchSessionIdsRef.current.size === 0 || batchSessionIdsRef.current.has(t.id))
+              );
+            } catch {
+              break;
+            }
+          }
+          if (!task) break;
+
           const limit = checkLimit('analysis');
           if (!limit.allowed) {
-              alert(`今日背调次数已达上限（${limit.current}/${limit.max}），批量任务已暂停。可在刷新后继续，或联系管理员提高限额。`);
+              alert(`今日背调次数已达上限（${limit.current}/${limit.max}），批量任务已暂停。可稍后继续，或联系管理员提高限额。`);
               break;
           }
 
-          // Update Status to Analyzing
-          setAutomationResults(prev => prev.map(t => t.id === task.id ? { ...t, status: 'analyzing' } : t));
+          setAutomationResults((prev) =>
+            prev.map((t) => (t.id === task!.id ? { ...t, status: 'analyzing' } : t))
+          );
 
           try {
-              // 1. Analyze — 遇 429 自动退避重试（全局限流门闩，避免倒计时后再连环冷却）
               const kw = (task.keyword || discoveryState.product || '').trim();
               if (kw) addCustomKeyword(kw);
               const result = await withRateLimitRetry(
                 () =>
-                  analyzeCompany(task.website, task.mode || 'economy', {
+                  analyzeCompany(task!.website, task!.mode || 'economy', {
                     searchKeyword: kw || undefined,
-                    searchTags: kw ? buildSearchTags(kw, task.country || '') : undefined,
-                    searchCountry: task.country || undefined,
+                    searchTags: kw ? buildSearchTags(kw, task!.country || '') : undefined,
+                    searchCountry: task!.country || undefined,
                   }),
                 {
                   maxAttempts: 4,
@@ -1790,62 +1866,67 @@ const App: React.FC = () => {
                 }
               );
 
-              // 2. Complete — 立刻落盘任务 + 写入历史（开发信请稍后在策略模块手动生成）
-              const completedTask: AutomationResult = { 
+              const completedTask: AutomationResult = {
                   ...task,
                   clientName: result.companyInfo?.name || task.clientName,
                   website: result.companyInfo?.website || task.website,
                   country: result.companyInfo?.headquarters?.split(',').pop()?.trim() || task.country,
                   status: 'completed',
                   completedAt: Date.now(),
-                  analysis: result, 
+                  analysis: result,
                   mailGroup: undefined,
                   keyword: kw || task.keyword || discoveryState.product,
               };
-              
+
               await saveAutomationTask(completedTask);
-              setAutomationResults(prev => prev.map(t => t.id === task.id ? completedTask : t));
+              setAutomationResults((prev) => prev.map((t) => (t.id === task!.id ? completedTask : t)));
 
               try {
                   await saveAnalysisToHistory(result, 'batch');
               } catch (histErr) {
                   console.error('批量结果写入历史失败，但任务队列已保存', histErr);
               }
-              
+
               incrementUsage('analysis');
               updateCrmStatus(result);
-
           } catch (e: any) {
               console.error(`Task ${task.id} failed`, e);
               const failedTask: AutomationResult = { ...task, status: 'failed' };
               await saveAutomationTask(failedTask);
-              setAutomationResults(prev => prev.map(t => t.id === task.id ? failedTask : t));
+              setAutomationResults((prev) => prev.map((t) => (t.id === task!.id ? failedTask : t)));
               if (isRateLimitError(e)) {
                   noteRateLimited(75);
               }
           }
-          
-          // Safety delay — 冷却中拉长间隔，降低连环 429
-          const gap = getCooldownRemainingSec() > 0 ? 5000 : 2500;
-          await new Promise(r => setTimeout(r, gap));
-      }
-      setIsAutomating(false);
 
-      const done = tasksToRun.filter((t) => {
-        const latest = automationResults.find((x) => x.id === t.id);
-        return latest?.status === 'completed' || t.status === 'completed';
-      }).length;
-      // 用队列最新状态统计（state 可能滞后，再读一遍本地库更准）
-      try {
-        const q = await getAutomationQueue();
-        const completedNow = q.filter(
-          (t) => tasksToRun.some((r) => r.id === t.id) && t.status === 'completed' && t.analysis
-        ).length;
-        if (completedNow > 0) {
-          alert(`批量背调完成 ${completedNow} 条。结果已写入「历史记录」与任务队列，可查看并下载 PPT。`);
+          const gap = getCooldownRemainingSec() > 0 ? 5000 : 2500;
+          await new Promise((r) => setTimeout(r, gap));
         }
-      } catch {
-        if (done > 0) alert('批量背调已结束，请到历史记录或自动化队列查看结果。');
+      } finally {
+        batchRunnerActiveRef.current = false;
+        const stillPending = automationResultsRef.current.some(
+          (t) =>
+            t.status === 'pending' &&
+            (batchSessionIdsRef.current.size === 0 || batchSessionIdsRef.current.has(t.id))
+        );
+        if (stillPending && !shouldStopRef.current) {
+          void processBatchQueue();
+          return;
+        }
+        setIsAutomating(false);
+        const sessionIds = batchSessionIdsRef.current;
+        try {
+          const q = await getAutomationQueue();
+          const completedNow = q.filter(
+            (t) => sessionIds.has(t.id) && t.status === 'completed' && t.analysis
+          ).length;
+          if (completedNow > 0 && sessionIds.size > 0) {
+            // 非阻塞提示：不打断当前页面
+            console.info(`[batch] 后台背调完成 ${completedNow} 条`);
+          }
+        } catch {
+          /* ignore */
+        }
       }
   };
 
@@ -1889,75 +1970,73 @@ const App: React.FC = () => {
       setBatchModalOpen(true); 
   };
 
-  /** CRM：对已背调客户批量产品品类/价格深挖并入库 */
-  const handleBatchProductDigFromCRM = async (clients: Client[]) => {
+  /** CRM：批量产品深挖 → 后台队列（可与批量背调同时进行） */
+  const handleProductDigComplete = async (payload: ProductDigCompletePayload) => {
+    const { clientId, domain, result, previousHistoryId } = payload;
+    const client = crmClientsRef.current.find((c) => c.id === clientId);
+    const hist = client
+      ? findHistoryForClient(client, historyRef.current)
+      : previousHistoryId
+        ? historyRef.current.find((h) => h.id === previousHistoryId)
+        : undefined;
+    const historyItem: HistoryItem = stampOwnership({
+      id: hist?.id || previousHistoryId || `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+      type: ModuleType.BACKGROUND,
+      data: result,
+      timestamp: Date.now(),
+      domain: result.companyInfo?.website || domain,
+      keyword: result.searchKeyword || hist?.keyword,
+      country: result.searchCountry || hist?.country || client?.country,
+      source: 'product_redig',
+    });
+    try {
+      await persistHistoryItem(historyItem);
+      setHistory((prev) => {
+        const rest = prev.filter((h) => h.id !== historyItem.id);
+        return [historyItem, ...rest];
+      });
+      await indexAnalysisIntoProductCatalog(result, {
+        historyId: historyItem.id,
+        crmClientId: clientId,
+        ownerUsername: historyItem.ownerUsername,
+        departmentId: historyItem.departmentId,
+      });
+      const patch = clientPatchFromAnalysis(result, domain, Date.now());
+      setCrmClients((prev) => prev.map((c) => (c.id !== clientId ? c : { ...c, ...patch })));
+    } catch (e) {
+      console.error('[productDig] persist failed', domain, e);
+    }
+  };
+
+  const handleBatchProductDigFromCRM = (clients: Client[]) => {
     if (!clients?.length) return;
-    if (!hasPermission(currentUser, 'feature.product_redig') && !hasPermission(currentUser, 'feature.analyze_company')) {
+    const authorized =
+      hasPermission(currentUser, 'feature.product_redig') ||
+      hasPermission(currentUser, 'feature.analyze_company');
+    if (!authorized) {
       alert('你没有「产品品类深挖」权限，请联系管理员开通。');
       return;
     }
     if (
       !confirm(
-        `将对 ${clients.length} 家客户联网爬取官网及其它平台的全部品类与价格区间（不仅关键词相关），并写入产品匹配库。继续？`
+        `将对 ${clients.length} 家客户在后台爬取全部品类与价格区间（可与批量背调同时进行）。继续？`
       )
     ) {
       return;
     }
-    setProductDigBusy(true);
-    let ok = 0;
-    let fail = 0;
-    try {
-      for (const client of clients) {
-        try {
-          const domain = (client.website || client.name || '').trim();
-          if (!domain) {
-            fail += 1;
-            continue;
-          }
-          const hist = findHistoryForClient(client, history);
-          const merged = await withRateLimitRetry(() =>
-            digProductIntelligence(domain, hist?.data || null, {
-              searchKeyword: client.searchKeyword || hist?.data?.searchKeyword || discoveryState.product,
-              searchCountry: client.country || hist?.data?.searchCountry,
-            })
-          );
-          const historyItem: HistoryItem = stampOwnership({
-            id: hist?.id || `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
-            type: ModuleType.BACKGROUND,
-            data: merged,
-            timestamp: Date.now(),
-            domain: merged.companyInfo?.website || domain,
-            keyword: merged.searchKeyword || hist?.keyword,
-            country: merged.searchCountry || hist?.country || client.country,
-            source: 'product_redig',
-          });
-          await persistHistoryItem(historyItem);
-          setHistory((prev) => {
-            const rest = prev.filter((h) => h.id !== historyItem.id);
-            return [historyItem, ...rest];
-          });
-          await indexAnalysisIntoProductCatalog(merged, {
-            historyId: historyItem.id,
-            crmClientId: client.id,
-            ownerUsername: historyItem.ownerUsername,
-            departmentId: historyItem.departmentId,
-          });
-          const patch = clientPatchFromAnalysis(merged, domain, Date.now());
-          setCrmClients((prev) =>
-            prev.map((c) => (c.id !== client.id ? c : { ...c, ...patch }))
-          );
-          ok += 1;
-        } catch (e) {
-          console.error('[productDig] failed for', client.name, e);
-          fail += 1;
-          if (isRateLimitError(e)) noteRateLimited();
-        }
-      }
-      alert(`产品深挖完成：成功 ${ok}，失败 ${fail}。可在「新品匹配」中按新品反查客户。`);
-      setActiveModule(ModuleType.PRODUCT_MATCH);
-    } finally {
-      setProductDigBusy(false);
+    const { queued, skipped, reasons } = enqueueProductDigBatch(clients, {
+      authorized: true,
+      onComplete: handleProductDigComplete,
+    });
+    if (queued === 0) {
+      alert(reasons[0] || '没有任务可加入队列');
+      return;
     }
+    alert(
+      skipped > 0
+        ? `已加入后台产品深挖 ${queued} 家（跳过 ${skipped}）。可继续其它操作，左下角查看进度。`
+        : `已加入后台产品深挖 ${queued} 家。可继续其它操作，左下角查看进度。`
+    );
   };
 
   /** 同类公司多选 → 批量背调队列 */
@@ -2003,7 +2082,6 @@ const App: React.FC = () => {
         return;
       }
       setBatchModalOpen(false); 
-      setActiveModule(ModuleType.PROMO_GENERATOR); 
       
       const kw = (discoveryState.product || pendingBatchContext || '').trim();
       if (kw && kw !== 'Manual Input' && kw !== 'CRM Batch' && kw !== 'Discovery Batch') {
@@ -2028,22 +2106,44 @@ const App: React.FC = () => {
       }));
       setPendingBatchCountries({}); 
       
+      for (const t of newTasks) batchSessionIdsRef.current.add(t.id);
       setAutomationResults(prev => [...prev, ...newTasks]); 
       for (const task of newTasks) { 
           await saveAutomationTask(task); 
       } 
       
-      await processBatchQueue(newTasks); 
+      // 后台执行，不阻塞当前页面；可同时开产品深挖
+      void processBatchQueue(newTasks);
+      alert(`已加入后台批量背调 ${newTasks.length} 家。可继续操作，左侧栏可查看进度。`);
   };
 
   const handleRunPending = async () => { 
-      const pending = automationResults.filter(t => t.status === 'pending' || t.status === 'failed'); 
-      await processBatchQueue(pending); 
+      const pending = automationResults.filter((t) => t.status === 'pending' || t.status === 'failed');
+      if (!pending.length) return;
+      const resetFailed = pending.filter((t) => t.status === 'failed');
+      if (resetFailed.length) {
+        setAutomationResults((prev) =>
+          prev.map((t) => (t.status === 'failed' && pending.some((p) => p.id === t.id) ? { ...t, status: 'pending' } : t))
+        );
+        for (const t of resetFailed) {
+          await saveAutomationTask({ ...t, status: 'pending' });
+        }
+      }
+      for (const t of pending) batchSessionIdsRef.current.add(t.id);
+      void processBatchQueue(pending.map((t) => ({ ...t, status: 'pending' as const })));
   };
   
   const handleRunSingle = async (id: string) => { 
-      const task = automationResults.find(t => t.id === id);
-      if(task) await processBatchQueue([task]);
+      const task = automationResults.find((t) => t.id === id);
+      if (!task) return;
+      if (task.status === 'failed' || task.status === 'completed') {
+        const reset = { ...task, status: 'pending' as const, analysis: undefined };
+        await saveAutomationTask(reset);
+        setAutomationResults((prev) => prev.map((t) => (t.id === id ? reset : t)));
+        void processBatchQueue([reset]);
+        return;
+      }
+      void processBatchQueue([task]);
   };
 
   /** 已完成任务：重置后再次背调 */
@@ -2068,7 +2168,7 @@ const App: React.FC = () => {
       };
       await saveAutomationTask(reset);
       setAutomationResults((prev) => prev.map((t) => (t.id === id ? reset : t)));
-      await processBatchQueue([reset]);
+      void processBatchQueue([reset]);
   };
 
   /** 当前报告页：再次背调 */
@@ -2470,15 +2570,82 @@ const App: React.FC = () => {
             </div>
         )}
 
-        {isAutomating && (
-            <div className="mx-4 mt-4 p-3 bg-slate-900 rounded-xl border border-slate-800 shadow-lg text-white animate-pulse">
-                <div className="flex justify-between items-center mb-2">
-                    <span className="text-xs font-bold text-green-400 flex items-center gap-1"><Loader2 className="animate-spin" size={10}/> RUNNING</span>
-                    <span className="text-[10px] text-slate-400">Processing...</span>
-                </div>
-                <div className="text-xs font-bold mb-3">{automationResults.filter(r => r.status === 'completed').length} / {automationResults.length} Completed</div>
+        {(isAutomating || productDigProgress.active > 0) && (
+            <div className="mx-4 mt-4 p-3 bg-slate-900 rounded-xl border border-slate-800 shadow-lg text-white space-y-3">
+                {isAutomating && (
+                  <div>
+                    <div className="flex justify-between items-center mb-2">
+                        <span className="text-xs font-bold text-green-400 flex items-center gap-1">
+                          <Loader2 className="animate-spin" size={10}/> 批量背调进行中
+                        </span>
+                        <span className="text-[10px] text-slate-400">后台运行</span>
+                    </div>
+                    {(() => {
+                      const session = automationResults.filter(
+                        (r) => batchSessionIdsRef.current.has(r.id) || r.status === 'analyzing' || r.status === 'pending'
+                      );
+                      const list = session.length ? session : automationResults;
+                      const done = list.filter((r) => r.status === 'completed').length;
+                      const failed = list.filter((r) => r.status === 'failed').length;
+                      const analyzing = list.find((r) => r.status === 'analyzing');
+                      const total = list.length;
+                      const pct = total ? Math.round(((done + failed) / total) * 100) : 0;
+                      return (
+                        <>
+                          <div className="text-xs font-bold mb-1">
+                            {done + failed} / {total} 已处理
+                            {failed > 0 ? `（失败 ${failed}）` : ''}
+                          </div>
+                          <div className="h-1.5 rounded-full bg-slate-700 overflow-hidden mb-2">
+                            <div className="h-full bg-green-500 transition-all" style={{ width: `${pct}%` }} />
+                          </div>
+                          {analyzing && (
+                            <div className="text-[10px] text-slate-400 truncate mb-2">
+                              当前：{analyzing.clientName || analyzing.website}
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
+                )}
+                {productDigProgress.active > 0 && (
+                  <div>
+                    <div className="flex justify-between items-center mb-2">
+                        <span className="text-xs font-bold text-emerald-400 flex items-center gap-1">
+                          <Loader2 className="animate-spin" size={10}/> 产品深挖进行中
+                        </span>
+                        <span className="text-[10px] text-slate-400">后台运行</span>
+                    </div>
+                    <div className="text-xs font-bold mb-1">
+                      {productDigProgress.completed + productDigProgress.failed} / {productDigProgress.total} 已处理
+                      {productDigProgress.failed > 0 ? `（失败 ${productDigProgress.failed}）` : ''}
+                    </div>
+                    <div className="h-1.5 rounded-full bg-slate-700 overflow-hidden mb-2">
+                      <div
+                        className="h-full bg-emerald-500 transition-all"
+                        style={{
+                          width: `${
+                            productDigProgress.total
+                              ? Math.round(
+                                  ((productDigProgress.completed + productDigProgress.failed) /
+                                    productDigProgress.total) *
+                                    100
+                                )
+                              : 0
+                          }%`,
+                        }}
+                      />
+                    </div>
+                    {productDigProgress.runningName && (
+                      <div className="text-[10px] text-slate-400 truncate mb-2">
+                        当前：{productDigProgress.runningName}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <button onClick={stopAutomation} className="w-full bg-red-600 hover:bg-red-700 text-white text-xs font-bold py-2 rounded-lg flex items-center justify-center gap-1 transition-colors">
-                    <StopCircle size={12} /> STOP NOW
+                    <StopCircle size={12} /> 停止后台任务
                 </button>
             </div>
         )}
@@ -2762,7 +2929,7 @@ const App: React.FC = () => {
                         onBatchProductDig={handleBatchProductDigFromCRM}
                         onPurgeBeforeJune2026={handlePurgeCrmBeforeJune2026}
                         onRecoverCrm={handleRecoverCrm}
-                        productDigBusy={productDigBusy}
+                        productDigBusy={isProductDigQueueBusy() || productDigProgress.active > 0}
                         onReanalyze={(client) => void handleBatchAnalyzeFromCRM([client])}
                         history={history}
                         onOpenHistory={loadFromHistory}
@@ -3109,6 +3276,7 @@ const App: React.FC = () => {
       )}
 
       {hasPermission(currentUser, 'feature.dm_email_search') && <DmEmailSearchPanel />}
+      <ProductDigPanel />
 
       {reportConfirm && (
         <div className="fixed inset-0 z-[90] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">

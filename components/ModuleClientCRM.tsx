@@ -30,7 +30,7 @@ interface ModuleClientCRMProps {
   onBatchDelete?: (clients: Client[]) => void | Promise<void>;
   /** 批量决策人邮箱深挖（后台队列） */
   onBatchDmSearch?: (clients: Client[]) => void;
-  onBatchProductDig?: (clients: Client[]) => Promise<void>;
+  onBatchProductDig?: (clients: Client[]) => void | Promise<void>;
   /** 手动清理 2026-06 前旧 CRM */
   onPurgeBeforeJune2026?: () => void | Promise<void>;
   /** 从 GitHub / Supabase / 背调历史恢复 CRM */
@@ -694,13 +694,14 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
             {onBatchProductDig && (
               <button
                 type="button"
-                disabled={productDigBusy}
                 onClick={() => void onBatchProductDig(selectedClients)}
-                className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm touch-manipulation disabled:opacity-50 inline-flex items-center justify-center gap-2"
-                title="联网深挖/更新产品品类与价格，写入产品匹配库"
+                className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm touch-manipulation inline-flex items-center justify-center gap-2"
+                title="后台联网深挖全部品类与价格（不阻塞页面，可与批量背调同时进行）"
               >
                 <PackageSearch size={16} />
-                {productDigBusy ? '产品深挖中…' : `批量产品深挖 (${selectedClientIds.size})`}
+                {productDigBusy
+                  ? `继续加入产品深挖 (${selectedClientIds.size})`
+                  : `批量产品深挖 (${selectedClientIds.size})`}
               </button>
             )}
             {onBatchDelete && (
