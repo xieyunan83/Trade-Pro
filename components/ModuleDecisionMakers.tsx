@@ -25,6 +25,7 @@ interface ModuleDecisionMakersProps {
   ) => void;
   /** 入队后台搜索；由 App 注入写回逻辑 */
   onEnqueueEmailSearch?: () => { ok: boolean; message: string };
+  onAddToCRM?: () => void;
 }
 
 const formatSearchTime = (ts?: number) => {
@@ -70,6 +71,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
   canViewEmails = true,
   onUpdate,
   onEnqueueEmailSearch,
+  onAddToCRM,
 }) => {
   const [decisionMakers, setDecisionMakers] = useState(() =>
     (data.decisionMakers || []).filter(
@@ -309,6 +311,15 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
             )}
           </div>
           <div className="flex flex-col sm:flex-row gap-2 flex-shrink-0">
+            {onAddToCRM && (
+              <button
+                type="button"
+                onClick={onAddToCRM}
+                className="inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl text-sm font-semibold touch-manipulation shadow-sm"
+              >
+                <ShieldCheck size={16} /> 导入 CRM
+              </button>
+            )}
             <button
               type="button"
               onClick={handleAddDecisionMaker}

@@ -111,6 +111,7 @@ const App: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [analysisData, setAnalysisData] = useState<AnalysisResult | null>(null);
   const [viewingHistoryId, setViewingHistoryId] = useState<string | null>(null);
+  const [crmNavOrder, setCrmNavOrder] = useState<{ clientId: string; historyId: string }[]>([]);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -907,6 +908,44 @@ const App: React.FC = () => {
       setErrorMsg(`打开历史记录失败: ${e?.message || String(e)}`);
       setHistoryOpen(false);
     }
+  };
+
+  const resolveCrmNavIndex = (): number => {
+    if (!crmNavOrder.length) return -1;
+    if (viewingHistoryId) {
+      const byId = crmNavOrder.findIndex((o) => o.historyId === viewingHistoryId);
+      if (byId >= 0) return byId;
+    }
+    if (!analysisData) return -1;
+    const lookup = lookupBackgroundCheck(
+      analysisData.companyInfo?.website,
+      analysisData.companyInfo?.name,
+      history,
+      crmClients
+    );
+    if (lookup.historyItem) {
+      const byHistory = crmNavOrder.findIndex((o) => o.historyId === lookup.historyItem!.id);
+      if (byHistory >= 0) return byHistory;
+    }
+    return -1;
+  };
+
+  const goToAdjacentCrmReport = (delta: number) => {
+    const idx = resolveCrmNavIndex();
+    if (idx < 0) return;
+    const target = crmNavOrder[idx + delta];
+    if (!target) return;
+    const item = history.find((h) => h.id === target.historyId);
+    if (item) loadFromHistory(item);
+  };
+
+  const similarCompanyLookup = (company: SimilarCompany) => {
+    const lookup = lookupBackgroundCheck(company.website, company.name, history, crmClients);
+    return {
+      checked: lookup.checked,
+      checkedAt: lookup.checkedAt,
+      historyItem: lookup.historyItem,
+    };
   };
 
   /** 合并局部更新到当前背调报告并持久化到历史 */
@@ -2964,6 +3003,7 @@ const App: React.FC = () => {
                         onReanalyze={(client) => void handleBatchAnalyzeFromCRM([client])}
                         history={history}
                         onOpenHistory={loadFromHistory}
+                        onNavOrderChange={setCrmNavOrder}
                     />
                 )}
                 {activeModule === ModuleType.PRODUCT_MATCH && (
@@ -3074,6 +3114,34 @@ const App: React.FC = () => {
                               <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-slate-900 tracking-tight break-words min-w-0">
                                 {analysisData.companyInfo?.name || '未知公司'}
                               </h2>
+                              {crmNavOrder.length > 0 && (
+                                <div className="mt-1 sm:mt-2 flex items-center gap-1.5 flex-shrink-0">
+                                  <button
+                                    type="button"
+                                    disabled={resolveCrmNavIndex() <= 0}
+                                    onClick={() => goToAdjacentCrmReport(-1)}
+                                    className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 px-2.5 py-1.5 text-xs font-black touch-manipulation disabled:opacity-40"
+                                  >
+                                    前一个
+                                  </button>
+                                  <span className="text-xs font-black text-slate-500 tabular-nums px-1">
+                                    {resolveCrmNavIndex() >= 0
+                                      ? `${resolveCrmNavIndex() + 1} / ${crmNavOrder.length}`
+                                      : `— / ${crmNavOrder.length}`}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    disabled={
+                                      resolveCrmNavIndex() < 0 ||
+                                      resolveCrmNavIndex() >= crmNavOrder.length - 1
+                                    }
+                                    onClick={() => goToAdjacentCrmReport(1)}
+                                    className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 px-2.5 py-1.5 text-xs font-black touch-manipulation disabled:opacity-40"
+                                  >
+                                    后一个
+                                  </button>
+                                </div>
+                              )}
                               <div className="mt-1 sm:mt-2 flex items-center gap-2 flex-shrink-0 relative z-10">
                                 <button
                                   type="button"
@@ -3218,11 +3286,14 @@ const App: React.FC = () => {
                         }
                         onAnalyzeSimilar={(domain) => handleAnalyzeInput(domain)}
                         onBatchAnalyzeSimilar={handleBatchAnalyzeSimilar}
+                        lookupChecked={similarCompanyLookup}
+                        onOpenReport={loadFromHistory}
                       />
                     )}
                     {activeModule === ModuleType.PRODUCTS && (
                       <ModuleProducts
                         data={analysisData}
+                        onAddToCRM={handleAddToCRM}
                         onUpdateProductSummary={(summary) => {
                           const next = { ...analysisData, productSummary: summary };
                           persistCurrentAnalysis(next).catch(console.error);
@@ -3233,6 +3304,7 @@ const App: React.FC = () => {
                       <ModuleDecisionMakers
                         data={analysisData}
                         historyId={viewingHistoryId}
+                        onAddToCRM={handleAddToCRM}
                         canDmEmailSearch={hasPermission(currentUser, 'feature.dm_email_search')}
                         canExportExcel={hasPermission(currentUser, 'feature.export_report')}
                         canViewEmails={canViewFullDecisionMakerEmails(currentUser)}
@@ -3261,6 +3333,8 @@ const App: React.FC = () => {
                         data={analysisData}
                         onAnalyze={handleAnalyzeInput}
                         onBatchAnalyze={handleBatchAnalyzeSimilar}
+                        lookupChecked={similarCompanyLookup}
+                        onOpenReport={loadFromHistory}
                       />
                     )}
                     </div>

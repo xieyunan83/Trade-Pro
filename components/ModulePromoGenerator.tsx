@@ -25,6 +25,8 @@ import { findCountryByEn } from '../data/countriesByContinent';
 import { exportAutomationResultsToExcel } from '../services/exportService';
 import { formatBackgroundCheckTime } from '../utils/crmHistory';
 import { IndustryMultiSelect } from './IndustryMultiSelect';
+import { PaginationBar } from './PaginationBar';
+import { hasRichProductCatalog } from '../services/productCatalog';
 import { maskEmailAddress } from '../services/permissions';
 
 interface ModulePromoGeneratorProps {
@@ -94,6 +96,9 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   const [filterKeyword, setFilterKeyword] = useState('all');
   const [filterMode, setFilterMode] = useState<'all' | 'detailed' | 'economy'>('all');
   const [filterIndustry, setFilterIndustry] = useState('all');
+  const [filterBg, setFilterBg] = useState<'all' | 'yes' | 'no'>('all');
+  const [filterProduct, setFilterProduct] = useState<'all' | 'yes' | 'no'>('all');
+  const [filterDm, setFilterDm] = useState<'all' | 'yes' | 'no'>('all');
   const [pageSize, setPageSize] = useState<10 | 20 | 50>(20);
   const [page, setPage] = useState(1);
 
@@ -145,6 +150,11 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
     [automationResults]
   );
 
+  const taskHasBg = (task: AutomationResult) => task.status === 'completed' && !!task.analysis;
+  const taskHasProduct = (task: AutomationResult) => hasRichProductCatalog(task.analysis);
+  const taskHasDm = (task: AutomationResult) =>
+    !!task.analysis?.decisionMakerEmailSearchAt || (task.analysis?.decisionMakers?.length || 0) > 0;
+
   const filteredResults = useMemo(() => {
     const q = filterQuery.trim().toLowerCase();
     return automationResults.filter((task) => {
@@ -156,6 +166,12 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
       if (filterKeyword !== 'all' && !kws.includes(filterKeyword)) return false;
       const industry = taskIndustry(task);
       if (filterIndustry !== 'all' && industry !== filterIndustry) return false;
+      if (filterBg === 'yes' && !taskHasBg(task)) return false;
+      if (filterBg === 'no' && taskHasBg(task)) return false;
+      if (filterProduct === 'yes' && !taskHasProduct(task)) return false;
+      if (filterProduct === 'no' && taskHasProduct(task)) return false;
+      if (filterDm === 'yes' && !taskHasDm(task)) return false;
+      if (filterDm === 'no' && taskHasDm(task)) return false;
       if (q) {
         const contact = taskPrimaryContact(task);
         const hay = [
@@ -184,6 +200,9 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
     filterKeyword,
     filterMode,
     filterIndustry,
+    filterBg,
+    filterProduct,
+    filterDm,
   ]);
 
   const totalPages = Math.max(1, Math.ceil(filteredResults.length / pageSize));
@@ -196,7 +215,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   // 筛选/页大小变化时回到第一页
   useEffect(() => {
     setPage(1);
-  }, [filterQuery, filterStatus, filterCountry, filterKeyword, filterMode, filterIndustry, pageSize]);
+  }, [filterQuery, filterStatus, filterCountry, filterKeyword, filterMode, filterIndustry, filterBg, filterProduct, filterDm, pageSize]);
 
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
@@ -242,6 +261,9 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
     setFilterKeyword('all');
     setFilterMode('all');
     setFilterIndustry('all');
+    setFilterBg('all');
+    setFilterProduct('all');
+    setFilterDm('all');
   };
 
   const hasActiveFilters =
@@ -250,7 +272,10 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
     filterCountry !== 'all' ||
     filterKeyword !== 'all' ||
     filterMode !== 'all' ||
-    filterIndustry !== 'all';
+    filterIndustry !== 'all' ||
+    filterBg !== 'all' ||
+    filterProduct !== 'all' ||
+    filterDm !== 'all';
 
   const handleBatchExport = () => {
     const list = selectedTasks.length ? selectedTasks : filteredResults.filter((t) => t.status === 'completed');
@@ -830,6 +855,33 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                 </option>
               ))}
             </select>
+            <select
+              value={filterBg}
+              onChange={(e) => setFilterBg(e.target.value as typeof filterBg)}
+              className="px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold bg-white"
+            >
+              <option value="all">背调: 全部</option>
+              <option value="yes">已背调</option>
+              <option value="no">未背调</option>
+            </select>
+            <select
+              value={filterProduct}
+              onChange={(e) => setFilterProduct(e.target.value as typeof filterProduct)}
+              className="px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold bg-white"
+            >
+              <option value="all">品类: 全部</option>
+              <option value="yes">已采品类</option>
+              <option value="no">未采品类</option>
+            </select>
+            <select
+              value={filterDm}
+              onChange={(e) => setFilterDm(e.target.value as typeof filterDm)}
+              className="px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold bg-white"
+            >
+              <option value="all">决策人: 全部</option>
+              <option value="yes">已挖决策人</option>
+              <option value="no">未挖决策人</option>
+            </select>
             {hasActiveFilters && (
               <button
                 type="button"
@@ -960,6 +1012,23 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                             规模: {task.analysis.companyInfo.scale}
                           </div>
                         )}
+                        <div className="flex flex-wrap gap-1 mt-1.5">
+                          {taskHasBg(task) && (
+                            <span className="inline-flex text-[9px] font-black bg-emerald-50 text-emerald-700 border border-emerald-100 px-1.5 py-0.5 rounded">
+                              已背调
+                            </span>
+                          )}
+                          {taskHasProduct(task) && (
+                            <span className="inline-flex text-[9px] font-black bg-teal-50 text-teal-700 border border-teal-100 px-1.5 py-0.5 rounded">
+                              已采品类
+                            </span>
+                          )}
+                          {taskHasDm(task) && (
+                            <span className="inline-flex text-[9px] font-black bg-amber-50 text-amber-800 border border-amber-100 px-1.5 py-0.5 rounded">
+                              已挖决策人
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-4 text-sm font-bold text-slate-600 whitespace-nowrap">
                         {task.country || task.analysis?.searchCountry || '—'}
@@ -1137,57 +1206,11 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                 </button>
               )}
             </div>
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <button
-                type="button"
-                disabled={safePage <= 1}
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-slate-600 disabled:opacity-40 hover:bg-white"
-              >
-                上一页
-              </button>
-              {Array.from({ length: totalPages }, (_, i) => i + 1)
-                .filter((n) => {
-                  if (totalPages <= 7) return true;
-                  if (n === 1 || n === totalPages) return true;
-                  return Math.abs(n - safePage) <= 1;
-                })
-                .reduce<(number | 'gap')[]>((acc, n, idx, arr) => {
-                  if (idx > 0 && typeof arr[idx - 1] === 'number' && n - (arr[idx - 1] as number) > 1) {
-                    acc.push('gap');
-                  }
-                  acc.push(n);
-                  return acc;
-                }, [])
-                .map((n, idx) =>
-                  n === 'gap' ? (
-                    <span key={`gap-${idx}`} className="px-1 text-slate-400 text-xs font-bold">
-                      …
-                    </span>
-                  ) : (
-                    <button
-                      key={n}
-                      type="button"
-                      onClick={() => setPage(n)}
-                      className={`min-w-[32px] px-2 py-1.5 rounded-lg border text-xs font-black ${
-                        n === safePage
-                          ? 'bg-slate-900 text-white border-slate-900'
-                          : 'border-slate-200 text-slate-600 hover:bg-white'
-                      }`}
-                    >
-                      {n}
-                    </button>
-                  )
-                )}
-              <button
-                type="button"
-                disabled={safePage >= totalPages}
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-slate-600 disabled:opacity-40 hover:bg-white"
-              >
-                下一页
-              </button>
-            </div>
+            <PaginationBar
+              page={safePage}
+              totalPages={totalPages}
+              onPageChange={setPage}
+            />
           </div>
         )}
       </div>

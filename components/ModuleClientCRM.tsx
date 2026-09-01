@@ -17,11 +17,14 @@ import {
   buildHistoryLookupIndex,
   clientHasBackgroundCheckIndexed,
   formatBackgroundCheckTime,
+  historyHasDmSearch,
   lookupHistoryForClient,
   resolveBackgroundCheckAtIndexed,
 } from '../utils/crmHistory';
 import { exportClientsToExcel } from '../services/exportService';
 import { IndustryMultiSelect } from './IndustryMultiSelect';
+import { PaginationBar } from './PaginationBar';
+import { hasRichProductCatalog } from '../services/productCatalog';
 
 interface ModuleClientCRMProps {
   clients: Client[];
@@ -39,12 +42,16 @@ interface ModuleClientCRMProps {
   history: HistoryItem[];
   onOpenHistory: (item: HistoryItem) => void;
   productDigBusy?: boolean;
+  /** 当前筛选后的客户顺序（含可打开报告的），供报告页上一家/下一家 */
+  onNavOrderChange?: (order: { clientId: string; historyId: string }[]) => void;
 }
 
 type EnrichedClient = {
   client: Client;
   historyItem?: HistoryItem;
   hasBg: boolean;
+  hasProduct: boolean;
+  hasDm: boolean;
   bgAt?: number;
   canOpenReport: boolean;
 };
@@ -216,6 +223,38 @@ const BgStatus = React.memo(
 );
 BgStatus.displayName = 'BgStatus';
 
+const IntelChips: React.FC<{ hasBg: boolean; hasProduct: boolean; hasDm: boolean }> = ({
+  hasBg,
+  hasProduct,
+  hasDm,
+}) => (
+  <div className="flex flex-wrap gap-1">
+    <span
+      className={`text-[9px] font-black px-1.5 py-0.5 rounded ${
+        hasBg ? 'bg-violet-600 text-white' : 'bg-slate-100 text-slate-400 border border-slate-200'
+      }`}
+    >
+      {hasBg ? '已背调' : '未背调'}
+    </span>
+    <span
+      className={`text-[9px] font-black px-1.5 py-0.5 rounded inline-flex items-center gap-0.5 ${
+        hasProduct ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-400 border border-slate-200'
+      }`}
+    >
+      <PackageSearch size={9} />
+      {hasProduct ? '已采品类' : '未采品类'}
+    </span>
+    <span
+      className={`text-[9px] font-black px-1.5 py-0.5 rounded inline-flex items-center gap-0.5 ${
+        hasDm ? 'bg-amber-500 text-white' : 'bg-slate-100 text-slate-400 border border-slate-200'
+      }`}
+    >
+      <Users size={9} />
+      {hasDm ? '已挖决策人' : '未挖决策人'}
+    </span>
+  </div>
+);
+
 export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   clients,
   setClients,
@@ -229,6 +268,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   history,
   onOpenHistory,
   productDigBusy,
+  onNavOrderChange,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const debouncedSearch = useDebouncedValue(searchTerm);
@@ -238,7 +278,10 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   const [filterProductType, setFilterProductType] = useState<string>('all');
   const [filterDateFrom, setFilterDateFrom] = useState('');
   const [filterDateTo, setFilterDateTo] = useState('');
-  const [filterBackgroundCheck, setFilterBackgroundCheck] = useState<boolean>(false);
+  /** all | yes | no */
+  const [filterBg, setFilterBg] = useState<'all' | 'yes' | 'no'>('all');
+  const [filterProduct, setFilterProduct] = useState<'all' | 'yes' | 'no'>('all');
+  const [filterDm, setFilterDm] = useState<'all' | 'yes' | 'no'>('all');
   const [filterStatus, setFilterStatus] = useState<Client['status'] | 'all' | 'overdue'>('all');
   const [selectedClientIds, setSelectedClientIds] = useState<Set<string>>(new Set());
   const [page, setPage] = useState(1);
@@ -250,10 +293,14 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
       const historyItem = lookupHistoryForClient(client, historyIndex);
       const bgAt = resolveBackgroundCheckAtIndexed(client, historyIndex);
       const hasBg = clientHasBackgroundCheckIndexed(client, historyIndex);
+      const hasProduct = hasRichProductCatalog(historyItem?.data);
+      const hasDm = historyItem ? historyHasDmSearch(historyItem) : false;
       return {
         client,
         historyItem,
         hasBg,
+        hasProduct,
+        hasDm,
         bgAt,
         canOpenReport: !!historyItem,
       };
@@ -281,7 +328,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
 
   const filteredEnriched = useMemo(() => {
     const q = debouncedSearch.trim().toLowerCase();
-    return enrichedClients.filter(({ client, hasBg, bgAt }) => {
+    return enrichedClients.filter(({ client, hasBg, hasProduct, hasDm, bgAt }) => {
       if (q) {
         const hit =
           client.name.toLowerCase().includes(q) ||
@@ -302,7 +349,12 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
         const needle = filterIndustry.toLowerCase().split(',')[0].trim();
         if (!ind.includes(needle)) return false;
       }
-      if (filterBackgroundCheck && !hasBg) return false;
+      if (filterBg === 'yes' && !hasBg) return false;
+      if (filterBg === 'no' && hasBg) return false;
+      if (filterProduct === 'yes' && !hasProduct) return false;
+      if (filterProduct === 'no' && hasProduct) return false;
+      if (filterDm === 'yes' && !hasDm) return false;
+      if (filterDm === 'no' && hasDm) return false;
       if (filterStatus === 'overdue' && !isOverdueFollowUp(client)) return false;
       if (filterStatus !== 'all' && filterStatus !== 'overdue' && client.status !== filterStatus) {
         return false;
@@ -320,13 +372,23 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
     debouncedSearch,
     filterCountry,
     filterType,
-    filterIndustry,
     filterProductType,
-    filterBackgroundCheck,
+    filterIndustry,
+    filterBg,
+    filterProduct,
+    filterDm,
     filterStatus,
     dateFromMs,
     dateToMs,
   ]);
+
+  useEffect(() => {
+    if (!onNavOrderChange) return;
+    const order = filteredEnriched
+      .filter((e) => e.historyItem?.id)
+      .map((e) => ({ clientId: e.client.id, historyId: e.historyItem!.id }));
+    onNavOrderChange(order);
+  }, [filteredEnriched, onNavOrderChange]);
 
   const totalPages = Math.max(1, Math.ceil(filteredEnriched.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
@@ -345,7 +407,9 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
     filterProductType,
     filterDateFrom,
     filterDateTo,
-    filterBackgroundCheck,
+    filterBg,
+    filterProduct,
+    filterDm,
     filterStatus,
   ]);
 
@@ -440,7 +504,9 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
     setFilterProductType('all');
     setFilterDateFrom('');
     setFilterDateTo('');
-    setFilterBackgroundCheck(false);
+    setFilterBg('all');
+    setFilterProduct('all');
+    setFilterDm('all');
     setFilterStatus('all');
   };
 
@@ -452,7 +518,9 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
     filterProductType !== 'all' ||
     !!filterDateFrom ||
     !!filterDateTo ||
-    filterBackgroundCheck ||
+    filterBg !== 'all' ||
+    filterProduct !== 'all' ||
+    filterDm !== 'all' ||
     filterStatus !== 'all';
 
   const handleExport = () => {
@@ -649,16 +717,37 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
           </label>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
-          <label className="flex items-center gap-2 font-bold text-xs sm:text-sm text-slate-700">
-            <input
-              type="checkbox"
-              checked={filterBackgroundCheck}
-              onChange={(e) => setFilterBackgroundCheck(e.target.checked)}
-              className="w-5 h-5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-            />
-            仅已做背调
-          </label>
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+          <select
+            value={filterBg}
+            onChange={(e) => setFilterBg(e.target.value as 'all' | 'yes' | 'no')}
+            className="px-3 py-2 rounded-xl border border-slate-200 font-bold text-xs sm:text-sm bg-white"
+            title="背调状态"
+          >
+            <option value="all">背调：全部</option>
+            <option value="yes">已背调</option>
+            <option value="no">未背调</option>
+          </select>
+          <select
+            value={filterProduct}
+            onChange={(e) => setFilterProduct(e.target.value as 'all' | 'yes' | 'no')}
+            className="px-3 py-2 rounded-xl border border-slate-200 font-bold text-xs sm:text-sm bg-white"
+            title="产品品类采集状态"
+          >
+            <option value="all">品类：全部</option>
+            <option value="yes">已采品类</option>
+            <option value="no">未采品类</option>
+          </select>
+          <select
+            value={filterDm}
+            onChange={(e) => setFilterDm(e.target.value as 'all' | 'yes' | 'no')}
+            className="px-3 py-2 rounded-xl border border-slate-200 font-bold text-xs sm:text-sm bg-white"
+            title="决策人挖掘状态"
+          >
+            <option value="all">决策人：全部</option>
+            <option value="yes">已挖决策人</option>
+            <option value="no">未挖决策人</option>
+          </select>
           {hasActiveFilters && (
             <button
               type="button"
@@ -728,7 +817,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
             {clients.length === 0 ? '暂无客户数据' : '没有符合筛选条件的客户'}
           </div>
         ) : (
-          pagedEnriched.map(({ client, historyItem, hasBg, bgAt, canOpenReport }) => (
+          pagedEnriched.map(({ client, historyItem, hasBg, hasProduct, hasDm, bgAt, canOpenReport }) => (
             <div key={client.id} className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
               <div className="flex items-start justify-between gap-3 mb-3">
                 <div className="flex items-start gap-3 min-w-0">
@@ -759,6 +848,9 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                       </div>
                     )}
                     <KeywordTags client={client} />
+                    <div className="mt-1.5">
+                      <IntelChips hasBg={hasBg} hasProduct={hasProduct} hasDm={hasDm} />
+                    </div>
                   </div>
                 </div>
                 <div className="flex items-start gap-1 flex-shrink-0">
@@ -816,18 +908,19 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
               <th className="px-4 lg:px-6 py-4">网址</th>
               <th className="px-4 lg:px-6 py-4">阶段 / 跟进</th>
               <th className="px-4 lg:px-6 py-4">背调</th>
+              <th className="px-4 lg:px-6 py-4">进度状态</th>
               <th className="px-4 lg:px-6 py-4 w-28">操作</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-50">
             {pagedEnriched.length === 0 ? (
               <tr>
-                <td colSpan={9} className="px-6 py-12 text-center text-slate-400 font-bold text-sm">
+                <td colSpan={10} className="px-6 py-12 text-center text-slate-400 font-bold text-sm">
                   {clients.length === 0 ? '暂无客户数据' : '没有符合筛选条件的客户'}
                 </td>
               </tr>
             ) : (
-              pagedEnriched.map(({ client, historyItem, hasBg, bgAt, canOpenReport }) => (
+              pagedEnriched.map(({ client, historyItem, hasBg, hasProduct, hasDm, bgAt, canOpenReport }) => (
                 <tr key={client.id} className="hover:bg-slate-50/50 transition-colors">
                   <td className="px-4 lg:px-6 py-4">
                     <input
@@ -874,6 +967,9 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                     />
                   </td>
                   <td className="px-4 lg:px-6 py-4">
+                    <IntelChips hasBg={hasBg} hasProduct={hasProduct} hasDm={hasDm} />
+                  </td>
+                  <td className="px-4 lg:px-6 py-4">
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
@@ -900,34 +996,19 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
       </div>
 
       {filteredEnriched.length > 0 && (
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-1 pb-4">
-          <span className="text-xs font-bold text-slate-500">
-            第 {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filteredEnriched.length)} 条
-            / 共 {filteredEnriched.length} 条
-            {selectedClientIds.size > 0 ? ` · 已选 ${selectedClientIds.size}` : ''}
-          </span>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              disabled={safePage <= 1}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold disabled:opacity-40"
-            >
-              上一页
-            </button>
-            <span className="text-xs font-black text-slate-600">
-              {safePage} / {totalPages}
-            </span>
-            <button
-              type="button"
-              disabled={safePage >= totalPages}
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold disabled:opacity-40"
-            >
-              下一页
-            </button>
-          </div>
-        </div>
+        <PaginationBar
+          page={safePage}
+          totalPages={totalPages}
+          onPageChange={setPage}
+          summary={
+            <>
+              第 {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filteredEnriched.length)} 条
+              / 共 {filteredEnriched.length} 条
+              {selectedClientIds.size > 0 ? ` · 已选 ${selectedClientIds.size}` : ''}
+            </>
+          }
+          className="px-1 pb-4"
+        />
       )}
     </div>
   );

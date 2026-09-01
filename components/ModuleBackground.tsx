@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AnalysisResult, SimilarCompany } from '../types';
+import { AnalysisResult, HistoryItem, SimilarCompany } from '../types';
 import {
   LayoutDashboard, Globe, MapPin, Calendar, Users, Briefcase, TrendingUp, ShieldCheck,
   Lightbulb, Target, Ship, Award, AlertTriangle, Store, Network, Linkedin, Package, Building2, RefreshCw, Loader2,
@@ -31,6 +31,12 @@ interface ModuleBackgroundProps {
   onAnalyzeSimilar?: (domain: string) => void;
   /** 同类公司批量背调 */
   onBatchAnalyzeSimilar?: (companies: SimilarCompany[]) => void;
+  lookupChecked?: (company: SimilarCompany) => {
+    checked: boolean;
+    checkedAt?: number;
+    historyItem?: HistoryItem;
+  };
+  onOpenReport?: (item: HistoryItem) => void;
 }
 
 const Pill: React.FC<{ children: React.ReactNode; tone?: 'slate' | 'blue' | 'green' | 'amber' | 'red' | 'violet' }> = ({ children, tone = 'slate' }) => {
@@ -63,6 +69,8 @@ export const ModuleBackground: React.FC<ModuleBackgroundProps> = ({
   backgroundCheckedAt,
   onAnalyzeSimilar,
   onBatchAnalyzeSimilar,
+  lookupChecked,
+  onOpenReport,
 }) => {
   const company = data.companyInfo || ({} as AnalysisResult['companyInfo']);
   const financials = data.financials || { revenueEstimate: '—', paymentTerms: '—', ipInfo: '—' };
@@ -469,6 +477,8 @@ export const ModuleBackground: React.FC<ModuleBackgroundProps> = ({
             companies={data.similarCompanies!}
             onAnalyze={onAnalyzeSimilar}
             onBatchAnalyze={onBatchAnalyzeSimilar}
+            lookupChecked={lookupChecked}
+            onOpenReport={onOpenReport}
             description="本背调报告关联的同类目标客户：可单家深度调查，或勾选后批量背调。"
           />
         </SectionCard>

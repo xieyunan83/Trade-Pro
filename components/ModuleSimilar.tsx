@@ -1,5 +1,5 @@
 import React from 'react';
-import { AnalysisResult, SimilarCompany } from '../types';
+import { AnalysisResult, HistoryItem, SimilarCompany } from '../types';
 import { Network } from 'lucide-react';
 import { SimilarCompaniesPanel } from './SimilarCompaniesPanel';
 
@@ -7,12 +7,20 @@ interface ModuleSimilarProps {
   data: AnalysisResult;
   onAnalyze: (domain: string) => void;
   onBatchAnalyze?: (companies: SimilarCompany[]) => void;
+  lookupChecked?: (company: SimilarCompany) => {
+    checked: boolean;
+    checkedAt?: number;
+    historyItem?: HistoryItem;
+  };
+  onOpenReport?: (item: HistoryItem) => void;
 }
 
 export const ModuleSimilar: React.FC<ModuleSimilarProps> = ({
   data,
   onAnalyze,
   onBatchAnalyze,
+  lookupChecked,
+  onOpenReport,
 }) => {
   const companies = data.similarCompanies || [];
 
@@ -31,6 +39,8 @@ export const ModuleSimilar: React.FC<ModuleSimilarProps> = ({
           companies={companies}
           onAnalyze={onAnalyze}
           onBatchAnalyze={onBatchAnalyze}
+          lookupChecked={lookupChecked}
+          onOpenReport={onOpenReport}
           description="基于当前公司的业务模式、产品线和市场定位推荐。列表已保存在本背调报告中；可多选后批量加入背调队列。"
         />
       </div>

@@ -34,6 +34,7 @@ import {
   isHistoryInCrm,
   normalizeCrmHost,
 } from '../utils/crmHistory';
+import { hasRichProductCatalog } from '../services/productCatalog';
 
 type RecordTab = 'search' | 'background' | 'all';
 type GroupBy = 'keyword' | 'country' | 'time' | 'dmMined';
@@ -145,6 +146,9 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [isBatchDeleting, setIsBatchDeleting] = useState(false);
   const [isBatchImporting, setIsBatchImporting] = useState(false);
+  const [filterDm, setFilterDm] = useState<'all' | 'yes' | 'no'>('all');
+  const [filterProduct, setFilterProduct] = useState<'all' | 'yes' | 'no'>('all');
+  const [filterCrm, setFilterCrm] = useState<'all' | 'yes' | 'no'>('all');
 
   // 启动时把已有记录里的词合并进自定义列表
   useEffect(() => {
@@ -176,6 +180,24 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
         const blob = [h.keyword, h.country, h.domain, h.data?.companyInfo?.name].filter(Boolean).join(' ').toLowerCase();
         return blob.includes(q);
       })
+      .filter((h) => {
+        if (filterDm !== 'all') {
+          const mined = historyHasDmSearch(h);
+          if (filterDm === 'yes' && !mined) return false;
+          if (filterDm === 'no' && mined) return false;
+        }
+        if (filterProduct !== 'all') {
+          const hasProduct = hasRichProductCatalog(h.data);
+          if (filterProduct === 'yes' && !hasProduct) return false;
+          if (filterProduct === 'no' && hasProduct) return false;
+        }
+        if (filterCrm !== 'all') {
+          const inCrm = isHistoryInCrm(h, crmClients);
+          if (filterCrm === 'yes' && !inCrm) return false;
+          if (filterCrm === 'no' && inCrm) return false;
+        }
+        return true;
+      })
       .map((item) => ({ kind: 'history' as const, item }));
 
     const disc: Row[] = discoveryArchives
@@ -188,7 +210,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
       .map((item) => ({ kind: 'discovery' as const, item }));
 
     return [...disc, ...hist];
-  }, [history, discoveryArchives, tab, query]);
+  }, [history, discoveryArchives, tab, query, filterDm, filterProduct, filterCrm, crmClients]);
 
   const groups = useMemo(() => {
     const map = new Map<string, Row[]>();
@@ -226,7 +248,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   // 切换 Tab / 筛选时清空勾选，避免误删不可见项
   useEffect(() => {
     setSelected(new Set());
-  }, [tab, query, groupBy]);
+  }, [tab, query, groupBy, filterDm, filterProduct, filterCrm]);
 
   const rowSelectKey = (row: Row) =>
     row.kind === 'history' ? `h:${row.item.id}` : `d:${row.item.id}`;
@@ -479,9 +501,42 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
         <span className="mr-0.5">状态:</span>
         <StatusChip done doneLabel="已背调" pendingLabel="未背调" tone="violet" />
         <StatusChip done doneLabel="已挖决策人" pendingLabel="未挖决策人" tone="amber" />
+        <StatusChip done doneLabel="已采品类" pendingLabel="未采品类" tone="emerald" />
         <StatusChip done doneLabel="已入CRM" pendingLabel="未入CRM" tone="emerald" />
         <span className="text-slate-300 ml-0.5">灰底 = 未完成</span>
       </div>
+      {(tab === 'background' || tab === 'all') && (
+        <div className="px-3 py-2 border-b border-slate-100 flex flex-wrap gap-2 items-center bg-slate-50/60">
+          <span className="text-[10px] font-black text-slate-500">筛选:</span>
+          <select
+            value={filterDm}
+            onChange={(e) => setFilterDm(e.target.value as typeof filterDm)}
+            className="text-[10px] font-bold border border-slate-200 rounded-lg px-2 py-1 bg-white"
+          >
+            <option value="all">决策人: 全部</option>
+            <option value="yes">已挖决策人</option>
+            <option value="no">未挖决策人</option>
+          </select>
+          <select
+            value={filterProduct}
+            onChange={(e) => setFilterProduct(e.target.value as typeof filterProduct)}
+            className="text-[10px] font-bold border border-slate-200 rounded-lg px-2 py-1 bg-white"
+          >
+            <option value="all">品类: 全部</option>
+            <option value="yes">已采品类</option>
+            <option value="no">未采品类</option>
+          </select>
+          <select
+            value={filterCrm}
+            onChange={(e) => setFilterCrm(e.target.value as typeof filterCrm)}
+            className="text-[10px] font-bold border border-slate-200 rounded-lg px-2 py-1 bg-white"
+          >
+            <option value="all">CRM: 全部</option>
+            <option value="yes">已入CRM</option>
+            <option value="no">未入CRM</option>
+          </select>
+        </div>
+      )}
 
       {/* 自定义分类管理 */}
       {(groupBy === 'keyword' || groupBy === 'country') && (
@@ -700,6 +755,12 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                                   doneLabel="已挖决策人"
                                   pendingLabel="未挖决策人"
                                   tone="amber"
+                                />
+                                <StatusChip
+                                  done={hasRichProductCatalog(row.item.data)}
+                                  doneLabel="已采品类"
+                                  pendingLabel="未采品类"
+                                  tone="emerald"
                                 />
                                 <StatusChip
                                   done={isHistoryInCrm(row.item, crmClients)}

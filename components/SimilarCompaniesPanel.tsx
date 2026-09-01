@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { SimilarCompany } from '../types';
-import { Briefcase, CheckSquare, ChevronRight, Globe, Search, Square } from 'lucide-react';
+import { HistoryItem, SimilarCompany } from '../types';
+import { Briefcase, CheckSquare, ChevronRight, FileText, Globe, Search, Square } from 'lucide-react';
+import { formatBackgroundCheckTime } from '../utils/crmHistory';
 
 export interface SimilarCompaniesPanelProps {
   companies: SimilarCompany[];
@@ -12,6 +13,12 @@ export interface SimilarCompaniesPanelProps {
   compact?: boolean;
   title?: string;
   description?: string;
+  lookupChecked?: (company: SimilarCompany) => {
+    checked: boolean;
+    checkedAt?: number;
+    historyItem?: HistoryItem;
+  };
+  onOpenReport?: (item: HistoryItem) => void;
 }
 
 const companyKey = (c: SimilarCompany, i: number) =>
@@ -26,6 +33,8 @@ export const SimilarCompaniesPanel: React.FC<SimilarCompaniesPanelProps> = ({
   compact = false,
   title,
   description,
+  lookupChecked,
+  onOpenReport,
 }) => {
   const list = companies || [];
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -135,6 +144,9 @@ export const SimilarCompaniesPanel: React.FC<SimilarCompaniesPanelProps> = ({
           const key = keys[i];
           const canAnalyze = analyzable(comp);
           const isOn = selected.has(key);
+          const checkMeta = lookupChecked?.(comp);
+          const isChecked = !!checkMeta?.checked;
+          const timeLabel = formatBackgroundCheckTime(checkMeta?.checkedAt);
           return (
             <div
               key={key}
@@ -172,17 +184,33 @@ export const SimilarCompaniesPanel: React.FC<SimilarCompaniesPanelProps> = ({
                       {comp.website || '—'}
                       {comp.country ? ` · ${comp.country}` : ''}
                     </div>
+                    {isChecked && (
+                      <span className="inline-flex mt-1.5 text-[10px] font-black bg-emerald-50 text-emerald-700 border border-emerald-100 px-2 py-0.5 rounded-lg">
+                        已背调{timeLabel ? ` · ${timeLabel}` : ''}
+                      </span>
+                    )}
                   </div>
                 </div>
-                {onAnalyze && canAnalyze && (
-                  <button
-                    type="button"
-                    onClick={() => onAnalyze((comp.website || comp.name).trim())}
-                    className="shrink-0 inline-flex items-center gap-1 bg-slate-900 text-white px-3 py-1.5 rounded-xl text-[10px] font-bold hover:bg-blue-600"
-                  >
-                    <Search size={11} /> 深度调查
-                  </button>
-                )}
+                <div className="shrink-0 flex flex-col items-end gap-1">
+                  {onOpenReport && checkMeta?.historyItem && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenReport(checkMeta.historyItem!)}
+                      className="inline-flex items-center gap-1 bg-emerald-600 text-white px-3 py-1.5 rounded-xl text-[10px] font-bold hover:bg-emerald-700"
+                    >
+                      <FileText size={11} /> 查看报告
+                    </button>
+                  )}
+                  {onAnalyze && canAnalyze && (
+                    <button
+                      type="button"
+                      onClick={() => onAnalyze((comp.website || comp.name).trim())}
+                      className="inline-flex items-center gap-1 bg-slate-900 text-white px-3 py-1.5 rounded-xl text-[10px] font-bold hover:bg-blue-600"
+                    >
+                      <Search size={11} /> 深度调查
+                    </button>
+                  )}
+                </div>
               </div>
               {comp.mainProducts && (
                 <div

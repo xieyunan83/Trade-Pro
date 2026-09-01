@@ -12,6 +12,7 @@ import {
   Loader2,
   Layers,
   Filter,
+  ShieldCheck,
 } from 'lucide-react';
 import {
   looksLikeEnglishParagraph,
@@ -21,6 +22,7 @@ import {
 interface ModuleProductsProps {
   data: AnalysisResult;
   onUpdateProductSummary?: (summary: NonNullable<AnalysisResult['productSummary']>) => void;
+  onAddToCRM?: () => void;
 }
 
 const productMatchesKeyword = (p: ProductAnalysis, keyword?: string): boolean => {
@@ -115,7 +117,7 @@ const buildCategoryRows = (
     .sort((a, b) => Number(b.keywordHit) - Number(a.keywordHit) || a.name.localeCompare(b.name, 'zh'));
 };
 
-export const ModuleProducts: React.FC<ModuleProductsProps> = ({ data, onUpdateProductSummary }) => {
+export const ModuleProducts: React.FC<ModuleProductsProps> = ({ data, onUpdateProductSummary, onAddToCRM }) => {
   const keyword = (data.searchKeyword || '').trim();
   const [summary, setSummary] = useState(data.productSummary);
   const [translating, setTranslating] = useState(false);
@@ -198,6 +200,16 @@ export const ModuleProducts: React.FC<ModuleProductsProps> = ({ data, onUpdatePr
             ) : null}
           </div>
         </div>
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          {onAddToCRM && (
+            <button
+              type="button"
+              onClick={onAddToCRM}
+              className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-lg touch-manipulation"
+            >
+              <ShieldCheck size={14} /> 导入 CRM
+            </button>
+          )}
         {keyword && (
           <div className="flex items-center gap-1 bg-white rounded-xl border border-emerald-100 p-1 shrink-0">
             <button
@@ -221,6 +233,7 @@ export const ModuleProducts: React.FC<ModuleProductsProps> = ({ data, onUpdatePr
             </button>
           </div>
         )}
+        </div>
       </div>
 
       {keyword && viewMode === 'keyword' && (
