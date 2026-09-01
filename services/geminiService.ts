@@ -2712,8 +2712,11 @@ export const analyzeCompany = async (
   - Do NOT only collect products related to "${searchKeyword}". Non-matching categories/SKUs are REQUIRED.
   - websiteCategories: complete nav/catalog tree (aim 5–15 categoryName). EACH category MUST include
     priceMinCNY, priceMaxCNY (CNY terminal/retail band for that category) and priceBand (e.g. "¥15–45" or "$4–12 CAD").
-  - products[]: 12–20 concrete SKUs spanning MULTIPLE categories across the full assortment (real names from site).
+  - products[]: 8–12 concrete SKUs spanning MULTIPLE categories across the full assortment (real names from site).
     Cover breadth: at least several categories, not a single keyword niche.
+    (品类树 websiteCategories 必须完整；SKU 数量适中，避免挤掉 strategy / similarCompanies / marketTrends。)
+  - CRITICAL OUTPUT ORDER: fill marketTrends + strategy.actionPlan (5 steps) + similarCompanies (12–15) BEFORE the long products[].
+    Never omit 建议行动计划 / 同类公司 / 市场趋势.
   - AFTER full collection: set keywordMatch=true ONLY for items clearly related to "${searchKeyword}"; false otherwise.
     UI will highlight matches — never omit non-matching lines to "focus".
   - EVERY product MUST include: category (标准化品类), retailPrice, retailPriceCNY, estimatedFOBPriceCNY, priceMinCNY, priceMaxCNY.
@@ -2727,7 +2730,8 @@ export const analyzeCompany = async (
   PRODUCT CATALOG COLLECTION (CRITICAL — full assortment for exporter matching DB):
   - Crawl official shop/catalog/collection pages + other retail/wholesale platforms; inventory ALL major sellable categories.
   - websiteCategories: 5–15 categories from real nav; EACH with priceMinCNY, priceMaxCNY, priceBand.
-  - products[]: 12–20 concrete SKUs spanning multiple categories (real site names, not vague "toys").
+  - products[]: 8–12 concrete SKUs spanning multiple categories (real site names, not vague "toys").
+  - CRITICAL: always include marketTrends, strategy.actionPlan (≥5), similarCompanies (12–15) — output these BEFORE products[].
   - EVERY product MUST include category, retailPrice, retailPriceCNY, estimatedFOBPriceCNY, priceMinCNY, priceMaxCNY.
   - coreProducts = top lines across the whole catalog; importCategories for trade.
   - Set keywordMatch=false (no active search keyword).
@@ -2870,10 +2874,8 @@ ${productFocusBlock}
     "financials": { "revenueEstimate": "", "paymentTerms": "", "ipInfo": "" },
     "productSummary": { "marketPreference": "", "recommendedProducts": "", "packagingAnalysis": "", "colorPreference": "", "featureAnalysis": "" },
     "socials": { "linkedin": "", "facebook": "", "instagram": "", "youtube": "" },
-    "products": [{ "name": "", "category": "", "retailPrice": "", "retailPriceCNY": 0, "estimatedFOBPriceCNY": 0, "priceMinCNY": 0, "priceMaxCNY": 0, "imageUrl": "", "competitorLink": "", "pricingStrategy": "", "pitchPoint": "", "techSpecs": "", "features": "", "colors": "", "packaging": "", "keywordMatch": false }],
     "marketTrends": "",
-    "decisionMakers": [{ "firstName": "", "lastName": "", "name": "", "title": "", "department": "", "emailGuess": "", "phone": "", "whatsapp": "", "linkedin": "", "yearsActive": "", "type": "Buyer", "source": "AI", "isVerified": false, "influenceScore": 4 }],
-    "strategy": { "buyingOfficeLocation": "", "actionPlan": [] },
+    "strategy": { "buyingOfficeLocation": "", "actionPlan": ["1.", "2.", "3.", "4.", "5."] },
     "similarCompanies": [
       { "name": "", "website": "", "country": "", "mainProducts": "" },
       { "name": "", "website": "", "country": "", "mainProducts": "" },
@@ -2887,7 +2889,9 @@ ${productFocusBlock}
       { "name": "", "website": "", "country": "", "mainProducts": "" },
       { "name": "", "website": "", "country": "", "mainProducts": "" },
       { "name": "", "website": "", "country": "", "mainProducts": "" }
-    ]
+    ],
+    "decisionMakers": [{ "firstName": "", "lastName": "", "name": "", "title": "", "department": "", "emailGuess": "", "phone": "", "whatsapp": "", "linkedin": "", "yearsActive": "", "type": "Buyer", "source": "AI", "isVerified": false, "influenceScore": 4 }],
+    "products": [{ "name": "", "category": "", "retailPrice": "", "retailPriceCNY": 0, "estimatedFOBPriceCNY": 0, "priceMinCNY": 0, "priceMaxCNY": 0, "imageUrl": "", "competitorLink": "", "pricingStrategy": "", "pitchPoint": "", "techSpecs": "", "features": "", "colors": "", "packaging": "", "keywordMatch": false }]
   }
   `;
 
@@ -3089,20 +3093,136 @@ ${productFocusBlock}
 
   let normalized = normalizeAnalysisResult(result);
 
-  // 新背调必须带上品类与价格：若首轮不足，自动再跑一轮产品深挖并合并
+  // 若首轮因产物过长截断，补回行动计划 / 同类公司 / 市场趋势
+  if (needsStrategySectionsRepair(normalized)) {
+    try {
+      console.info('[analyzeCompany] repairing missing strategy/similar/trends');
+      normalized = await repairStrategySections(normalized, {
+        domain: hasDomain ? canonicalDomain : rawInput,
+        searchKeyword: searchKeyword || undefined,
+        searchCountry: searchCountry || undefined,
+      });
+    } catch (e) {
+      console.warn('[analyzeCompany] strategy repair failed', e);
+    }
+  }
+
+  // 新背调必须带上品类与价格：若首轮不足，自动再跑一轮产品深挖并合并（不得冲掉策略字段）
   if (!hasRichProductCatalog(normalized)) {
     try {
       console.info('[analyzeCompany] product catalog incomplete → auto digProductIntelligence');
+      const beforeDig = normalized;
       normalized = await digProductIntelligence(hasDomain ? canonicalDomain : rawInput, normalized, {
         searchKeyword: searchKeyword || undefined,
         searchCountry: searchCountry || undefined,
       });
+      normalized = preserveStrategySections(beforeDig, normalized);
     } catch (e) {
       console.warn('[analyzeCompany] auto product dig failed, keeping first-pass report', e);
     }
   }
 
-  return normalized;
+  return normalizeAnalysisResult(normalized);
+};
+
+const needsStrategySectionsRepair = (r: AnalysisResult): boolean => {
+  const noPlan = !(r.strategy?.actionPlan || []).length;
+  const noSimilar = !(r.similarCompanies || []).length;
+  const noTrends = !r.marketTrends || r.marketTrends === 'N/A';
+  return noPlan || noSimilar || noTrends;
+};
+
+/** 品类补采后强制保留首轮背调的策略区块 */
+const preserveStrategySections = (before: AnalysisResult, after: AnalysisResult): AnalysisResult => ({
+  ...after,
+  marketTrends:
+    before.marketTrends && before.marketTrends !== 'N/A'
+      ? before.marketTrends
+      : after.marketTrends,
+  strategy: {
+    buyingOfficeLocation:
+      before.strategy?.buyingOfficeLocation && before.strategy.buyingOfficeLocation !== 'N/A'
+        ? before.strategy.buyingOfficeLocation
+        : after.strategy?.buyingOfficeLocation || 'N/A',
+    actionPlan:
+      (before.strategy?.actionPlan || []).length > 0
+        ? before.strategy!.actionPlan
+        : after.strategy?.actionPlan || [],
+  },
+  similarCompanies:
+    (before.similarCompanies || []).length > 0
+      ? before.similarCompanies
+      : after.similarCompanies || [],
+  decisionMakers:
+    (before.decisionMakers || []).length > 0 ? before.decisionMakers : after.decisionMakers || [],
+  evidenceChain:
+    (before.evidenceChain || []).length > 0 ? before.evidenceChain : after.evidenceChain || [],
+  evidenceConfidence: before.evidenceConfidence ?? after.evidenceConfidence,
+  evidenceSummary: before.evidenceSummary || after.evidenceSummary,
+  swot: before.swot || after.swot,
+});
+
+/**
+ * 轻量补全：建议行动计划 / 同类公司 / 市场趋势（首轮 JSON 被产品列表挤掉时）
+ */
+const repairStrategySections = async (
+  existing: AnalysisResult,
+  opts: { domain: string; searchKeyword?: string; searchCountry?: string }
+): Promise<AnalysisResult> => {
+  const name = existing.companyInfo?.name || opts.domain;
+  const needPlan = !(existing.strategy?.actionPlan || []).length;
+  const needSimilar = !(existing.similarCompanies || []).length;
+  const needTrends = !existing.marketTrends || existing.marketTrends === 'N/A';
+  if (!needPlan && !needSimilar && !needTrends) return existing;
+
+  const prompt = `
+Company: "${name}" / ${opts.domain}
+${opts.searchKeyword ? `Keyword: ${opts.searchKeyword}` : ''}
+${opts.searchCountry ? `Market: ${opts.searchCountry}` : ''}
+Core products: ${(existing.businessScope?.coreProducts || []).slice(0, 8).join('、') || '未知'}
+Nature: ${existing.companyInfo?.nature || ''}
+HQ: ${existing.companyInfo?.headquarters || ''}
+
+Task: Fill ONLY the missing B2B exporter sections in Simplified Chinese. Use web search if needed.
+${needPlan ? '- strategy.actionPlan: exactly 5 concrete outreach steps for Chinese exporters.' : ''}
+${needSimilar ? '- similarCompanies: 12 real peer buyers/importers/retailers (name, website, country, mainProducts).' : ''}
+${needTrends ? '- marketTrends: 2–4 sentences on market opportunity for Chinese suppliers.' : ''}
+
+Output JSON only:
+{
+  ${needTrends ? `"marketTrends": "",` : ''}
+  ${needPlan ? `"strategy": { "buyingOfficeLocation": "", "actionPlan": ["", "", "", "", ""] },` : ''}
+  ${needSimilar ? `"similarCompanies": [{ "name": "", "website": "", "country": "", "mainProducts": "" }]` : ''}
+}
+`.replace(/,\s*}/g, '\n}');
+
+  const text = await generateContentUnified('analysis', prompt, SYSTEM_INSTRUCTION, true);
+  const ai = extractJson(text) || {};
+  const next: AnalysisResult = { ...existing };
+
+  if (needTrends && typeof ai.marketTrends === 'string' && ai.marketTrends.trim()) {
+    next.marketTrends = ai.marketTrends.trim();
+  }
+  if (needPlan && Array.isArray(ai.strategy?.actionPlan) && ai.strategy.actionPlan.length) {
+    next.strategy = {
+      buyingOfficeLocation:
+        String(ai.strategy?.buyingOfficeLocation || existing.strategy?.buyingOfficeLocation || '').trim() ||
+        'N/A',
+      actionPlan: ai.strategy.actionPlan.map(String).map((s: string) => s.trim()).filter(Boolean).slice(0, 8),
+    };
+  }
+  if (needSimilar && Array.isArray(ai.similarCompanies) && ai.similarCompanies.length) {
+    next.similarCompanies = ai.similarCompanies
+      .filter((c: any) => c && (c.name || c.website))
+      .slice(0, 20)
+      .map((c: any) => ({
+        name: String(c.name || '').trim() || 'Unknown',
+        website: String(c.website || '').trim(),
+        country: String(c.country || '').trim(),
+        mainProducts: String(c.mainProducts || '').trim(),
+      }));
+  }
+  return next;
 };
 
 /**
@@ -3147,8 +3267,9 @@ ${productEvidence ? `=== WEB PRODUCT EVIDENCE ===\n${productEvidence}\n=== END =
 Requirements (简体中文描述字段):
 1. FIRST inventory the company's ENTIRE assortment — all major categories from website nav + shop + other platforms. Do NOT only collect "${searchKeyword || 'keyword'}"-related items.
 2. websiteCategories: 5–15 real nav/catalog categories. EACH MUST include priceMinCNY, priceMaxCNY, priceBand (CNY terminal/retail band for that category).
-3. products[]: 12–20 concrete SKUs spanning MULTIPLE categories (breadth of full catalog). Each with name, category, retailPrice, retailPriceCNY, estimatedFOBPriceCNY, priceMinCNY, priceMaxCNY.
+3. products[]: 8–15 concrete SKUs spanning MULTIPLE categories (breadth of full catalog). Each with name, category, retailPrice, retailPriceCNY, estimatedFOBPriceCNY, priceMinCNY, priceMaxCNY.
 4. AFTER full collection: keywordMatch=true only if clearly related to "${searchKeyword || ''}"; otherwise false. Never drop non-matching SKUs.
+5. Do NOT output or overwrite strategy / similarCompanies / marketTrends / decisionMakers — those stay on the existing report.
 5. businessScope.coreProducts = 全站主营品类；relevantProducts 可列与关键词相关项；priceSensitivity / brandPositioning / consumerGroup / productVariety.
 6. tradeIntelligence.importCategories + hsCodes (cover full lines, short).
 7. productSummary entirely in Simplified Chinese (全站定位 + 可选关键词机会).
@@ -3298,6 +3419,26 @@ Output JSON only:
     products: products.length ? products : base.products,
     searchKeyword: searchKeyword || base.searchKeyword,
     searchCountry: searchCountry || base.searchCountry,
+    // 品类补采绝不可冲掉首轮背调的行动计划 / 同类公司 / 市场趋势 / 决策人 / 证据链
+    marketTrends:
+      base.marketTrends && base.marketTrends !== 'N/A' ? base.marketTrends : base.marketTrends || 'N/A',
+    strategy: {
+      buyingOfficeLocation:
+        base.strategy?.buyingOfficeLocation && base.strategy.buyingOfficeLocation !== 'N/A'
+          ? base.strategy.buyingOfficeLocation
+          : base.strategy?.buyingOfficeLocation || 'N/A',
+      actionPlan: Array.isArray(base.strategy?.actionPlan) ? base.strategy.actionPlan : [],
+    },
+    similarCompanies: Array.isArray(base.similarCompanies) ? base.similarCompanies : [],
+    decisionMakers: Array.isArray(base.decisionMakers) ? base.decisionMakers : [],
+    evidenceChain: Array.isArray(base.evidenceChain) ? base.evidenceChain : [],
+    evidenceConfidence: base.evidenceConfidence,
+    evidenceSummary: base.evidenceSummary,
+    swot: base.swot,
+    financialTrends: base.financialTrends,
+    trafficAnalysis: base.trafficAnalysis,
+    financials: base.financials,
+    socials: base.socials,
   };
 
   if (searchKeyword && merged.products?.length) {
@@ -3315,7 +3456,8 @@ Output JSON only:
       .sort((a, b) => Number(!!b.keywordMatch) - Number(!!a.keywordMatch));
   }
 
-  return normalizeAnalysisResult(merged);
+  const out = normalizeAnalysisResult(merged);
+  return existing ? preserveStrategySections(existing, out) : out;
 };
 
 /** 检测文本是否主要为英文（用于已有报告译成中文） */
