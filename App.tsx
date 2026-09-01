@@ -1397,6 +1397,7 @@ const App: React.FC = () => {
         added += disc.stats.added;
         skipped += disc.stats.skipped;
       }
+      clearCrmTombstonesForClients(next);
       return next;
     });
 
