@@ -31,6 +31,8 @@ interface ModuleClientCRMProps {
   setClients: React.Dispatch<React.SetStateAction<Client[]>>;
   onBatchAnalyze: (clients: Client[]) => Promise<void>;
   onBatchDelete?: (clients: Client[]) => void | Promise<void>;
+  /** 单条删除（带云端同步 + 墓碑，避免登录复活） */
+  onDeleteClient?: (client: Client) => void | Promise<void>;
   /** 批量决策人邮箱深挖（后台队列） */
   onBatchDmSearch?: (clients: Client[]) => void;
   onBatchProductDig?: (clients: Client[]) => void | Promise<void>;
@@ -260,6 +262,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   setClients,
   onBatchAnalyze,
   onBatchDelete,
+  onDeleteClient: onDeleteClientProp,
   onBatchDmSearch,
   onBatchProductDig,
   onPurgeBeforeJune2026,
@@ -441,6 +444,17 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
 
   const onDeleteClient = useCallback(
     (id: string) => {
+      const client = clients.find((c) => c.id === id);
+      if (onDeleteClientProp && client) {
+        void onDeleteClientProp(client);
+        setSelectedClientIds((prev) => {
+          if (!prev.has(id)) return prev;
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+        return;
+      }
       setClients((prev) => prev.filter((c) => c.id !== id));
       setSelectedClientIds((prev) => {
         if (!prev.has(id)) return prev;
@@ -449,7 +463,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
         return next;
       });
     },
-    [setClients]
+    [clients, onDeleteClientProp, setClients]
   );
 
   const openClientReport = useCallback(

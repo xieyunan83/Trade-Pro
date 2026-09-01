@@ -28,6 +28,11 @@ import { addCustomKeyword, addCustomCountry } from './services/taxonomyStore';
 import { normalizeCountryZh } from './utils/countryNormalize';
 import { buildSearchTags, stampSearchResults } from './utils/searchTags';
 import { mergeDiscoveryResultsIntoCrm, mergeHistoryItemsIntoCrm, findCrmIdsForHistoryItem, findCrmIdsForDiscoveryResults, lookupBackgroundCheck, formatBackgroundCheckTime, findHistoryForClient, clientPatchFromAnalysis, CRM_JUNE_2026_CUTOFF_MS } from './utils/crmHistory';
+import {
+  clearCrmTombstonesForClients,
+  filterOutCrmTombstones,
+  markCrmClientsDeleted,
+} from './utils/crmTombstones';
 import { checkLimit, incrementUsage, updateLocalConfig, resetDailyUsage, getDailyUsagePublic } from './services/limitService';
 import { ModuleType, AnalysisResult, DiscoveryState, Client, User, HistoryItem, AutomationResult, ClientSearchResult, DiscoveryArchiveItem, DecisionMaker, Department, AutomationPipelineConfig, SimilarCompany } from './types';
 import { ModuleBackground } from './components/ModuleBackground';
@@ -519,7 +524,7 @@ const App: React.FC = () => {
             const ghStatus = checkGitHubStatus();
             if (!cancelled) setIsGitHubConnected(ghStatus.ok);
 
-            let nextCrm: Client[] = loadAllCrmClients();
+            let nextCrm: Client[] = filterOutCrmTombstones(loadAllCrmClients());
 
             if (currentUser && isSupabaseConfigured()) {
                 if (currentUser.role !== 'admin') {
@@ -575,9 +580,9 @@ const App: React.FC = () => {
                 try {
                     const cloudCrm = await getCrmClients();
                     if (cloudCrm.length > 0) {
-                      // 云端全量与本地合并（按 id），展示时再过滤
+                      // 云端全量与本地合并（按 id），展示时再过滤；排除用户已删除墓碑
                       const byId = new Map<string, Client>();
-                      [...nextCrm, ...cloudCrm].forEach((c) => byId.set(c.id, c));
+                      [...nextCrm, ...filterOutCrmTombstones(cloudCrm)].forEach((c) => byId.set(c.id, c));
                       nextCrm = Array.from(byId.values());
                     }
                 } catch (e) {
@@ -632,7 +637,7 @@ const App: React.FC = () => {
                   const cloudCRM = await fetchCRMFromCloud();
                   if (cloudCRM.length > 0) {
                     const byId = new Map<string, Client>();
-                    [...nextCrm, ...cloudCRM].forEach((c) => byId.set(c.id, c));
+                    [...nextCrm, ...filterOutCrmTombstones(cloudCRM)].forEach((c) => byId.set(c.id, c));
                     nextCrm = Array.from(byId.values());
                   }
                 } catch (e) {
@@ -673,7 +678,7 @@ const App: React.FC = () => {
                 try {
                   const ghCrm = await fetchCRMFromCloud();
                   if (ghCrm.length > 0) {
-                    recovered = ghCrm;
+                    recovered = filterOutCrmTombstones(ghCrm);
                     source = 'GitHub 云端备份';
                   }
                 } catch (e) {
@@ -683,7 +688,7 @@ const App: React.FC = () => {
                   try {
                     const sbCrm = await getCrmClients();
                     if (sbCrm.length > 0) {
-                      recovered = sbCrm;
+                      recovered = filterOutCrmTombstones(sbCrm);
                       source = 'Supabase 云端';
                     }
                   } catch (e) {
@@ -695,7 +700,7 @@ const App: React.FC = () => {
                   if (histNow.length > 0) {
                     const rebuilt = mergeHistoryItemsIntoCrm([], histNow, stampOwnership);
                     if (rebuilt.clients.length > 0) {
-                      recovered = rebuilt.clients;
+                      recovered = filterOutCrmTombstones(rebuilt.clients);
                       source = '背调历史记录';
                     }
                   }
@@ -708,6 +713,9 @@ const App: React.FC = () => {
                 console.warn('[CRM] auto recovery failed', e);
               }
             }
+
+            // 最终再滤一次墓碑，防止本地残留被云端冲回
+            nextCrm = filterOutCrmTombstones(nextCrm);
 
             if (!cancelled) {
               // 旧 CRM 回填部门，便于本部门主管按规则看到历史客户
@@ -782,9 +790,14 @@ const App: React.FC = () => {
           .filter((c) => canViewOwnedRecord(currentUser, c, users, departments))
           .map((c) => c.id)
       );
-      mergeSaveCrmClients(currentUser, crmClients, users, departments);
+      const mergedAll = mergeSaveCrmClients(currentUser, crmClients, users, departments);
       const nowIds = new Set(crmClients.map((c) => c.id));
       const removedIds = [...prevVisibleIds].filter((id) => !nowIds.has(id));
+
+      if (removedIds.length) {
+        const removedClients = before.filter((c) => removedIds.includes(c.id));
+        markCrmClientsDeleted(removedClients);
+      }
 
       if (isSupabaseConfigured()) {
           // 只 upsert 当前可见列表；删除走单条 delete，避免空视图把云端全库清空
@@ -794,8 +807,12 @@ const App: React.FC = () => {
           for (const id of removedIds) {
             deleteCrmClient(id).catch((e) => console.error('CRM delete sync failed', id, e));
           }
-      } else if (isGitHubConnected && crmClients.length > 0) {
-          saveCRMToCloud(crmClients).catch(e => console.error("Auto CRM sync failed", e));
+      }
+      // GitHub 备份也要同步删除（即便已用 Supabase），否则下次登录会从 crm.json 复活
+      if (isGitHubConnected) {
+          saveCRMToCloud(filterOutCrmTombstones(mergedAll)).catch((e) =>
+            console.error('Auto CRM GitHub sync failed', e)
+          );
       }
   }, [crmClients, isGitHubConnected, currentUser, users, departments]);
 
@@ -1267,6 +1284,7 @@ const App: React.FC = () => {
           hasBackgroundCheck: true,
           contacts: analysisData.decisionMakers || [],
       };
+      clearCrmTombstonesForClients([{ id: '', website, name: analysisData.companyInfo.name }]);
       setCrmClients(prev => {
           const idx = prev.findIndex(c =>
               (websiteKey && (c.website || '').toLowerCase() === websiteKey) ||
@@ -2370,7 +2388,12 @@ const App: React.FC = () => {
     setCurrentUser(null);
   };
   const handleSyncToGitHub = async () => { if(!currentUser) return; setIsSyncing(true); try { await backupUserHistory(currentUser.username, history); await saveCRMToCloud(crmClients); alert("数据同步成功!"); } catch (e: any) { alert("同步失败: " + e.message); } finally { setIsSyncing(false); } };
-  const handleAddClients = (newClients: Client[]) => { setCrmClients(prev => [...prev, ...newClients.map(stampOwnership)]); alert(`已成功导入 ${newClients.length} 个客户资料！`); };
+  const handleAddClients = (newClients: Client[]) => {
+    const stamped = newClients.map(stampOwnership);
+    clearCrmTombstonesForClients(stamped);
+    setCrmClients((prev) => [...prev, ...stamped]);
+    alert(`已成功导入 ${newClients.length} 个客户资料！`);
+  };
 
   const handleBatchDeleteClients = async (clients: Client[]) => {
     if (!clients?.length) return;
@@ -2381,11 +2404,37 @@ const App: React.FC = () => {
     if (!confirm(`确定删除选中的 ${clients.length} 个客户？\n此操作不可恢复（仅删 CRM 条目，背调历史仍保留在记录中心）。`)) {
       return;
     }
+    markCrmClientsDeleted(clients);
     const ids = new Set(clients.map((c) => c.id));
     setCrmClients((prev) => prev.filter((c) => !ids.has(c.id)));
     for (const id of ids) {
       void deleteCrmClient(id).catch((e) => console.warn('[CRM] cloud delete failed', id, e));
     }
+  };
+
+  /** 单条删除 CRM（与批量一致：墓碑 + 云端） */
+  const handleDeleteClient = async (clientOrId: Client | string) => {
+    const client =
+      typeof clientOrId === 'string'
+        ? crmClientsRef.current.find((c) => c.id === clientOrId) ||
+          loadAllCrmClients().find((c) => c.id === clientOrId)
+        : clientOrId;
+    if (!client) {
+      // 仍尝试按 id 本地移除
+      const id = typeof clientOrId === 'string' ? clientOrId : '';
+      if (id) setCrmClients((prev) => prev.filter((c) => c.id !== id));
+      return;
+    }
+    if (!hasPermission(currentUser, 'feature.crm_manage')) {
+      alert('你没有 CRM 编辑权限，无法删除客户。');
+      return;
+    }
+    if (!confirm(`确定删除客户「${client.name}」？\n仅删 CRM 条目；背调历史仍保留。删除后不会在登录时从云端复活。`)) {
+      return;
+    }
+    markCrmClientsDeleted([client]);
+    setCrmClients((prev) => prev.filter((c) => c.id !== client.id));
+    void deleteCrmClient(client.id).catch((e) => console.warn('[CRM] cloud delete failed', client.id, e));
   };
 
   /** 手动清理 2026-06 前 CRM（本地 + 云端，保守日期规则） */
@@ -2461,6 +2510,7 @@ const App: React.FC = () => {
     if (!confirm(`从「${source}」恢复 ${recovered.length} 条客户到 CRM？\n将覆盖当前空列表并同步到云端。`)) {
       return;
     }
+    clearCrmTombstonesForClients(recovered);
     const depts = departments.length ? departments : loadDepartmentsFromStorage();
     const migrated = migrateLegacyCrmOwnership(recovered, users, depts);
     saveAllCrmClients(migrated.clients);
@@ -2805,7 +2855,12 @@ const App: React.FC = () => {
             // 先更新界面，避免云端 await 卡住导致批量删除「没反应」
             setHistory((prev) => prev.filter((h) => h.id !== id));
             if (crmIds.length) {
+              const doomed = crmClientsRef.current.filter((c) => crmIds.includes(c.id));
+              markCrmClientsDeleted(doomed);
               setCrmClients((prev) => prev.filter((c) => !crmIds.includes(c.id)));
+              for (const cid of crmIds) {
+                void deleteCrmClient(cid).catch((e) => console.warn('[CRM] cloud delete failed', cid, e));
+              }
             }
             if (viewingHistoryIdRef.current === id || viewingHistoryId === id) {
               setAnalysisData(null);
@@ -2825,7 +2880,12 @@ const App: React.FC = () => {
             const crmIds = findCrmIdsForDiscoveryResults(target?.results, crmClients);
             setDiscoveryArchives((prev) => prev.filter((d) => d.id !== id));
             if (crmIds.length) {
+              const doomed = crmClientsRef.current.filter((c) => crmIds.includes(c.id));
+              markCrmClientsDeleted(doomed);
               setCrmClients((prev) => prev.filter((c) => !crmIds.includes(c.id)));
+              for (const cid of crmIds) {
+                void deleteCrmClient(cid).catch((e) => console.warn('[CRM] cloud delete failed', cid, e));
+              }
             }
             await deleteDiscoveryArchive(id).catch((e) => console.error(e));
             addDiscoveryTombstone(id, target?.product, target?.country);
@@ -2996,6 +3056,7 @@ const App: React.FC = () => {
                         onBatchAnalyze={handleBatchAnalyzeFromCRM}
                         onBatchDmSearch={handleBatchDmSearchFromCRM}
                         onBatchDelete={handleBatchDeleteClients}
+                        onDeleteClient={handleDeleteClient}
                         onBatchProductDig={handleBatchProductDigFromCRM}
                         onPurgeBeforeJune2026={handlePurgeCrmBeforeJune2026}
                         onRecoverCrm={handleRecoverCrm}
