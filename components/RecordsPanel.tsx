@@ -740,6 +740,11 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                               <div className="text-[10px] text-slate-400 truncate">{row.item.domain}</div>
                               <div className="flex flex-wrap gap-1 mt-1.5">
                                 <StatusChip done doneLabel="已背调" pendingLabel="未背调" tone="violet" />
+                                {(row.item.ownerUsername || '').trim() ? (
+                                  <span className="text-[9px] font-black bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-100">
+                                    拥有人 · {row.item.ownerUsername}
+                                  </span>
+                                ) : null}
                                 <span className="text-[9px] font-black bg-violet-50 text-violet-700 px-1.5 py-0.5 rounded border border-violet-100">
                                   {new Date(row.item.timestamp).toLocaleString('zh-CN', {
                                     year: 'numeric',

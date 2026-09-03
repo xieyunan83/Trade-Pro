@@ -99,6 +99,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   const [filterBg, setFilterBg] = useState<'all' | 'yes' | 'no'>('all');
   const [filterProduct, setFilterProduct] = useState<'all' | 'yes' | 'no'>('all');
   const [filterDm, setFilterDm] = useState<'all' | 'yes' | 'no'>('all');
+  const [filterOwner, setFilterOwner] = useState('all');
   const [pageSize, setPageSize] = useState<10 | 20 | 50>(20);
   const [page, setPage] = useState(1);
 
@@ -150,6 +151,18 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
     [automationResults]
   );
 
+  const ownerOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          automationResults
+            .map((t) => (t.ownerUsername || '').trim())
+            .filter(Boolean)
+        )
+      ).sort((a, b) => a.localeCompare(b, 'zh-CN')),
+    [automationResults]
+  );
+
   const taskHasBg = (task: AutomationResult) => task.status === 'completed' && !!task.analysis;
   const taskHasProduct = (task: AutomationResult) => hasRichProductCatalog(task.analysis);
   const taskHasDm = (task: AutomationResult) =>
@@ -162,6 +175,8 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
       if (filterMode !== 'all' && (task.mode || 'economy') !== filterMode) return false;
       const country = (task.country || task.analysis?.searchCountry || '').trim();
       if (filterCountry !== 'all' && country !== filterCountry) return false;
+      const owner = (task.ownerUsername || '').trim();
+      if (filterOwner !== 'all' && owner !== filterOwner) return false;
       const kws = taskKeywords(task);
       if (filterKeyword !== 'all' && !kws.includes(filterKeyword)) return false;
       const industry = taskIndustry(task);
@@ -178,6 +193,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
           task.clientName,
           task.website,
           task.country,
+          owner,
           ...kws,
           industry,
           contact?.name,
@@ -197,6 +213,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
     filterQuery,
     filterStatus,
     filterCountry,
+    filterOwner,
     filterKeyword,
     filterMode,
     filterIndustry,
@@ -215,7 +232,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   // 筛选/页大小变化时回到第一页
   useEffect(() => {
     setPage(1);
-  }, [filterQuery, filterStatus, filterCountry, filterKeyword, filterMode, filterIndustry, filterBg, filterProduct, filterDm, pageSize]);
+  }, [filterQuery, filterStatus, filterCountry, filterOwner, filterKeyword, filterMode, filterIndustry, filterBg, filterProduct, filterDm, pageSize]);
 
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
@@ -258,6 +275,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
     setFilterQuery('');
     setFilterStatus('all');
     setFilterCountry('all');
+    setFilterOwner('all');
     setFilterKeyword('all');
     setFilterMode('all');
     setFilterIndustry('all');
@@ -270,6 +288,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
     !!filterQuery.trim() ||
     filterStatus !== 'all' ||
     filterCountry !== 'all' ||
+    filterOwner !== 'all' ||
     filterKeyword !== 'all' ||
     filterMode !== 'all' ||
     filterIndustry !== 'all' ||
@@ -823,6 +842,19 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
               ))}
             </select>
             <select
+              value={filterOwner}
+              onChange={(e) => setFilterOwner(e.target.value)}
+              className="px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold bg-white"
+              title="按拥有人筛选"
+            >
+              <option value="all">所有拥有人</option>
+              {ownerOptions.map((o) => (
+                <option key={o} value={o}>
+                  {o}
+                </option>
+              ))}
+            </select>
+            <select
               value={filterKeyword}
               onChange={(e) => setFilterKeyword(e.target.value)}
               className="px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold bg-white"
@@ -943,10 +975,10 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse min-w-[1100px]">
+          <table className="w-full text-left border-collapse min-w-[1180px]">
             <thead>
               <tr className="bg-slate-50 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">
-                <th className="px-4 py-4 w-10">
+                <th className="px-3 py-3 w-10">
                   <input
                     type="checkbox"
                     checked={allPageSelected}
@@ -955,27 +987,28 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                     title="全选本页"
                   />
                 </th>
-                <th className="px-4 py-4">客户信息</th>
-                <th className="px-4 py-4">国家</th>
-                <th className="px-4 py-4">行业</th>
-                <th className="px-4 py-4">关键词</th>
-                <th className="px-4 py-4">联系人</th>
-                <th className="px-4 py-4">状态</th>
-                <th className="px-4 py-4">背调时间</th>
-                <th className="px-4 py-4">模式</th>
-                <th className="px-4 py-4 text-right">操作</th>
+                <th className="px-3 py-3">客户信息</th>
+                <th className="px-3 py-3">国家</th>
+                <th className="px-3 py-3">拥有人</th>
+                <th className="px-3 py-3">行业</th>
+                <th className="px-3 py-3">关键词</th>
+                <th className="px-3 py-3">联系人</th>
+                <th className="px-3 py-3">状态</th>
+                <th className="px-3 py-3">背调时间</th>
+                <th className="px-3 py-3">模式</th>
+                <th className="px-3 py-3 text-right">操作</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-50">
+            <tbody className="divide-y divide-slate-100">
               {automationResults.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="px-6 py-12 text-center text-slate-400 font-bold">
+                  <td colSpan={11} className="px-6 py-12 text-center text-slate-400 font-bold">
                     暂无任务队列
                   </td>
                 </tr>
               ) : filteredResults.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="px-6 py-12 text-center text-slate-400 font-bold">
+                  <td colSpan={11} className="px-6 py-12 text-center text-slate-400 font-bold">
                     无匹配结果，请调整筛选条件
                   </td>
                 </tr>
@@ -985,14 +1018,15 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                   const industry = taskIndustry(task);
                   const contact = taskPrimaryContact(task);
                   const dmCount = task.analysis?.decisionMakers?.length || 0;
+                  const owner = (task.ownerUsername || '').trim();
                   return (
                     <tr
                       key={task.id}
-                      className={`hover:bg-slate-50/50 transition-colors ${
+                      className={`hover:bg-slate-50/50 transition-colors align-top ${
                         selectedIds.has(task.id) ? 'bg-blue-50/40' : ''
                       }`}
                     >
-                      <td className="px-4 py-4">
+                      <td className="px-3 py-2.5">
                         <input
                           type="checkbox"
                           checked={selectedIds.has(task.id)}
@@ -1000,8 +1034,8 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                           className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                         />
                       </td>
-                      <td className="px-4 py-4 max-w-[220px]">
-                        <div className="font-bold text-slate-800 truncate">
+                      <td className="px-3 py-2.5 max-w-[220px]">
+                        <div className="font-bold text-slate-800 truncate text-sm">
                           {task.analysis?.companyInfo?.name || task.clientName}
                         </div>
                         <div className="text-[10px] text-slate-400 font-bold truncate">
@@ -1030,10 +1064,22 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                           )}
                         </div>
                       </td>
-                      <td className="px-4 py-4 text-sm font-bold text-slate-600 whitespace-nowrap">
+                      <td className="px-3 py-2.5 text-xs font-bold text-slate-600 whitespace-nowrap">
                         {task.country || task.analysis?.searchCountry || '—'}
                       </td>
-                      <td className="px-4 py-4 text-xs font-bold text-slate-600 max-w-[160px]">
+                      <td className="px-3 py-2.5">
+                        <span
+                          className={`inline-flex max-w-[100px] truncate text-[11px] font-black px-2 py-0.5 rounded-md ${
+                            owner
+                              ? 'bg-indigo-50 text-indigo-700 border border-indigo-100'
+                              : 'bg-slate-50 text-slate-400 border border-slate-100'
+                          }`}
+                          title={owner || '未标注'}
+                        >
+                          {owner || '—'}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5 text-xs font-bold text-slate-600 max-w-[140px]">
                         <span className="line-clamp-2" title={industry || undefined}>
                           {industry || '—'}
                         </span>

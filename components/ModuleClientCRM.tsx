@@ -285,9 +285,14 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   const [filterBg, setFilterBg] = useState<'all' | 'yes' | 'no'>('all');
   const [filterProduct, setFilterProduct] = useState<'all' | 'yes' | 'no'>('all');
   const [filterDm, setFilterDm] = useState<'all' | 'yes' | 'no'>('all');
+  const [filterOwner, setFilterOwner] = useState<string>('all');
   const [filterStatus, setFilterStatus] = useState<Client['status'] | 'all' | 'overdue'>('all');
   const [selectedClientIds, setSelectedClientIds] = useState<Set<string>>(new Set());
   const [page, setPage] = useState(1);
+
+  const resolveOwner = useCallback((client: Client, historyItem?: HistoryItem) => {
+    return (client.ownerUsername || historyItem?.ownerUsername || '').trim();
+  }, []);
 
   const historyIndex = useMemo(() => buildHistoryLookupIndex(history), [history]);
 
@@ -313,16 +318,21 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   const filterOptions = useMemo(() => {
     const countries = new Set<string>();
     const productTypes = new Set<string>();
-    for (const c of clients) {
+    const owners = new Set<string>();
+    for (const row of enrichedClients) {
+      const c = row.client;
       if (c.country) countries.add(c.country);
       const pt = (c.productType || '').trim();
       if (pt && pt !== 'N/A') productTypes.add(pt);
+      const owner = resolveOwner(c, row.historyItem);
+      if (owner) owners.add(owner);
     }
     return {
       countries: [...countries].sort((a, b) => a.localeCompare(b, 'zh-CN')),
       productTypes: [...productTypes].sort((a, b) => a.localeCompare(b, 'zh-CN')),
+      owners: [...owners].sort((a, b) => a.localeCompare(b, 'zh-CN')),
     };
-  }, [clients]);
+  }, [enrichedClients, resolveOwner]);
 
   const dateFromMs = filterDateFrom ? new Date(filterDateFrom).getTime() : undefined;
   const dateToMs = filterDateTo
@@ -331,12 +341,14 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
 
   const filteredEnriched = useMemo(() => {
     const q = debouncedSearch.trim().toLowerCase();
-    return enrichedClients.filter(({ client, hasBg, hasProduct, hasDm, bgAt }) => {
+    return enrichedClients.filter(({ client, historyItem, hasBg, hasProduct, hasDm, bgAt }) => {
       if (q) {
+        const owner = resolveOwner(client, historyItem).toLowerCase();
         const hit =
           client.name.toLowerCase().includes(q) ||
           (client.website || '').toLowerCase().includes(q) ||
-          (client.productType || '').toLowerCase().includes(q);
+          (client.productType || '').toLowerCase().includes(q) ||
+          owner.includes(q);
         if (!hit) return false;
       }
       if (filterCountry !== 'all' && client.country !== filterCountry) return false;
@@ -351,6 +363,10 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
         const ind = (client.industry || '').toLowerCase();
         const needle = filterIndustry.toLowerCase().split(',')[0].trim();
         if (!ind.includes(needle)) return false;
+      }
+      if (filterOwner !== 'all') {
+        const owner = resolveOwner(client, historyItem);
+        if (owner !== filterOwner) return false;
       }
       if (filterBg === 'yes' && !hasBg) return false;
       if (filterBg === 'no' && hasBg) return false;
@@ -377,12 +393,14 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
     filterType,
     filterProductType,
     filterIndustry,
+    filterOwner,
     filterBg,
     filterProduct,
     filterDm,
     filterStatus,
     dateFromMs,
     dateToMs,
+    resolveOwner,
   ]);
 
   useEffect(() => {
@@ -413,6 +431,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
     filterBg,
     filterProduct,
     filterDm,
+    filterOwner,
     filterStatus,
   ]);
 
@@ -521,6 +540,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
     setFilterBg('all');
     setFilterProduct('all');
     setFilterDm('all');
+    setFilterOwner('all');
     setFilterStatus('all');
   };
 
@@ -535,6 +555,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
     filterBg !== 'all' ||
     filterProduct !== 'all' ||
     filterDm !== 'all' ||
+    filterOwner !== 'all' ||
     filterStatus !== 'all';
 
   const handleExport = () => {
@@ -642,7 +663,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full pl-12 pr-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold text-sm sm:text-base"
-              placeholder="搜索客户名称、网址或产品类型..."
+              placeholder="搜索客户、网址、产品类型或拥有人..."
             />
           </div>
           <button
@@ -667,7 +688,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
           )}
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-2 sm:gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-2 sm:gap-3">
           <select
             value={filterCountry}
             onChange={(e) => setFilterCountry(e.target.value)}
@@ -677,6 +698,19 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
             {filterOptions.countries.map((c) => (
               <option key={c} value={c}>
                 {c}
+              </option>
+            ))}
+          </select>
+          <select
+            value={filterOwner}
+            onChange={(e) => setFilterOwner(e.target.value)}
+            className="px-3 py-2.5 rounded-xl border border-slate-200 font-bold text-sm appearance-none bg-white"
+            title="按背调拥有人筛选"
+          >
+            <option value="all">所有拥有人</option>
+            {filterOptions.owners.map((o) => (
+              <option key={o} value={o}>
+                {o}
               </option>
             ))}
           </select>
@@ -825,16 +859,18 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
       </div>
 
       {/* Mobile card view */}
-      <div className="md:hidden space-y-3">
+      <div className="md:hidden space-y-2.5">
         {pagedEnriched.length === 0 ? (
           <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center text-slate-400 font-bold text-sm">
             {clients.length === 0 ? '暂无客户数据' : '没有符合筛选条件的客户'}
           </div>
         ) : (
-          pagedEnriched.map(({ client, historyItem, hasBg, hasProduct, hasDm, bgAt, canOpenReport }) => (
-            <div key={client.id} className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-              <div className="flex items-start justify-between gap-3 mb-3">
-                <div className="flex items-start gap-3 min-w-0">
+          pagedEnriched.map(({ client, historyItem, hasBg, hasProduct, hasDm, bgAt, canOpenReport }) => {
+            const owner = resolveOwner(client, historyItem);
+            return (
+            <div key={client.id} className="bg-white rounded-2xl border border-slate-200 p-3.5 shadow-sm">
+              <div className="flex items-start justify-between gap-2 mb-2">
+                <div className="flex items-start gap-2.5 min-w-0">
                   <input
                     type="checkbox"
                     checked={selectedClientIds.has(client.id)}
@@ -846,7 +882,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                       type="button"
                       onClick={() => canOpenReport && openClientReport(historyItem)}
                       disabled={!canOpenReport}
-                      className={`font-bold text-left truncate block w-full ${
+                      className={`font-bold text-left truncate block w-full text-sm ${
                         canOpenReport
                           ? 'text-blue-700 hover:underline cursor-pointer'
                           : 'text-slate-800 cursor-default'
@@ -855,7 +891,10 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                     >
                       {client.name}
                     </button>
-                    <div className="text-xs text-blue-600 font-bold truncate mt-0.5">{client.website}</div>
+                    <div className="text-[11px] text-slate-500 font-bold truncate mt-0.5">{client.website}</div>
+                    {owner ? (
+                      <div className="text-[10px] font-black text-indigo-600 mt-1">拥有人 · {owner}</div>
+                    ) : null}
                     {client.productType && client.productType !== 'N/A' && (
                       <div className="text-[10px] font-bold text-violet-600 mt-0.5 truncate">
                         {client.productType}
@@ -884,10 +923,9 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                   </button>
                 </div>
               </div>
-              <div className="flex flex-wrap gap-2 text-xs font-bold text-slate-500 mb-3">
-                <span className="bg-slate-50 px-2 py-1 rounded-lg">{client.country}</span>
-                <span className="bg-slate-50 px-2 py-1 rounded-lg">{client.type}</span>
-                <span className="bg-slate-50 px-2 py-1 rounded-lg">{client.industry}</span>
+              <div className="flex flex-wrap gap-1.5 text-[11px] font-bold text-slate-500 mb-2">
+                <span className="bg-slate-50 px-2 py-0.5 rounded-md">{client.country}</span>
+                <span className="bg-slate-50 px-2 py-0.5 rounded-md">{client.type}</span>
                 <BgStatus
                   hasBg={hasBg}
                   canOpen={canOpenReport}
@@ -898,16 +936,17 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
               </div>
               <StageControls client={client} onPatch={patchClient} />
             </div>
-          ))
+            );
+          })
         )}
       </div>
 
       {/* Desktop table */}
       <div className="hidden md:block bg-white rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm overflow-x-auto">
-        <table className="w-full text-left border-collapse min-w-[980px]">
+        <table className="w-full text-left border-collapse min-w-[1080px] table-fixed">
           <thead>
-            <tr className="bg-slate-50 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">
-              <th className="px-4 lg:px-6 py-4 w-12">
+            <tr className="bg-slate-50/90 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">
+              <th className="px-3 py-3 w-10">
                 <input
                   type="checkbox"
                   checked={allPageSelected}
@@ -915,18 +954,18 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                   className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                 />
               </th>
-              <th className="px-4 lg:px-6 py-4">客户名称</th>
-              <th className="px-4 lg:px-6 py-4">国家</th>
-              <th className="px-4 lg:px-6 py-4">产品类型</th>
-              <th className="px-4 lg:px-6 py-4">类型</th>
-              <th className="px-4 lg:px-6 py-4">网址</th>
-              <th className="px-4 lg:px-6 py-4">阶段 / 跟进</th>
-              <th className="px-4 lg:px-6 py-4">背调</th>
-              <th className="px-4 lg:px-6 py-4">进度状态</th>
-              <th className="px-4 lg:px-6 py-4 w-28">操作</th>
+              <th className="px-3 py-3 w-[18%]">客户名称</th>
+              <th className="px-3 py-3 w-[8%]">国家</th>
+              <th className="px-3 py-3 w-[10%]">产品类型</th>
+              <th className="px-3 py-3 w-[7%]">类型</th>
+              <th className="px-3 py-3 w-[12%]">网址</th>
+              <th className="px-3 py-3 w-[8%]">拥有人</th>
+              <th className="px-3 py-3 w-[14%]">阶段 / 跟进</th>
+              <th className="px-3 py-3 w-[12%]">背调 / 进度</th>
+              <th className="px-3 py-3 w-16">操作</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-50">
+          <tbody className="divide-y divide-slate-100">
             {pagedEnriched.length === 0 ? (
               <tr>
                 <td colSpan={10} className="px-6 py-12 text-center text-slate-400 font-bold text-sm">
@@ -934,9 +973,11 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                 </td>
               </tr>
             ) : (
-              pagedEnriched.map(({ client, historyItem, hasBg, hasProduct, hasDm, bgAt, canOpenReport }) => (
-                <tr key={client.id} className="hover:bg-slate-50/50 transition-colors">
-                  <td className="px-4 lg:px-6 py-4">
+              pagedEnriched.map(({ client, historyItem, hasBg, hasProduct, hasDm, bgAt, canOpenReport }) => {
+                const owner = resolveOwner(client, historyItem);
+                return (
+                <tr key={client.id} className="hover:bg-slate-50/60 transition-colors align-top">
+                  <td className="px-3 py-2.5">
                     <input
                       type="checkbox"
                       checked={selectedClientIds.has(client.id)}
@@ -944,12 +985,12 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                       className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                     />
                   </td>
-                  <td className="px-4 lg:px-6 py-4">
+                  <td className="px-3 py-2.5">
                     <button
                       type="button"
                       onClick={() => canOpenReport && openClientReport(historyItem)}
                       disabled={!canOpenReport}
-                      className={`font-bold text-left ${
+                      className={`font-bold text-left text-sm leading-snug line-clamp-2 ${
                         canOpenReport
                           ? 'text-blue-700 hover:underline cursor-pointer'
                           : 'text-slate-800 cursor-default'
@@ -960,18 +1001,30 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                     </button>
                     <KeywordTags client={client} />
                   </td>
-                  <td className="px-4 lg:px-6 py-4 text-sm font-bold text-slate-600">{client.country}</td>
-                  <td className="px-4 lg:px-6 py-4 text-xs font-bold text-violet-700 max-w-[120px] truncate" title={client.productType}>
+                  <td className="px-3 py-2.5 text-xs font-bold text-slate-600 whitespace-nowrap">{client.country || '—'}</td>
+                  <td className="px-3 py-2.5 text-xs font-bold text-violet-700 truncate" title={client.productType}>
                     {client.productType && client.productType !== 'N/A' ? client.productType : '—'}
                   </td>
-                  <td className="px-4 lg:px-6 py-4 text-sm font-bold text-slate-600">{client.type}</td>
-                  <td className="px-4 lg:px-6 py-4 text-sm font-bold text-blue-600 max-w-[160px] truncate">
-                    {client.website}
+                  <td className="px-3 py-2.5 text-xs font-bold text-slate-600 whitespace-nowrap">{client.type || '—'}</td>
+                  <td className="px-3 py-2.5 text-xs font-bold text-blue-600 truncate" title={client.website}>
+                    {client.website || '—'}
                   </td>
-                  <td className="px-4 lg:px-6 py-4">
+                  <td className="px-3 py-2.5">
+                    <span
+                      className={`inline-flex max-w-full truncate text-[11px] font-black px-2 py-0.5 rounded-md ${
+                        owner
+                          ? 'bg-indigo-50 text-indigo-700 border border-indigo-100'
+                          : 'bg-slate-50 text-slate-400 border border-slate-100'
+                      }`}
+                      title={owner || '未标注拥有人'}
+                    >
+                      {owner || '—'}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5">
                     <StageControls client={client} onPatch={patchClient} />
                   </td>
-                  <td className="px-4 lg:px-6 py-4">
+                  <td className="px-3 py-2.5 space-y-1.5">
                     <BgStatus
                       hasBg={hasBg}
                       canOpen={canOpenReport}
@@ -979,31 +1032,30 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                       onOpenReport={() => openClientReport(historyItem)}
                       onReanalyze={() => triggerReanalyze(client, bgAt)}
                     />
-                  </td>
-                  <td className="px-4 lg:px-6 py-4">
                     <IntelChips hasBg={hasBg} hasProduct={hasProduct} hasDm={hasDm} />
                   </td>
-                  <td className="px-4 lg:px-6 py-4">
-                    <div className="flex items-center gap-2">
+                  <td className="px-3 py-2.5">
+                    <div className="flex items-center gap-1.5">
                       <button
                         type="button"
                         onClick={() => triggerReanalyze(client, bgAt)}
-                        className="text-amber-600 hover:text-amber-700"
+                        className="text-amber-600 hover:text-amber-700 p-0.5"
                         title="再次背调"
                       >
-                        <RefreshCw size={16} />
+                        <RefreshCw size={15} />
                       </button>
                       <button
                         onClick={() => onDeleteClient(client.id)}
-                        className="text-red-400 hover:text-red-600"
+                        className="text-red-400 hover:text-red-600 p-0.5"
                         title="删除"
                       >
-                        <Trash2 size={16} />
+                        <Trash2 size={15} />
                       </button>
                     </div>
                   </td>
                 </tr>
-              ))
+                );
+              })
             )}
           </tbody>
         </table>

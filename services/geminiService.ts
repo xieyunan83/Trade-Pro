@@ -656,6 +656,7 @@ const isWeakJobTitle = (title?: string): boolean =>
 const needsProfileEnrichment = (dm: DecisionMaker): boolean =>
   isIncompletePersonName(dm.name) ||
   isWeakJobTitle(dm.title) ||
+  !(dm.phone || '').trim() ||
   !dm.linkedin ||
   !/linkedin\.com\/in\//i.test(dm.linkedin || '');
 
@@ -777,6 +778,15 @@ const mapAnymailPersonPayload = (
     title,
     linkedin: data.person_linkedin_url || data.linkedin_url || undefined,
     emailGuess: email,
+    phone:
+      String(
+        data.person_phone ||
+          data.phone ||
+          data.person_mobile ||
+          data.mobile ||
+          data.phone_number ||
+          ''
+      ).trim() || undefined,
     type: classifyDecisionMakerType(title),
     source: 'AnymailFinder',
     emailSource: 'AnymailFinder',
@@ -1018,26 +1028,30 @@ const enrichCompanyContactsWithWebIntel = async (
   companyName: string,
   contacts: DecisionMaker[]
 ): Promise<DecisionMaker[]> => {
-  const targets = contacts.filter((c) => c.emailGuess && needsProfileEnrichment(c)).slice(0, 20);
+  const targets = contacts.filter((c) => c.emailGuess && needsProfileEnrichment(c)).slice(0, 24);
   if (!targets.length) return contacts;
 
-  // 1) AnySearch：并行检索每人 + 公司团队页线索
+  // 1) AnySearch：并行检索每人 + 公司团队页 / 联系电话线索
   let searchEvidence = '';
   if (getAnysearchApiKey().trim() || isSupabaseConfigured()) {
     try {
       const queries = [
         {
-          query: `${companyName || domain} ${domain} LinkedIn company employees team leadership procurement`,
+          query: `${companyName || domain} ${domain} LinkedIn company employees team leadership procurement contact phone`,
           max_results: 5,
         },
-        ...targets.slice(0, 4).map((c) => ({
-          query: `${c.emailGuess} OR ${c.name} ${domain} LinkedIn job title`,
+        {
+          query: `site:${domain} (contact OR team OR about OR "phone" OR "tel:" OR WhatsApp)`,
+          max_results: 4,
+        },
+        ...targets.slice(0, 5).map((c) => ({
+          query: `${c.emailGuess} OR "${c.name}" ${domain} LinkedIn job title phone OR mobile OR WhatsApp`,
           max_results: 3,
         })),
-      ].slice(0, 5);
+      ].slice(0, 7);
       const batchText = await anysearchBatchSearch(queries);
       if (batchText?.trim()) {
-        searchEvidence = batchText.trim().slice(0, 8_000);
+        searchEvidence = batchText.trim().slice(0, 10_000);
         console.log('[DM enrich] AnySearch evidence chars:', searchEvidence.length);
       }
     } catch (e) {
@@ -1048,33 +1062,31 @@ const enrichCompanyContactsWithWebIntel = async (
   const roster = targets
     .map(
       (c, i) =>
-        `${i + 1}. email=${c.emailGuess}; guessedName=${c.name}; first=${c.firstName || ''}; last=${c.lastName || ''}; currentTitle=${c.title || ''}`
+        `${i + 1}. email=${c.emailGuess}; guessedName=${c.name}; first=${c.firstName || ''}; last=${c.lastName || ''}; currentTitle=${c.title || ''}; currentPhone=${c.phone || ''}`
     )
     .join('\n');
 
-  const prompt = `你是外贸 B2B 情报分析师。请为公司联系人补全「真实全名 + 职位 + LinkedIn」。
+  const prompt = `你是外贸 B2B 情报分析师。请为公司联系人补全「真实全名 + 真实职位 + 公开联系电话 + LinkedIn」。
 
 公司：${companyName || domain}
 官网域名：${domain}
 
-AnySearch 网页检索证据（优先采信；可能含 LinkedIn / 新闻 / 团队页片段）：
+AnySearch 网页检索证据（优先采信；可能含 LinkedIn / 新闻 / 团队页 / Contact 电话）：
 ${searchEvidence || '（无 AnySearch 证据，请自行联网搜索 LinkedIn、官网 About/Team/Contact）'}
 
 待补全联系人（邮箱来自 Anymail 公司域名搜索，姓名可能只是邮箱前缀）：
 ${roster}
 
-任务：
+硬性要求：
 1. 对每人用邮箱本地部分 + 公司名在 LinkedIn / 官网 / 新闻中交叉验证。
-2. 输出真实 First Last 全名（拉丁字母姓名优先）；查不到则 fullName 留空，不要把邮箱前缀当全名。
-3. 职位写具体岗位（如 Purchasing Manager / Category Buyer / CFO）；查不到 title 留空。
-4. linkedin 必须是 linkedin.com/in/... 个人主页；不确定则留空，严禁编造。
-5. 采购/买手/品类/供应链 → type=Buyer；CEO/Founder/Owner/President → CEO；其它 Other。
+2. fullName 必须是可核验的真实 First Last（拉丁字母优先）；查不到则留空，严禁把邮箱前缀、"Decision Maker"、"Contact" 当全名。
+3. title 必须是具体岗位（如 Purchasing Manager / Category Buyer / CFO）；查不到留空，不要写 "Staff"/"Employee"。
+4. phone / whatsapp：尽量从官网 Contact、页脚、团队页、新闻稿、公开名片提取国际格式号码；查不到留空，严禁编造。
+5. linkedin 必须是 linkedin.com/in/... 个人主页；不确定则留空。
+6. 采购/买手/品类/供应链 → type=Buyer；CEO/Founder/Owner/President → CEO；其它 Other。
 
 严格返回 JSON 数组（与输入人数相同、顺序一致）：
 [{"email":"...","fullName":"","firstName":"","lastName":"","title":"","phone":"","whatsapp":"","linkedin":"","type":"CEO|Buyer|Other","influenceScore":1-5}]
-规则补充：
-- phone / whatsapp 仅填公开可查到的号码（官网 Contact、名片、新闻）；查不到留空，不要编造。
-- WhatsApp 可为国际号码格式或 wa.me 链接中的号码。
 只输出 JSON，不要 markdown。`;
 
   try {
@@ -1346,6 +1358,7 @@ export const researchDecisionMakerEmails = async (opts: {
                       ? candidate.title
                       : cur.title,
                   linkedin: cur.linkedin || candidate.linkedin,
+                  phone: cur.phone || candidate.phone,
                   type: candidate.type !== 'Other' ? candidate.type : cur.type,
                   influenceScore: Math.max(
                     cur.influenceScore || 0,

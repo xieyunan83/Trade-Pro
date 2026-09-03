@@ -17,6 +17,7 @@ export interface SimilarCompaniesPanelProps {
     checked: boolean;
     checkedAt?: number;
     historyItem?: HistoryItem;
+    ownerUsername?: string;
   };
   onOpenReport?: (item: HistoryItem) => void;
 }
@@ -185,8 +186,15 @@ export const SimilarCompaniesPanel: React.FC<SimilarCompaniesPanelProps> = ({
                       {comp.country ? ` · ${comp.country}` : ''}
                     </div>
                     {isChecked && (
-                      <span className="inline-flex mt-1.5 text-[10px] font-black bg-emerald-50 text-emerald-700 border border-emerald-100 px-2 py-0.5 rounded-lg">
-                        已背调{timeLabel ? ` · ${timeLabel}` : ''}
+                      <span className="inline-flex flex-col gap-0.5 mt-1.5">
+                        <span className="inline-flex text-[10px] font-black bg-emerald-50 text-emerald-700 border border-emerald-100 px-2 py-0.5 rounded-lg">
+                          已背调{timeLabel ? ` · ${timeLabel}` : ''}
+                        </span>
+                        {(checkMeta?.ownerUsername || checkMeta?.historyItem?.ownerUsername) && (
+                          <span className="inline-flex text-[10px] font-black bg-indigo-50 text-indigo-700 border border-indigo-100 px-2 py-0.5 rounded-lg">
+                            拥有人 · {checkMeta?.ownerUsername || checkMeta?.historyItem?.ownerUsername}
+                          </span>
+                        )}
                       </span>
                     )}
                   </div>

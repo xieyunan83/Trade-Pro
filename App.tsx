@@ -88,7 +88,7 @@ import { AccessGate } from './components/AccessGate';
 import { loadUsersWithMigration, loadUsersFromStorage, saveUsersToStorage, getUsersUpdatedAt } from './services/auth';
 import { AdminDashboard } from './components/AdminDashboard';
 import { 
-  LayoutDashboard, PackageSearch, Users, PenTool, Network, Search, Loader2, Menu, Globe, Zap, FileSpreadsheet, History, Clock, ChevronRight, AlertTriangle, RefreshCw, LogOut, Briefcase, Ruler, CheckCircle2, Hourglass, StopCircle, PlayCircle, Layers, Mail, Cloud, Download, Info, Link2, X, Database, Github, Image, Trash2, Ban, Target
+  LayoutDashboard, PackageSearch, Users, PenTool, Network, Search, Loader2, Menu, Globe, Zap, FileSpreadsheet, History, Clock, ChevronRight, AlertTriangle, RefreshCw, LogOut, Briefcase, Ruler, CheckCircle2, Hourglass, StopCircle, PlayCircle, Layers, Mail, Cloud, Download, Info, Link2, X, Database, Image, Trash2, Ban, Target
 } from 'lucide-react';
 import {
   addExcludedCompany,
@@ -869,40 +869,60 @@ const App: React.FC = () => {
       }
   };
 
-  const performSingleAnalysis = async (
+  /** 单次/再次背调：一律进后台队列，不挡当前页面操作 */
+  const enqueueBackgroundAnalysis = (
+    domain: string,
+    override?: { searchKeyword?: string; searchTags?: string[]; searchCountry?: string; mode?: 'detailed' | 'economy' }
+  ) => {
+    if (!hasPermission(currentUser, 'feature.analyze_company') && !hasPermission(currentUser, 'feature.batch_analyze')) {
+      alert('你没有背调权限，请联系管理员或部门主管开通。');
+      return;
+    }
+    const target = (domain || '').trim();
+    if (!target) {
+      alert('请先填写公司网址或名称');
+      return;
+    }
+    const limit = checkLimit('analysis');
+    if (!limit.allowed) {
+      alert(`今日背调次数已达上限（${limit.current}/${limit.max}）。请联系管理员提高限额，或明日再试。`);
+      return;
+    }
+    const kw = (override?.searchKeyword || discoveryState.product || '').trim();
+    if (kw) addCustomKeyword(kw);
+    const countryHint = (
+      override?.searchCountry ||
+      discoveryState.countries?.[0] ||
+      discoveryState.country ||
+      ''
+    ).trim();
+    const specificCountry = /^(global|worldwide|international|国际|全球|不限)$/i.test(countryHint)
+      ? ''
+      : countryHint;
+    const task = stampOwnership({
+      id: newAutomationTaskId(),
+      clientName: target,
+      website: target,
+      country: specificCountry || '',
+      status: 'pending' as const,
+      productContext: kw || 'Manual',
+      productImages: [],
+      mode: override?.mode || 'economy',
+      keyword: kw || undefined,
+      createdAt: Date.now(),
+    });
+    batchSessionIdsRef.current.add(task.id);
+    setAutomationResults((prev) => [...prev, task]);
+    void saveAutomationTask(task);
+    void processBatchQueue([task]);
+    alert(`已加入后台背调：${target}\n可继续其它操作，左侧栏可看进度。`);
+  };
+
+  const performSingleAnalysis = (
     domain: string,
     override?: { searchKeyword?: string; searchTags?: string[]; searchCountry?: string }
   ) => {
-    setLoading(true); setErrorMsg(null); setActiveModule(ModuleType.BACKGROUND); setMobileMenuOpen(false);
-    try {
-      const keyword = (override?.searchKeyword || discoveryState.product || '').trim();
-      if (keyword) addCustomKeyword(keyword);
-      const countryHint = (
-        override?.searchCountry ||
-        discoveryState.countries?.[0] ||
-        discoveryState.country ||
-        ''
-      ).trim();
-      const specificCountry = /^(global|worldwide|international|国际|全球|不限)$/i.test(countryHint)
-        ? ''
-        : countryHint;
-      const tags =
-        override?.searchTags?.length
-          ? override.searchTags
-          : keyword
-            ? buildSearchTags(keyword, specificCountry)
-            : undefined;
-      const result = await analyzeCompany(domain, 'economy', {
-        searchKeyword: keyword || undefined,
-        searchTags: tags,
-        searchCountry: specificCountry || undefined,
-      });
-      setAnalysisData(result);
-      incrementUsage('analysis');
-      const saved = await saveAnalysisToHistory(result, keyword ? 'discovery' : 'single');
-      setViewingHistoryId(saved.id);
-      updateCrmStatus(result);
-    } catch (e: any) { setErrorMsg(`Error: ${e.message}`); } finally { setLoading(false); }
+    enqueueBackgroundAnalysis(domain, override);
   };
 
   const loadFromHistory = (item: HistoryItem) => {
@@ -962,6 +982,7 @@ const App: React.FC = () => {
       checked: lookup.checked,
       checkedAt: lookup.checkedAt,
       historyItem: lookup.historyItem,
+      ownerUsername: lookup.ownerUsername || lookup.historyItem?.ownerUsername,
     };
   };
 
@@ -1422,6 +1443,8 @@ const App: React.FC = () => {
                   hasAnalyzed: true,
                   hasBackgroundCheck: true,
                   lastBackgroundCheckAt: now,
+                  ownerUsername: c.ownerUsername || currentUser?.username,
+                  departmentId: c.departmentId || currentUser?.departmentId,
                   industry: analysis.companyInfo?.nature || c.industry,
                   contacts: (analysis.decisionMakers?.length
                     ? analysis.decisionMakers
@@ -2791,12 +2814,6 @@ const App: React.FC = () => {
         </nav>
 
         <div className="p-4 border-t border-white/5 space-y-2">
-            {isGitHubConnected && (
-                <div className="w-full flex items-center gap-2 px-4 py-2 bg-signal-500/10 text-signal-300 rounded-xl text-xs font-semibold mb-2 border border-signal-500/20">
-                    <Github size={14} /> GitHub Auto-Sync Active
-                </div>
-            )}
-            
             <div 
                 className={`px-4 py-2.5 rounded-xl border border-emerald-400/20 bg-emerald-400/10 flex items-center gap-2 mb-2 cursor-pointer hover:bg-emerald-400/15 transition-colors ${isKBSyncing ? 'opacity-70' : ''}`}
             >
@@ -3264,6 +3281,15 @@ const App: React.FC = () => {
                                   <span className="text-[10px] font-black bg-emerald-50 text-emerald-700 px-2 py-1 rounded-lg border border-emerald-100">
                                     已背调{timeLabel ? ` · ${timeLabel}` : ''}
                                   </span>
+                                  {(bgMeta.ownerUsername ||
+                                    (viewingHistoryId &&
+                                      history.find((h) => h.id === viewingHistoryId)?.ownerUsername)) && (
+                                    <span className="text-[10px] font-black bg-indigo-50 text-indigo-700 px-2 py-1 rounded-lg border border-indigo-100">
+                                      拥有人 ·{' '}
+                                      {bgMeta.ownerUsername ||
+                                        history.find((h) => h.id === viewingHistoryId)?.ownerUsername}
+                                    </span>
+                                  )}
                                   {kws.map((kw) => (
                                     <span
                                       key={kw}

@@ -409,6 +409,8 @@ export type BackgroundCheckLookup = {
   checkedAt?: number;
   keywords: string[];
   historyItem?: HistoryItem;
+  /** 背调拥有人（历史或 CRM） */
+  ownerUsername?: string;
 };
 
 const collectKeywordsFromHistory = (h: HistoryItem): string[] => {
@@ -437,6 +439,7 @@ export const lookupBackgroundCheck = (
   const keywords = new Set<string>();
   let latest: HistoryItem | undefined;
   let checkedAt = 0;
+  let ownerUsername = '';
 
   for (const h of history) {
     const hHost = normalizeCrmHost(h.domain || h.data?.companyInfo?.website);
@@ -445,7 +448,10 @@ export const lookupBackgroundCheck = (
       (host && hHost && host === hHost) || (nameKey && hName && nameKey === hName);
     if (!match) continue;
     for (const k of collectKeywordsFromHistory(h)) keywords.add(k);
-    if (!latest || h.timestamp > latest.timestamp) latest = h;
+    if (!latest || h.timestamp > latest.timestamp) {
+      latest = h;
+      if ((h.ownerUsername || '').trim()) ownerUsername = h.ownerUsername!.trim();
+    }
     if (h.timestamp > checkedAt) checkedAt = h.timestamp;
   }
 
@@ -463,6 +469,9 @@ export const lookupBackgroundCheck = (
         if (v) keywords.add(v);
       }
     }
+    if (!ownerUsername && (c.ownerUsername || '').trim()) {
+      ownerUsername = c.ownerUsername!.trim();
+    }
     if (c.hasBackgroundCheck || c.hasAnalyzed || c.lastBackgroundCheckAt) {
       const at = c.lastBackgroundCheckAt || 0;
       if (at > checkedAt) checkedAt = at;
@@ -478,6 +487,10 @@ export const lookupBackgroundCheck = (
     checkedAt: checkedAt || latest?.timestamp,
     keywords: [...keywords],
     historyItem: latest,
+    ownerUsername:
+      ownerUsername ||
+      (latest?.ownerUsername || '').trim() ||
+      undefined,
   };
 };
 
@@ -502,6 +515,10 @@ export const buildBackgroundCheckIndex = (
         (prev.historyItem?.timestamp || 0) >= (patch.historyItem?.timestamp || 0)
           ? prev.historyItem
           : patch.historyItem,
+      ownerUsername:
+        (prev.historyItem?.timestamp || 0) >= (patch.historyItem?.timestamp || 0)
+          ? prev.ownerUsername || patch.ownerUsername
+          : patch.ownerUsername || prev.ownerUsername,
     });
   };
 
@@ -513,6 +530,7 @@ export const buildBackgroundCheckIndex = (
       checkedAt: h.timestamp,
       keywords: collectKeywordsFromHistory(h),
       historyItem: h,
+      ownerUsername: (h.ownerUsername || '').trim() || undefined,
     };
     if (host) upsert(host, base);
     if (name) upsert(`name:${name}`, base);
@@ -533,6 +551,7 @@ export const buildBackgroundCheckIndex = (
       checked: true,
       checkedAt: c.lastBackgroundCheckAt,
       keywords: kws,
+      ownerUsername: (c.ownerUsername || '').trim() || undefined,
     };
     if (host) upsert(host, base);
     if (name) upsert(`name:${name}`, base);
@@ -553,14 +572,19 @@ export const lookupFromBgIndex = (
   if (!byHost && !byName) return { checked: false, keywords: [] };
   if (byHost && !byName) return byHost;
   if (!byHost && byName) return byName;
+  const historyItem =
+    (byHost!.historyItem?.timestamp || 0) >= (byName!.historyItem?.timestamp || 0)
+      ? byHost!.historyItem
+      : byName!.historyItem;
   return {
     checked: true,
     checkedAt: Math.max(byHost!.checkedAt || 0, byName!.checkedAt || 0) || undefined,
     keywords: [...new Set([...(byHost!.keywords || []), ...(byName!.keywords || [])])],
-    historyItem:
-      (byHost!.historyItem?.timestamp || 0) >= (byName!.historyItem?.timestamp || 0)
-        ? byHost!.historyItem
-        : byName!.historyItem,
+    historyItem,
+    ownerUsername:
+      historyItem?.ownerUsername ||
+      byHost!.ownerUsername ||
+      byName!.ownerUsername,
   };
 };
 

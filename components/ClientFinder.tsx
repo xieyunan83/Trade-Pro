@@ -664,6 +664,11 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
                         {timeLabel && (
                           <span className="text-[9px] font-bold text-emerald-600/80">{timeLabel}</span>
                         )}
+                        {(bg.ownerUsername || bg.historyItem?.ownerUsername) && (
+                          <span className="text-[9px] font-black text-indigo-600">
+                            拥有人 · {bg.ownerUsername || bg.historyItem?.ownerUsername}
+                          </span>
+                        )}
                       </span>
                     )}
                     <div className="flex flex-wrap justify-end gap-2">

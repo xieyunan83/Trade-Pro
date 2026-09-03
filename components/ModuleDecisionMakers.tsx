@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { AnalysisResult, DecisionMaker } from '../types';
-import { Users, Linkedin, Mail, Phone, ExternalLink, UserCheck, AlertTriangle, Download, Briefcase, ShieldCheck, ShieldAlert, RefreshCw, Loader2, Clock, Plus, Trash2, Save } from 'lucide-react';
+import { Linkedin, Mail, Phone, ExternalLink, UserCheck, AlertTriangle, Download, Briefcase, ShieldCheck, ShieldAlert, RefreshCw, Loader2, Clock, Plus, Trash2, Save } from 'lucide-react';
 import { exportContactsToExcel } from '../services/exportService';
 import {
   getActiveDmJobForDomain,
@@ -288,12 +288,9 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
         <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4 mb-6">
           <div className="min-w-0">
             <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-600 mb-1">Intelligence · Contacts</div>
-            <h3 className="text-xl sm:text-2xl font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
-              <Users className="text-cyan-600" /> 关键决策人挖掘
+            <h3 className="text-xl sm:text-2xl font-extrabold text-slate-900 tracking-tight">
+              关键决策人挖掘
             </h3>
-            <p className="text-sm text-slate-500 font-medium mt-1 leading-relaxed">
-              背调不会自动扣 Anymail 积分。点「后台搜索」优先 Anymail 公司域名搜索；若 Anymail 未找到任何联系人，再自动用 Hunter.io。Hunter 额度用尽时静默跳过不报错。「再次深挖」才会额外按采购等角色补充（Anymail，成功约 2 积分/人）。
-            </p>
             {lastSearchAt ? (
               <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-semibold text-slate-500">
                 <span className="inline-flex items-center gap-1 text-cyan-700">
