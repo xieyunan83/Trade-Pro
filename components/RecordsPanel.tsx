@@ -3,7 +3,6 @@ import { HistoryItem, DiscoveryArchiveItem, Client, DiscoveryState } from '../ty
 import {
   ChevronDown,
   ChevronRight,
-  Clock,
   Download,
   FolderOpen,
   Globe,
@@ -17,6 +16,9 @@ import {
   RefreshCw,
   Users,
   PackageSearch,
+  FileText,
+  ArrowLeft,
+  ExternalLink,
 } from 'lucide-react';
 import { normalizeCountryZh } from '../utils/countryNormalize';
 import {
@@ -37,6 +39,8 @@ import {
   normalizeCrmHost,
 } from '../utils/crmHistory';
 import { hasRichProductCatalog } from '../services/productCatalog';
+import { extractHistoryAnalysis } from '../services/analysisNormalize';
+import { ModuleBackground } from './ModuleBackground';
 
 type RecordTab = 'search' | 'background' | 'all';
 type GroupBy = 'keyword' | 'country' | 'time' | 'dmMined';
@@ -182,6 +186,31 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   const [filterProduct, setFilterProduct] = useState<'all' | 'yes' | 'no'>('all');
   /** 默认隐藏已入 CRM，减少记录中心噪音 */
   const [filterCrm, setFilterCrm] = useState<'all' | 'yes' | 'no'>('no');
+  /** 记录中心内嵌查看背调结果 */
+  const [previewHistory, setPreviewHistory] = useState<HistoryItem | null>(null);
+
+  const openHistoryPreview = (item: HistoryItem) => {
+    const data = extractHistoryAnalysis(item);
+    if (!data) {
+      alert('该记录缺少有效背调数据，无法打开。可点击「再次背调」重新生成。');
+      return;
+    }
+    setPreviewHistory({ ...item, data });
+  };
+
+  const previewAnalysis = useMemo(
+    () => (previewHistory ? extractHistoryAnalysis(previewHistory) : null),
+    [previewHistory]
+  );
+
+  // 预览打开时，跟随 history 更新（决策人挖掘等写回后可即时看到）
+  useEffect(() => {
+    if (!previewHistory) return;
+    const fresh = history.find((h) => h.id === previewHistory.id);
+    if (fresh && fresh.data !== previewHistory.data) {
+      setPreviewHistory(fresh);
+    }
+  }, [history, previewHistory]);
 
   // 启动时把已有记录里的词合并进自定义列表
   useEffect(() => {
@@ -520,14 +549,96 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
 
   return (
     <div className="fixed inset-0 z-[60] bg-slate-100/95 backdrop-blur-sm flex flex-col animate-fade-in safe-area-inset">
-      <div className="flex-1 min-h-0 w-full max-w-6xl mx-auto flex flex-col bg-white shadow-2xl sm:my-0 md:my-0 border-x border-slate-200/80">
+      <div className="relative flex-1 min-h-0 w-full max-w-6xl mx-auto flex flex-col bg-white shadow-2xl sm:my-0 md:my-0 border-x border-slate-200/80">
+      {previewHistory && previewAnalysis && (
+        <div className="absolute inset-0 z-40 bg-white flex flex-col animate-fade-in">
+          <div className="p-3 sm:p-4 border-b border-slate-200/70 bg-gradient-to-r from-slate-50 to-cyan-50/40 flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setPreviewHistory(null)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-black text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 touch-manipulation"
+            >
+              <ArrowLeft size={14} /> 返回列表
+            </button>
+            <div className="min-w-0 flex-1">
+              <div className="font-extrabold text-slate-900 text-sm sm:text-base truncate">
+                {previewAnalysis.companyInfo?.name || previewHistory.domain}
+              </div>
+              <div className="text-[10px] text-slate-400 font-semibold truncate">
+                背调结果预览 · 评估后再决定是否加入 CRM
+              </div>
+            </div>
+            {canImportCrm && onBatchImportToCrm && !isHistoryInCrm(previewHistory, crmClients) && (
+              <button
+                type="button"
+                onClick={() => {
+                  onBatchImportToCrm([previewHistory], []);
+                  setPreviewHistory(null);
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-black text-white bg-blue-600 hover:bg-blue-700 touch-manipulation"
+              >
+                <ShieldCheck size={14} /> 加入 CRM
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                onOpenHistory(previewHistory);
+                setPreviewHistory(null);
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-black text-cyan-700 bg-cyan-50 border border-cyan-100 hover:bg-cyan-100 touch-manipulation"
+              title="在主界面报告页打开"
+            >
+              <ExternalLink size={14} /> 完整报告页
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="text-slate-400 hover:text-slate-700 text-lg px-3 py-2 touch-manipulation rounded-xl hover:bg-slate-100"
+              title="关闭"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-4 custom-scrollbar overscroll-contain bg-slate-50/80">
+            <ModuleBackground
+              data={previewAnalysis}
+              onAddToCRM={() => {
+                if (!canImportCrm || !onBatchImportToCrm) {
+                  alert('你没有 CRM 导入权限。');
+                  return;
+                }
+                onBatchImportToCrm([previewHistory], []);
+              }}
+              onEnqueueDmEmailSearch={
+                onBatchDmSearch
+                  ? () => {
+                      onBatchDmSearch([previewHistory]);
+                      return { ok: true, message: '已加入决策人挖掘队列（请保持页面打开）' };
+                    }
+                  : undefined
+              }
+              hasPriorDmSearch={historyHasDmSearch(previewHistory)}
+              onReanalyze={
+                onReanalyzeHistory
+                  ? () => {
+                      setPreviewHistory(null);
+                      onReanalyzeHistory(previewHistory);
+                    }
+                  : undefined
+              }
+              backgroundCheckedAt={previewHistory.timestamp}
+            />
+          </div>
+        </div>
+      )}
       <div className="p-3 sm:p-4 border-b border-slate-200/70 bg-gradient-to-r from-slate-50 to-cyan-50/40 flex justify-between items-center gap-2 shrink-0">
         <div className="min-w-0">
           <div className="font-extrabold text-slate-900 text-base sm:text-lg flex items-center gap-2 tracking-tight">
             <FolderOpen size={18} className="text-cyan-600 flex-shrink-0" /> 记录中心
           </div>
           <div className="text-[10px] sm:text-[11px] text-slate-400 font-semibold mt-0.5 truncate tracking-wide">
-            全屏管理 · 默认隐藏已入 CRM
+            点击公司可查看背调 · 默认隐藏已入 CRM
             {filterCrm === 'no' && hiddenCrmHistoryCount > 0
               ? `（已隐藏 ${hiddenCrmHistoryCount} 条）`
               : ''}
@@ -855,8 +966,17 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                       row.kind === 'history' ? (
                         <div
                           key={`h-${row.item.id}`}
-                          className={`p-3 hover:bg-blue-50/60 ${selected.has(rowSelectKey(row)) ? 'bg-blue-50/80' : ''}`}
-                          onClick={() => onOpenHistory(row.item)}
+                          role="button"
+                          tabIndex={0}
+                          className={`p-3 hover:bg-blue-50/60 cursor-pointer touch-manipulation ${selected.has(rowSelectKey(row)) ? 'bg-blue-50/80' : ''}`}
+                          onClick={() => openHistoryPreview(row.item)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              openHistoryPreview(row.item);
+                            }
+                          }}
+                          title="点击查看背调结果"
                         >
                           <div className="flex items-start gap-2">
                             {canSelect && (
@@ -872,9 +992,19 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                                 />
                               </label>
                             )}
-                            <Building2 size={14} className="text-blue-500 mt-0.5" />
+                            <Building2 size={14} className="text-blue-500 mt-0.5 shrink-0" />
                             <div className="min-w-0 flex-1">
-                              <div className="text-xs font-black text-slate-800 truncate">{row.item.data?.companyInfo?.name || row.item.domain}</div>
+                              <button
+                                type="button"
+                                className="text-xs font-black text-blue-700 hover:underline truncate text-left block max-w-full"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openHistoryPreview(row.item);
+                                }}
+                                title="查看背调结果"
+                              >
+                                {row.item.data?.companyInfo?.name || row.item.domain}
+                              </button>
                               <div className="text-[10px] text-slate-400 truncate">{row.item.domain}</div>
                               <div className="flex flex-wrap gap-1 mt-1.5">
                                 <StatusChip done doneLabel="已背调" pendingLabel="未背调" tone="violet" />
@@ -957,7 +1087,18 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                               )}
                             </div>
                           </div>
-                          <div className="flex justify-end gap-2 mt-2">
+                          <div className="flex justify-end gap-2 mt-2 flex-wrap">
+                            <button
+                              type="button"
+                              className="text-[10px] font-black text-cyan-700"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openHistoryPreview(row.item);
+                              }}
+                              title="查看背调结果"
+                            >
+                              <FileText size={11} className="inline" /> 查看报告
+                            </button>
                             {onReanalyzeHistory && (
                               <button
                                 type="button"

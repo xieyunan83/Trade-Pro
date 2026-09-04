@@ -985,10 +985,28 @@ const App: React.FC = () => {
 
   const loadFromHistory = (item: HistoryItem) => {
     try {
-      const data = extractHistoryAnalysis(item);
+      let data = extractHistoryAnalysis(item);
       if (!data) {
-        setErrorMsg('该历史记录缺少有效背调数据，无法打开。可重新对该域名做一次深度调查。');
-        setHistoryOpen(false);
+        const domainKey = (item.domain || '')
+          .toLowerCase()
+          .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
+          .split('/')[0];
+        const task = automationResultsRef.current.find((t) => {
+          if (t.status !== 'completed' || !t.analysis) return false;
+          const tw = (t.analysis.companyInfo?.website || t.website || '')
+            .toLowerCase()
+            .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
+            .split('/')[0];
+          return !!domainKey && tw === domainKey;
+        });
+        if (task?.analysis) data = normalizeAnalysisResult(task.analysis);
+      }
+      if (!data) {
+        const fresh = historyRef.current.find((h) => h.id === item.id);
+        data = extractHistoryAnalysis(fresh);
+      }
+      if (!data) {
+        alert('该历史记录缺少有效背调数据，无法打开。可对该域名再次背调。');
         return;
       }
       setAnalysisData(data);
@@ -998,10 +1016,10 @@ const App: React.FC = () => {
       setHistoryOpen(false);
       setMobileMenuOpen(false);
       setErrorMsg(null);
+      setLoading(false);
     } catch (e: any) {
       console.error('loadFromHistory failed', e);
-      setErrorMsg(`打开历史记录失败: ${e?.message || String(e)}`);
-      setHistoryOpen(false);
+      alert(`打开历史记录失败: ${e?.message || String(e)}`);
     }
   };
 
