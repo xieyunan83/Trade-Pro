@@ -7,9 +7,12 @@
 import { getTavilyApiKeys, saveTavilyApiKeys, getTavilyApiKey } from './env';
 import { isLocalDevHost } from './qwenProxy';
 import { getApiConfig, isSupabaseConfigured } from './supabase';
+import { buildLeadDiscoveryQueries } from './leadDiscoverySources';
 
 const TIMEOUT_MS = 40_000;
 const MAX_EVIDENCE_CHARS = 14_000;
+/** 客户搜索证据可稍长，便于目录站多公司抽取 */
+const MAX_LEAD_EVIDENCE_CHARS = 18_000;
 const LS_EXHAUSTED = 'trade_scout_tavily_exhausted';
 const LS_ACTIVE_IDX = 'trade_scout_tavily_active_idx';
 
@@ -283,34 +286,58 @@ export const gatherTavilyLeadEvidence = async (opts: {
 }): Promise<string> => {
   if (!hasTavilyKey()) return '';
   const kw = (opts.productKeyword || '').trim();
-  const country = (opts.country || '').trim();
-  const industry = (opts.industry || '').trim();
-  const ctype = (opts.clientType || 'distributor importer wholesaler').trim();
   if (!kw) return '';
 
-  const queries = [
-    `${kw} ${ctype} ${country} company website`.replace(/\s+/g, ' ').trim(),
-    `${kw} buyer OR importer OR distributor ${country}`.replace(/\s+/g, ' ').trim(),
-  ];
-  if (industry) {
-    queries.push(`${industry} ${kw} ${country} wholesale`.replace(/\s+/g, ' ').trim());
-  }
+  // 多源查询：开放网页 + 目录站 + 展会（控制次数，避免打爆额度）
+  const allQueries = buildLeadDiscoveryQueries({
+    productKeyword: kw,
+    country: opts.country,
+    industry: opts.industry,
+    clientType: opts.clientType,
+  });
+  // 优先跑前 4 条；若证据偏少再补 1 条
+  const primary = allQueries.slice(0, 4);
+  const backup = allQueries.slice(4, 5);
 
   const chunks: string[] = [];
-  for (const q of queries.slice(0, 2)) {
+  const runQuery = async (q: string) => {
+    const data = await tavilySearch(q, {
+      maxResults: 10,
+      searchDepth: 'basic',
+      includeAnswer: true,
+    });
+    const block = formatTavilyEvidence(data, `TAVILY:${q.slice(0, 48)}`);
+    if (block) chunks.push(block);
+  };
+
+  for (const q of primary) {
     try {
-      const data = await tavilySearch(q, { maxResults: 8, searchDepth: 'basic', includeAnswer: true });
-      const block = formatTavilyEvidence(data, `TAVILY:${q.slice(0, 40)}`);
-      if (block) chunks.push(block);
+      await runQuery(q);
     } catch (e) {
       if (String((e as any)?.message || e).includes('TAVILY_POOL_EXHAUSTED')) {
         console.warn('[tavily] pool exhausted, fall back to Qwen web search');
-        return '';
+        return chunks.join('\n\n').slice(0, MAX_LEAD_EVIDENCE_CHARS);
       }
       console.warn('[tavily] lead search failed', q, e);
     }
   }
-  return chunks.join('\n\n').slice(0, MAX_EVIDENCE_CHARS);
+
+  const joinedLen = chunks.join('\n\n').length;
+  if (joinedLen < 2200 && backup.length) {
+    for (const q of backup) {
+      try {
+        await runQuery(q);
+      } catch (e) {
+        if (String((e as any)?.message || e).includes('TAVILY_POOL_EXHAUSTED')) break;
+        console.warn('[tavily] lead backup search failed', q, e);
+      }
+    }
+  }
+
+  console.log(
+    `[tavily] lead evidence queries=${primary.length + (joinedLen < 2200 ? backup.length : 0)} chunks=${chunks.length} chars≈${chunks.join('\n\n').length}`
+  );
+  return chunks.join('\n\n').slice(0, MAX_LEAD_EVIDENCE_CHARS);
 };
 
 export type TavilyCompanyEvidenceBundle = {

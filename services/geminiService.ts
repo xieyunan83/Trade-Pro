@@ -20,6 +20,7 @@ import { env, getEmailSearchKeys, getAnysearchApiKey } from './env';
 import {
   anysearchBatchSearch,
   gatherIdentityEvidence,
+  gatherAnysearchLeadEvidence,
   testAnysearchConnection,
 } from './anysearchService';
 import { filterExcludedSearchResults } from './excludedCompanies';
@@ -28,6 +29,7 @@ import {
   gatherTavilyCompanyEvidenceBundle,
   hasTavilyKey,
 } from './tavilyService';
+import { LEAD_EVIDENCE_USAGE_HINT, resolveDirectorySitesForMarket } from './leadDiscoverySources';
 import { hasRichProductCatalog } from './productCatalog';
 import {
   buildFallbackEvidenceFromReport,
@@ -3598,16 +3600,20 @@ export const searchPotentialClients = async (productKeyword: string, country: st
   const types = clientType.split(/[,，;/|]+/).map(s => s.trim()).filter(Boolean);
   const singleMarket = countries.length === 1 && !isVagueMarketCountry(countries[0]);
   const targetMarket = singleMarket ? countries[0] : countries.filter((c) => !isVagueMarketCountry(c)).join(', ');
-  // 单次请求控制体量；单国可稍高
-  const effectiveLimit = Math.min(Math.max(limit, 3), countries.length > 1 ? 12 : 20);
+  // 单次请求控制体量；证据充足时可略提高（仍有硬上限，不影响其它模块）
+  const effectiveLimit = Math.min(Math.max(limit, 3), countries.length > 1 ? 14 : 22);
   const industryConstraint = inferIndustryConstraint(productKeyword, industry);
   const typeHint = types.length
     ? types.join(', ')
     : 'Importer, Distributor, Wholesaler, Retailer, Brand Owner, Buying Office';
+  const directorySites = resolveDirectorySitesForMarket(singleMarket ? countries[0] : country);
+  const directoryHint = directorySites.length
+    ? `- Also mine B2B directories / yellow pages when evidence includes them (e.g. ${directorySites.join(', ')}), plus trade-show / association member lists.`
+    : `- Also mine B2B directories, yellow pages, trade-show exhibitor lists, and industry association member directories when present in evidence.`;
 
   const buildPrompt = (askLimit: number, stricter = false) => `
   Act as a high-performance B2B lead discovery engine for Chinese exporters (楠哥的小助理).
-  Use web search to find REAL companies that buy / import / distribute / wholesale / retail the product: "${productKeyword}".
+  Use web search / provided live evidence to find REAL companies that buy / import / distribute / wholesale / retail the product: "${productKeyword}".
 
   TARGET MARKET (CRITICAL):
   ${
@@ -3630,10 +3636,12 @@ export const searchPotentialClients = async (productKeyword: string, country: st
 
   Preferred buyer types (match ANY): ${typeHint}.
   ${types.length > 1 ? `- Mix buyer types among: ${types.join(', ')}.` : ''}
+  ${directoryHint}
 
   Rules:
   - Only real companies with active websites. Prefer B2B buyers.
   - Return up to ${askLimit} diverse targets (no duplicates). Prefer precision over filler leads.
+  - When evidence lists many companies (directories / fairs), extract as many DISTINCT qualified buyers as possible up to ${askLimit}.
   - fitScore 1-5 reflecting PRODUCT fit for "${productKeyword}" in the target market (3+=usable, 5=excellent).
   - description / fitReason / mainProducts in Simplified Chinese; explicitly mention how they relate to "${productKeyword}".
   - Do NOT invent emails.
@@ -3684,48 +3692,68 @@ export const searchPotentialClients = async (productKeyword: string, country: st
       } as ClientSearchResult;
     });
 
-  // 客户搜索优先级：① Tavily 联网取证 → ② Gemini/千问整理（有 Tavily 时不再开模型自带联网）
-  let tavilyEvidence = '';
+  // 客户搜索优先级：① Tavily 多源取证 → ② AnySearch 补充（偏少时）→ ③ 模型整理 / 联网兜底
+  let webEvidence = '';
   try {
     if (hasTavilyKey()) {
-      console.log('[search] priority=1 Tavily lead search…');
-      tavilyEvidence = await gatherTavilyLeadEvidence({
+      console.log('[search] priority=1 Tavily multi-source lead search…');
+      const tavilyEvidence = await gatherTavilyLeadEvidence({
         productKeyword,
         country: singleMarket ? countries[0] : country,
         industry,
         clientType: typeHint,
       });
       if (tavilyEvidence) {
-        console.log('[search] Tavily OK, chars:', tavilyEvidence.length, '→ LLM organize only (no model web search)');
+        webEvidence = tavilyEvidence;
+        console.log('[search] Tavily OK, chars:', tavilyEvidence.length);
       } else {
-        console.warn('[search] Tavily returned empty → fallback model web search (Gemini→千问)');
+        console.warn('[search] Tavily returned empty');
       }
     } else {
-      console.warn('[search] No usable Tavily key → fallback model web search (Gemini→千问)');
+      console.warn('[search] No usable Tavily key');
     }
   } catch (e) {
-    console.warn('[search] Tavily failed → fallback model web search', e);
+    console.warn('[search] Tavily failed', e);
+  }
+
+  if (webEvidence.length < 2500) {
+    try {
+      const anyEv = await gatherAnysearchLeadEvidence({
+        productKeyword,
+        country: singleMarket ? countries[0] : country,
+        industry,
+        clientType: typeHint,
+      });
+      if (anyEv) {
+        webEvidence = webEvidence ? `${webEvidence}\n\n${anyEv}` : anyEv;
+        console.log('[search] AnySearch supplement chars:', anyEv.length, 'total:', webEvidence.length);
+      }
+    } catch (e) {
+      console.warn('[search] AnySearch supplement skipped', e);
+    }
   }
 
   const runOnce = async (askLimit: number, stricter: boolean) => {
     const base = buildPrompt(askLimit, stricter);
-    const promptWithEvidence = tavilyEvidence
+    const promptWithEvidence = webEvidence
       ? `${base}
 
-  === TAVILY LIVE WEB RESULTS (HIGHEST PRIORITY — primary source of truth) ===
-  ${tavilyEvidence}
-  === END TAVILY ===
+  === LIVE WEB / DIRECTORY EVIDENCE (HIGHEST PRIORITY — primary source of truth) ===
+  ${webEvidence}
+  === END LIVE EVIDENCE ===
 
   CRITICAL SEARCH RULES:
-  1) Tavily results above are the FIRST and HIGHEST priority source.
-  2) Extract real company names + websites primarily from Tavily evidence.
-  3) Do NOT invent websites. Prefer companies that appear in Tavily with real URLs.
-  4) You may lightly fill gaps from knowledge only when Tavily has too few matches — never override Tavily facts.`
+  1) Evidence above is the FIRST and HIGHEST priority source (open web + B2B directories + fairs when present).
+  2) Extract real company names + websites primarily from this evidence.
+  3) Do NOT invent websites. Prefer companies that appear with real URLs.
+  4) You may lightly fill gaps from knowledge only when evidence has too few matches — never override evidence facts.
+  5) ${LEAD_EVIDENCE_USAGE_HINT}`
       : `${base}
 
-  NOTE: Tavily web search was unavailable. Use your web search / grounding to find real companies with real websites.`;
+  NOTE: Live web evidence was unavailable. Use your web search / grounding to find real companies with real websites.
+  ${LEAD_EVIDENCE_USAGE_HINT}`;
 
-    // 有 Tavily：只让路由模型整理名单（关联网）；无 Tavily：Gemini→千问自带联网兜底
+    // 有联网证据：只让路由模型整理名单（关联网）；无证据：Gemini→千问自带联网兜底
     const text = await generateContentUnified(
       'search',
       promptWithEvidence,
@@ -3733,14 +3761,14 @@ export const searchPotentialClients = async (productKeyword: string, country: st
       true,
       [],
       [],
-      { enableSearch: !tavilyEvidence }
+      { enableSearch: !webEvidence }
     );
 
     const parsed = extractJson(text, true);
     if (!Array.isArray(parsed) || parsed.length === 0) {
       throw new Error(
-        tavilyEvidence
-          ? 'Tavily 已返回证据，但模型未能整理出有效客户列表。请重试或检查关键词。'
+        webEvidence
+          ? '已获取联网/目录证据，但模型未能整理出有效客户列表。请重试或检查关键词。'
           : '搜索未返回有效结果。请确认已配置 Tavily Key，或千问/Gemini 联网可用。'
       );
     }

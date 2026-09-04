@@ -220,7 +220,7 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
             country,
             state.industry,
             typeArg,
-            15
+            18
           );
           const stamped = stampSearchResults(raw, {
             keyword: state.product,

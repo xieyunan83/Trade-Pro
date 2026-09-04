@@ -6,6 +6,7 @@
 import { getAnysearchApiKey, saveAnysearchApiKey } from './env';
 import { isLocalDevHost } from './qwenProxy';
 import { getApiConfig, isSupabaseConfigured } from './supabase';
+import { buildLeadDiscoveryQueries } from './leadDiscoverySources';
 
 const CLIENT_HEADER = 'trade-pro/1.0';
 const TIMEOUT_MS = 40_000;
@@ -208,6 +209,44 @@ export const gatherIdentityEvidence = async (
   ].join('\n\n');
 
   return clip(evidence, MAX_EVIDENCE_CHARS);
+};
+
+/**
+ * 客户搜索补充证据：Tavily 偏少或未配置时，用 AnySearch 拉目录/买家网页摘要。
+ * 失败时返回空字符串，不影响主流程。
+ */
+export const gatherAnysearchLeadEvidence = async (opts: {
+  productKeyword: string;
+  country?: string;
+  industry?: string;
+  clientType?: string;
+}): Promise<string> => {
+  if (!getAnysearchApiKey().trim() && !isSupabaseConfigured()) return '';
+  const kw = (opts.productKeyword || '').trim();
+  if (!kw) return '';
+
+  try {
+    const queries = buildLeadDiscoveryQueries({
+      productKeyword: kw,
+      country: opts.country,
+      industry: opts.industry,
+      clientType: opts.clientType,
+    })
+      .slice(0, 4)
+      .map((query) => ({ query, max_results: 6 }));
+
+    if (!queries.length) return '';
+    const text = await anysearchBatchSearch(queries);
+    if (!text?.trim()) return '';
+    console.log('[anysearch] lead evidence chars:', text.length);
+    return clip(
+      `=== ANYSEARCH LEAD WEB RESULTS ===\n${text.trim()}\n=== END ANYSEARCH ===`,
+      MAX_EVIDENCE_CHARS
+    );
+  } catch (e) {
+    console.warn('[anysearch] lead evidence skipped', e);
+    return '';
+  }
 };
 
 /** 管理后台连通性探测（调用前请已把 Key 写入 localStorage / getAnysearchApiKey） */
