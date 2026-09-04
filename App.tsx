@@ -231,6 +231,10 @@ const App: React.FC = () => {
 
   useEffect(() => {
     setProductDigHistoryResolver((clientId) => {
+      if (clientId.startsWith('hist_')) {
+        const hid = clientId.slice(5);
+        return historyRef.current.find((h) => h.id === hid);
+      }
       const client = crmClientsRef.current.find((c) => c.id === clientId);
       if (!client) return undefined;
       return findHistoryForClient(client, historyRef.current);
@@ -2664,6 +2668,189 @@ const App: React.FC = () => {
     alert(`已从「${source}」恢复 ${migrated.clients.length} 条客户（您可见 ${scoped.length} 条）。`);
   };
 
+  /** 记录中心：批量再次背调 */
+  const handleBatchReanalyzeFromRecords = (items: HistoryItem[]) => {
+    if (!items?.length) return;
+    if (!hasPermission(currentUser, 'feature.batch_analyze') && !hasPermission(currentUser, 'feature.analyze_company')) {
+      alert('你没有背调权限，请联系管理员或部门主管开通。');
+      return;
+    }
+    const targets = items
+      .map((h) => (h.domain || h.data?.companyInfo?.website || h.data?.companyInfo?.name || '').trim())
+      .filter(Boolean);
+    if (!targets.length) {
+      alert('所选记录缺少网址/名称，无法背调。');
+      return;
+    }
+    const kw =
+      items.find((h) => h.keyword || h.data?.searchKeyword)?.keyword ||
+      items.find((h) => h.data?.searchKeyword)?.data?.searchKeyword ||
+      discoveryState.product ||
+      'Records Batch';
+    setPendingBatch(targets);
+    setPendingBatchContext(kw);
+    const countryMap: Record<string, string> = {};
+    for (const h of items) {
+      const key = (h.domain || h.data?.companyInfo?.website || h.data?.companyInfo?.name || '').toLowerCase();
+      const country = (h.country || h.data?.searchCountry || '').trim();
+      if (key && country && !/^(global|worldwide|international|国际|全球|不限)$/i.test(country)) {
+        countryMap[key] = country;
+      }
+    }
+    setPendingBatchCountries(countryMap);
+    if (kw && !['Records Batch', 'CRM Batch', 'Discovery Batch', 'Manual Input'].includes(kw)) {
+      setDiscoveryState((prev) => ({ ...prev, product: kw }));
+      addCustomKeyword(kw);
+    }
+    setHistoryOpen(false);
+    setBatchModalOpen(true);
+  };
+
+  /** 记录中心：批量决策人挖掘 */
+  const handleBatchDmSearchFromRecords = (items: HistoryItem[]) => {
+    if (!items?.length) return;
+    if (!hasPermission(currentUser, 'feature.dm_email_search')) {
+      alert('你没有「决策人邮箱搜索」权限，请联系管理员或部门主管开通。');
+      return;
+    }
+    if (
+      !confirm(
+        `将为 ${items.length} 条背调记录加入「决策人邮箱深挖」后台队列（请保持本页打开）。继续？`
+      )
+    ) {
+      return;
+    }
+    let queued = 0;
+    let skipped = 0;
+    const skipSamples: string[] = [];
+    for (const hist of items) {
+      const domain = (hist.domain || hist.data?.companyInfo?.website || '').trim();
+      if (!domain || !domain.includes('.')) {
+        skipped += 1;
+        continue;
+      }
+      const companyName = hist.data?.companyInfo?.name || domain;
+      const res = enqueueDmEmailSearch({
+        domain,
+        companyName,
+        historyId: hist.id,
+        companyLinkedin:
+          hist.data?.socials?.linkedin || hist.data?.tradeIntelligence?.companyLinkedin,
+        deepDig: true,
+        authorized: true,
+        existingDecisionMakers: hist.data?.decisionMakers || [],
+        resolveExisting: () => {
+          const h = historyRef.current.find((x) => x.id === hist.id);
+          return h?.data?.decisionMakers || [];
+        },
+        onComplete: async (job: DmEmailSearchJob) => {
+          if (job.status !== 'completed' || !job.resultDecisionMakers || !job.searchedAt) return;
+          const list = historyRef.current;
+          let prevHistory: number[] = [];
+          const matchId = job.historyId;
+          if (matchId) {
+            const item = list.find((h) => h.id === matchId);
+            prevHistory = item?.data?.decisionMakerEmailSearchHistory || [];
+          }
+          const searchHistory = [...prevHistory, job.searchedAt].slice(-30);
+          await persistDecisionMakerResearch(
+            {
+              decisionMakers: job.resultDecisionMakers,
+              decisionMakerEmailSearchAt: job.searchedAt,
+              decisionMakerEmailSearchHistory: searchHistory,
+            },
+            { historyId: job.historyId, domain: job.domain, companyName: job.companyName }
+          );
+        },
+      });
+      if (res.ok) queued += 1;
+      else {
+        skipped += 1;
+        if (skipSamples.length < 4) {
+          skipSamples.push(`${companyName}: ${'reason' in res ? res.reason : '跳过'}`);
+        }
+      }
+    }
+    alert(
+      `决策人挖掘：已加入队列 ${queued} 家` +
+        (skipped ? `，跳过 ${skipped} 家` : '') +
+        (skipSamples.length ? `\n\n${skipSamples.join('\n')}` : '') +
+        `\n\n请保持页面打开，左侧/决策人页可看进度。`
+    );
+  };
+
+  /** 记录中心：批量产品品类补做 */
+  const handleBatchProductDigFromRecords = (items: HistoryItem[]) => {
+    if (!items?.length) return;
+    const authorized =
+      hasPermission(currentUser, 'feature.product_redig') ||
+      hasPermission(currentUser, 'feature.analyze_company');
+    if (!authorized) {
+      alert('你没有「产品品类深挖」权限，请联系管理员开通。');
+      return;
+    }
+
+    const alreadyRich: HistoryItem[] = [];
+    const needRedig: Array<{
+      id: string;
+      name: string;
+      website: string;
+      country: string;
+      searchKeyword: string;
+    }> = [];
+    for (const h of items) {
+      if (hasRichProductCatalog(h.data)) {
+        alreadyRich.push(h);
+        continue;
+      }
+      const website = (h.domain || h.data?.companyInfo?.website || '').trim();
+      if (!website) continue;
+      const crmHit = crmClientsRef.current.find((c) => {
+        const host = (c.website || '').toLowerCase().replace(/^www\./, '');
+        const hHost = website.toLowerCase().replace(/^(?:https?:\/\/)?(?:www\.)?/, '').split('/')[0];
+        return host && hHost && (host.includes(hHost) || hHost.includes(host.replace(/^https?:\/\//, '').split('/')[0]));
+      });
+      needRedig.push({
+        id: crmHit?.id || `hist_${h.id}`,
+        name: h.data?.companyInfo?.name || website,
+        website,
+        country: h.country || h.data?.searchCountry || crmHit?.country || '',
+        searchKeyword: h.keyword || h.data?.searchKeyword || crmHit?.searchKeyword || '',
+      });
+    }
+
+    if (!needRedig.length) {
+      alert(
+        alreadyRich.length
+          ? `${alreadyRich.length} 条已有完整品类数据，无需再挖。`
+          : '所选记录均无法补做产品品类。'
+      );
+      return;
+    }
+    if (
+      !confirm(
+        `将对 ${needRedig.length} 条缺品类背调在后台补采全站品类与价格。${
+          alreadyRich.length ? `\n（已跳过已有品类 ${alreadyRich.length} 条）` : ''
+        }\n请保持本页打开。继续？`
+      )
+    ) {
+      return;
+    }
+    const { queued, skipped, reasons } = enqueueProductDigBatch(needRedig, {
+      authorized: true,
+      onComplete: handleProductDigComplete,
+    });
+    if (queued === 0) {
+      alert(reasons[0] || '没有任务可加入队列');
+      return;
+    }
+    alert(
+      skipped > 0
+        ? `已加入后台补做品类 ${queued} 条（跳过 ${skipped}）。左下角可看进度。`
+        : `已加入后台补做品类 ${queued} 条。左下角可看进度。`
+    );
+  };
+
   /** CRM 多选：批量决策人邮箱深挖（后台队列） */
   const handleBatchDmSearchFromCRM = (clients: Client[]) => {
     if (!clients?.length) return;
@@ -2970,6 +3157,18 @@ const App: React.FC = () => {
           canExportPpt={hasPermission(currentUser, 'feature.export_ppt')}
           canImportCrm={canAccessModule(currentUser, ModuleType.CLIENT_CRM)}
           onBatchImportToCrm={handleBatchImportRecordsToCrm}
+          onBatchReanalyze={handleBatchReanalyzeFromRecords}
+          onBatchDmSearch={
+            hasPermission(currentUser, 'feature.dm_email_search')
+              ? handleBatchDmSearchFromRecords
+              : undefined
+          }
+          onBatchProductDig={
+            hasPermission(currentUser, 'feature.product_redig') ||
+            hasPermission(currentUser, 'feature.analyze_company')
+              ? handleBatchProductDigFromRecords
+              : undefined
+          }
           onRestoreDiscovery={(archive) => {
             setDiscoveryState(archiveToDiscoveryState(archive));
             setActiveModule(ModuleType.DISCOVERY);

@@ -15,6 +15,8 @@ import {
   Tag,
   ShieldCheck,
   RefreshCw,
+  Users,
+  PackageSearch,
 } from 'lucide-react';
 import { normalizeCountryZh } from '../utils/countryNormalize';
 import {
@@ -56,6 +58,12 @@ interface RecordsPanelProps {
   onBatchImportToCrm?: (historyItems: HistoryItem[], discoveryArchives: DiscoveryArchiveItem[]) => void;
   /** 无 CRM 编辑权限时隐藏导入按钮 */
   canImportCrm?: boolean;
+  /** 批量再次背调（本地队列） */
+  onBatchReanalyze?: (items: HistoryItem[]) => void;
+  /** 批量挖掘决策人 */
+  onBatchDmSearch?: (items: HistoryItem[]) => void;
+  /** 批量产品品类补做 */
+  onBatchProductDig?: (items: HistoryItem[]) => void;
   /** 更新背调记录的关键词/国家 */
   onPatchHistory?: (id: string, patch: Partial<Pick<HistoryItem, 'keyword' | 'country'>>) => void;
   /** 批量更新 */
@@ -92,6 +100,27 @@ const historyDmMined = (h: HistoryItem) =>
   historyHasDmSearch(h) ? '已挖掘决策人' : '未挖掘决策人';
 
 const discoveryDmMined = () => '搜索记录（无决策人挖掘）';
+
+/** 搜索归档是否「已入 CRM」：有结果且全部匹配客户均已在 CRM */
+const isDiscoveryFullyInCrm = (d: DiscoveryArchiveItem, clients: Client[]): boolean => {
+  const results = d.results || [];
+  if (!results.length || !clients?.length) return false;
+  let matched = 0;
+  for (const r of results) {
+    const host = normalizeCrmHost(r.website);
+    const name = (r.name || '').trim().toLowerCase();
+    if (!host && !name) continue;
+    const inCrm = clients.some((c) => {
+      const cHost = normalizeCrmHost(c.website);
+      if (host && cHost && host === cHost) return true;
+      if (name && (c.name || '').trim().toLowerCase() === name) return true;
+      return false;
+    });
+    if (inCrm) matched += 1;
+    else return false;
+  }
+  return matched > 0;
+};
 
 /** Status chip: done = solid tint, pending = muted outline */
 const StatusChip: React.FC<{ done: boolean; doneLabel: string; pendingLabel: string; tone: 'violet' | 'amber' | 'emerald' }> = ({
@@ -130,6 +159,9 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   onDeleteDiscovery,
   onBatchImportToCrm,
   canImportCrm = false,
+  onBatchReanalyze,
+  onBatchDmSearch,
+  onBatchProductDig,
   onPatchHistory,
   onBulkPatchHistory,
   onReanalyzeHistory,
@@ -148,7 +180,8 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   const [isBatchImporting, setIsBatchImporting] = useState(false);
   const [filterDm, setFilterDm] = useState<'all' | 'yes' | 'no'>('all');
   const [filterProduct, setFilterProduct] = useState<'all' | 'yes' | 'no'>('all');
-  const [filterCrm, setFilterCrm] = useState<'all' | 'yes' | 'no'>('all');
+  /** 默认隐藏已入 CRM，减少记录中心噪音 */
+  const [filterCrm, setFilterCrm] = useState<'all' | 'yes' | 'no'>('no');
 
   // 启动时把已有记录里的词合并进自定义列表
   useEffect(() => {
@@ -206,6 +239,13 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
         if (!q) return true;
         const blob = [d.product, d.country, ...(d.countries || [])].filter(Boolean).join(' ').toLowerCase();
         return blob.includes(q);
+      })
+      .filter((d) => {
+        if (filterCrm === 'all') return true;
+        const fullyIn = isDiscoveryFullyInCrm(d, crmClients);
+        if (filterCrm === 'yes') return fullyIn;
+        if (filterCrm === 'no') return !fullyIn;
+        return true;
       })
       .map((item) => ({ kind: 'discovery' as const, item }));
 
@@ -284,7 +324,11 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   const selectedCount = selected.size;
   const canBatchDelete = !!(onDeleteHistory || onDeleteDiscovery);
   const canBatchImport = !!(canImportCrm && onBatchImportToCrm);
-  const canSelect = canBatchDelete || canBatchImport;
+  const canBatchReanalyze = !!onBatchReanalyze;
+  const canBatchDm = !!onBatchDmSearch;
+  const canBatchProductDig = !!onBatchProductDig;
+  const canSelect =
+    canBatchDelete || canBatchImport || canBatchReanalyze || canBatchDm || canBatchProductDig;
 
   const resolveSelected = () => {
     const histItems: HistoryItem[] = [];
@@ -353,6 +397,44 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
       setIsBatchImporting(false);
     }
   };
+
+  const handleBatchReanalyzeClick = () => {
+    if (!onBatchReanalyze || selectedCount === 0) return;
+    const { histItems } = resolveSelected();
+    if (!histItems.length) {
+      alert('请勾选背调记录（搜索归档请先做背调后再批量再次背调）。');
+      return;
+    }
+    onBatchReanalyze(histItems);
+    setSelected(new Set());
+  };
+
+  const handleBatchDmClick = () => {
+    if (!onBatchDmSearch || selectedCount === 0) return;
+    const { histItems } = resolveSelected();
+    if (!histItems.length) {
+      alert('请勾选背调记录后再批量挖掘决策人。');
+      return;
+    }
+    onBatchDmSearch(histItems);
+    setSelected(new Set());
+  };
+
+  const handleBatchProductDigClick = () => {
+    if (!onBatchProductDig || selectedCount === 0) return;
+    const { histItems } = resolveSelected();
+    if (!histItems.length) {
+      alert('请勾选背调记录后再批量补做产品品类。');
+      return;
+    }
+    onBatchProductDig(histItems);
+    setSelected(new Set());
+  };
+
+  const hiddenCrmHistoryCount = useMemo(
+    () => history.filter((h) => isHistoryInCrm(h, crmClients)).length,
+    [history, crmClients]
+  );
 
   useEffect(() => {
     const sig = `${tab}|${groupBy}|${groups.map((g) => g.key).join(',')}`;
@@ -437,15 +519,26 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   const taxonomyList = groupBy === 'keyword' ? keywords : groupBy === 'country' ? countries : [];
 
   return (
-    <div className="fixed inset-y-0 left-0 md:left-72 w-full sm:w-[min(100vw,28rem)] md:w-96 lg:w-[28rem] max-w-full bg-white/95 backdrop-blur-xl shadow-signal z-50 border-r border-slate-200/80 flex flex-col animate-fade-in safe-area-inset">
-      <div className="p-3 sm:p-4 border-b border-slate-200/70 bg-gradient-to-r from-slate-50 to-cyan-50/40 flex justify-between items-center gap-2">
+    <div className="fixed inset-0 z-[60] bg-slate-100/95 backdrop-blur-sm flex flex-col animate-fade-in safe-area-inset">
+      <div className="flex-1 min-h-0 w-full max-w-6xl mx-auto flex flex-col bg-white shadow-2xl sm:my-0 md:my-0 border-x border-slate-200/80">
+      <div className="p-3 sm:p-4 border-b border-slate-200/70 bg-gradient-to-r from-slate-50 to-cyan-50/40 flex justify-between items-center gap-2 shrink-0">
         <div className="min-w-0">
-          <div className="font-extrabold text-slate-900 text-sm flex items-center gap-2 tracking-tight">
-            <FolderOpen size={16} className="text-cyan-600 flex-shrink-0" /> 记录中心
+          <div className="font-extrabold text-slate-900 text-base sm:text-lg flex items-center gap-2 tracking-tight">
+            <FolderOpen size={18} className="text-cyan-600 flex-shrink-0" /> 记录中心
           </div>
-          <div className="text-[10px] text-slate-400 font-semibold mt-0.5 truncate tracking-wide">自定义分类 · 可增删改</div>
+          <div className="text-[10px] sm:text-[11px] text-slate-400 font-semibold mt-0.5 truncate tracking-wide">
+            全屏管理 · 默认隐藏已入 CRM
+            {filterCrm === 'no' && hiddenCrmHistoryCount > 0
+              ? `（已隐藏 ${hiddenCrmHistoryCount} 条）`
+              : ''}
+          </div>
         </div>
-        <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-700 text-lg px-2 touch-manipulation">
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-slate-400 hover:text-slate-700 text-lg px-3 py-2 touch-manipulation rounded-xl hover:bg-slate-100"
+          title="关闭"
+        >
           ✕
         </button>
       </div>
@@ -505,35 +598,40 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
         <StatusChip done doneLabel="已入CRM" pendingLabel="未入CRM" tone="emerald" />
         <span className="text-slate-300 ml-0.5">灰底 = 未完成</span>
       </div>
-      {(tab === 'background' || tab === 'all') && (
-        <div className="px-3 py-2 border-b border-slate-100 flex flex-wrap gap-2 items-center bg-slate-50/60">
+      {(tab === 'background' || tab === 'all' || tab === 'search') && (
+        <div className="px-3 py-2 border-b border-slate-100 flex flex-wrap gap-2 items-center bg-slate-50/60 shrink-0">
           <span className="text-[10px] font-black text-slate-500">筛选:</span>
-          <select
-            value={filterDm}
-            onChange={(e) => setFilterDm(e.target.value as typeof filterDm)}
-            className="text-[10px] font-bold border border-slate-200 rounded-lg px-2 py-1 bg-white"
-          >
-            <option value="all">决策人: 全部</option>
-            <option value="yes">已挖决策人</option>
-            <option value="no">未挖决策人</option>
-          </select>
-          <select
-            value={filterProduct}
-            onChange={(e) => setFilterProduct(e.target.value as typeof filterProduct)}
-            className="text-[10px] font-bold border border-slate-200 rounded-lg px-2 py-1 bg-white"
-          >
-            <option value="all">品类: 全部</option>
-            <option value="yes">已采品类</option>
-            <option value="no">未采品类</option>
-          </select>
+          {(tab === 'background' || tab === 'all') && (
+            <>
+              <select
+                value={filterDm}
+                onChange={(e) => setFilterDm(e.target.value as typeof filterDm)}
+                className="text-[10px] font-bold border border-slate-200 rounded-lg px-2 py-1 bg-white"
+              >
+                <option value="all">决策人: 全部</option>
+                <option value="yes">已挖决策人</option>
+                <option value="no">未挖决策人</option>
+              </select>
+              <select
+                value={filterProduct}
+                onChange={(e) => setFilterProduct(e.target.value as typeof filterProduct)}
+                className="text-[10px] font-bold border border-slate-200 rounded-lg px-2 py-1 bg-white"
+              >
+                <option value="all">品类: 全部</option>
+                <option value="yes">已采品类</option>
+                <option value="no">未采品类</option>
+              </select>
+            </>
+          )}
           <select
             value={filterCrm}
             onChange={(e) => setFilterCrm(e.target.value as typeof filterCrm)}
             className="text-[10px] font-bold border border-slate-200 rounded-lg px-2 py-1 bg-white"
+            title="默认隐藏已入 CRM 的记录"
           >
+            <option value="no">CRM: 未入CRM（默认）</option>
             <option value="all">CRM: 全部</option>
-            <option value="yes">已入CRM</option>
-            <option value="no">未入CRM</option>
+            <option value="yes">CRM: 已入CRM</option>
           </select>
         </div>
       )}
@@ -596,39 +694,89 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
         </div>
       )}
 
-      <div className="px-3 py-2 border-b border-slate-100 flex gap-2 items-center">
-        <div className="relative flex-1 min-w-0">
-          <Search className="absolute left-3 top-2.5 text-slate-400" size={14} />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="筛选…"
-            className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 text-xs font-bold"
-          />
-        </div>
-        {canSelect && (
-          <>
+      <div className="px-3 py-2 border-b border-slate-100 flex flex-col gap-2 shrink-0">
+        <div className="flex gap-2 items-center flex-wrap">
+          <div className="relative flex-1 min-w-[10rem]">
+            <Search className="absolute left-3 top-2.5 text-slate-400" size={14} />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="筛选公司名 / 网址 / 关键词…"
+              className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 text-xs font-bold"
+            />
+          </div>
+          {canSelect && (
             <button
               type="button"
               onClick={toggleSelectAllVisible}
               disabled={rows.length === 0}
-              className="px-2 py-2 rounded-xl border border-slate-200 text-[10px] font-black text-slate-600 touch-manipulation whitespace-nowrap disabled:opacity-40"
+              className="px-2.5 py-2 rounded-xl border border-slate-200 text-[10px] font-black text-slate-600 touch-manipulation whitespace-nowrap disabled:opacity-40"
             >
               {rows.length > 0 && rows.every((r) => selected.has(rowSelectKey(r))) ? '取消全选' : '全选'}
             </button>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              if (expanded.size >= groups.length) setExpanded(new Set());
+              else setExpanded(new Set(groups.map((g) => g.key)));
+            }}
+            className="px-2.5 py-2 rounded-xl border border-slate-200 text-[10px] font-black text-slate-500 touch-manipulation whitespace-nowrap"
+          >
+            {expanded.size >= groups.length ? '全部收起' : '全部展开'}
+          </button>
+        </div>
+        {canSelect && (
+          <div className="flex flex-wrap gap-1.5">
+            {canBatchReanalyze && (
+              <button
+                type="button"
+                onClick={handleBatchReanalyzeClick}
+                disabled={selectedCount === 0}
+                className="px-2.5 py-2 rounded-xl bg-amber-50 border border-amber-100 text-[10px] font-black text-amber-800 touch-manipulation whitespace-nowrap disabled:opacity-40 inline-flex items-center gap-1"
+                title="对选中的背调记录加入本地后台再次背调"
+              >
+                <RefreshCw size={12} />
+                {selectedCount > 0 ? `批量背调(${selectedCount})` : '批量背调'}
+              </button>
+            )}
+            {canBatchDm && (
+              <button
+                type="button"
+                onClick={handleBatchDmClick}
+                disabled={selectedCount === 0}
+                className="px-2.5 py-2 rounded-xl bg-violet-50 border border-violet-100 text-[10px] font-black text-violet-700 touch-manipulation whitespace-nowrap disabled:opacity-40 inline-flex items-center gap-1"
+                title="对选中背调记录后台挖掘决策人"
+              >
+                <Users size={12} />
+                {selectedCount > 0 ? `批量挖决策人(${selectedCount})` : '批量挖决策人'}
+              </button>
+            )}
+            {canBatchProductDig && (
+              <button
+                type="button"
+                onClick={handleBatchProductDigClick}
+                disabled={selectedCount === 0}
+                className="px-2.5 py-2 rounded-xl bg-teal-50 border border-teal-100 text-[10px] font-black text-teal-700 touch-manipulation whitespace-nowrap disabled:opacity-40 inline-flex items-center gap-1"
+                title="对缺品类的旧背调补做产品品类"
+              >
+                <PackageSearch size={12} />
+                {selectedCount > 0 ? `批量品类深挖(${selectedCount})` : '批量品类深挖'}
+              </button>
+            )}
             {canBatchImport && (
               <button
                 type="button"
                 onClick={handleBatchImportCrm}
                 disabled={selectedCount === 0 || isBatchImporting}
-                className="px-2 py-2 rounded-xl bg-emerald-50 border border-emerald-100 text-[10px] font-black text-emerald-700 touch-manipulation whitespace-nowrap disabled:opacity-40 inline-flex items-center gap-1"
+                className="px-2.5 py-2 rounded-xl bg-emerald-50 border border-emerald-100 text-[10px] font-black text-emerald-700 touch-manipulation whitespace-nowrap disabled:opacity-40 inline-flex items-center gap-1"
               >
                 <ShieldCheck size={12} />
                 {isBatchImporting
                   ? '导入中…'
                   : selectedCount > 0
-                    ? `批量导入CRM(${selectedCount})`
-                    : '批量导入CRM'}
+                    ? `批量加入CRM(${selectedCount})`
+                    : '批量加入CRM'}
               </button>
             )}
             {canBatchDelete && (
@@ -636,27 +784,17 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                 type="button"
                 onClick={() => void handleBatchDelete()}
                 disabled={selectedCount === 0 || isBatchDeleting}
-                className="px-2 py-2 rounded-xl bg-red-50 border border-red-100 text-[10px] font-black text-red-600 touch-manipulation whitespace-nowrap disabled:opacity-40 inline-flex items-center gap-1"
+                className="px-2.5 py-2 rounded-xl bg-red-50 border border-red-100 text-[10px] font-black text-red-600 touch-manipulation whitespace-nowrap disabled:opacity-40 inline-flex items-center gap-1"
               >
                 <Trash2 size={12} />
                 {isBatchDeleting ? '删除中…' : selectedCount > 0 ? `批量删除(${selectedCount})` : '批量删除'}
               </button>
             )}
-          </>
+          </div>
         )}
-        <button
-          type="button"
-          onClick={() => {
-            if (expanded.size >= groups.length) setExpanded(new Set());
-            else setExpanded(new Set(groups.map((g) => g.key)));
-          }}
-          className="px-2 py-2 rounded-xl border border-slate-200 text-[10px] font-black text-slate-500 touch-manipulation whitespace-nowrap"
-        >
-          {expanded.size >= groups.length ? '全部收起' : '全部展开'}
-        </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar overscroll-contain">
+      <div className="flex-1 overflow-y-auto p-2 sm:p-3 space-y-1 custom-scrollbar overscroll-contain">
         {groups.length === 0 ? (
           <div className="p-6 text-center text-slate-400 text-sm font-bold">暂无记录</div>
         ) : (
@@ -955,6 +1093,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
             );
           })
         )}
+      </div>
       </div>
     </div>
   );
