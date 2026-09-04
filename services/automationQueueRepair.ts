@@ -65,6 +65,17 @@ export const loadAndRepairAutomationQueue = async (
       }
     }
 
+    // 页面刷新后残留的 analyzing 视为可继续执行
+    if (t.status === 'analyzing') {
+      t = { ...t, status: 'pending' };
+      repaired += 1;
+      try {
+        await saveAutomationTask(t);
+      } catch (e) {
+        console.warn('[automation] reset analyzing save failed', e);
+      }
+    }
+
     next.push(t);
   }
 

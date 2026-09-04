@@ -156,6 +156,14 @@ const App: React.FC = () => {
     active: 0,
     runningName: '',
   });
+  /** 背调后台进度（独立 state，避免仅靠 isAutomating + filter 导致进度条闪退） */
+  const [batchProgress, setBatchProgress] = useState({
+    active: false,
+    total: 0,
+    done: 0,
+    failed: 0,
+    currentName: '',
+  });
   
   const [cloudModalOpen, setCloudModalOpen] = useState(false);
   const [manualToken, setManualToken] = useState('');
@@ -165,6 +173,8 @@ const App: React.FC = () => {
   const shouldStopRef = useRef(false);
   const batchRunnerActiveRef = useRef(false);
   const batchSessionIdsRef = useRef<Set<string>>(new Set());
+  /** 刚入队、React state / IndexedDB 可能尚未同步的任务，供队列 runner 兜底捞取 */
+  const batchSeedByIdRef = useRef<Map<string, AutomationResult>>(new Map());
   const historyRef = useRef<HistoryItem[]>([]);
   const automationResultsRef = useRef<AutomationResult[]>([]);
   const crmClientsRef = useRef<Client[]>([]);
@@ -180,6 +190,41 @@ const App: React.FC = () => {
     automationResultsRef.current = automationResults;
   }, [automationResults]);
 
+  /** 同步写入内存队列（ref + state），避免入队后立刻跑 runner 时读到旧 ref */
+  const syncAutomationResults = (
+    updater: (prev: AutomationResult[]) => AutomationResult[]
+  ) => {
+    const next = updater(automationResultsRef.current);
+    automationResultsRef.current = next;
+    setAutomationResults(next);
+    return next;
+  };
+
+  const refreshBatchProgressFromSession = (currentName?: string) => {
+    const ids = batchSessionIdsRef.current;
+    const list = automationResultsRef.current.filter((r) => ids.has(r.id));
+    // 若 seed 里还有未进 memory 的，也计入总数
+    for (const [id, seed] of batchSeedByIdRef.current) {
+      if (!ids.has(id)) continue;
+      if (!list.some((r) => r.id === id)) list.push(seed);
+    }
+    const done = list.filter((r) => r.status === 'completed').length;
+    const failed = list.filter((r) => r.status === 'failed').length;
+    const analyzing = list.find((r) => r.status === 'analyzing');
+    const pendingLeft = list.some(
+      (r) => r.status === 'pending' || r.status === 'analyzing'
+    );
+    setBatchProgress({
+      active: pendingLeft || batchRunnerActiveRef.current,
+      total: Math.max(list.length, ids.size),
+      done,
+      failed,
+      currentName:
+        currentName !== undefined
+          ? currentName
+          : analyzing?.clientName || analyzing?.website || '',
+    });
+  };
   useEffect(() => {
     crmClientsRef.current = crmClients;
   }, [crmClients]);
@@ -870,7 +915,7 @@ const App: React.FC = () => {
   };
 
   /** 单次/再次背调：一律进后台队列，不挡当前页面操作 */
-  const enqueueBackgroundAnalysis = (
+  const enqueueBackgroundAnalysis = async (
     domain: string,
     override?: { searchKeyword?: string; searchTags?: string[]; searchCountry?: string; mode?: 'detailed' | 'economy' }
   ) => {
@@ -911,18 +956,27 @@ const App: React.FC = () => {
       keyword: kw || undefined,
       createdAt: Date.now(),
     });
-    batchSessionIdsRef.current.add(task.id);
-    setAutomationResults((prev) => [...prev, task]);
-    void saveAutomationTask(task);
+    if (!batchRunnerActiveRef.current) {
+      batchSessionIdsRef.current = new Set([task.id]);
+    } else {
+      batchSessionIdsRef.current.add(task.id);
+    }
+    batchSeedByIdRef.current.set(task.id, task);
+    syncAutomationResults((prev) => [task, ...prev.filter((t) => t.id !== task.id)]);
+    try {
+      await saveAutomationTask(task);
+    } catch (e) {
+      console.warn('[batch] saveAutomationTask failed, runner will use in-memory seed', e);
+    }
+    refreshBatchProgressFromSession(target);
     void processBatchQueue([task]);
-    alert(`已加入后台背调：${target}\n可继续其它操作，左侧栏可看进度。`);
   };
 
   const performSingleAnalysis = (
     domain: string,
     override?: { searchKeyword?: string; searchTags?: string[]; searchCountry?: string }
   ) => {
-    enqueueBackgroundAnalysis(domain, override);
+    void enqueueBackgroundAnalysis(domain, override);
   };
 
   const loadFromHistory = (item: HistoryItem) => {
@@ -1562,6 +1616,7 @@ const App: React.FC = () => {
     shouldStopRef.current = true;
     stopProductDigQueue();
     setIsAutomating(false);
+    setBatchProgress((p) => ({ ...p, active: false, currentName: '' }));
   };
 
   /** 限制背调并行度，避免打爆限额 */
@@ -1885,61 +1940,98 @@ const App: React.FC = () => {
   // RESTORED: Process Automation Queue（后台 drain，可与产品深挖并行）
   const processBatchQueue = async (tasksToRun?: AutomationResult[]) => {
       if (tasksToRun?.length) {
-        for (const t of tasksToRun) {
-          batchSessionIdsRef.current.add(t.id);
+        if (!batchRunnerActiveRef.current) {
+          // 新一轮后台波次：进度只统计本波任务，避免旧 session 把进度算乱
+          batchSessionIdsRef.current = new Set(tasksToRun.map((t) => t.id));
+        } else {
+          for (const t of tasksToRun) batchSessionIdsRef.current.add(t.id);
         }
+        for (const t of tasksToRun) {
+          const pending = { ...t, status: 'pending' as const };
+          batchSeedByIdRef.current.set(t.id, pending);
+          if (!automationResultsRef.current.some((x) => x.id === t.id)) {
+            syncAutomationResults((prev) => [pending, ...prev]);
+          } else {
+            syncAutomationResults((prev) =>
+              prev.map((x) => (x.id === t.id && x.status !== 'analyzing' ? { ...x, status: 'pending' } : x))
+            );
+          }
+        }
+        refreshBatchProgressFromSession(tasksToRun[0]?.clientName || tasksToRun[0]?.website || '');
       }
       if (batchRunnerActiveRef.current) {
         // 已有后台 runner：新任务保持 pending，循环末尾会继续捞取
         setIsAutomating(true);
+        setBatchProgress((p) => ({ ...p, active: true }));
         return;
       }
 
       batchRunnerActiveRef.current = true;
       setIsAutomating(true);
       shouldStopRef.current = false;
+      setBatchProgress((p) => ({ ...p, active: true }));
+
+      const inSession = (t: AutomationResult) =>
+        batchSessionIdsRef.current.size === 0 || batchSessionIdsRef.current.has(t.id);
+
+      const findNextPending = async (): Promise<AutomationResult | undefined> => {
+        const fromMem = automationResultsRef.current.find(
+          (t) => t.status === 'pending' && inSession(t)
+        );
+        if (fromMem) return fromMem;
+
+        for (const id of batchSessionIdsRef.current) {
+          const seed = batchSeedByIdRef.current.get(id);
+          if (!seed || seed.status !== 'pending') continue;
+          const mem = automationResultsRef.current.find((t) => t.id === id);
+          if (mem?.status === 'completed' || mem?.status === 'failed' || mem?.status === 'analyzing') {
+            continue;
+          }
+          if (!mem) {
+            syncAutomationResults((prev) => [seed, ...prev.filter((t) => t.id !== id)]);
+          }
+          return seed;
+        }
+
+        try {
+          const q = await getAutomationQueue();
+          return q.find((t) => t.status === 'pending' && inSession(t));
+        } catch (e) {
+          console.warn('[batch] getAutomationQueue failed', e);
+          return undefined;
+        }
+      };
 
       try {
         while (!shouldStopRef.current) {
-          const fromMem = automationResultsRef.current.find(
-            (t) =>
-              t.status === 'pending' &&
-              (batchSessionIdsRef.current.size === 0 || batchSessionIdsRef.current.has(t.id))
-          );
-          let task = fromMem;
-          if (!task) {
-            try {
-              const q = await getAutomationQueue();
-              task = q.find(
-                (t) =>
-                  t.status === 'pending' &&
-                  (batchSessionIdsRef.current.size === 0 || batchSessionIdsRef.current.has(t.id))
-              );
-            } catch {
-              break;
-            }
-          }
+          const task = await findNextPending();
           if (!task) break;
 
           const limit = checkLimit('analysis');
           if (!limit.allowed) {
-              alert(`今日背调次数已达上限（${limit.current}/${limit.max}），批量任务已暂停。可稍后继续，或联系管理员提高限额。`);
+              setSystemNotice(
+                `今日背调次数已达上限（${limit.current}/${limit.max}），批量任务已暂停。可稍后点「继续待处理任务」，或联系管理员提高限额。`
+              );
               break;
           }
 
-          setAutomationResults((prev) =>
-            prev.map((t) => (t.id === task!.id ? { ...t, status: 'analyzing' } : t))
+          const analyzingTask: AutomationResult = { ...task, status: 'analyzing' };
+          batchSeedByIdRef.current.set(task.id, analyzingTask);
+          syncAutomationResults((prev) =>
+            prev.map((t) => (t.id === task.id ? analyzingTask : t))
           );
+          refreshBatchProgressFromSession(task.clientName || task.website || '');
+          void saveAutomationTask(analyzingTask).catch(() => undefined);
 
           try {
               const kw = (task.keyword || discoveryState.product || '').trim();
               if (kw) addCustomKeyword(kw);
               const result = await withRateLimitRetry(
                 () =>
-                  analyzeCompany(task!.website, task!.mode || 'economy', {
+                  analyzeCompany(task.website, task.mode || 'economy', {
                     searchKeyword: kw || undefined,
-                    searchTags: kw ? buildSearchTags(kw, task!.country || '') : undefined,
-                    searchCountry: task!.country || undefined,
+                    searchTags: kw ? buildSearchTags(kw, task.country || '') : undefined,
+                    searchCountry: task.country || undefined,
                   }),
                 {
                   maxAttempts: 4,
@@ -1960,8 +2052,10 @@ const App: React.FC = () => {
                   keyword: kw || task.keyword || discoveryState.product,
               };
 
+              batchSeedByIdRef.current.set(task.id, completedTask);
               await saveAutomationTask(completedTask);
-              setAutomationResults((prev) => prev.map((t) => (t.id === task!.id ? completedTask : t)));
+              syncAutomationResults((prev) => prev.map((t) => (t.id === task.id ? completedTask : t)));
+              refreshBatchProgressFromSession('');
 
               try {
                   await saveAnalysisToHistory(result, 'batch');
@@ -1972,10 +2066,21 @@ const App: React.FC = () => {
               incrementUsage('analysis');
               updateCrmStatus(result);
           } catch (e: any) {
+              if (shouldStopRef.current) {
+                const paused: AutomationResult = { ...task, status: 'pending' };
+                batchSeedByIdRef.current.set(task.id, paused);
+                syncAutomationResults((prev) =>
+                  prev.map((t) => (t.id === task.id ? paused : t))
+                );
+                void saveAutomationTask(paused).catch(() => undefined);
+                break;
+              }
               console.error(`Task ${task.id} failed`, e);
               const failedTask: AutomationResult = { ...task, status: 'failed' };
+              batchSeedByIdRef.current.set(task.id, failedTask);
               await saveAutomationTask(failedTask);
-              setAutomationResults((prev) => prev.map((t) => (t.id === task!.id ? failedTask : t)));
+              syncAutomationResults((prev) => prev.map((t) => (t.id === task.id ? failedTask : t)));
+              refreshBatchProgressFromSession('');
               if (isRateLimitError(e)) {
                   noteRateLimited(75);
               }
@@ -1986,16 +2091,14 @@ const App: React.FC = () => {
         }
       } finally {
         batchRunnerActiveRef.current = false;
-        const stillPending = automationResultsRef.current.some(
-          (t) =>
-            t.status === 'pending' &&
-            (batchSessionIdsRef.current.size === 0 || batchSessionIdsRef.current.has(t.id))
-        );
+        const stillPending = await findNextPending();
         if (stillPending && !shouldStopRef.current) {
           void processBatchQueue();
           return;
         }
         setIsAutomating(false);
+        refreshBatchProgressFromSession('');
+        setBatchProgress((p) => ({ ...p, active: false, currentName: '' }));
         const sessionIds = batchSessionIdsRef.current;
         try {
           const q = await getAutomationQueue();
@@ -2003,7 +2106,6 @@ const App: React.FC = () => {
             (t) => sessionIds.has(t.id) && t.status === 'completed' && t.analysis
           ).length;
           if (completedNow > 0 && sessionIds.size > 0) {
-            // 非阻塞提示：不打断当前页面
             console.info(`[batch] 后台背调完成 ${completedNow} 条`);
           }
         } catch {
@@ -2218,31 +2320,40 @@ const App: React.FC = () => {
       }));
       setPendingBatchCountries({}); 
       
-      for (const t of newTasks) batchSessionIdsRef.current.add(t.id);
-      setAutomationResults(prev => [...prev, ...newTasks]); 
+      for (const t of newTasks) {
+        batchSeedByIdRef.current.set(t.id, t);
+      }
+      syncAutomationResults((prev) => {
+        const ids = new Set(newTasks.map((t) => t.id));
+        return [...newTasks, ...prev.filter((t) => !ids.has(t.id))];
+      });
       for (const task of newTasks) { 
           await saveAutomationTask(task); 
       } 
       
       // 后台执行，不阻塞当前页面；可同时开产品深挖
       void processBatchQueue(newTasks);
-      alert(`已加入后台批量背调 ${newTasks.length} 家。可继续操作，左侧栏可查看进度。`);
   };
 
   const handleRunPending = async () => { 
       const pending = automationResults.filter((t) => t.status === 'pending' || t.status === 'failed');
       if (!pending.length) return;
-      const resetFailed = pending.filter((t) => t.status === 'failed');
-      if (resetFailed.length) {
-        setAutomationResults((prev) =>
-          prev.map((t) => (t.status === 'failed' && pending.some((p) => p.id === t.id) ? { ...t, status: 'pending' } : t))
-        );
-        for (const t of resetFailed) {
-          await saveAutomationTask({ ...t, status: 'pending' });
-        }
+      const resetFailed = pending.map((t) =>
+        t.status === 'failed' ? { ...t, status: 'pending' as const } : t
+      );
+      for (const t of resetFailed) {
+        batchSeedByIdRef.current.set(t.id, { ...t, status: 'pending' });
       }
-      for (const t of pending) batchSessionIdsRef.current.add(t.id);
-      void processBatchQueue(pending.map((t) => ({ ...t, status: 'pending' as const })));
+      syncAutomationResults((prev) =>
+        prev.map((t) => {
+          const hit = resetFailed.find((p) => p.id === t.id);
+          return hit ? { ...t, status: 'pending' as const } : t;
+        })
+      );
+      for (const t of resetFailed) {
+        if (t.status === 'pending') await saveAutomationTask({ ...t, status: 'pending' });
+      }
+      void processBatchQueue(resetFailed.map((t) => ({ ...t, status: 'pending' as const })));
   };
   
   const handleRunSingle = async (id: string) => { 
@@ -2251,11 +2362,13 @@ const App: React.FC = () => {
       if (task.status === 'failed' || task.status === 'completed') {
         const reset = { ...task, status: 'pending' as const, analysis: undefined };
         await saveAutomationTask(reset);
-        setAutomationResults((prev) => prev.map((t) => (t.id === id ? reset : t)));
+        batchSeedByIdRef.current.set(reset.id, reset);
+        syncAutomationResults((prev) => prev.map((t) => (t.id === id ? reset : t)));
         void processBatchQueue([reset]);
         return;
       }
-      void processBatchQueue([task]);
+      batchSeedByIdRef.current.set(task.id, { ...task, status: 'pending' });
+      void processBatchQueue([{ ...task, status: 'pending' }]);
   };
 
   /** 已完成任务：重置后再次背调 */
@@ -2279,7 +2392,8 @@ const App: React.FC = () => {
         completedAt: undefined,
       };
       await saveAutomationTask(reset);
-      setAutomationResults((prev) => prev.map((t) => (t.id === id ? reset : t)));
+      batchSeedByIdRef.current.set(reset.id, reset);
+      syncAutomationResults((prev) => prev.map((t) => (t.id === id ? reset : t)));
       void processBatchQueue([reset]);
   };
 
@@ -2714,9 +2828,9 @@ const App: React.FC = () => {
             </div>
         )}
 
-        {(isAutomating || productDigProgress.active > 0) && (
+        {(isAutomating || batchProgress.active || productDigProgress.active > 0) && (
             <div className="mx-4 mt-4 p-3 bg-slate-900 rounded-xl border border-slate-800 shadow-lg text-white space-y-3">
-                {isAutomating && (
+                {(isAutomating || batchProgress.active) && (
                   <div>
                     <div className="flex justify-between items-center mb-2">
                         <span className="text-xs font-bold text-green-400 flex items-center gap-1">
@@ -2725,14 +2839,9 @@ const App: React.FC = () => {
                         <span className="text-[10px] text-slate-400">后台运行</span>
                     </div>
                     {(() => {
-                      const session = automationResults.filter(
-                        (r) => batchSessionIdsRef.current.has(r.id) || r.status === 'analyzing' || r.status === 'pending'
-                      );
-                      const list = session.length ? session : automationResults;
-                      const done = list.filter((r) => r.status === 'completed').length;
-                      const failed = list.filter((r) => r.status === 'failed').length;
-                      const analyzing = list.find((r) => r.status === 'analyzing');
-                      const total = list.length;
+                      const done = batchProgress.done;
+                      const failed = batchProgress.failed;
+                      const total = batchProgress.total || Math.max(done + failed, 1);
                       const pct = total ? Math.round(((done + failed) / total) * 100) : 0;
                       return (
                         <>
@@ -2743,9 +2852,9 @@ const App: React.FC = () => {
                           <div className="h-1.5 rounded-full bg-slate-700 overflow-hidden mb-2">
                             <div className="h-full bg-green-500 transition-all" style={{ width: `${pct}%` }} />
                           </div>
-                          {analyzing && (
+                          {batchProgress.currentName && (
                             <div className="text-[10px] text-slate-400 truncate mb-2">
-                              当前：{analyzing.clientName || analyzing.website}
+                              当前：{batchProgress.currentName}
                             </div>
                           )}
                         </>
