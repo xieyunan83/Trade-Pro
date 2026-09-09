@@ -54,9 +54,11 @@ import { OrgPermissionPanel } from './components/OrgPermissionPanel';
 import { loadDepartmentsFromStorage } from './services/orgStore';
 import {
   canAccessModule,
+  canBrowseAllDepartments,
   canViewFullDecisionMakerEmails,
   canViewOwnedRecord,
   filterOwnedRecords,
+  getDepartmentMemberUsernames,
   hasPermission,
 } from './services/permissions';
 import {
@@ -65,6 +67,7 @@ import {
   loadUserDiscoveryState,
   mergeSaveCrmClients,
   migrateLegacyCrmOwnership,
+  migrateLegacyOwnership,
   purgeAllCrmClientsBeforeDate,
   purgeCrmListBeforeDate,
   previewPurgeCrmBeforeDate,
@@ -466,7 +469,8 @@ const App: React.FC = () => {
                 .filter((i) => !isDiscoveryTombstoned(i, tombs))
                 .forEach((i) => map.set(i.id, i));
               const discAll = Array.from(map.values()).sort((a, b) => b.timestamp - a.timestamp);
-              ownedArchives = scope(discAll);
+              const migratedDisc = migrateLegacyOwnership(discAll, users, depts());
+              ownedArchives = scope(migratedDisc.items);
               if (!cancelled) setDiscoveryArchives(ownedArchives);
             } catch (e) {
               console.warn('discovery archives load failed', e);
@@ -566,8 +570,24 @@ const App: React.FC = () => {
               }
             }
             const recoveredAll = [...recovered, ...historyForRecover];
+            const migratedHist = migrateLegacyOwnership(recoveredAll, users, depts());
+            if (migratedHist.changed) {
+              const before = new Map(recoveredAll.map((h) => [h.id, h]));
+              for (const item of migratedHist.items) {
+                const prev = before.get(item.id);
+                if (
+                  prev &&
+                  ((prev.departmentId || '') !== (item.departmentId || '') ||
+                    (prev.ownerUsername || '') !== (item.ownerUsername || ''))
+                ) {
+                  void persistHistoryItem(item).catch((e) =>
+                    console.warn('history ownership backfill failed', e)
+                  );
+                }
+              }
+            }
             if (!cancelled) {
-              setHistory(scope(recoveredAll));
+              setHistory(scope(migratedHist.items));
             }
 
             const ghStatus = checkGitHubStatus();
@@ -606,7 +626,11 @@ const App: React.FC = () => {
                         const existingIds = new Set(h.map(i => i.id));
                         const newItems = cloudHistory.filter(i => !existingIds.has(i.id));
                         for (const item of newItems) { await saveHistory(item); }
-                        const merged = [...newItems, ...h].sort((a, b) => b.timestamp - a.timestamp);
+                        const merged = migrateLegacyOwnership(
+                          [...newItems, ...h].sort((a, b) => b.timestamp - a.timestamp),
+                          users,
+                          depts()
+                        ).items;
                         if (!cancelled) {
                           setHistory(scope(merged));
                         }
@@ -694,13 +718,52 @@ const App: React.FC = () => {
                 }
 
                 try {
-                  const cloudHistory = await fetchUserHistoryFromCloud(currentUser.username);
-                  if (cloudHistory.length > 0) {
-                      const existingIds = new Set(h.map(i => i.id));
-                      const newItems = cloudHistory.filter(i => !existingIds.has(i.id));
+                  const historyUsers = new Set<string>([currentUser.username]);
+                  if (canBrowseAllDepartments(currentUser)) {
+                    users.forEach((u) => {
+                      if ((u.username || '').trim()) historyUsers.add(u.username.trim());
+                    });
+                  } else if (currentUser.role === 'manager') {
+                    const deptId =
+                      currentUser.departmentId ||
+                      departments.find((d) =>
+                        (d.managerUsername || '').trim().toLowerCase() ===
+                        currentUser.username.trim().toLowerCase()
+                      )?.id;
+                    getDepartmentMemberUsernames(deptId, users).forEach((u) => historyUsers.add(u));
+                  }
+                  const collected: HistoryItem[] = [];
+                  for (const uname of historyUsers) {
+                    try {
+                      const part = await fetchUserHistoryFromCloud(uname);
+                      if (part.length) collected.push(...part);
+                    } catch (e) {
+                      console.warn('GitHub history fetch failed for', uname, e);
+                    }
+                  }
+                  if (collected.length > 0) {
+                      const existingIds = new Set(
+                        (historyRef.current.length ? historyRef.current : h).map((i) => i.id)
+                      );
+                      const byId = new Map<string, HistoryItem>();
+                      collected.forEach((item) => {
+                        if (!item?.id) return;
+                        const prev = byId.get(item.id);
+                        if (!prev || (item.timestamp || 0) >= (prev.timestamp || 0)) {
+                          byId.set(item.id, item);
+                        }
+                      });
+                      const newItems = [...byId.values()].filter((i) => !existingIds.has(i.id));
                       if (newItems.length > 0) {
-                          for(const item of newItems) await persistHistoryItem(item);
-                          if (!cancelled) setHistory(prev => scope([...newItems, ...prev]));
+                          const migratedNew = migrateLegacyOwnership(newItems, users, depts()).items;
+                          for (const item of migratedNew) await persistHistoryItem(item);
+                          if (!cancelled) {
+                            setHistory((prev) =>
+                              scope(
+                                migrateLegacyOwnership([...migratedNew, ...prev], users, depts()).items
+                              )
+                            );
+                          }
                       }
                   }
                 } catch (e) {
@@ -794,7 +857,14 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!currentUser || !userDataReadyRef.current) return;
     const depts = departments.length ? departments : loadDepartmentsFromStorage();
-    setHistory((prev) => filterOwnedRecords(currentUser, prev, users, depts));
+    setHistory((prev) =>
+      filterOwnedRecords(
+        currentUser,
+        migrateLegacyOwnership(prev, users, depts).items,
+        users,
+        depts
+      )
+    );
     setAutomationResults((prev) => {
       // 先给无归属的内存项打上当前用户，避免重过滤后「突然消失」
       const stamped = prev.map((t) =>
@@ -802,9 +872,21 @@ const App: React.FC = () => {
           ? { ...t, ownerUsername: currentUser.username, departmentId: currentUser.departmentId }
           : t
       );
-      return filterOwnedRecords(currentUser, stamped, users, depts);
+      return filterOwnedRecords(
+        currentUser,
+        migrateLegacyOwnership(stamped, users, depts).items,
+        users,
+        depts
+      );
     });
-    setDiscoveryArchives((prev) => filterOwnedRecords(currentUser, prev, users, depts));
+    setDiscoveryArchives((prev) =>
+      filterOwnedRecords(
+        currentUser,
+        migrateLegacyOwnership(prev, users, depts).items,
+        users,
+        depts
+      )
+    );
     setCrmClients((prev) => filterOwnedRecords(currentUser, prev, users, depts));
   }, [users, departments, currentUser]);
 
@@ -3174,6 +3256,10 @@ const App: React.FC = () => {
           }}
           canExportPpt={hasPermission(currentUser, 'feature.export_ppt')}
           canImportCrm={canAccessModule(currentUser, ModuleType.CLIENT_CRM)}
+          showOwnerFilter={
+            !!currentUser &&
+            (canBrowseAllDepartments(currentUser) || currentUser.role === 'manager')
+          }
           onBatchImportToCrm={handleBatchImportRecordsToCrm}
           onBatchReanalyze={handleBatchReanalyzeFromRecords}
           onBatchDmSearch={

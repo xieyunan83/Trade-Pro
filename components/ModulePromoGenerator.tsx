@@ -23,11 +23,12 @@ import {
 import { ContinentCountryMultiSelect } from './ContinentCountryMultiSelect';
 import { findCountryByEn } from '../data/countriesByContinent';
 import { exportAutomationResultsToExcel } from '../services/exportService';
-import { formatBackgroundCheckTime } from '../utils/crmHistory';
+import { formatBackgroundCheckTime, resolveDmDigStatus, DmDigStatus } from '../utils/crmHistory';
 import { IndustryMultiSelect } from './IndustryMultiSelect';
 import { PaginationBar } from './PaginationBar';
 import { hasRichProductCatalog } from '../services/productCatalog';
 import { maskEmailAddress } from '../services/permissions';
+import { DmStatusChip } from './DmStatusChip';
 
 interface ModulePromoGeneratorProps {
   onStartAutomation: (config: AutomationPipelineConfig) => void;
@@ -98,7 +99,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   const [filterIndustry, setFilterIndustry] = useState('all');
   const [filterBg, setFilterBg] = useState<'all' | 'yes' | 'no'>('all');
   const [filterProduct, setFilterProduct] = useState<'all' | 'yes' | 'no'>('all');
-  const [filterDm, setFilterDm] = useState<'all' | 'yes' | 'no'>('all');
+  const [filterDm, setFilterDm] = useState<'all' | 'yes' | 'found' | 'empty' | 'no'>('all');
   const [filterOwner, setFilterOwner] = useState('all');
   const [pageSize, setPageSize] = useState<10 | 20 | 50>(20);
   const [page, setPage] = useState(1);
@@ -165,8 +166,11 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
 
   const taskHasBg = (task: AutomationResult) => task.status === 'completed' && !!task.analysis;
   const taskHasProduct = (task: AutomationResult) => hasRichProductCatalog(task.analysis);
-  const taskHasDm = (task: AutomationResult) =>
-    !!task.analysis?.decisionMakerEmailSearchAt || (task.analysis?.decisionMakers?.length || 0) > 0;
+  const taskDmMined = (task: AutomationResult) => !!task.analysis?.decisionMakerEmailSearchAt;
+  const taskDmCount = (task: AutomationResult) => task.analysis?.decisionMakers?.length || 0;
+  const taskDmStatus = (task: AutomationResult): DmDigStatus =>
+    resolveDmDigStatus(taskDmMined(task), taskDmCount(task));
+  const taskHasDm = (task: AutomationResult) => taskDmMined(task);
 
   const filteredResults = useMemo(() => {
     const q = filterQuery.trim().toLowerCase();
@@ -186,6 +190,8 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
       if (filterProduct === 'yes' && !taskHasProduct(task)) return false;
       if (filterProduct === 'no' && taskHasProduct(task)) return false;
       if (filterDm === 'yes' && !taskHasDm(task)) return false;
+      if (filterDm === 'found' && taskDmStatus(task) !== 'found') return false;
+      if (filterDm === 'empty' && taskDmStatus(task) !== 'empty') return false;
       if (filterDm === 'no' && taskHasDm(task)) return false;
       if (q) {
         const contact = taskPrimaryContact(task);
@@ -911,7 +917,9 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
               className="px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold bg-white"
             >
               <option value="all">决策人: 全部</option>
-              <option value="yes">已挖决策人</option>
+              <option value="found">有联系人</option>
+              <option value="empty">已挖无联系人</option>
+              <option value="yes">已挖（含有/无）</option>
               <option value="no">未挖决策人</option>
             </select>
             {hasActiveFilters && (
@@ -1057,11 +1065,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                               已采品类
                             </span>
                           )}
-                          {taskHasDm(task) && (
-                            <span className="inline-flex text-[9px] font-black bg-amber-50 text-amber-800 border border-amber-100 px-1.5 py-0.5 rounded">
-                              已挖决策人
-                            </span>
-                          )}
+                          <DmStatusChip status={taskDmStatus(task)} contactCount={dmCount} />
                         </div>
                       </td>
                       <td className="px-3 py-2.5 text-xs font-bold text-slate-600 whitespace-nowrap">
@@ -1125,6 +1129,8 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                               </div>
                             )}
                           </div>
+                        ) : taskDmStatus(task) === 'empty' ? (
+                          <DmStatusChip status="empty" showIcon />
                         ) : (
                           <span className="text-slate-300 text-xs font-bold">暂无</span>
                         )}

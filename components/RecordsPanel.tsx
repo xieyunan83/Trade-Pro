@@ -35,12 +35,16 @@ import {
 } from '../services/taxonomyStore';
 import {
   historyHasDmSearch,
+  historyDmDigStatus,
+  historyDmContactCount,
+  dmDigGroupLabel,
   isHistoryInCrm,
   normalizeCrmHost,
 } from '../utils/crmHistory';
 import { hasRichProductCatalog } from '../services/productCatalog';
 import { extractHistoryAnalysis } from '../services/analysisNormalize';
 import { ModuleBackground } from './ModuleBackground';
+import { DmStatusChip } from './DmStatusChip';
 
 type RecordTab = 'search' | 'background' | 'all';
 type GroupBy = 'keyword' | 'country' | 'time' | 'dmMined';
@@ -74,6 +78,8 @@ interface RecordsPanelProps {
   onBulkPatchHistory?: (ids: string[], patch: Partial<Pick<HistoryItem, 'keyword' | 'country'>>) => void;
   /** 对已有背调记录再次背调 */
   onReanalyzeHistory?: (item: HistoryItem) => void;
+  /** 是否显示拥有人筛选（主管/总管） */
+  showOwnerFilter?: boolean;
 }
 
 const UNCATEGORIZED = '未分类';
@@ -100,8 +106,7 @@ const historyKeyword = (h: HistoryItem) =>
 const historyCountry = (h: HistoryItem) =>
   normalizeCountryZh(h.country || h.data?.companyInfo?.headquarters || h.data?.companyInfo?.city || '');
 
-const historyDmMined = (h: HistoryItem) =>
-  historyHasDmSearch(h) ? '已挖掘决策人' : '未挖掘决策人';
+const historyDmMined = (h: HistoryItem) => dmDigGroupLabel(historyDmDigStatus(h));
 
 const discoveryDmMined = () => '搜索记录（无决策人挖掘）';
 
@@ -169,6 +174,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   onPatchHistory,
   onBulkPatchHistory,
   onReanalyzeHistory,
+  showOwnerFilter = false,
 }) => {
   const [tab, setTab] = useState<RecordTab>('background');
   const [groupBy, setGroupBy] = useState<GroupBy>('keyword');
@@ -182,10 +188,11 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [isBatchDeleting, setIsBatchDeleting] = useState(false);
   const [isBatchImporting, setIsBatchImporting] = useState(false);
-  const [filterDm, setFilterDm] = useState<'all' | 'yes' | 'no'>('all');
+  const [filterDm, setFilterDm] = useState<'all' | 'yes' | 'found' | 'empty' | 'no'>('all');
   const [filterProduct, setFilterProduct] = useState<'all' | 'yes' | 'no'>('all');
   /** 默认隐藏已入 CRM，减少记录中心噪音 */
   const [filterCrm, setFilterCrm] = useState<'all' | 'yes' | 'no'>('no');
+  const [filterOwner, setFilterOwner] = useState<string>('all');
   /** 记录中心内嵌查看背调结果 */
   const [previewHistory, setPreviewHistory] = useState<HistoryItem | null>(null);
 
@@ -239,13 +246,20 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
       .filter((h) => tab === 'all' || tab === 'background')
       .filter((h) => {
         if (!q) return true;
-        const blob = [h.keyword, h.country, h.domain, h.data?.companyInfo?.name].filter(Boolean).join(' ').toLowerCase();
+        const blob = [h.keyword, h.country, h.domain, h.data?.companyInfo?.name, h.ownerUsername]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
         return blob.includes(q);
       })
       .filter((h) => {
+        if (filterOwner !== 'all' && (h.ownerUsername || '').trim() !== filterOwner) return false;
         if (filterDm !== 'all') {
-          const mined = historyHasDmSearch(h);
+          const status = historyDmDigStatus(h);
+          const mined = status !== 'none';
           if (filterDm === 'yes' && !mined) return false;
+          if (filterDm === 'found' && status !== 'found') return false;
+          if (filterDm === 'empty' && status !== 'empty') return false;
           if (filterDm === 'no' && mined) return false;
         }
         if (filterProduct !== 'all') {
@@ -265,8 +279,12 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
     const disc: Row[] = discoveryArchives
       .filter(() => tab === 'all' || tab === 'search')
       .filter((d) => {
+        if (filterOwner !== 'all' && (d.ownerUsername || '').trim() !== filterOwner) return false;
         if (!q) return true;
-        const blob = [d.product, d.country, ...(d.countries || [])].filter(Boolean).join(' ').toLowerCase();
+        const blob = [d.product, d.country, ...(d.countries || []), d.ownerUsername]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
         return blob.includes(q);
       })
       .filter((d) => {
@@ -279,7 +297,57 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
       .map((item) => ({ kind: 'discovery' as const, item }));
 
     return [...disc, ...hist];
-  }, [history, discoveryArchives, tab, query, filterDm, filterProduct, filterCrm, crmClients]);
+  }, [history, discoveryArchives, tab, query, filterDm, filterProduct, filterCrm, filterOwner, crmClients]);
+
+  /** Tab 数字 = 当前筛选下可见条数（与列表一致） */
+  const tabCounts = useMemo(() => {
+    const matchHist = (h: HistoryItem) => {
+      if (filterOwner !== 'all' && (h.ownerUsername || '').trim() !== filterOwner) return false;
+      if (filterDm !== 'all') {
+        const status = historyDmDigStatus(h);
+        const mined = status !== 'none';
+        if (filterDm === 'yes' && !mined) return false;
+        if (filterDm === 'found' && status !== 'found') return false;
+        if (filterDm === 'empty' && status !== 'empty') return false;
+        if (filterDm === 'no' && mined) return false;
+      }
+      if (filterProduct !== 'all') {
+        const hasProduct = hasRichProductCatalog(h.data);
+        if (filterProduct === 'yes' && !hasProduct) return false;
+        if (filterProduct === 'no' && hasProduct) return false;
+      }
+      if (filterCrm !== 'all') {
+        const inCrm = isHistoryInCrm(h, crmClients);
+        if (filterCrm === 'yes' && !inCrm) return false;
+        if (filterCrm === 'no' && inCrm) return false;
+      }
+      return true;
+    };
+    const matchDisc = (d: DiscoveryArchiveItem) => {
+      if (filterOwner !== 'all' && (d.ownerUsername || '').trim() !== filterOwner) return false;
+      if (filterCrm === 'all') return true;
+      const fullyIn = isDiscoveryFullyInCrm(d, crmClients);
+      if (filterCrm === 'yes') return fullyIn;
+      if (filterCrm === 'no') return !fullyIn;
+      return true;
+    };
+    const bg = history.filter(matchHist).length;
+    const search = discoveryArchives.filter(matchDisc).length;
+    return { search, background: bg, all: search + bg };
+  }, [history, discoveryArchives, filterDm, filterProduct, filterCrm, filterOwner, crmClients]);
+
+  const ownerOptions = useMemo(() => {
+    const set = new Set<string>();
+    history.forEach((h) => {
+      const o = (h.ownerUsername || '').trim();
+      if (o) set.add(o);
+    });
+    discoveryArchives.forEach((d) => {
+      const o = (d.ownerUsername || '').trim();
+      if (o) set.add(o);
+    });
+    return [...set].sort((a, b) => a.localeCompare(b, 'zh-CN'));
+  }, [history, discoveryArchives]);
 
   const groups = useMemo(() => {
     const map = new Map<string, Row[]>();
@@ -305,7 +373,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
       .sort((a, b) => {
         if (groupBy === 'time') return b.key.localeCompare(a.key);
         if (groupBy === 'dmMined') {
-          const order = ['未挖掘决策人', '已挖掘决策人', '搜索记录（无决策人挖掘）'];
+          const order = ['未挖掘决策人', '已挖·有联系人', '已挖·无联系人', '搜索记录（无决策人挖掘）'];
           return order.indexOf(a.key) - order.indexOf(b.key);
         }
         if (a.key === UNCATEGORIZED) return 1;
@@ -317,7 +385,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   // 切换 Tab / 筛选时清空勾选，避免误删不可见项
   useEffect(() => {
     setSelected(new Set());
-  }, [tab, query, groupBy, filterDm, filterProduct, filterCrm]);
+  }, [tab, query, groupBy, filterDm, filterProduct, filterCrm, filterOwner]);
 
   const rowSelectKey = (row: Row) =>
     row.kind === 'history' ? `h:${row.item.id}` : `d:${row.item.id}`;
@@ -638,9 +706,12 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
             <FolderOpen size={18} className="text-cyan-600 flex-shrink-0" /> 记录中心
           </div>
           <div className="text-[10px] sm:text-[11px] text-slate-400 font-semibold mt-0.5 truncate tracking-wide">
-            点击公司可查看背调 · 默认隐藏已入 CRM
+            点击公司可查看背调 · 标签数字=当前筛选可见数
             {filterCrm === 'no' && hiddenCrmHistoryCount > 0
-              ? `（已隐藏 ${hiddenCrmHistoryCount} 条）`
+              ? ` · 已隐藏已入CRM ${hiddenCrmHistoryCount} 条（可改筛选）`
+              : ''}
+            {history.length + discoveryArchives.length > tabCounts.all
+              ? ` · 库内共 ${history.length + discoveryArchives.length}`
               : ''}
           </div>
         </div>
@@ -657,9 +728,9 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
       <div className="p-2 border-b border-slate-100 flex gap-1">
         {(
           [
-            { id: 'search' as const, label: '搜索', count: discoveryArchives.length },
-            { id: 'background' as const, label: '背调', count: history.length },
-            { id: 'all' as const, label: '全部', count: discoveryArchives.length + history.length },
+            { id: 'search' as const, label: '搜索', count: tabCounts.search },
+            { id: 'background' as const, label: '背调', count: tabCounts.background },
+            { id: 'all' as const, label: '全部', count: tabCounts.all },
           ] as const
         ).map((t) => (
           <button
@@ -698,13 +769,15 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
       </div>
       {groupBy === 'dmMined' && (
         <div className="px-3 py-2 border-b border-slate-100 bg-violet-50/80 text-[10px] font-bold text-violet-700">
-          「已挖掘」= 已点过决策人邮箱搜索；「未挖掘」= 背调后尚未搜索决策人，避免重复操作。
+          「已挖·有联系人」= 挖掘完成且找到联系人；「已挖·无联系人」= 挖过但未找到；「未挖掘」= 尚未搜索决策人。
         </div>
       )}
       <div className="px-3 py-1.5 text-[9px] text-slate-400 font-semibold border-b border-slate-50 flex flex-wrap gap-1.5 items-center">
         <span className="mr-0.5">状态:</span>
         <StatusChip done doneLabel="已背调" pendingLabel="未背调" tone="violet" />
-        <StatusChip done doneLabel="已挖决策人" pendingLabel="未挖决策人" tone="amber" />
+        <DmStatusChip status="found" contactCount={2} />
+        <DmStatusChip status="empty" />
+        <DmStatusChip status="none" />
         <StatusChip done doneLabel="已采品类" pendingLabel="未采品类" tone="emerald" />
         <StatusChip done doneLabel="已入CRM" pendingLabel="未入CRM" tone="emerald" />
         <span className="text-slate-300 ml-0.5">灰底 = 未完成</span>
@@ -720,7 +793,9 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                 className="text-[10px] font-bold border border-slate-200 rounded-lg px-2 py-1 bg-white"
               >
                 <option value="all">决策人: 全部</option>
-                <option value="yes">已挖决策人</option>
+                <option value="found">有联系人</option>
+                <option value="empty">已挖无联系人</option>
+                <option value="yes">已挖（含有/无）</option>
                 <option value="no">未挖决策人</option>
               </select>
               <select
@@ -744,6 +819,21 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
             <option value="all">CRM: 全部</option>
             <option value="yes">CRM: 已入CRM</option>
           </select>
+          {showOwnerFilter && ownerOptions.length > 0 && (
+            <select
+              value={filterOwner}
+              onChange={(e) => setFilterOwner(e.target.value)}
+              className="text-[10px] font-bold border border-slate-200 rounded-lg px-2 py-1 bg-white"
+              title="按拥有人筛选（主管可看本部门员工）"
+            >
+              <option value="all">拥有人: 全部</option>
+              {ownerOptions.map((o) => (
+                <option key={o} value={o}>
+                  拥有人: {o}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
       )}
 
@@ -1023,11 +1113,9 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                                     hour12: false,
                                   })}
                                 </span>
-                                <StatusChip
-                                  done={historyHasDmSearch(row.item)}
-                                  doneLabel="已挖决策人"
-                                  pendingLabel="未挖决策人"
-                                  tone="amber"
+                                <DmStatusChip
+                                  status={historyDmDigStatus(row.item)}
+                                  contactCount={historyDmContactCount(row.item)}
                                 />
                                 <StatusChip
                                   done={hasRichProductCatalog(row.item.data)}

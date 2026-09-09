@@ -16,15 +16,19 @@ import {
 import {
   buildHistoryLookupIndex,
   clientHasBackgroundCheckIndexed,
+  countAnalysisDecisionMakers,
+  DmDigStatus,
   formatBackgroundCheckTime,
   historyHasDmSearch,
   lookupHistoryForClient,
   resolveBackgroundCheckAtIndexed,
+  resolveDmDigStatus,
 } from '../utils/crmHistory';
 import { exportClientsToExcel } from '../services/exportService';
 import { IndustryMultiSelect } from './IndustryMultiSelect';
 import { PaginationBar } from './PaginationBar';
 import { hasRichProductCatalog } from '../services/productCatalog';
+import { DmStatusChip } from './DmStatusChip';
 
 interface ModuleClientCRMProps {
   clients: Client[];
@@ -54,6 +58,8 @@ type EnrichedClient = {
   hasBg: boolean;
   hasProduct: boolean;
   hasDm: boolean;
+  dmStatus: DmDigStatus;
+  dmContactCount: number;
   bgAt?: number;
   canOpenReport: boolean;
 };
@@ -225,11 +231,12 @@ const BgStatus = React.memo(
 );
 BgStatus.displayName = 'BgStatus';
 
-const IntelChips: React.FC<{ hasBg: boolean; hasProduct: boolean; hasDm: boolean }> = ({
-  hasBg,
-  hasProduct,
-  hasDm,
-}) => (
+const IntelChips: React.FC<{
+  hasBg: boolean;
+  hasProduct: boolean;
+  dmStatus: DmDigStatus;
+  dmContactCount: number;
+}> = ({ hasBg, hasProduct, dmStatus, dmContactCount }) => (
   <div className="flex flex-wrap gap-1">
     <span
       className={`text-[9px] font-black px-1.5 py-0.5 rounded ${
@@ -246,14 +253,7 @@ const IntelChips: React.FC<{ hasBg: boolean; hasProduct: boolean; hasDm: boolean
       <PackageSearch size={9} />
       {hasProduct ? '已采品类' : '未采品类'}
     </span>
-    <span
-      className={`text-[9px] font-black px-1.5 py-0.5 rounded inline-flex items-center gap-0.5 ${
-        hasDm ? 'bg-amber-500 text-white' : 'bg-slate-100 text-slate-400 border border-slate-200'
-      }`}
-    >
-      <Users size={9} />
-      {hasDm ? '已挖决策人' : '未挖决策人'}
-    </span>
+    <DmStatusChip status={dmStatus} contactCount={dmContactCount} />
   </div>
 );
 
@@ -284,7 +284,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   /** all | yes | no */
   const [filterBg, setFilterBg] = useState<'all' | 'yes' | 'no'>('all');
   const [filterProduct, setFilterProduct] = useState<'all' | 'yes' | 'no'>('all');
-  const [filterDm, setFilterDm] = useState<'all' | 'yes' | 'no'>('all');
+  const [filterDm, setFilterDm] = useState<'all' | 'yes' | 'found' | 'empty' | 'no'>('all');
   const [filterOwner, setFilterOwner] = useState<string>('all');
   const [filterStatus, setFilterStatus] = useState<Client['status'] | 'all' | 'overdue'>('all');
   const [selectedClientIds, setSelectedClientIds] = useState<Set<string>>(new Set());
@@ -303,12 +303,19 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
       const hasBg = clientHasBackgroundCheckIndexed(client, historyIndex);
       const hasProduct = hasRichProductCatalog(historyItem?.data);
       const hasDm = historyItem ? historyHasDmSearch(historyItem) : false;
+      const dmContactCount = Math.max(
+        countAnalysisDecisionMakers(historyItem?.data),
+        Array.isArray(client.contacts) ? client.contacts.length : 0
+      );
+      const dmStatus = resolveDmDigStatus(hasDm, hasDm ? dmContactCount : 0);
       return {
         client,
         historyItem,
         hasBg,
         hasProduct,
         hasDm,
+        dmStatus,
+        dmContactCount: hasDm ? dmContactCount : 0,
         bgAt,
         canOpenReport: !!historyItem,
       };
@@ -341,7 +348,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
 
   const filteredEnriched = useMemo(() => {
     const q = debouncedSearch.trim().toLowerCase();
-    return enrichedClients.filter(({ client, historyItem, hasBg, hasProduct, hasDm, bgAt }) => {
+    return enrichedClients.filter(({ client, historyItem, hasBg, hasProduct, hasDm, dmStatus, bgAt }) => {
       if (q) {
         const owner = resolveOwner(client, historyItem).toLowerCase();
         const hit =
@@ -373,6 +380,8 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
       if (filterProduct === 'yes' && !hasProduct) return false;
       if (filterProduct === 'no' && hasProduct) return false;
       if (filterDm === 'yes' && !hasDm) return false;
+      if (filterDm === 'found' && dmStatus !== 'found') return false;
+      if (filterDm === 'empty' && dmStatus !== 'empty') return false;
       if (filterDm === 'no' && hasDm) return false;
       if (filterStatus === 'overdue' && !isOverdueFollowUp(client)) return false;
       if (filterStatus !== 'all' && filterStatus !== 'overdue' && client.status !== filterStatus) {
@@ -788,12 +797,14 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
           </select>
           <select
             value={filterDm}
-            onChange={(e) => setFilterDm(e.target.value as 'all' | 'yes' | 'no')}
+            onChange={(e) => setFilterDm(e.target.value as typeof filterDm)}
             className="px-3 py-2 rounded-xl border border-slate-200 font-bold text-xs sm:text-sm bg-white"
             title="决策人挖掘状态"
           >
             <option value="all">决策人：全部</option>
-            <option value="yes">已挖决策人</option>
+            <option value="found">有联系人</option>
+            <option value="empty">已挖无联系人</option>
+            <option value="yes">已挖（含有/无）</option>
             <option value="no">未挖决策人</option>
           </select>
           {hasActiveFilters && (
@@ -865,7 +876,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
             {clients.length === 0 ? '暂无客户数据' : '没有符合筛选条件的客户'}
           </div>
         ) : (
-          pagedEnriched.map(({ client, historyItem, hasBg, hasProduct, hasDm, bgAt, canOpenReport }) => {
+          pagedEnriched.map(({ client, historyItem, hasBg, hasProduct, dmStatus, dmContactCount, bgAt, canOpenReport }) => {
             const owner = resolveOwner(client, historyItem);
             return (
             <div key={client.id} className="bg-white rounded-2xl border border-slate-200 p-3.5 shadow-sm">
@@ -902,7 +913,12 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                     )}
                     <KeywordTags client={client} />
                     <div className="mt-1.5">
-                      <IntelChips hasBg={hasBg} hasProduct={hasProduct} hasDm={hasDm} />
+                      <IntelChips
+                        hasBg={hasBg}
+                        hasProduct={hasProduct}
+                        dmStatus={dmStatus}
+                        dmContactCount={dmContactCount}
+                      />
                     </div>
                   </div>
                 </div>
@@ -973,7 +989,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                 </td>
               </tr>
             ) : (
-              pagedEnriched.map(({ client, historyItem, hasBg, hasProduct, hasDm, bgAt, canOpenReport }) => {
+              pagedEnriched.map(({ client, historyItem, hasBg, hasProduct, dmStatus, dmContactCount, bgAt, canOpenReport }) => {
                 const owner = resolveOwner(client, historyItem);
                 return (
                 <tr key={client.id} className="hover:bg-slate-50/60 transition-colors align-top">
@@ -1032,7 +1048,12 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                       onOpenReport={() => openClientReport(historyItem)}
                       onReanalyze={() => triggerReanalyze(client, bgAt)}
                     />
-                    <IntelChips hasBg={hasBg} hasProduct={hasProduct} hasDm={hasDm} />
+                    <IntelChips
+                      hasBg={hasBg}
+                      hasProduct={hasProduct}
+                      dmStatus={dmStatus}
+                      dmContactCount={dmContactCount}
+                    />
                   </td>
                   <td className="px-3 py-2.5">
                     <div className="flex items-center gap-1.5">

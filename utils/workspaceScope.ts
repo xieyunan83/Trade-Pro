@@ -57,17 +57,17 @@ export const loadAllCrmClients = (): Client[] => {
 };
 
 /**
- * 回填旧 CRM 归属，让「本部门主管」能按部门看到历史客户：
+ * 回填旧业务数据归属，让「本部门主管」能按部门看到历史记录：
  * - 已有 owner、缺 departmentId → 按用户表补部门
  * - 完全无归属且系统只有 1 个部门 → 归入该部门（并尽量挂到部门主管名下）
- * - 多部门且无归属 → 不改，仅总管/管理员可见，需在后台指定部门后再给主管看
+ * - 多部门且无归属 → 不改，仅总管/管理员可见
  */
-export const migrateLegacyCrmOwnership = (
-  clients: Client[],
+export const migrateLegacyOwnership = <T extends OwnedRecordMeta>(
+  items: T[],
   allUsers: User[],
   departments: Department[]
-): { clients: Client[]; changed: boolean } => {
-  if (!clients.length) return { clients, changed: false };
+): { items: T[]; changed: boolean } => {
+  if (!items.length) return { items, changed: false };
 
   const byName = new Map(
     allUsers.map((u) => [u.username.trim().toLowerCase(), u] as const)
@@ -75,10 +75,10 @@ export const migrateLegacyCrmOwnership = (
   const soleDept = departments.length === 1 ? departments[0] : undefined;
   let changed = false;
 
-  const next = clients.map((c) => {
+  const next = items.map((c) => {
     const owner = (c.ownerUsername || '').trim();
     const dept = (c.departmentId || '').trim();
-    const patch: Partial<Client> = {};
+    const patch: Partial<OwnedRecordMeta> = {};
 
     if (owner) {
       const u = byName.get(owner.toLowerCase());
@@ -96,15 +96,29 @@ export const migrateLegacyCrmOwnership = (
     return { ...c, ...patch };
   });
 
+  return { items: next, changed };
+};
+
+/**
+ * 回填旧 CRM 归属，让「本部门主管」能按部门看到历史客户：
+ * - 已有 owner、缺 departmentId → 按用户表补部门
+ * - 完全无归属且系统只有 1 个部门 → 归入该部门（并尽量挂到部门主管名下）
+ * - 多部门且无归属 → 不改，仅总管/管理员可见，需在后台指定部门后再给主管看
+ */
+export const migrateLegacyCrmOwnership = (
+  clients: Client[],
+  allUsers: User[],
+  departments: Department[]
+): { clients: Client[]; changed: boolean } => {
+  const { items, changed } = migrateLegacyOwnership(clients, allUsers, departments);
   if (changed) {
     try {
-      localStorage.setItem(CRM_ALL_KEY, JSON.stringify(next));
+      localStorage.setItem(CRM_ALL_KEY, JSON.stringify(items));
     } catch {
       /* ignore */
     }
   }
-
-  return { clients: next, changed };
+  return { clients: items, changed };
 };
 
 /**

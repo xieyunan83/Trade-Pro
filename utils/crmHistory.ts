@@ -645,3 +645,32 @@ export const findCrmIdsForDiscoveryResults = (
 export const historyHasDmSearch = (item: HistoryItem): boolean =>
   !!item.data?.decisionMakerEmailSearchAt ||
   !!(item.data?.decisionMakerEmailSearchHistory && item.data.decisionMakerEmailSearchHistory.length > 0);
+
+/** 决策人挖掘完成态：未挖 / 已挖有联系人 / 已挖无联系人 */
+export type DmDigStatus = 'none' | 'found' | 'empty';
+
+export const countAnalysisDecisionMakers = (data?: AnalysisResult | null): number =>
+  Array.isArray(data?.decisionMakers) ? data.decisionMakers.length : 0;
+
+export const resolveDmDigStatus = (mined: boolean, contactCount: number): DmDigStatus => {
+  if (!mined) return 'none';
+  return contactCount > 0 ? 'found' : 'empty';
+};
+
+export const historyDmContactCount = (item: HistoryItem): number =>
+  countAnalysisDecisionMakers(item.data);
+
+export const historyDmDigStatus = (item: HistoryItem): DmDigStatus =>
+  resolveDmDigStatus(historyHasDmSearch(item), historyDmContactCount(item));
+
+export const dmDigStatusLabel = (status: DmDigStatus, contactCount = 0): string => {
+  if (status === 'found') return contactCount > 0 ? `有联系人·${contactCount}` : '有联系人';
+  if (status === 'empty') return '已挖无联系人';
+  return '未挖决策人';
+};
+
+export const dmDigGroupLabel = (status: DmDigStatus): string => {
+  if (status === 'found') return '已挖·有联系人';
+  if (status === 'empty') return '已挖·无联系人';
+  return '未挖掘决策人';
+};

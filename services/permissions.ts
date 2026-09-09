@@ -164,14 +164,23 @@ export const canViewOwnedRecord = (
   // 无归属旧数据：普通员工/其它部门主管不可见（仅总管/管理员可见，见上方）
   if (!owner && !recordDept) return false;
 
-  // 部门主管：仅本部门
-  if (viewer.role === 'manager' && viewer.departmentId) {
-    if (recordDept && recordDept === viewer.departmentId) return true;
+  // 部门主管：本部门全部（含员工）。无 departmentId 时尝试用「部门主管」任命反查部门。
+  if (viewer.role === 'manager') {
+    const deptId =
+      (viewer.departmentId || '').trim() ||
+      departments.find((d) => sameUser(d.managerUsername, viewer.username))?.id ||
+      '';
+    if (!deptId) {
+      return sameUser(owner, viewer.username);
+    }
+    if (recordDept && recordDept === deptId) return true;
     if (sameUser(owner, viewer.username)) return true;
     if (owner) {
-      const members = getDepartmentMemberUsernames(viewer.departmentId, allUsers).map((s) =>
-        s.toLowerCase()
-      );
+      const ownerUser = allUsers.find((u) => sameUser(u.username, owner));
+      if (ownerUser && !ownerUser.disabled && (ownerUser.departmentId || '') === deptId) {
+        return true;
+      }
+      const members = getDepartmentMemberUsernames(deptId, allUsers).map((s) => s.toLowerCase());
       if (members.includes(owner.toLowerCase())) return true;
     }
     return false;
