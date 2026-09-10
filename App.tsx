@@ -29,7 +29,7 @@ import { saveProductProfilesBulk } from './services/db';
 import { addCustomKeyword, addCustomCountry } from './services/taxonomyStore';
 import { normalizeCountryZh } from './utils/countryNormalize';
 import { buildSearchTags, stampSearchResults } from './utils/searchTags';
-import { mergeDiscoveryResultsIntoCrm, mergeHistoryItemsIntoCrm, findCrmIdsForHistoryItem, findCrmIdsForDiscoveryResults, lookupBackgroundCheck, formatBackgroundCheckTime, findHistoryForClient, clientPatchFromAnalysis, CRM_JUNE_2026_CUTOFF_MS, isSearchResultInCrm } from './utils/crmHistory';
+import { mergeDiscoveryResultsIntoCrm, mergeHistoryItemsIntoCrm, findCrmIdsForHistoryItem, findCrmIdsForDiscoveryResults, lookupBackgroundCheck, formatBackgroundCheckTime, findHistoryForClient, clientPatchFromAnalysis, CRM_JUNE_2026_CUTOFF_MS, isSearchResultInCrm, normalizeCrmHost } from './utils/crmHistory';
 import {
   clearCrmTombstonesForClients,
   filterOutCrmTombstones,
@@ -97,6 +97,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { extractHistoryAnalysis, normalizeAnalysisResult, websiteHref } from './services/analysisNormalize';
 import { ModuleSimilar } from './components/ModuleSimilar';
 import { ModulePromoGenerator } from './components/ModulePromoGenerator';
+import type { PromoListRow } from './utils/promoListRows';
 import { ModuleClientCRM } from './components/ModuleClientCRM';
 import { ModuleProductMatch } from './components/ModuleProductMatch';
 import { ModuleEmailCampaign } from './components/ModuleEmailCampaign'; 
@@ -3641,6 +3642,151 @@ const App: React.FC = () => {
     );
   };
 
+  /** 营销工具：批量决策人挖掘（与 CRM / 记录中心同一队列） */
+  const handleBatchDmSearchFromPromo = (rows: PromoListRow[]) => {
+    if (!rows?.length) return;
+    const clients: Client[] = [];
+    const seen = new Set<string>();
+    for (const row of rows) {
+      if (row.client) {
+        if (!seen.has(row.client.id)) {
+          seen.add(row.client.id);
+          clients.push(row.client);
+        }
+        continue;
+      }
+      const website =
+        (row.website && row.website !== '—' ? row.website : '') ||
+        row.task?.website ||
+        row.intel.historyItem?.domain ||
+        row.intel.bestAnalysis?.companyInfo?.website ||
+        '';
+      const key = (normalizeCrmHost(website) || row.clientName || row.id).toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      clients.push({
+        id: `promo_dm_${row.id}`,
+        name: row.clientName !== '—' ? row.clientName : website || '未知公司',
+        website: website || undefined,
+        country: row.country || '',
+        type: '进口商',
+        status: '新建/潜在',
+        productType: '',
+        industry: row.industry || '',
+        priceRange: '',
+        isSampleNeeded: false,
+        lastOrderDate: '',
+        lastContactSent: '',
+        lastContactReceived: '',
+        nextFollowUpDate: '',
+        activityLog: '',
+        contacts: row.contact ? [row.contact] : row.intel.bestAnalysis?.decisionMakers || [],
+        searchKeyword: row.keywords[0],
+        ownerUsername: row.owner || undefined,
+      });
+    }
+    handleBatchDmSearchFromCRM(clients);
+  };
+
+  /** 营销工具：批量补做品类 */
+  const handleBatchProductDigFromPromo = (rows: PromoListRow[]) => {
+    if (!rows?.length) return;
+    const clients: Client[] = [];
+    const seen = new Set<string>();
+    for (const row of rows) {
+      if (row.client) {
+        if (!seen.has(row.client.id)) {
+          seen.add(row.client.id);
+          clients.push(row.client);
+        }
+        continue;
+      }
+      const website =
+        (row.website && row.website !== '—' ? row.website : '') ||
+        row.task?.website ||
+        row.intel.historyItem?.domain ||
+        '';
+      const key = (normalizeCrmHost(website) || row.clientName || row.id).toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      clients.push({
+        id: `promo_pd_${row.id}`,
+        name: row.clientName !== '—' ? row.clientName : website || '未知公司',
+        website: website || undefined,
+        country: row.country || '',
+        type: '进口商',
+        status: '新建/潜在',
+        productType: '',
+        industry: row.industry || '',
+        priceRange: '',
+        isSampleNeeded: false,
+        lastOrderDate: '',
+        lastContactSent: '',
+        lastContactReceived: '',
+        nextFollowUpDate: '',
+        activityLog: '',
+        searchKeyword: row.keywords[0],
+        ownerUsername: row.owner || undefined,
+      });
+    }
+    handleBatchProductDigFromCRM(clients);
+  };
+
+  /** 营销工具：批量加入 CRM（已完成队列且未入 CRM） */
+  const handleBatchAddToCrmFromPromo = (tasks: AutomationResult[]) => {
+    if (!tasks?.length) return;
+    if (!canAccessModule(currentUser, ModuleType.CLIENT_CRM)) {
+      alert('你没有「客户管理 CRM」权限，请联系管理员或部门主管开通。');
+      return;
+    }
+    const historyItems: HistoryItem[] = [];
+    for (const task of tasks) {
+      if (!task.analysis) continue;
+      const domainKey = (task.analysis.companyInfo?.website || task.website || '')
+        .toLowerCase()
+        .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
+        .split('/')[0];
+      const nameKey = (task.analysis.companyInfo?.name || task.clientName || '').trim().toLowerCase();
+      const matched = historyRef.current.find((h) => {
+        const hHost = (h.domain || h.data?.companyInfo?.website || '')
+          .toLowerCase()
+          .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
+          .split('/')[0];
+        const hName = (h.data?.companyInfo?.name || '').trim().toLowerCase();
+        return (
+          (domainKey && hHost && domainKey === hHost) || (nameKey && hName && nameKey === hName)
+        );
+      });
+      if (matched) {
+        historyItems.push(matched);
+        continue;
+      }
+      historyItems.push(
+        stampOwnership({
+          id: `promo_crm_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          type: ModuleType.BACKGROUND,
+          data: task.analysis,
+          timestamp: task.completedAt || Date.now(),
+          domain: task.analysis.companyInfo?.website || task.website || task.clientName || '',
+          keyword: task.keyword || task.analysis.searchKeyword,
+          country: normalizeCountryZh(
+            task.country ||
+              task.analysis.searchCountry ||
+              task.analysis.companyInfo?.headquarters ||
+              ''
+          ),
+          source: 'batch',
+        })
+      );
+    }
+    if (!historyItems.length) {
+      alert('没有可导入的报告数据');
+      return;
+    }
+    if (!confirm(`将把 ${historyItems.length} 条已完成背调加入客户管理？`)) return;
+    handleBatchImportRecordsToCrm(historyItems, []);
+  };
+
   if (!currentUser) {
     if (!authReady) return <div className="h-screen flex items-center justify-center bg-slate-50"><Loader2 className="animate-spin text-blue-600" size={40} /></div>;
     return (
@@ -4130,18 +4276,29 @@ const App: React.FC = () => {
                 {activeModule === ModuleType.PROMO_GENERATOR && (
                     <ModulePromoGenerator 
                         onStartAutomation={handleStartQueueGeneration} 
-                        automationResults={automationResults} 
+                        automationResults={automationResults}
+                        crmClients={crmClients}
+                        history={history}
                         isAutomating={isAutomating} 
                         onRunPending={handleRunPending}
                         onRunSingle={handleRunSingle}
                         onRerunCompleted={handleRerunCompletedTask}
                         onDelete={handleDeleteTask}
                         onViewResult={handleViewAutomationResult}
+                        onOpenClient={openCrmClientReport}
+                        onOpenHistoryItem={loadFromHistory}
                         onDownloadResult={handleDownloadAutomationResult}
                         onDownloadAll={handleDownloadAllCompleted}
                         canExportPpt={hasPermission(currentUser, 'feature.export_ppt')}
                         canDmMine={hasPermission(currentUser, 'feature.dm_email_search')}
                         canCrmImport={canAccessModule(currentUser, ModuleType.CLIENT_CRM)}
+                        canProductDig={
+                          hasPermission(currentUser, 'feature.product_redig') ||
+                          hasPermission(currentUser, 'feature.analyze_company')
+                        }
+                        onBatchDmSearch={handleBatchDmSearchFromPromo}
+                        onBatchAddToCrm={handleBatchAddToCrmFromPromo}
+                        onBatchProductDig={handleBatchProductDigFromPromo}
                         onClearCompleted={handleClearCompletedTasks}
                         onClearAll={handleClearAllTasks}
                         onReloadQueue={handleReloadAutomationQueue}

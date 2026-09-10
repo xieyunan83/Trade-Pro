@@ -1,5 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AutomationPipelineConfig, AutomationResult, CLIENT_TYPE_OPTIONS } from '../types';
+import {
+  AutomationPipelineConfig,
+  AutomationResult,
+  Client,
+  CLIENT_TYPE_OPTIONS,
+  HistoryItem,
+} from '../types';
 import {
   Ruler,
   PlayCircle,
@@ -19,20 +25,24 @@ import {
   Users,
   ShieldCheck,
   FileSpreadsheet,
+  PackageSearch,
 } from 'lucide-react';
 import { ContinentCountryMultiSelect } from './ContinentCountryMultiSelect';
 import { findCountryByEn } from '../data/countriesByContinent';
 import { exportAutomationResultsToExcel } from '../services/exportService';
-import { formatBackgroundCheckTime, resolveDmDigStatus, DmDigStatus } from '../utils/crmHistory';
+import { formatBackgroundCheckTime } from '../utils/crmHistory';
 import { IndustryMultiSelect } from './IndustryMultiSelect';
 import { PaginationBar } from './PaginationBar';
-import { hasRichProductCatalog } from '../services/productCatalog';
 import { maskEmailAddress } from '../services/permissions';
 import { DmStatusChip } from './DmStatusChip';
+import { buildPromoListRows, type PromoListRow } from '../utils/promoListRows';
 
 interface ModulePromoGeneratorProps {
   onStartAutomation: (config: AutomationPipelineConfig) => void;
   automationResults: AutomationResult[];
+  /** 与客户管理同步：合并 CRM 客户并统一状态 */
+  crmClients?: Client[];
+  history?: HistoryItem[];
   isAutomating: boolean;
   onRunPending: () => void;
   onRunSingle: (id: string) => void;
@@ -40,6 +50,8 @@ interface ModulePromoGeneratorProps {
   onRerunCompleted?: (id: string) => void;
   onDelete: (id: string) => void;
   onViewResult: (task: AutomationResult) => void;
+  onOpenClient?: (client: Client) => void;
+  onOpenHistoryItem?: (item: HistoryItem) => void;
   onDownloadResult: (task: AutomationResult) => void;
   onDownloadAll: () => void;
   canExportPpt?: boolean;
@@ -49,6 +61,13 @@ interface ModulePromoGeneratorProps {
   onReloadQueue?: () => void;
   canDmMine?: boolean;
   canCrmImport?: boolean;
+  canProductDig?: boolean;
+  /** 批量决策人挖掘（队列任务 + CRM 行） */
+  onBatchDmSearch?: (rows: PromoListRow[]) => void;
+  /** 批量加入 CRM（仅队列已完成且未入 CRM） */
+  onBatchAddToCrm?: (tasks: AutomationResult[]) => void;
+  /** 批量补做品类 */
+  onBatchProductDig?: (rows: PromoListRow[]) => void;
   /** 普通员工邮箱脱敏 */
   canViewEmails?: boolean;
 }
@@ -67,15 +86,39 @@ const emptyDraft = (): Omit<AutomationPipelineConfig, never> => ({
   doCrmImport: false,
 });
 
+const StatusMini: React.FC<{ done: boolean; yes: string; no: string; tone: 'emerald' | 'teal' | 'violet' }> = ({
+  done,
+  yes,
+  no,
+  tone,
+}) => {
+  const on =
+    tone === 'emerald'
+      ? 'bg-emerald-50 text-emerald-700 border-emerald-100'
+      : tone === 'teal'
+        ? 'bg-teal-50 text-teal-700 border-teal-100'
+        : 'bg-violet-50 text-violet-700 border-violet-100';
+  const off = 'bg-slate-100 text-slate-400 border-slate-200';
+  return (
+    <span className={`inline-flex text-[9px] font-black border px-1.5 py-0.5 rounded ${done ? on : off}`}>
+      {done ? yes : no}
+    </span>
+  );
+};
+
 export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   onStartAutomation,
   automationResults,
+  crmClients = [],
+  history = [],
   isAutomating,
   onRunPending,
   onRunSingle,
   onRerunCompleted,
   onDelete,
   onViewResult,
+  onOpenClient,
+  onOpenHistoryItem,
   onDownloadResult,
   onDownloadAll,
   canExportPpt = false,
@@ -84,6 +127,10 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   onReloadQueue,
   canDmMine = false,
   canCrmImport = false,
+  canProductDig = false,
+  onBatchDmSearch,
+  onBatchAddToCrm,
+  onBatchProductDig,
   canViewEmails = false,
 }) => {
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -92,7 +139,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [filterQuery, setFilterQuery] = useState('');
-  const [filterStatus, setFilterStatus] = useState<'all' | AutomationResult['status']>('all');
+  const [filterStatus, setFilterStatus] = useState<'all' | AutomationResult['status'] | 'crm'>('all');
   const [filterCountry, setFilterCountry] = useState('all');
   const [filterKeyword, setFilterKeyword] = useState('all');
   const [filterMode, setFilterMode] = useState<'all' | 'detailed' | 'economy'>('all');
@@ -100,112 +147,81 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   const [filterBg, setFilterBg] = useState<'all' | 'yes' | 'no'>('all');
   const [filterProduct, setFilterProduct] = useState<'all' | 'yes' | 'no'>('all');
   const [filterDm, setFilterDm] = useState<'all' | 'yes' | 'found' | 'empty' | 'no'>('all');
+  const [filterCrm, setFilterCrm] = useState<'all' | 'yes' | 'no'>('all');
   const [filterOwner, setFilterOwner] = useState('all');
   const [pageSize, setPageSize] = useState<10 | 20 | 50>(20);
   const [page, setPage] = useState(1);
 
+  const allRows = useMemo(
+    () => buildPromoListRows(automationResults, crmClients, history),
+    [automationResults, crmClients, history]
+  );
+
   const completedCount = automationResults.filter((r) => r.status === 'completed' && r.analysis).length;
-
-  const taskKeywords = (task: AutomationResult): string[] => {
-    const tags = (task.analysis?.searchTags || [])
-      .filter((t) => t.startsWith('关键词:'))
-      .map((t) => t.replace(/^关键词:/, '').trim());
-    return Array.from(
-      new Set([task.keyword, task.analysis?.searchKeyword, ...tags].filter(Boolean) as string[])
-    );
-  };
-
-  const taskIndustry = (task: AutomationResult) =>
-    (task.analysis?.companyInfo?.nature || '').trim();
-
-  const taskPrimaryContact = (task: AutomationResult) => {
-    const dms = task.analysis?.decisionMakers || [];
-    const withEmail = dms.find((d) => d.emailGuess?.includes('@'));
-    return withEmail || dms[0] || null;
-  };
+  const crmOnlyCount = allRows.filter((r) => r.source === 'crm').length;
 
   const countryOptions = useMemo(
     () =>
-      Array.from(
-        new Set(
-          automationResults
-            .map((t) => (t.country || t.analysis?.searchCountry || '').trim())
-            .filter(Boolean)
-        )
-      ).sort((a, b) => a.localeCompare(b)),
-    [automationResults]
+      Array.from(new Set(allRows.map((r) => r.country).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    [allRows]
   );
 
   const keywordOptions = useMemo(
     () =>
-      Array.from(new Set(automationResults.flatMap((t) => taskKeywords(t)))).sort((a, b) =>
-        a.localeCompare(b)
-      ),
-    [automationResults]
+      Array.from(new Set(allRows.flatMap((r) => r.keywords))).sort((a, b) => a.localeCompare(b)),
+    [allRows]
   );
 
   const industryOptions = useMemo(
     () =>
-      Array.from(
-        new Set(automationResults.map((t) => taskIndustry(t)).filter(Boolean))
-      ).sort((a, b) => a.localeCompare(b, 'zh')),
-    [automationResults]
+      Array.from(new Set(allRows.map((r) => r.industry).filter(Boolean))).sort((a, b) =>
+        a.localeCompare(b, 'zh')
+      ),
+    [allRows]
   );
 
   const ownerOptions = useMemo(
     () =>
-      Array.from(
-        new Set(
-          automationResults
-            .map((t) => (t.ownerUsername || '').trim())
-            .filter(Boolean)
-        )
-      ).sort((a, b) => a.localeCompare(b, 'zh-CN')),
-    [automationResults]
+      Array.from(new Set(allRows.map((r) => r.owner).filter(Boolean))).sort((a, b) =>
+        a.localeCompare(b, 'zh-CN')
+      ),
+    [allRows]
   );
-
-  const taskHasBg = (task: AutomationResult) => task.status === 'completed' && !!task.analysis;
-  const taskHasProduct = (task: AutomationResult) => hasRichProductCatalog(task.analysis);
-  const taskDmMined = (task: AutomationResult) => !!task.analysis?.decisionMakerEmailSearchAt;
-  const taskDmCount = (task: AutomationResult) => task.analysis?.decisionMakers?.length || 0;
-  const taskDmStatus = (task: AutomationResult): DmDigStatus =>
-    resolveDmDigStatus(taskDmMined(task), taskDmCount(task));
-  const taskHasDm = (task: AutomationResult) => taskDmMined(task);
 
   const filteredResults = useMemo(() => {
     const q = filterQuery.trim().toLowerCase();
-    return automationResults.filter((task) => {
-      if (filterStatus !== 'all' && task.status !== filterStatus) return false;
-      if (filterMode !== 'all' && (task.mode || 'economy') !== filterMode) return false;
-      const country = (task.country || task.analysis?.searchCountry || '').trim();
-      if (filterCountry !== 'all' && country !== filterCountry) return false;
-      const owner = (task.ownerUsername || '').trim();
-      if (filterOwner !== 'all' && owner !== filterOwner) return false;
-      const kws = taskKeywords(task);
-      if (filterKeyword !== 'all' && !kws.includes(filterKeyword)) return false;
-      const industry = taskIndustry(task);
-      if (filterIndustry !== 'all' && industry !== filterIndustry) return false;
-      if (filterBg === 'yes' && !taskHasBg(task)) return false;
-      if (filterBg === 'no' && taskHasBg(task)) return false;
-      if (filterProduct === 'yes' && !taskHasProduct(task)) return false;
-      if (filterProduct === 'no' && taskHasProduct(task)) return false;
-      if (filterDm === 'yes' && !taskHasDm(task)) return false;
-      if (filterDm === 'found' && taskDmStatus(task) !== 'found') return false;
-      if (filterDm === 'empty' && taskDmStatus(task) !== 'empty') return false;
-      if (filterDm === 'no' && taskHasDm(task)) return false;
+    return allRows.filter((row) => {
+      if (filterStatus === 'crm') {
+        if (row.source !== 'crm') return false;
+      } else if (filterStatus !== 'all' && row.status !== filterStatus) {
+        return false;
+      }
+      if (filterMode !== 'all' && (row.mode || 'economy') !== filterMode) return false;
+      if (filterCountry !== 'all' && row.country !== filterCountry) return false;
+      if (filterOwner !== 'all' && row.owner !== filterOwner) return false;
+      if (filterKeyword !== 'all' && !row.keywords.includes(filterKeyword)) return false;
+      if (filterIndustry !== 'all' && row.industry !== filterIndustry) return false;
+      if (filterBg === 'yes' && !row.intel.hasBg) return false;
+      if (filterBg === 'no' && row.intel.hasBg) return false;
+      if (filterProduct === 'yes' && !row.intel.hasProduct) return false;
+      if (filterProduct === 'no' && row.intel.hasProduct) return false;
+      if (filterDm === 'yes' && !row.intel.hasDm) return false;
+      if (filterDm === 'found' && row.intel.dmStatus !== 'found') return false;
+      if (filterDm === 'empty' && row.intel.dmStatus !== 'empty') return false;
+      if (filterDm === 'no' && row.intel.hasDm) return false;
+      if (filterCrm === 'yes' && !row.intel.inCrm) return false;
+      if (filterCrm === 'no' && row.intel.inCrm) return false;
       if (q) {
-        const contact = taskPrimaryContact(task);
         const hay = [
-          task.clientName,
-          task.website,
-          task.country,
-          owner,
-          ...kws,
-          industry,
-          contact?.name,
-          contact?.emailGuess,
-          contact?.title,
-          task.analysis?.companyInfo?.name,
+          row.clientName,
+          row.website,
+          row.country,
+          row.owner,
+          ...row.keywords,
+          row.industry,
+          row.contact?.name,
+          row.contact?.emailGuess,
+          row.contact?.title,
         ]
           .filter(Boolean)
           .join(' ')
@@ -215,7 +231,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
       return true;
     });
   }, [
-    automationResults,
+    allRows,
     filterQuery,
     filterStatus,
     filterCountry,
@@ -226,6 +242,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
     filterBg,
     filterProduct,
     filterDm,
+    filterCrm,
   ]);
 
   const totalPages = Math.max(1, Math.ceil(filteredResults.length / pageSize));
@@ -235,18 +252,34 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
     return filteredResults.slice(start, start + pageSize);
   }, [filteredResults, safePage, pageSize]);
 
-  // 筛选/页大小变化时回到第一页
   useEffect(() => {
     setPage(1);
-  }, [filterQuery, filterStatus, filterCountry, filterOwner, filterKeyword, filterMode, filterIndustry, filterBg, filterProduct, filterDm, pageSize]);
+  }, [
+    filterQuery,
+    filterStatus,
+    filterCountry,
+    filterOwner,
+    filterKeyword,
+    filterMode,
+    filterIndustry,
+    filterBg,
+    filterProduct,
+    filterDm,
+    filterCrm,
+    pageSize,
+  ]);
 
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
 
-  const selectedTasks = useMemo(
-    () => filteredResults.filter((t) => selectedIds.has(t.id)),
+  const selectedRows = useMemo(
+    () => filteredResults.filter((r) => selectedIds.has(r.id)),
     [filteredResults, selectedIds]
+  );
+  const selectedTasks = useMemo(
+    () => selectedRows.map((r) => r.task).filter(Boolean) as AutomationResult[],
+    [selectedRows]
   );
 
   const allPageSelected =
@@ -288,6 +321,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
     setFilterBg('all');
     setFilterProduct('all');
     setFilterDm('all');
+    setFilterCrm('all');
   };
 
   const hasActiveFilters =
@@ -300,46 +334,99 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
     filterIndustry !== 'all' ||
     filterBg !== 'all' ||
     filterProduct !== 'all' ||
-    filterDm !== 'all';
+    filterDm !== 'all' ||
+    filterCrm !== 'all';
+
+  const openRow = (row: PromoListRow) => {
+    if (row.source === 'queue' && row.task) {
+      onViewResult(row.task);
+      return;
+    }
+    if (row.intel.historyItem && onOpenHistoryItem) {
+      onOpenHistoryItem(row.intel.historyItem);
+      return;
+    }
+    if (row.client && onOpenClient) {
+      onOpenClient(row.client);
+      return;
+    }
+    alert('暂无完整报告可打开。可先对该客户再次背调。');
+  };
 
   const handleBatchExport = () => {
-    const list = selectedTasks.length ? selectedTasks : filteredResults.filter((t) => t.status === 'completed');
+    const list = selectedTasks.length
+      ? selectedTasks
+      : automationResults.filter((t) => t.status === 'completed');
     if (!list.length) {
-      alert('没有可导出的已完成任务');
+      alert('没有可导出的已完成队列任务（CRM 同步行请从客户管理导出）');
       return;
     }
     exportAutomationResultsToExcel(list);
   };
 
   const handleBatchDelete = async () => {
-    if (!selectedTasks.length) return;
-    if (!confirm(`删除选中的 ${selectedTasks.length} 条任务？`)) return;
-    for (const t of selectedTasks) {
-      await onDelete(t.id);
+    const queueSelected = selectedRows.filter((r) => r.source === 'queue' && r.task);
+    if (!queueSelected.length) {
+      alert('请选择队列中的任务删除（CRM 同步行请在客户管理中删除）');
+      return;
+    }
+    if (!confirm(`删除选中的 ${queueSelected.length} 条队列任务？`)) return;
+    for (const r of queueSelected) {
+      if (r.task) await onDelete(r.task.id);
     }
     setSelectedIds(new Set());
   };
 
   const handleBatchRerun = async () => {
     if (!onRerunCompleted) return;
-    const targets = selectedTasks.filter((t) => t.status === 'completed');
+    const targets = selectedRows.filter((r) => r.source === 'queue' && r.task?.status === 'completed');
     if (!targets.length) {
-      alert('请选择已完成的任务进行再次背调');
+      alert('请选择已完成的队列任务进行再次背调');
       return;
     }
     if (!confirm(`对选中的 ${targets.length} 条已完成任务再次背调？`)) return;
-    for (const t of targets) {
-      await onRerunCompleted(t.id);
+    for (const r of targets) {
+      if (r.task) await onRerunCompleted(r.task.id);
     }
   };
 
   const handleBatchDownloadPpt = () => {
     const targets = selectedTasks.filter((t) => t.status === 'completed' && t.analysis);
     if (!targets.length) {
-      alert('请选择已完成且有报告的任务');
+      alert('请选择已完成且有报告的队列任务');
       return;
     }
     for (const t of targets) onDownloadResult(t);
+  };
+
+  const handleBatchDm = () => {
+    if (!onBatchDmSearch) return;
+    if (!selectedRows.length) {
+      alert('请先勾选客户');
+      return;
+    }
+    onBatchDmSearch(selectedRows);
+  };
+
+  const handleBatchCrm = () => {
+    if (!onBatchAddToCrm) return;
+    const notInCrm = selectedRows
+      .filter((r) => r.source === 'queue' && r.task?.status === 'completed' && r.task.analysis && !r.intel.inCrm)
+      .map((r) => r.task!) as AutomationResult[];
+    if (!notInCrm.length) {
+      alert('没有可导入的队列任务（需已完成背调且尚未入 CRM）');
+      return;
+    }
+    onBatchAddToCrm(notInCrm);
+  };
+
+  const handleBatchProduct = () => {
+    if (!onBatchProductDig) return;
+    if (!selectedRows.length) {
+      alert('请先勾选客户');
+      return;
+    }
+    onBatchProductDig(selectedRows);
   };
 
   const patchDraft = (partial: Partial<AutomationPipelineConfig>) => {
@@ -738,10 +825,20 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
         <div className="p-4 sm:p-6 border-b border-slate-100 flex flex-col gap-3 bg-slate-50/50">
           <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
             <h3 className="text-lg font-black text-slate-800 flex items-center gap-2 flex-wrap">
-              <Clock className="text-slate-400" /> 任务队列 ({automationResults.length})
+              <Clock className="text-slate-400" /> 客户列表 ({allRows.length})
+              {automationResults.length > 0 && (
+                <span className="text-xs font-black text-slate-500 bg-slate-100 px-2 py-1 rounded-lg">
+                  队列 {automationResults.length}
+                </span>
+              )}
+              {crmOnlyCount > 0 && (
+                <span className="text-xs font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg">
+                  CRM 同步 {crmOnlyCount}
+                </span>
+              )}
               {completedCount > 0 && (
                 <span className="text-xs font-black text-green-600 bg-green-50 px-2 py-1 rounded-lg">
-                  已完成 {completedCount}
+                  队列已完成 {completedCount}
                 </span>
               )}
               {hasActiveFilters && (
@@ -834,6 +931,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
               <option value="analyzing">分析中</option>
               <option value="failed">失败</option>
               <option value="generating_email">生成邮件中</option>
+              <option value="crm">仅 CRM 同步</option>
             </select>
             <select
               value={filterCountry}
@@ -922,6 +1020,15 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
               <option value="yes">已挖（含有/无）</option>
               <option value="no">未挖决策人</option>
             </select>
+            <select
+              value={filterCrm}
+              onChange={(e) => setFilterCrm(e.target.value as typeof filterCrm)}
+              className="px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold bg-white"
+            >
+              <option value="all">CRM: 全部</option>
+              <option value="yes">已入 CRM</option>
+              <option value="no">未入 CRM</option>
+            </select>
             {hasActiveFilters && (
               <button
                 type="button"
@@ -934,9 +1041,9 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
           </div>
 
           {/* Batch selection actions */}
-          {selectedTasks.length > 0 && (
+          {selectedRows.length > 0 && (
             <div className="flex flex-wrap items-center gap-2 bg-blue-50 border border-blue-100 rounded-xl px-3 py-2">
-              <span className="text-xs font-black text-blue-800">已选 {selectedTasks.length} 条</span>
+              <span className="text-xs font-black text-blue-800">已选 {selectedRows.length} 条</span>
               <button
                 type="button"
                 onClick={handleBatchExport}
@@ -951,6 +1058,39 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                   className="text-xs font-bold text-slate-700 hover:underline"
                 >
                   下载 PPT
+                </button>
+              )}
+              {canDmMine && onBatchDmSearch && (
+                <button
+                  type="button"
+                  onClick={handleBatchDm}
+                  disabled={isAutomating}
+                  className="inline-flex items-center gap-1 text-xs font-bold text-violet-700 hover:underline disabled:opacity-50"
+                  title="与客户管理相同的决策人挖掘队列"
+                >
+                  <Users size={12} /> 批量决策人挖掘
+                </button>
+              )}
+              {canProductDig && onBatchProductDig && (
+                <button
+                  type="button"
+                  onClick={handleBatchProduct}
+                  disabled={isAutomating}
+                  className="inline-flex items-center gap-1 text-xs font-bold text-teal-700 hover:underline disabled:opacity-50"
+                  title="补做缺品类的背调"
+                >
+                  <PackageSearch size={12} /> 批量补做品类
+                </button>
+              )}
+              {canCrmImport && onBatchAddToCrm && (
+                <button
+                  type="button"
+                  onClick={handleBatchCrm}
+                  disabled={isAutomating}
+                  className="inline-flex items-center gap-1 text-xs font-bold text-indigo-700 hover:underline disabled:opacity-50"
+                  title="将已完成且未入 CRM 的队列任务加入客户管理"
+                >
+                  <Building2 size={12} /> 批量加入 CRM
                 </button>
               )}
               {onRerunCompleted && (
@@ -1008,10 +1148,10 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {automationResults.length === 0 ? (
+              {allRows.length === 0 ? (
                 <tr>
                   <td colSpan={11} className="px-6 py-12 text-center text-slate-400 font-bold">
-                    暂无任务队列
+                    暂无客户：请启动自动化流水线，或在客户管理中添加客户后将自动同步到此列表
                   </td>
                 </tr>
               ) : filteredResults.length === 0 ? (
@@ -1021,55 +1161,73 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                   </td>
                 </tr>
               ) : (
-                pagedResults.map((task) => {
-                  const kws = taskKeywords(task);
-                  const industry = taskIndustry(task);
-                  const contact = taskPrimaryContact(task);
-                  const dmCount = task.analysis?.decisionMakers?.length || 0;
-                  const owner = (task.ownerUsername || '').trim();
+                pagedResults.map((row) => {
+                  const kws = row.keywords;
+                  const industry = row.industry;
+                  const contact = row.contact;
+                  const dmCount = row.intel.dmContactCount;
+                  const owner = row.owner;
+                  const task = row.task;
+                  const bgAt =
+                    task?.status === 'completed'
+                      ? formatBackgroundCheckTime(task.completedAt || task.createdAt)
+                      : row.intel.historyItem
+                        ? formatBackgroundCheckTime(row.intel.historyItem.timestamp)
+                        : '';
                   return (
                     <tr
-                      key={task.id}
+                      key={row.id}
                       className={`hover:bg-slate-50/50 transition-colors align-top ${
-                        selectedIds.has(task.id) ? 'bg-blue-50/40' : ''
+                        selectedIds.has(row.id) ? 'bg-blue-50/40' : ''
                       }`}
                     >
                       <td className="px-3 py-2.5">
                         <input
                           type="checkbox"
-                          checked={selectedIds.has(task.id)}
-                          onChange={() => toggleSelect(task.id)}
+                          checked={selectedIds.has(row.id)}
+                          onChange={() => toggleSelect(row.id)}
                           className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                         />
                       </td>
                       <td className="px-3 py-2.5 max-w-[220px]">
-                        <div className="font-bold text-slate-800 truncate text-sm">
-                          {task.analysis?.companyInfo?.name || task.clientName}
-                        </div>
-                        <div className="text-[10px] text-slate-400 font-bold truncate">
-                          {task.website || task.analysis?.companyInfo?.website || '—'}
-                        </div>
-                        {task.analysis?.companyInfo?.scale && (
+                        <div className="font-bold text-slate-800 truncate text-sm">{row.clientName}</div>
+                        <div className="text-[10px] text-slate-400 font-bold truncate">{row.website}</div>
+                        {(row.intel.bestAnalysis?.companyInfo?.scale ||
+                          task?.analysis?.companyInfo?.scale) && (
                           <div className="text-[9px] text-slate-400 font-bold mt-0.5">
-                            规模: {task.analysis.companyInfo.scale}
+                            规模:{' '}
+                            {row.intel.bestAnalysis?.companyInfo?.scale ||
+                              task?.analysis?.companyInfo?.scale}
                           </div>
                         )}
                         <div className="flex flex-wrap gap-1 mt-1.5">
-                          {taskHasBg(task) && (
-                            <span className="inline-flex text-[9px] font-black bg-emerald-50 text-emerald-700 border border-emerald-100 px-1.5 py-0.5 rounded">
-                              已背调
+                          <StatusMini
+                            done={row.intel.hasBg}
+                            yes="已背调"
+                            no="未背调"
+                            tone="emerald"
+                          />
+                          <StatusMini
+                            done={row.intel.hasProduct}
+                            yes="已采品类"
+                            no="未采品类"
+                            tone="teal"
+                          />
+                          <DmStatusChip status={row.intel.dmStatus} contactCount={dmCount} />
+                          {row.intel.inCrm && (
+                            <span className="inline-flex text-[9px] font-black bg-indigo-50 text-indigo-700 border border-indigo-100 px-1.5 py-0.5 rounded">
+                              已入CRM
                             </span>
                           )}
-                          {taskHasProduct(task) && (
-                            <span className="inline-flex text-[9px] font-black bg-teal-50 text-teal-700 border border-teal-100 px-1.5 py-0.5 rounded">
-                              已采品类
+                          {row.source === 'crm' && (
+                            <span className="inline-flex text-[9px] font-black bg-slate-100 text-slate-500 border border-slate-200 px-1.5 py-0.5 rounded">
+                              来自CRM
                             </span>
                           )}
-                          <DmStatusChip status={taskDmStatus(task)} contactCount={dmCount} />
                         </div>
                       </td>
                       <td className="px-3 py-2.5 text-xs font-bold text-slate-600 whitespace-nowrap">
-                        {task.country || task.analysis?.searchCountry || '—'}
+                        {row.country || '—'}
                       </td>
                       <td className="px-3 py-2.5">
                         <span
@@ -1129,78 +1287,82 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                               </div>
                             )}
                           </div>
-                        ) : taskDmStatus(task) === 'empty' ? (
+                        ) : row.intel.dmStatus === 'empty' ? (
                           <DmStatusChip status="empty" showIcon />
                         ) : (
                           <span className="text-slate-300 text-xs font-bold">暂无</span>
                         )}
                       </td>
                       <td className="px-4 py-4">
-                        <div
-                          className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-tighter ${
-                            task.status === 'completed'
-                              ? 'bg-green-100 text-green-600'
-                              : task.status === 'failed'
-                                ? 'bg-red-100 text-red-600'
-                                : task.status === 'pending'
-                                  ? 'bg-slate-100 text-slate-400'
-                                  : 'bg-blue-100 text-blue-600'
-                          }`}
-                        >
-                          {task.status === 'analyzing' || task.status === 'generating_email' ? (
-                            <Loader2 className="animate-spin" size={10} />
-                          ) : null}
-                          {task.status === 'completed' ? <CheckCircle2 size={10} /> : null}
-                          {task.status === 'failed' ? <AlertTriangle size={10} /> : null}
-                          {task.status === 'pending' ? <Hourglass size={10} /> : null}
-                          {task.status.replace('_', ' ')}
-                        </div>
+                        {row.source === 'crm' ? (
+                          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-tighter bg-indigo-100 text-indigo-700">
+                            <Building2 size={10} /> CRM
+                          </div>
+                        ) : (
+                          <div
+                            className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-tighter ${
+                              row.status === 'completed'
+                                ? 'bg-green-100 text-green-600'
+                                : row.status === 'failed'
+                                  ? 'bg-red-100 text-red-600'
+                                  : row.status === 'pending'
+                                    ? 'bg-slate-100 text-slate-400'
+                                    : 'bg-blue-100 text-blue-600'
+                            }`}
+                          >
+                            {row.status === 'analyzing' || row.status === 'generating_email' ? (
+                              <Loader2 className="animate-spin" size={10} />
+                            ) : null}
+                            {row.status === 'completed' ? <CheckCircle2 size={10} /> : null}
+                            {row.status === 'failed' ? <AlertTriangle size={10} /> : null}
+                            {row.status === 'pending' ? <Hourglass size={10} /> : null}
+                            {String(row.status).replace('_', ' ')}
+                          </div>
+                        )}
                       </td>
                       <td className="px-4 py-4">
                         <span className="text-[11px] font-bold text-slate-600 whitespace-nowrap">
-                          {task.status === 'completed'
-                            ? formatBackgroundCheckTime(task.completedAt || task.createdAt) || '—'
-                            : '—'}
+                          {bgAt || '—'}
                         </span>
                       </td>
                       <td className="px-4 py-4">
                         <span className="text-[10px] font-black text-slate-400 uppercase">
-                          {task.mode || 'economy'}
+                          {row.mode || (row.source === 'crm' ? '—' : 'economy')}
                         </span>
                       </td>
                       <td className="px-4 py-4 text-right">
                         <div className="flex justify-end gap-1">
-                          {task.status === 'completed' && task.analysis && (
-                            <>
-                              <button
-                                onClick={() => onViewResult(task)}
-                                className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                                title="查看背调结果"
-                              >
-                                <FileText size={16} />
-                              </button>
-                              {canExportPpt && (
-                                <button
-                                  onClick={() => onDownloadResult(task)}
-                                  className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                                  title="下载 PPT"
-                                >
-                                  <Download size={16} />
-                                </button>
-                              )}
-                              {onRerunCompleted && (
-                                <button
-                                  onClick={() => onRerunCompleted(task.id)}
-                                  disabled={isAutomating}
-                                  className="p-2 text-amber-600 hover:bg-amber-50 rounded-lg transition-colors disabled:opacity-50"
-                                  title="再次背调"
-                                >
-                                  <RefreshCw size={16} />
-                                </button>
-                              )}
-                            </>
+                          {(row.intel.hasBg ||
+                            (task?.status === 'completed' && task.analysis) ||
+                            row.intel.historyItem) && (
+                            <button
+                              onClick={() => openRow(row)}
+                              className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                              title="查看背调结果"
+                            >
+                              <FileText size={16} />
+                            </button>
                           )}
-                          {(task.status === 'pending' || task.status === 'failed') && (
+                          {task?.status === 'completed' && task.analysis && canExportPpt && (
+                            <button
+                              onClick={() => onDownloadResult(task)}
+                              className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                              title="下载 PPT"
+                            >
+                              <Download size={16} />
+                            </button>
+                          )}
+                          {task?.status === 'completed' && onRerunCompleted && (
+                            <button
+                              onClick={() => onRerunCompleted(task.id)}
+                              disabled={isAutomating}
+                              className="p-2 text-amber-600 hover:bg-amber-50 rounded-lg transition-colors disabled:opacity-50"
+                              title="再次背调"
+                            >
+                              <RefreshCw size={16} />
+                            </button>
+                          )}
+                          {task && (task.status === 'pending' || task.status === 'failed') && (
                             <button
                               onClick={() => onRunSingle(task.id)}
                               disabled={isAutomating}
@@ -1210,13 +1372,15 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                               <PlayCircle size={16} />
                             </button>
                           )}
-                          <button
-                            onClick={() => onDelete(task.id)}
-                            className="p-2 text-red-400 hover:bg-red-50 rounded-lg transition-colors"
-                            title="删除"
-                          >
-                            <Trash2 size={16} />
-                          </button>
+                          {task && (
+                            <button
+                              onClick={() => onDelete(task.id)}
+                              className="p-2 text-red-400 hover:bg-red-50 rounded-lg transition-colors"
+                              title="删除队列任务"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -1233,7 +1397,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
               <span>
                 第 {(safePage - 1) * pageSize + 1}–
                 {Math.min(safePage * pageSize, filteredResults.length)} 条 / 共 {filteredResults.length} 条
-                {hasActiveFilters ? `（已筛选，队列总计 ${automationResults.length}）` : ''}
+                {hasActiveFilters ? `（已筛选，列表总计 ${allRows.length}）` : ''}
               </span>
               <span className="text-slate-300">|</span>
               <label className="inline-flex items-center gap-1.5">

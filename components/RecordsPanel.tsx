@@ -760,7 +760,10 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
         <DmStatusChip status="empty" />
         <DmStatusChip status="none" />
         <StatusChip done doneLabel="已采品类" pendingLabel="未采品类" tone="emerald" />
-        <span className="text-slate-300 ml-0.5">灰底 = 未完成</span>
+        <span className="inline-flex text-[9px] font-black bg-indigo-50 text-indigo-700 border border-indigo-100 px-1.5 py-0.5 rounded">
+          已入CRM
+        </span>
+        <span className="text-slate-300 ml-0.5">与客户管理/营销工具同一套状态；已入CRM的背调在客户管理查看</span>
       </div>
       {(tab === 'background' || tab === 'all' || tab === 'search') && (
         <div className="px-3 py-2 border-b border-slate-100 flex flex-wrap gap-2 items-center bg-slate-50/60 shrink-0">

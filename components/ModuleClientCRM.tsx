@@ -15,19 +15,14 @@ import {
 } from 'lucide-react';
 import {
   buildHistoryLookupIndex,
-  clientHasBackgroundCheckIndexed,
-  countAnalysisDecisionMakers,
   DmDigStatus,
   formatBackgroundCheckTime,
-  historyHasDmSearch,
-  lookupHistoryForClient,
   resolveBackgroundCheckAtIndexed,
-  resolveDmDigStatus,
 } from '../utils/crmHistory';
+import { resolveCrmClientIntel } from '../utils/companyIntelStatus';
 import { exportClientsToExcel } from '../services/exportService';
 import { IndustryMultiSelect } from './IndustryMultiSelect';
 import { PaginationBar } from './PaginationBar';
-import { hasRichProductCatalog } from '../services/productCatalog';
 import { DmStatusChip } from './DmStatusChip';
 
 interface ModuleClientCRMProps {
@@ -332,29 +327,19 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
 
   const enrichedClients = useMemo((): EnrichedClient[] => {
     return clients.map((client) => {
-      const historyItem = lookupHistoryForClient(client, historyIndex);
+      const intel = resolveCrmClientIntel(client, historyIndex);
+      const historyItem = intel.historyItem;
       const bgAt = resolveBackgroundCheckAtIndexed(client, historyIndex);
-      const hasBg = clientHasBackgroundCheckIndexed(client, historyIndex);
-      const hasProduct = hasRichProductCatalog(historyItem?.data);
-      const hasDm =
-        (historyItem ? historyHasDmSearch(historyItem) : false) ||
-        (Array.isArray(client.contacts) &&
-          client.contacts.some((d) => !!(d.emailGuess && String(d.emailGuess).includes('@'))));
-      const dmContactCount = Math.max(
-        countAnalysisDecisionMakers(historyItem?.data),
-        Array.isArray(client.contacts) ? client.contacts.length : 0
-      );
-      const dmStatus = resolveDmDigStatus(hasDm, hasDm ? dmContactCount : 0);
       return {
         client,
         historyItem,
-        hasBg,
-        hasProduct,
-        hasDm,
-        dmStatus,
-        dmContactCount: hasDm ? dmContactCount : 0,
+        hasBg: intel.hasBg,
+        hasProduct: intel.hasProduct,
+        hasDm: intel.hasDm,
+        dmStatus: intel.dmStatus,
+        dmContactCount: intel.dmContactCount,
         bgAt,
-        canOpenReport: !!historyItem || hasBg,
+        canOpenReport: !!historyItem || intel.hasBg,
       };
     });
   }, [clients, historyIndex]);
