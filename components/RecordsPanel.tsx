@@ -193,8 +193,6 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   const [isBatchImporting, setIsBatchImporting] = useState(false);
   const [filterDm, setFilterDm] = useState<'all' | 'yes' | 'found' | 'empty' | 'no'>('all');
   const [filterProduct, setFilterProduct] = useState<'all' | 'yes' | 'no'>('all');
-  /** 默认隐藏已入 CRM，减少记录中心噪音 */
-  const [filterCrm, setFilterCrm] = useState<'all' | 'yes' | 'no'>('no');
   const [filterOwner, setFilterOwner] = useState<string>('all');
   /** 记录中心内嵌查看背调结果 */
   const [previewHistory, setPreviewHistory] = useState<HistoryItem | null>(null);
@@ -270,11 +268,8 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
           if (filterProduct === 'yes' && !hasProduct) return false;
           if (filterProduct === 'no' && hasProduct) return false;
         }
-        if (filterCrm !== 'all') {
-          const inCrm = isHistoryInCrm(h, crmClients);
-          if (filterCrm === 'yes' && !inCrm) return false;
-          if (filterCrm === 'no' && inCrm) return false;
-        }
+        // 已入 CRM 的背调不在记录中心展示（由 App 同步删除；此处兜底）
+        if (isHistoryInCrm(h, crmClients)) return false;
         return true;
       })
       .map((item) => ({ kind: 'history' as const, item }));
@@ -291,16 +286,14 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
         return blob.includes(q);
       })
       .filter((d) => {
-        if (filterCrm === 'all') return true;
-        const fullyIn = isDiscoveryFullyInCrm(d, crmClients);
-        if (filterCrm === 'yes') return fullyIn;
-        if (filterCrm === 'no') return !fullyIn;
+        // 整份已入 CRM 的搜索归档不展示
+        if (isDiscoveryFullyInCrm(d, crmClients)) return false;
         return true;
       })
       .map((item) => ({ kind: 'discovery' as const, item }));
 
     return [...disc, ...hist];
-  }, [history, discoveryArchives, tab, query, filterDm, filterProduct, filterCrm, filterOwner, crmClients]);
+  }, [history, discoveryArchives, tab, query, filterDm, filterProduct, filterOwner, crmClients]);
 
   /** Tab 数字 = 当前筛选下可见条数（与列表一致） */
   const tabCounts = useMemo(() => {
@@ -319,25 +312,18 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
         if (filterProduct === 'yes' && !hasProduct) return false;
         if (filterProduct === 'no' && hasProduct) return false;
       }
-      if (filterCrm !== 'all') {
-        const inCrm = isHistoryInCrm(h, crmClients);
-        if (filterCrm === 'yes' && !inCrm) return false;
-        if (filterCrm === 'no' && inCrm) return false;
-      }
+      if (isHistoryInCrm(h, crmClients)) return false;
       return true;
     };
     const matchDisc = (d: DiscoveryArchiveItem) => {
       if (filterOwner !== 'all' && (d.ownerUsername || '').trim() !== filterOwner) return false;
-      if (filterCrm === 'all') return true;
-      const fullyIn = isDiscoveryFullyInCrm(d, crmClients);
-      if (filterCrm === 'yes') return fullyIn;
-      if (filterCrm === 'no') return !fullyIn;
+      if (isDiscoveryFullyInCrm(d, crmClients)) return false;
       return true;
     };
     const bg = history.filter(matchHist).length;
     const search = discoveryArchives.filter(matchDisc).length;
     return { search, background: bg, all: search + bg };
-  }, [history, discoveryArchives, filterDm, filterProduct, filterCrm, filterOwner, crmClients]);
+  }, [history, discoveryArchives, filterDm, filterProduct, filterOwner, crmClients]);
 
   const ownerOptions = useMemo(() => {
     const set = new Set<string>();
@@ -388,7 +374,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   // 切换 Tab / 筛选时清空勾选，避免误删不可见项
   useEffect(() => {
     setSelected(new Set());
-  }, [tab, query, groupBy, filterDm, filterProduct, filterCrm, filterOwner]);
+  }, [tab, query, groupBy, filterDm, filterProduct, filterOwner]);
 
   const rowSelectKey = (row: Row) =>
     row.kind === 'history' ? `h:${row.item.id}` : `d:${row.item.id}`;
@@ -530,11 +516,6 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
     onBatchProductDig(histItems);
     setSelected(new Set());
   };
-
-  const hiddenCrmHistoryCount = useMemo(
-    () => history.filter((h) => isHistoryInCrm(h, crmClients)).length,
-    [history, crmClients]
-  );
 
   useEffect(() => {
     const sig = `${tab}|${groupBy}|${groups.map((g) => g.key).join(',')}`;
@@ -709,10 +690,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
             <FolderOpen size={18} className="text-cyan-600 flex-shrink-0" /> 记录中心
           </div>
           <div className="text-[10px] sm:text-[11px] text-slate-400 font-semibold mt-0.5 truncate tracking-wide">
-            点击公司可查看背调 · 标签数字=当前筛选可见数
-            {filterCrm === 'no' && hiddenCrmHistoryCount > 0
-              ? ` · 已隐藏已入CRM ${hiddenCrmHistoryCount} 条（可改筛选）`
-              : ''}
+            点击公司可查看背调 · 已入 CRM 的记录已移除（请在 CRM 查看）
             {history.length + discoveryArchives.length > tabCounts.all
               ? ` · 库内共 ${history.length + discoveryArchives.length}`
               : ''}
@@ -782,7 +760,6 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
         <DmStatusChip status="empty" />
         <DmStatusChip status="none" />
         <StatusChip done doneLabel="已采品类" pendingLabel="未采品类" tone="emerald" />
-        <StatusChip done doneLabel="已入CRM" pendingLabel="未入CRM" tone="emerald" />
         <span className="text-slate-300 ml-0.5">灰底 = 未完成</span>
       </div>
       {(tab === 'background' || tab === 'all' || tab === 'search') && (
@@ -812,16 +789,6 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
               </select>
             </>
           )}
-          <select
-            value={filterCrm}
-            onChange={(e) => setFilterCrm(e.target.value as typeof filterCrm)}
-            className="text-[10px] font-bold border border-slate-200 rounded-lg px-2 py-1 bg-white"
-            title="默认隐藏已入 CRM 的记录"
-          >
-            <option value="no">CRM: 未入CRM（默认）</option>
-            <option value="all">CRM: 全部</option>
-            <option value="yes">CRM: 已入CRM</option>
-          </select>
           {showOwnerFilter && ownerOptions.length > 0 && (
             <select
               value={filterOwner}
@@ -1136,12 +1103,6 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                                   pendingLabel="未采品类"
                                   tone="emerald"
                                 />
-                                <StatusChip
-                                  done={isHistoryInCrm(row.item, crmClients)}
-                                  doneLabel="已入CRM"
-                                  pendingLabel="未入CRM"
-                                  tone="emerald"
-                                />
                                 <span className="text-[9px] font-black bg-slate-50 text-slate-500 px-1.5 py-0.5 rounded border border-slate-100">
                                   {historyKeyword(row.item)}
                                 </span>
@@ -1268,7 +1229,6 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                                 {(() => {
                                   const results = row.item.results || [];
                                   let bgCount = 0;
-                                  let crmCount = 0;
                                   for (const r of results) {
                                     const host = normalizeCrmHost(r.website);
                                     if (!host) continue;
@@ -1280,25 +1240,14 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                                     ) {
                                       bgCount += 1;
                                     }
-                                    if (crmClients.some((c) => normalizeCrmHost(c.website) === host)) {
-                                      crmCount += 1;
-                                    }
                                   }
                                   return (
-                                    <>
-                                      <StatusChip
-                                        done={bgCount > 0}
-                                        doneLabel={`已背调 ${bgCount}/${results.length}`}
-                                        pendingLabel="未背调 0"
-                                        tone="violet"
-                                      />
-                                      <StatusChip
-                                        done={crmCount > 0}
-                                        doneLabel={`已入CRM ${crmCount}/${results.length}`}
-                                        pendingLabel="未入CRM 0"
-                                        tone="emerald"
-                                      />
-                                    </>
+                                    <StatusChip
+                                      done={bgCount > 0}
+                                      doneLabel={`已背调 ${bgCount}/${results.length}`}
+                                      pendingLabel="未背调 0"
+                                      tone="violet"
+                                    />
                                   );
                                 })()}
                                 <span className="text-[9px] font-black bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded">

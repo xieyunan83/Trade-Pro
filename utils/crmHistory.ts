@@ -604,6 +604,29 @@ export const isHistoryInCrm = (
   });
 };
 
+/** 搜索结果是否已在 CRM */
+export const isSearchResultInCrm = (
+  r: Pick<ClientSearchResult, 'website' | 'name'>,
+  clients: Client[]
+): boolean => {
+  if (!clients?.length) return false;
+  const host = normalizeCrmHost(r.website);
+  const name = (r.name || '').trim().toLowerCase();
+  if (!host && !name) return false;
+  return clients.some((c) => {
+    const cHost = normalizeCrmHost(c.website);
+    if (host && cHost && host === cHost) return true;
+    if (name && (c.name || '').trim().toLowerCase() === name) return true;
+    return false;
+  });
+};
+
+/** 待从记录中心移除的已入 CRM 背调 id */
+export const listHistoryIdsAlreadyInCrm = (
+  history: HistoryItem[],
+  clients: Client[]
+): string[] => history.filter((h) => isHistoryInCrm(h, clients)).map((h) => h.id);
+
 /** CRM client ids matching a背调 record (by website / name) */
 export const findCrmIdsForHistoryItem = (
   item: Pick<HistoryItem, 'domain' | 'data'>,

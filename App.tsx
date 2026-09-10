@@ -29,7 +29,7 @@ import { saveProductProfilesBulk } from './services/db';
 import { addCustomKeyword, addCustomCountry } from './services/taxonomyStore';
 import { normalizeCountryZh } from './utils/countryNormalize';
 import { buildSearchTags, stampSearchResults } from './utils/searchTags';
-import { mergeDiscoveryResultsIntoCrm, mergeHistoryItemsIntoCrm, findCrmIdsForHistoryItem, findCrmIdsForDiscoveryResults, lookupBackgroundCheck, formatBackgroundCheckTime, findHistoryForClient, clientPatchFromAnalysis, CRM_JUNE_2026_CUTOFF_MS } from './utils/crmHistory';
+import { mergeDiscoveryResultsIntoCrm, mergeHistoryItemsIntoCrm, findCrmIdsForHistoryItem, findCrmIdsForDiscoveryResults, lookupBackgroundCheck, formatBackgroundCheckTime, findHistoryForClient, clientPatchFromAnalysis, CRM_JUNE_2026_CUTOFF_MS, isHistoryInCrm, isSearchResultInCrm, listHistoryIdsAlreadyInCrm } from './utils/crmHistory';
 import {
   clearCrmTombstonesForClients,
   filterOutCrmTombstones,
@@ -1626,6 +1626,19 @@ const App: React.FC = () => {
           } as Client);
           return [newClient, ...prev];
       });
+      // 已入 CRM 后从记录中心移除对应背调，避免重复操作
+      const matchIds = historyRef.current
+        .filter((h) =>
+          isHistoryInCrm(h, [
+            {
+              id: '_',
+              name: analysisData.companyInfo.name,
+              website,
+            } as Client,
+          ])
+        )
+        .map((h) => h.id);
+      if (matchIds.length) void removeHistoryFromRecordsCenterOnly(matchIds);
       alert("已加入客户管理（含背调标记与 " + (analysisData.decisionMakers?.length || 0) + " 位决策人）");
   };
   
@@ -1668,6 +1681,9 @@ const App: React.FC = () => {
           else alert("所选客户已在 CRM 中");
           return [...unique, ...prev];
       });
+      // 对应搜索结果若整档已入 CRM，从记录中心剔除
+      const mergedForPrune = [...newClients, ...crmClientsRef.current];
+      void pruneDiscoveryArchivesAlreadyInCrm(null, mergedForPrune);
   };
 
   const handleBatchImportRecordsToCrm = (
@@ -1712,11 +1728,131 @@ const App: React.FC = () => {
       return next;
     });
 
+    // 已入 CRM 的背调从记录中心移除，避免重复操作（不删 CRM）
+    const importedHistIds = historyItems.map((h) => h.id).filter(Boolean);
+    if (importedHistIds.length) {
+      void removeHistoryFromRecordsCenterOnly(importedHistIds);
+    }
+    if (archives.length) {
+      void pruneDiscoveryArchivesAlreadyInCrm(
+        archives.map((a) => a.id),
+        // 用即将包含新导入客户的 CRM：下一拍 state 可能未刷新，合并计算
+        (() => {
+          let next = crmClientsRef.current;
+          if (historyItems.length) {
+            next = mergeHistoryItemsIntoCrm(next, historyItems, stampOwnership).clients;
+          }
+          for (const archive of archives) {
+            next = mergeDiscoveryResultsIntoCrm(next, archive.results || [], stampOwnership, {
+              product: archive.product,
+              industry: archive.industry,
+            }).clients;
+          }
+          return next;
+        })()
+      );
+    }
+
     const parts: string[] = [];
     if (added) parts.push(`新建 ${added}`);
     if (updated) parts.push(`更新 ${updated}`);
     if (skipped) parts.push(`跳过已存在 ${skipped}`);
+    if (importedHistIds.length) parts.push(`记录中心已移除 ${importedHistIds.length} 条`);
     alert(parts.length ? `CRM 导入完成：${parts.join('，')}` : '没有可导入的客户');
+  };
+
+  /** 仅从记录中心删除背调（本地+云端），不删 CRM、不写墓碑 */
+  const removeHistoryFromRecordsCenterOnly = async (ids: string[]) => {
+    const unique = [...new Set(ids.filter(Boolean))];
+    if (!unique.length) return 0;
+    const idSet = new Set(unique);
+    setHistory((prev) => prev.filter((h) => !idSet.has(h.id)));
+    historyRef.current = historyRef.current.filter((h) => !idSet.has(h.id));
+    if (viewingHistoryIdRef.current && idSet.has(viewingHistoryIdRef.current)) {
+      setAnalysisData(null);
+      setViewingHistoryId(null);
+    }
+    for (const id of unique) {
+      try {
+        await deleteHistoryItem(id);
+      } catch (e) {
+        console.warn('[records] local history delete failed', id, e);
+      }
+      void deleteInvestigationHistory(id).catch((e) =>
+        console.warn('[records] cloud history delete failed', id, e)
+      );
+    }
+    return unique.length;
+  };
+
+  /** 搜索归档：整份已入 CRM 则删；部分入 CRM 则剔除已入结果 */
+  const pruneDiscoveryArchivesAlreadyInCrm = async (
+    onlyIds: string[] | null,
+    clients: Client[]
+  ) => {
+    if (!clients?.length) return;
+    const idFilter = onlyIds ? new Set(onlyIds) : null;
+    const archives = discoveryArchives.filter((d) => !idFilter || idFilter.has(d.id));
+    const toDelete: string[] = [];
+    const toPatch: DiscoveryArchiveItem[] = [];
+
+    for (const arch of archives) {
+      const results = arch.results || [];
+      if (!results.length) continue;
+      const kept = results.filter((r) => !isSearchResultInCrm(r, clients));
+      if (kept.length === 0) toDelete.push(arch.id);
+      else if (kept.length < results.length) toPatch.push({ ...arch, results: kept });
+    }
+
+    if (toDelete.length || toPatch.length) {
+      setDiscoveryArchives((prev) =>
+        prev
+          .filter((d) => !toDelete.includes(d.id))
+          .map((d) => {
+            const p = toPatch.find((x) => x.id === d.id);
+            return p || d;
+          })
+      );
+    }
+    for (const id of toDelete) {
+      const target = archives.find((d) => d.id === id);
+      try {
+        await deleteDiscoveryArchive(id);
+      } catch (e) {
+        console.warn('[records] discovery delete failed', id, e);
+      }
+      addDiscoveryTombstone(id, target?.product, target?.country);
+      if (isSupabaseConfigured()) {
+        const looksUuid = /^[0-9a-f-]{36}$/i.test(id);
+        if (looksUuid) void deleteDiscoverySearchFromCloud(id);
+        if (target?.product) {
+          void deleteDiscoverySearchesByMeta(target.product, target.country || '');
+        }
+      }
+    }
+    for (const arch of toPatch) {
+      try {
+        await saveDiscoveryArchive(arch);
+      } catch (e) {
+        console.warn('[records] discovery patch failed', arch.id, e);
+      }
+    }
+  };
+
+  /** 清理记录中心里「已入 CRM」的条目（背调+搜索），保留 CRM 客户 */
+  const purgeRecordsAlreadyInCrm = async (opts?: { silent?: boolean }) => {
+    const crm = crmClientsRef.current;
+    const histIds = listHistoryIdsAlreadyInCrm(historyRef.current, crm);
+    const removedHist = await removeHistoryFromRecordsCenterOnly(histIds);
+    await pruneDiscoveryArchivesAlreadyInCrm(null, crm);
+    if (!opts?.silent) {
+      alert(
+        removedHist > 0
+          ? `已从记录中心移除 ${removedHist} 条已入 CRM 的背调（CRM 客户保留）。`
+          : '记录中心没有需要移除的已入 CRM 背调。'
+      );
+    }
+    return removedHist;
   };
 
   // RESTORED: Update CRM status if re-analyzed
@@ -2998,6 +3134,28 @@ const App: React.FC = () => {
         );
       }
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser?.username, history.length, crmClients.length, discoveryArchives.length]);
+
+  // 记录中心：已入 CRM 的背调/搜索自动删除（保留 CRM），避免混淆与重复操作
+  useEffect(() => {
+    if (!currentUser || !userDataReadyRef.current) return;
+    if (!crmClients.length) return;
+    if (!history.length && !discoveryArchives.length) return;
+    const histIds = listHistoryIdsAlreadyInCrm(history, crmClients);
+    const hasFullyInDiscovery = discoveryArchives.some((d) => {
+      const results = d.results || [];
+      if (!results.length) return false;
+      return results.every((r) => isSearchResultInCrm(r, crmClients));
+    });
+    const hasPartialDiscovery = discoveryArchives.some((d) => {
+      const results = d.results || [];
+      if (!results.length) return false;
+      const inCount = results.filter((r) => isSearchResultInCrm(r, crmClients)).length;
+      return inCount > 0 && inCount < results.length;
+    });
+    if (!histIds.length && !hasFullyInDiscovery && !hasPartialDiscovery) return;
+    void purgeRecordsAlreadyInCrm({ silent: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUser?.username, history.length, crmClients.length, discoveryArchives.length]);
 
