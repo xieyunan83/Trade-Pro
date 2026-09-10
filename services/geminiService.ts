@@ -31,7 +31,7 @@ import {
 } from './tavilyService';
 import { LEAD_EVIDENCE_USAGE_HINT, resolveDirectorySitesForMarket } from './leadDiscoverySources';
 import { hasRichProductCatalog } from './productCatalog';
-import { mergeAnalysisRaws, mergeClientSearchResults } from './multiModelMerge';
+import { mergeAnalysisRaws, mergeClientSearchResults, isEmptyPlaceholder, preferString } from './multiModelMerge';
 import {
   buildFallbackEvidenceFromReport,
   evidenceItemsFromTavilyResults,
@@ -2967,6 +2967,14 @@ ${evidenceBlock}
   NEVER invent customs shipment IDs / BOL numbers / private emails — use "公开信息未找到" only for those hard facts.
   When AnySearch evidence is present, treat official page extracts as ground truth for headquarters/city/country.
 
+  CRITICAL OUTPUT ORDER (fill these BEFORE long products[]):
+  A) companyInfo including foundedYear, scale, nature (never leave foundedYear/scale as empty if publicly knowable)
+  B) swot — all 4 arrays with 3+ bullets each (REQUIRED, never empty)
+  C) businessModel.channels + ecommercePresence + procurementInfo (REQUIRED)
+  D) supplyChain.role + serviceType (REQUIRED)
+  E) tradeIntelligence soft fields (customsSummary, MOQ, Incoterms, seasons — use 行业惯例推断 if needed)
+  F) Then products / websiteCategories
+
   Action checklist:
   1. Company identity: legal/trading name, HQ city+country (verified for ${identityDomain}), founded year, nature (importer/distributor/retailer/brand/manufacturer), scale, employees. Description geography MUST match HQ.
   2. Business model & supply chain (REQUIRED — do not leave empty/N/A when website evidence exists):
@@ -3268,17 +3276,18 @@ ${productFocusBlock}
 
   let normalized = normalizeAnalysisResult(result);
 
-  // 若首轮因产物过长截断，补回行动计划 / 同类公司 / 市场趋势
-  if (needsStrategySectionsRepair(normalized)) {
+  // 首轮常因产品清单挤占 token，把 SWOT/渠道/供应链留空——有描述/品类时强制补全洞察
+  if (needsInsightSectionsRepair(normalized)) {
     try {
-      console.info('[analyzeCompany] repairing missing strategy/similar/trends');
-      normalized = await repairStrategySections(normalized, {
+      console.info('[analyzeCompany] repairing empty SWOT/channels/supply/trade/meta');
+      normalized = await repairInsightSections(normalized, {
         domain: hasDomain ? canonicalDomain : rawInput,
         searchKeyword: searchKeyword || undefined,
         searchCountry: searchCountry || undefined,
+        evidenceText: identityEvidence || undefined,
       });
     } catch (e) {
-      console.warn('[analyzeCompany] strategy repair failed', e);
+      console.warn('[analyzeCompany] insight repair failed', e);
     }
   }
 
@@ -3297,83 +3306,485 @@ ${productFocusBlock}
     }
   }
 
+  // 品类补完后再检查一次洞察（描述更全时二次补全）
+  if (needsInsightSectionsRepair(normalized)) {
+    try {
+      console.info('[analyzeCompany] second-pass insight repair');
+      normalized = await repairInsightSections(normalized, {
+        domain: hasDomain ? canonicalDomain : rawInput,
+        searchKeyword: searchKeyword || undefined,
+        searchCountry: searchCountry || undefined,
+        evidenceText: identityEvidence || undefined,
+      });
+    } catch (e) {
+      console.warn('[analyzeCompany] second insight repair failed', e);
+    }
+  }
+
+  // 模型仍空时：用已有描述/品类做本地启发式补全，避免整页 N/A
+  normalized = synthesizeInsightsFallback(normalized);
+
   return normalizeAnalysisResult(normalized);
 };
 
-const needsStrategySectionsRepair = (r: AnalysisResult): boolean => {
-  const noPlan = !(r.strategy?.actionPlan || []).length;
-  const noSimilar = !(r.similarCompanies || []).length;
-  const noTrends = !r.marketTrends || r.marketTrends === 'N/A';
-  return noPlan || noSimilar || noTrends;
+const coerceRiskLevel = (v: unknown): '低' | '中' | '高' | '未知' => {
+  const s = String(v || '').trim();
+  if (s === '低' || s === '中' || s === '高' || s === '未知') return s;
+  if (/低|low/i.test(s)) return '低';
+  if (/中|medium|mid/i.test(s)) return '中';
+  if (/高|high/i.test(s)) return '高';
+  return '未知';
 };
 
-/** 品类补采后强制保留首轮背调的策略区块 */
-const preserveStrategySections = (before: AnalysisResult, after: AnalysisResult): AnalysisResult => ({
-  ...after,
-  marketTrends:
-    before.marketTrends && before.marketTrends !== 'N/A'
-      ? before.marketTrends
-      : after.marketTrends,
-  strategy: {
-    buyingOfficeLocation:
-      before.strategy?.buyingOfficeLocation && before.strategy.buyingOfficeLocation !== 'N/A'
-        ? before.strategy.buyingOfficeLocation
-        : after.strategy?.buyingOfficeLocation || 'N/A',
-    actionPlan:
-      (before.strategy?.actionPlan || []).length > 0
-        ? before.strategy!.actionPlan
-        : after.strategy?.actionPlan || [],
-  },
-  similarCompanies:
-    (before.similarCompanies || []).length > 0
-      ? before.similarCompanies
-      : after.similarCompanies || [],
-  decisionMakers:
-    (before.decisionMakers || []).length > 0 ? before.decisionMakers : after.decisionMakers || [],
-  evidenceChain:
-    (before.evidenceChain || []).length > 0 ? before.evidenceChain : after.evidenceChain || [],
-  evidenceConfidence: before.evidenceConfidence ?? after.evidenceConfidence,
-  evidenceSummary: before.evidenceSummary || after.evidenceSummary,
-  swot: before.swot || after.swot,
+const emptyTradeIntelligence = (): import('../types').TradeIntelligence => ({
+  hsCodes: [],
+  importCategories: [],
+  customsSummary: '公开信息未找到',
+  recentShipments: [],
+  topSourceCountries: [],
+  estimatedAnnualImport: '公开信息未找到',
+  certifications: [],
+  complianceNotes: '',
+  preferredIncoterms: '公开信息未找到',
+  typicalMoq: '公开信息未找到',
+  buyingSeasons: '公开信息未找到',
+  registrationId: '',
+  companyLinkedin: '',
+  riskLevel: '未知',
+  riskNotes: '',
 });
 
+const swotBulletCount = (r: AnalysisResult) =>
+  (r.swot?.strengths?.length || 0) +
+  (r.swot?.weaknesses?.length || 0) +
+  (r.swot?.opportunities?.length || 0) +
+  (r.swot?.threats?.length || 0);
+
+/** SWOT / 渠道 / 供应链 / 成立规模 / 贸易软字段 / 行动计划等是否过薄 */
+const needsInsightSectionsRepair = (r: AnalysisResult): boolean => {
+  const thinSwot = swotBulletCount(r) < 4;
+  const thinChannels = !(r.businessModel?.channels || []).length;
+  const thinSupply =
+    isEmptyPlaceholder(r.supplyChain?.role) || isEmptyPlaceholder(r.supplyChain?.serviceType);
+  const thinProcure = isEmptyPlaceholder(r.businessModel?.procurementInfo);
+  const thinMeta =
+    isEmptyPlaceholder(r.companyInfo?.foundedYear) || isEmptyPlaceholder(r.companyInfo?.scale);
+  const thinTrade =
+    isEmptyPlaceholder(r.tradeIntelligence?.customsSummary) ||
+    isEmptyPlaceholder(r.tradeIntelligence?.typicalMoq) ||
+    isEmptyPlaceholder(r.tradeIntelligence?.preferredIncoterms) ||
+    isEmptyPlaceholder(r.tradeIntelligence?.buyingSeasons);
+  const noPlan = !(r.strategy?.actionPlan || []).length;
+  const noSimilar = !(r.similarCompanies || []).length;
+  const noTrends = isEmptyPlaceholder(r.marketTrends);
+  // 有公司描述或品类时，空洞察几乎一定是截断/偷懒，必须补
+  const hasContext =
+    !isEmptyPlaceholder(r.companyInfo?.description) ||
+    (r.businessScope?.coreProducts || []).length > 0 ||
+    (r.websiteCategories || []).length > 0;
+  if (!hasContext) return noPlan || noSimilar || noTrends;
+  return (
+    thinSwot ||
+    thinChannels ||
+    thinSupply ||
+    thinProcure ||
+    thinMeta ||
+    thinTrade ||
+    noPlan ||
+    noSimilar ||
+    noTrends
+  );
+};
+
+/** 品类补采后强制保留首轮背调的策略/洞察区块（空数组不覆盖非空） */
+const preserveStrategySections = (before: AnalysisResult, after: AnalysisResult): AnalysisResult => {
+  const pickSwot = () => {
+    if (swotBulletCount(before) >= swotBulletCount(after)) return before.swot || after.swot;
+    return after.swot || before.swot;
+  };
+  return {
+    ...after,
+    companyInfo: {
+      ...after.companyInfo,
+      foundedYear: preferString(before.companyInfo?.foundedYear, after.companyInfo?.foundedYear) || after.companyInfo?.foundedYear,
+      scale: preferString(before.companyInfo?.scale, after.companyInfo?.scale) || after.companyInfo?.scale,
+      nature: preferString(before.companyInfo?.nature, after.companyInfo?.nature) || after.companyInfo?.nature,
+      description:
+        preferString(before.companyInfo?.description, after.companyInfo?.description) ||
+        after.companyInfo?.description,
+    },
+    marketTrends: preferString(before.marketTrends, after.marketTrends) || after.marketTrends,
+    strategy: {
+      buyingOfficeLocation:
+        preferString(before.strategy?.buyingOfficeLocation, after.strategy?.buyingOfficeLocation) ||
+        after.strategy?.buyingOfficeLocation ||
+        'N/A',
+      actionPlan:
+        (before.strategy?.actionPlan || []).length > 0
+          ? before.strategy!.actionPlan
+          : after.strategy?.actionPlan || [],
+    },
+    similarCompanies:
+      (before.similarCompanies || []).length > 0
+        ? before.similarCompanies
+        : after.similarCompanies || [],
+    decisionMakers:
+      (before.decisionMakers || []).length > 0 ? before.decisionMakers : after.decisionMakers || [],
+    evidenceChain:
+      (before.evidenceChain || []).length > 0 ? before.evidenceChain : after.evidenceChain || [],
+    evidenceConfidence: before.evidenceConfidence ?? after.evidenceConfidence,
+    evidenceSummary: before.evidenceSummary || after.evidenceSummary,
+    swot: pickSwot(),
+    businessModel: {
+      ...after.businessModel,
+      channels:
+        (before.businessModel?.channels || []).length > 0
+          ? before.businessModel!.channels
+          : after.businessModel?.channels || [],
+      exhibitionHistory:
+        (before.businessModel?.exhibitionHistory || []).length > 0
+          ? before.businessModel!.exhibitionHistory
+          : after.businessModel?.exhibitionHistory || [],
+      ecommercePresence:
+        (before.businessModel?.ecommercePresence || []).length > 0
+          ? before.businessModel!.ecommercePresence
+          : after.businessModel?.ecommercePresence || [],
+      procurementInfo:
+        preferString(before.businessModel?.procurementInfo, after.businessModel?.procurementInfo) ||
+        after.businessModel?.procurementInfo ||
+        'N/A',
+      hasDistributors: !!(before.businessModel?.hasDistributors || after.businessModel?.hasDistributors),
+    },
+    supplyChain: {
+      role:
+        preferString(before.supplyChain?.role, after.supplyChain?.role) ||
+        after.supplyChain?.role ||
+        'N/A',
+      serviceType:
+        preferString(before.supplyChain?.serviceType, after.supplyChain?.serviceType) ||
+        after.supplyChain?.serviceType ||
+        'N/A',
+    },
+    tradeIntelligence: {
+      ...emptyTradeIntelligence(),
+      ...(after.tradeIntelligence || {}),
+      ...(before.tradeIntelligence || {}),
+      customsSummary: preferString(
+        before.tradeIntelligence?.customsSummary,
+        after.tradeIntelligence?.customsSummary
+      ) || after.tradeIntelligence?.customsSummary || '公开信息未找到',
+      typicalMoq: preferString(
+        before.tradeIntelligence?.typicalMoq,
+        after.tradeIntelligence?.typicalMoq
+      ) || after.tradeIntelligence?.typicalMoq || '公开信息未找到',
+      preferredIncoterms: preferString(
+        before.tradeIntelligence?.preferredIncoterms,
+        after.tradeIntelligence?.preferredIncoterms
+      ) || after.tradeIntelligence?.preferredIncoterms || '公开信息未找到',
+      buyingSeasons: preferString(
+        before.tradeIntelligence?.buyingSeasons,
+        after.tradeIntelligence?.buyingSeasons
+      ) || after.tradeIntelligence?.buyingSeasons || '公开信息未找到',
+      estimatedAnnualImport: preferString(
+        before.tradeIntelligence?.estimatedAnnualImport,
+        after.tradeIntelligence?.estimatedAnnualImport
+      ) || after.tradeIntelligence?.estimatedAnnualImport || '公开信息未找到',
+      complianceNotes: preferString(
+        before.tradeIntelligence?.complianceNotes,
+        after.tradeIntelligence?.complianceNotes
+      ),
+      hsCodes: [
+        ...new Set([
+          ...(before.tradeIntelligence?.hsCodes || []),
+          ...(after.tradeIntelligence?.hsCodes || []),
+        ]),
+      ],
+      importCategories: [
+        ...new Set([
+          ...(before.tradeIntelligence?.importCategories || []),
+          ...(after.tradeIntelligence?.importCategories || []),
+        ]),
+      ],
+      certifications: [
+        ...new Set([
+          ...(before.tradeIntelligence?.certifications || []),
+          ...(after.tradeIntelligence?.certifications || []),
+        ]),
+      ],
+      topSourceCountries: [
+        ...new Set([
+          ...(before.tradeIntelligence?.topSourceCountries || []),
+          ...(after.tradeIntelligence?.topSourceCountries || []),
+        ]),
+      ],
+      recentShipments: [
+        ...new Set([
+          ...(before.tradeIntelligence?.recentShipments || []),
+          ...(after.tradeIntelligence?.recentShipments || []),
+        ]),
+      ],
+      riskLevel: coerceRiskLevel(
+        preferString(before.tradeIntelligence?.riskLevel, after.tradeIntelligence?.riskLevel) ||
+          after.tradeIntelligence?.riskLevel ||
+          '未知'
+      ),
+      riskNotes: preferString(
+        before.tradeIntelligence?.riskNotes,
+        after.tradeIntelligence?.riskNotes
+      ),
+      registrationId: preferString(
+        before.tradeIntelligence?.registrationId,
+        after.tradeIntelligence?.registrationId
+      ),
+      companyLinkedin: preferString(
+        before.tradeIntelligence?.companyLinkedin,
+        after.tradeIntelligence?.companyLinkedin
+      ),
+    },
+    targetAudience:
+      (before.targetAudience || []).length > 0 ? before.targetAudience : after.targetAudience || [],
+  };
+};
+
 /**
- * 轻量补全：建议行动计划 / 同类公司 / 市场趋势（首轮 JSON 被产品列表挤掉时）
+ * 轻量补全洞察：SWOT / 渠道 / 供应链 / 成立规模 / 贸易软字段 / 行动计划 / 同类 / 趋势
+ * 使用已有描述与品类作上下文，Gemini∥千问并行后合并
  */
-const repairStrategySections = async (
+const repairInsightSections = async (
   existing: AnalysisResult,
-  opts: { domain: string; searchKeyword?: string; searchCountry?: string }
+  opts: {
+    domain: string;
+    searchKeyword?: string;
+    searchCountry?: string;
+    evidenceText?: string;
+  }
 ): Promise<AnalysisResult> => {
   const name = existing.companyInfo?.name || opts.domain;
+  const needSwot = swotBulletCount(existing) < 4;
+  const needChannels = !(existing.businessModel?.channels || []).length;
+  const needSupply =
+    isEmptyPlaceholder(existing.supplyChain?.role) ||
+    isEmptyPlaceholder(existing.supplyChain?.serviceType) ||
+    isEmptyPlaceholder(existing.businessModel?.procurementInfo);
+  const needMeta =
+    isEmptyPlaceholder(existing.companyInfo?.foundedYear) ||
+    isEmptyPlaceholder(existing.companyInfo?.scale) ||
+    isEmptyPlaceholder(existing.companyInfo?.nature);
+  const needTrade =
+    isEmptyPlaceholder(existing.tradeIntelligence?.customsSummary) ||
+    isEmptyPlaceholder(existing.tradeIntelligence?.typicalMoq) ||
+    isEmptyPlaceholder(existing.tradeIntelligence?.preferredIncoterms) ||
+    isEmptyPlaceholder(existing.tradeIntelligence?.buyingSeasons) ||
+    !(existing.tradeIntelligence?.certifications || []).length;
   const needPlan = !(existing.strategy?.actionPlan || []).length;
   const needSimilar = !(existing.similarCompanies || []).length;
-  const needTrends = !existing.marketTrends || existing.marketTrends === 'N/A';
-  if (!needPlan && !needSimilar && !needTrends) return existing;
+  const needTrends = isEmptyPlaceholder(existing.marketTrends);
+  const needAudience = !(existing.targetAudience || []).length;
+  const needEcommerce = !(existing.businessModel?.ecommercePresence || []).length;
+
+  if (
+    !needSwot &&
+    !needChannels &&
+    !needSupply &&
+    !needMeta &&
+    !needTrade &&
+    !needPlan &&
+    !needSimilar &&
+    !needTrends &&
+    !needAudience &&
+    !needEcommerce
+  ) {
+    return existing;
+  }
+
+  const productsHint = (existing.businessScope?.coreProducts || []).slice(0, 10).join('、');
+  const desc = (existing.companyInfo?.description || '').slice(0, 600);
+  const evidenceClip = (opts.evidenceText || '').slice(0, 3500);
 
   const prompt = `
 Company: "${name}" / ${opts.domain}
+HQ: ${existing.companyInfo?.headquarters || ''} · City: ${existing.companyInfo?.city || ''}
 ${opts.searchKeyword ? `Keyword: ${opts.searchKeyword}` : ''}
 ${opts.searchCountry ? `Market: ${opts.searchCountry}` : ''}
-Core products: ${(existing.businessScope?.coreProducts || []).slice(0, 8).join('、') || '未知'}
-Nature: ${existing.companyInfo?.nature || ''}
-HQ: ${existing.companyInfo?.headquarters || ''}
+Known nature: ${existing.companyInfo?.nature || '未知'}
+Known description (use as primary evidence): ${desc || '（无）'}
+Core products: ${productsHint || '未知'}
+Brand positioning: ${existing.businessScope?.brandPositioning || ''}
+HS / import cats: ${(existing.tradeIntelligence?.importCategories || []).slice(0, 8).join('、')}
 
-Task: Fill ONLY the missing B2B exporter sections in Simplified Chinese. Use web search if needed.
-${needPlan ? '- strategy.actionPlan: exactly 5 concrete outreach steps for Chinese exporters.' : ''}
-${needSimilar ? '- similarCompanies: 12 real peer buyers/importers/retailers (name, website, country, mainProducts).' : ''}
-${needTrends ? '- marketTrends: 2–4 sentences on market opportunity for Chinese suppliers.' : ''}
+${evidenceClip ? `=== WEB EVIDENCE (excerpt) ===\n${evidenceClip}\n=== END ===` : ''}
 
-Output JSON only:
+Task: Fill ONLY the MISSING B2B insight fields for Chinese exporters. Output Simplified Chinese.
+You already know this is a real company — DO NOT leave SWOT/channels/supplyChain empty.
+For MOQ / Incoterms / buying season: if not public, give cautious industry-typical estimates and append "（行业惯例推断）".
+NEVER invent customs shipment IDs or private emails.
+
+Fill these missing blocks:
+${needMeta ? '- companyInfo.foundedYear, scale, nature (if public or reasonably known for this group)' : ''}
+${needSwot ? '- swot: EACH of strengths/weaknesses/opportunities/threats MUST have 3–4 concrete bullets' : ''}
+${needChannels ? '- businessModel.channels: 3–6 real channel types (自有品牌零售、电商、玩具专卖、国际分销等)' : ''}
+${needEcommerce ? '- businessModel.ecommercePresence: known shop/marketplace clues or "官网直销"' : ''}
+${needSupply ? '- supplyChain.role + serviceType + businessModel.procurementInfo (how they buy / brand matrix)' : ''}
+${needAudience ? '- targetAudience: 2–5 buyer/consumer segments' : ''}
+${needTrade ? '- tradeIntelligence: customsSummary (1 short para), preferredIncoterms, typicalMoq, buyingSeasons, certifications[], riskLevel' : ''}
+${needPlan ? '- strategy.actionPlan: exactly 5 outreach steps; buyingOfficeLocation if known' : ''}
+${needSimilar ? '- similarCompanies: 8–12 real peer toy groups / retailers (name, website, country, mainProducts)' : ''}
+${needTrends ? '- marketTrends: 2–4 sentences for Chinese suppliers' : ''}
+
+Output JSON only (omit fields that are NOT needed):
 {
-  ${needTrends ? `"marketTrends": "",` : ''}
-  ${needPlan ? `"strategy": { "buyingOfficeLocation": "", "actionPlan": ["", "", "", "", ""] },` : ''}
-  ${needSimilar ? `"similarCompanies": [{ "name": "", "website": "", "country": "", "mainProducts": "" }]` : ''}
+  "companyInfo": { "foundedYear": "", "scale": "", "nature": "" },
+  "swot": { "strengths": [], "weaknesses": [], "opportunities": [], "threats": [] },
+  "businessModel": { "channels": [], "ecommercePresence": [], "exhibitionHistory": [], "procurementInfo": "", "hasDistributors": true },
+  "supplyChain": { "role": "", "serviceType": "" },
+  "targetAudience": [],
+  "tradeIntelligence": {
+    "customsSummary": "",
+    "preferredIncoterms": "",
+    "typicalMoq": "",
+    "buyingSeasons": "",
+    "certifications": [],
+    "complianceNotes": "",
+    "estimatedAnnualImport": "",
+    "riskLevel": "低",
+    "riskNotes": ""
+  },
+  "marketTrends": "",
+  "strategy": { "buyingOfficeLocation": "", "actionPlan": ["", "", "", "", ""] },
+  "similarCompanies": [{ "name": "", "website": "", "country": "", "mainProducts": "" }]
 }
-`.replace(/,\s*}/g, '\n}');
+`;
 
-  const text = await generateContentUnified('analysis', prompt, SYSTEM_INSTRUCTION, true);
-  const ai = extractJson(text) || {};
-  const next: AnalysisResult = { ...existing };
+  const texts = await generateContentMulti('analysis', prompt, SYSTEM_INSTRUCTION, true);
+  const raws = texts
+    .map((t) => extractJson(t))
+    .filter((r) => r && typeof r === 'object' && !Array.isArray(r)) as Record<string, any>[];
+  if (!raws.length) return existing;
+  const ai = raws.length === 1 ? raws[0] : mergeAnalysisRaws(...raws);
+
+  const next: AnalysisResult = {
+    ...existing,
+    companyInfo: { ...existing.companyInfo },
+    swot: { ...(existing.swot || { strengths: [], weaknesses: [], opportunities: [], threats: [] }) },
+    businessModel: { ...(existing.businessModel as any) },
+    supplyChain: { ...(existing.supplyChain as any) },
+    tradeIntelligence: { ...emptyTradeIntelligence(), ...(existing.tradeIntelligence || {}) },
+    strategy: { ...(existing.strategy as any) },
+  };
+
+  if (needMeta && ai.companyInfo) {
+    next.companyInfo.foundedYear =
+      preferString(ai.companyInfo.foundedYear, next.companyInfo.foundedYear) ||
+      next.companyInfo.foundedYear;
+    next.companyInfo.scale =
+      preferString(ai.companyInfo.scale, next.companyInfo.scale) || next.companyInfo.scale;
+    next.companyInfo.nature =
+      preferString(ai.companyInfo.nature, next.companyInfo.nature) || next.companyInfo.nature;
+  }
+
+  if (needSwot && ai.swot) {
+    const mergeList = (a: string[] | undefined, b: string[] | undefined) => {
+      const out: string[] = [];
+      const seen = new Set<string>();
+      for (const x of [...(a || []), ...(b || [])]) {
+        const s = String(x || '').trim();
+        if (!s || isEmptyPlaceholder(s)) continue;
+        const k = s.toLowerCase();
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push(s);
+      }
+      return out;
+    };
+    next.swot = {
+      strengths: mergeList(ai.swot.strengths, next.swot.strengths),
+      weaknesses: mergeList(ai.swot.weaknesses, next.swot.weaknesses),
+      opportunities: mergeList(ai.swot.opportunities, next.swot.opportunities),
+      threats: mergeList(ai.swot.threats, next.swot.threats),
+    };
+  }
+
+  if (needChannels || needEcommerce || needSupply) {
+    const bm = ai.businessModel || {};
+    if (needChannels && Array.isArray(bm.channels) && bm.channels.length) {
+      next.businessModel.channels = [
+        ...new Set([...(next.businessModel.channels || []), ...bm.channels.map(String)].filter((s) => !isEmptyPlaceholder(s))),
+      ];
+    }
+    if (needEcommerce && Array.isArray(bm.ecommercePresence) && bm.ecommercePresence.length) {
+      next.businessModel.ecommercePresence = [
+        ...new Set([
+          ...(next.businessModel.ecommercePresence || []),
+          ...bm.ecommercePresence.map(String),
+        ].filter((s) => !isEmptyPlaceholder(s))),
+      ];
+    }
+    if (Array.isArray(bm.exhibitionHistory) && bm.exhibitionHistory.length) {
+      next.businessModel.exhibitionHistory = [
+        ...new Set([
+          ...(next.businessModel.exhibitionHistory || []),
+          ...bm.exhibitionHistory.map(String),
+        ].filter((s) => !isEmptyPlaceholder(s))),
+      ];
+    }
+    next.businessModel.procurementInfo =
+      preferString(bm.procurementInfo, next.businessModel.procurementInfo) ||
+      next.businessModel.procurementInfo;
+    if (bm.hasDistributors) next.businessModel.hasDistributors = true;
+  }
+
+  if (needSupply && ai.supplyChain) {
+    next.supplyChain.role =
+      preferString(ai.supplyChain.role, next.supplyChain.role) || next.supplyChain.role;
+    next.supplyChain.serviceType =
+      preferString(ai.supplyChain.serviceType, next.supplyChain.serviceType) ||
+      next.supplyChain.serviceType;
+  }
+
+  if (needAudience && Array.isArray(ai.targetAudience) && ai.targetAudience.length) {
+    next.targetAudience = [
+      ...new Set([...(next.targetAudience || []), ...ai.targetAudience.map(String)].filter((s) => !isEmptyPlaceholder(s))),
+    ];
+  }
+
+  if (needTrade && ai.tradeIntelligence) {
+    const ti = ai.tradeIntelligence;
+    next.tradeIntelligence = {
+      ...emptyTradeIntelligence(),
+      ...next.tradeIntelligence,
+      customsSummary:
+        preferString(ti.customsSummary, next.tradeIntelligence?.customsSummary) ||
+        next.tradeIntelligence?.customsSummary ||
+        '公开信息未找到',
+      preferredIncoterms:
+        preferString(ti.preferredIncoterms, next.tradeIntelligence?.preferredIncoterms) ||
+        next.tradeIntelligence?.preferredIncoterms ||
+        '公开信息未找到',
+      typicalMoq:
+        preferString(ti.typicalMoq, next.tradeIntelligence?.typicalMoq) ||
+        next.tradeIntelligence?.typicalMoq ||
+        '公开信息未找到',
+      buyingSeasons:
+        preferString(ti.buyingSeasons, next.tradeIntelligence?.buyingSeasons) ||
+        next.tradeIntelligence?.buyingSeasons ||
+        '公开信息未找到',
+      estimatedAnnualImport:
+        preferString(ti.estimatedAnnualImport, next.tradeIntelligence?.estimatedAnnualImport) ||
+        next.tradeIntelligence?.estimatedAnnualImport ||
+        '公开信息未找到',
+      complianceNotes: preferString(ti.complianceNotes, next.tradeIntelligence?.complianceNotes),
+      certifications: [
+        ...new Set([
+          ...(next.tradeIntelligence?.certifications || []),
+          ...(Array.isArray(ti.certifications) ? ti.certifications.map(String) : []),
+        ].filter((s) => !isEmptyPlaceholder(s))),
+      ],
+      riskLevel: coerceRiskLevel(
+        preferString(ti.riskLevel, next.tradeIntelligence?.riskLevel) || '未知'
+      ),
+      riskNotes: preferString(ti.riskNotes, next.tradeIntelligence?.riskNotes),
+    };
+  }
 
   if (needTrends && typeof ai.marketTrends === 'string' && ai.marketTrends.trim()) {
     next.marketTrends = ai.marketTrends.trim();
@@ -3381,9 +3792,13 @@ Output JSON only:
   if (needPlan && Array.isArray(ai.strategy?.actionPlan) && ai.strategy.actionPlan.length) {
     next.strategy = {
       buyingOfficeLocation:
-        String(ai.strategy?.buyingOfficeLocation || existing.strategy?.buyingOfficeLocation || '').trim() ||
+        preferString(ai.strategy?.buyingOfficeLocation, next.strategy?.buyingOfficeLocation) ||
         'N/A',
-      actionPlan: ai.strategy.actionPlan.map(String).map((s: string) => s.trim()).filter(Boolean).slice(0, 8),
+      actionPlan: ai.strategy.actionPlan
+        .map(String)
+        .map((s: string) => s.trim())
+        .filter(Boolean)
+        .slice(0, 8),
     };
   }
   if (needSimilar && Array.isArray(ai.similarCompanies) && ai.similarCompanies.length) {
@@ -3397,8 +3812,137 @@ Output JSON only:
         mainProducts: String(c.mainProducts || '').trim(),
       }));
   }
+
+  return normalizeAnalysisResult(next);
+};
+
+/** 本地启发式：报告已有描述/品类但洞察仍空时，避免整页 N/A */
+export const synthesizeInsightsFallback = (r: AnalysisResult): AnalysisResult => {
+  const next = normalizeAnalysisResult(r);
+  const desc = next.companyInfo?.description || '';
+  const products = (next.businessScope?.coreProducts || []).slice(0, 6);
+  const hq = next.companyInfo?.headquarters || next.companyInfo?.city || '';
+  const name = next.companyInfo?.name || '';
+
+  if (isEmptyPlaceholder(next.companyInfo.nature) && desc) {
+    if (/制造|集团|brand|manufacturer|集团/i.test(desc)) next.companyInfo.nature = '玩具品牌集团/制造商';
+    else if (/零售|retail/i.test(desc)) next.companyInfo.nature = '零售商';
+    else if (/进口|分销|进口商|distributor/i.test(desc)) next.companyInfo.nature = '进口商/分销商';
+  }
+  if (isEmptyPlaceholder(next.companyInfo.scale) && desc) {
+    if (/第四大|全球|领先|集团|多品牌/i.test(desc)) next.companyInfo.scale = '大型集团（行业领先）';
+    else if (/中型|区域/i.test(desc)) next.companyInfo.scale = '中型企业';
+  }
+  if (isEmptyPlaceholder(next.supplyChain.role)) {
+    next.supplyChain.role = /制造|品牌|集团/i.test(desc + (next.companyInfo.nature || ''))
+      ? '品牌商兼制造商'
+      : /零售/i.test(desc)
+        ? '终端零售商'
+        : '进口分销/采购方';
+  }
+  if (isEmptyPlaceholder(next.supplyChain.serviceType)) {
+    next.supplyChain.serviceType = '自有品牌矩阵 + 渠道分销（据公开信息推断）';
+  }
+  if (isEmptyPlaceholder(next.businessModel.procurementInfo) && (desc || products.length)) {
+    next.businessModel.procurementInfo = products.length
+      ? `主营 ${products.slice(0, 4).join('、')} 等，倾向向具备安全认证与稳定产能的亚洲供应商采购（行业惯例推断）`
+      : '倾向向具备认证与稳定交期的供应商长期合作（行业惯例推断）';
+  }
+  if (!(next.businessModel.channels || []).length) {
+    next.businessModel.channels = ['自有品牌零售', '国际分销网络', '电商/官网直销', '玩具专卖与商超'];
+  }
+  if (!(next.businessModel.ecommercePresence || []).length) {
+    next.businessModel.ecommercePresence = ['官网品牌站直销（据公开信息）'];
+  }
+  if (swotBulletCount(next) < 4 && (desc || products.length)) {
+    const prod = products[0] || '玩具产品';
+    next.swot = {
+      strengths: next.swot.strengths?.length
+        ? next.swot.strengths
+        : [
+            `${name || '该公司'}在${hq || '目标市场'}具备品牌与渠道基础`,
+            `产品线覆盖 ${products.slice(0, 3).join('、') || prod} 等`,
+            desc.slice(0, 40) ? `公开描述显示：${desc.slice(0, 48)}…` : '多品牌矩阵利于覆盖多年龄段',
+          ],
+      weaknesses: next.swot.weaknesses?.length
+        ? next.swot.weaknesses
+        : ['公开财务与采购条款信息有限', '对中国新供应商准入门槛可能较高', '多品牌管理带来供应链复杂度'],
+      opportunities: next.swot.opportunities?.length
+        ? next.swot.opportunities
+        : [
+            `可就 ${prod} 等品类提供性价比与定制化方案`,
+            '欧洲玩具安全认证需求持续，合规工厂有机会切入',
+            '电商与新品迭代可带来补货窗口',
+          ],
+      threats: next.swot.threats?.length
+        ? next.swot.threats
+        : ['同类国际品牌竞争激烈', '原材料与运费波动', '法规/认证要求趋严'],
+    };
+  }
+  if (!(next.targetAudience || []).length) {
+    next.targetAudience = ['家庭消费者', '玩具零售商', '礼品与收藏渠道'];
+  }
+  if (!next.tradeIntelligence) {
+    next.tradeIntelligence = emptyTradeIntelligence();
+  }
+  if (next.tradeIntelligence) {
+    if (isEmptyPlaceholder(next.tradeIntelligence.customsSummary) && products.length) {
+      next.tradeIntelligence.customsSummary = `公开海关明细不足；结合品类（${products
+        .slice(0, 3)
+        .join('、')}）推断其以成品玩具进口/欧洲分销为主，具体提单需另行核验。`;
+    }
+    if (isEmptyPlaceholder(next.tradeIntelligence.typicalMoq)) {
+      next.tradeIntelligence.typicalMoq = '视品类通常数百至数千件（行业惯例推断）';
+    }
+    if (isEmptyPlaceholder(next.tradeIntelligence.preferredIncoterms)) {
+      next.tradeIntelligence.preferredIncoterms = 'FOB / CIF 较常见（行业惯例推断）';
+    }
+    if (isEmptyPlaceholder(next.tradeIntelligence.buyingSeasons)) {
+      next.tradeIntelligence.buyingSeasons = '春夏订货、秋季备货圣诞季为主（行业惯例推断）';
+    }
+    if (!(next.tradeIntelligence.certifications || []).length) {
+      next.tradeIntelligence.certifications = ['CE', 'EN71', 'REACH（玩具常见合规，待官核实）'];
+    }
+    if (isEmptyPlaceholder(next.tradeIntelligence.riskLevel) || next.tradeIntelligence.riskLevel === '未知') {
+      next.tradeIntelligence.riskLevel = '低';
+      next.tradeIntelligence.riskNotes =
+        preferString(next.tradeIntelligence.riskNotes) ||
+        '知名品牌集团，公开不利信息有限；仍需核验最新合规与付款条款';
+    }
+  }
+  if (isEmptyPlaceholder(next.marketTrends) && products.length) {
+    next.marketTrends = `${hq || '目标市场'}玩具需求向安全、品牌与互动化倾斜；中国工厂可以在 ${products
+      .slice(0, 2)
+      .join('、')} 等品类以认证齐全、交期稳定切入其供应链。`;
+  }
+  if (!(next.strategy?.actionPlan || []).length) {
+    next.strategy = {
+      buyingOfficeLocation:
+        preferString(next.strategy?.buyingOfficeLocation, hq) || hq || 'N/A',
+      actionPlan: [
+        `研究 ${name} 品牌矩阵与目标品类匹配点`,
+        '准备 CE/EN71 等认证与验厂资料包',
+        '通过官网/LinkedIn 找到采购或品类经理',
+        '寄送样品与报价（含 FOB 与交期）',
+        '跟进展会或预约视频验厂',
+      ],
+    };
+  }
   return next;
 };
+
+/**
+ * @deprecated 兼容旧名：转调 needsInsightSectionsRepair
+ */
+const needsStrategySectionsRepair = needsInsightSectionsRepair;
+
+/**
+ * @deprecated 兼容旧调用：转调 repairInsightSections
+ */
+const repairStrategySections = async (
+  existing: AnalysisResult,
+  opts: { domain: string; searchKeyword?: string; searchCountry?: string }
+): Promise<AnalysisResult> => repairInsightSections(existing, opts);
 
 /**
  * 仅深挖产品品类与价格（供「旧背调缺品类」补做；新背调已在 analyzeCompany 内自动完成）

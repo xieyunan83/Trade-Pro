@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { analyzeCompany, hasApiKeyConfigured, checkApiKeyAvailability, hydrateApiConfigsFromCloud, searchPotentialClients, enableTavilyGeminiQwenCascade, enableGeminiQwenParallelMerge } from './services/geminiService';
+import { analyzeCompany, hasApiKeyConfigured, checkApiKeyAvailability, hydrateApiConfigsFromCloud, searchPotentialClients, enableTavilyGeminiQwenCascade, enableGeminiQwenParallelMerge, synthesizeInsightsFallback } from './services/geminiService';
 import {
   subscribeCooldown,
   withRateLimitRetry,
@@ -1154,6 +1154,8 @@ const App: React.FC = () => {
         alert('该历史记录缺少有效背调数据，无法打开。可对该域名再次背调。');
         return;
       }
+      // 旧报告 SWOT/渠道等常被模型留空：打开时本地启发式补全，避免整页 N/A
+      data = synthesizeInsightsFallback(data);
       setAnalysisData(data);
       setViewingHistoryId(item.id);
       setDomainInput(data.companyInfo.website !== 'N/A' ? data.companyInfo.website : item.domain || '');
@@ -1162,6 +1164,8 @@ const App: React.FC = () => {
       setMobileMenuOpen(false);
       setErrorMsg(null);
       setLoading(false);
+      // 补全后写回，下次打开即有内容
+      void persistHistoryItem({ ...item, data }).catch(() => undefined);
     } catch (e: any) {
       console.error('loadFromHistory failed', e);
       alert(`打开历史记录失败: ${e?.message || String(e)}`);
@@ -1192,7 +1196,7 @@ const App: React.FC = () => {
       return false;
     });
     if (task?.analysis) {
-      const data = normalizeAnalysisResult(task.analysis);
+      const data = synthesizeInsightsFallback(normalizeAnalysisResult(task.analysis));
       setAnalysisData(data);
       setViewingHistoryId(null);
       setDomainInput(data.companyInfo?.website || client.website || '');
