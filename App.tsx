@@ -50,6 +50,11 @@ import { ModuleProducts } from './components/ModuleProducts';
 import { ModuleDecisionMakers } from './components/ModuleDecisionMakers';
 import { DmEmailSearchPanel } from './components/DmEmailSearchPanel';
 import { ProductDigPanel } from './components/ProductDigPanel';
+import {
+  applyDmPersistToHistory,
+  mergeHistoryPreferDmRich,
+  upsertDmPersistRecord,
+} from './services/dmSearchPersist';
 import { enqueueDmEmailSearch, type DmEmailSearchJob } from './services/dmEmailSearchQueue';
 import {
   enqueueProductDigBatch,
@@ -597,7 +602,19 @@ const App: React.FC = () => {
               }
             }
             if (!cancelled) {
-              setHistory(scope(migratedHist.items));
+              const restored = applyDmPersistToHistory(migratedHist.items);
+              // ledger 比本地新时回写 IndexedDB，刷新后仍保留「已挖」
+              for (const item of restored) {
+                const before = migratedHist.items.find((x) => x.id === item.id);
+                if (
+                  before &&
+                  (item.data?.decisionMakerEmailSearchAt || 0) >
+                    (before.data?.decisionMakerEmailSearchAt || 0)
+                ) {
+                  void persistHistoryItem(item).catch(() => undefined);
+                }
+              }
+              setHistory(scope(restored));
             }
 
             const ghStatus = checkGitHubStatus();
@@ -633,17 +650,52 @@ const App: React.FC = () => {
                 try {
                     const cloudHistory = await getInvestigationHistory();
                     if (cloudHistory.length > 0) {
-                        const existingIds = new Set(h.map(i => i.id));
-                        const newItems = cloudHistory.filter(i => !existingIds.has(i.id));
-                        for (const item of newItems) { await saveHistory(item); }
+                        const localNow = await getHistory();
                         const merged = migrateLegacyOwnership(
-                          [...newItems, ...h].sort((a, b) => b.timestamp - a.timestamp),
+                          applyDmPersistToHistory(
+                            mergeHistoryPreferDmRich(localNow, cloudHistory)
+                          ),
                           users,
                           depts()
                         ).items;
+                        // 把合并后更完整的报告写回本地，避免下次又被旧云端盖掉
+                        for (const item of merged) {
+                          const local = localNow.find((x) => x.id === item.id);
+                          const cloud = cloudHistory.find((x) => x.id === item.id);
+                          const richerThanLocal =
+                            !local ||
+                            (item.data?.decisionMakerEmailSearchAt || 0) >
+                              (local.data?.decisionMakerEmailSearchAt || 0) ||
+                            (item.data?.decisionMakers?.length || 0) >
+                              (local.data?.decisionMakers?.length || 0);
+                          const richerThanCloud =
+                            cloud &&
+                            ((item.data?.decisionMakerEmailSearchAt || 0) >
+                              (cloud.data?.decisionMakerEmailSearchAt || 0) ||
+                              (item.data?.decisionMakers?.length || 0) >
+                                (cloud.data?.decisionMakers?.length || 0));
+                          if (richerThanLocal) {
+                            try {
+                              await saveHistory(item);
+                            } catch (e) {
+                              console.warn('[history] merge save local failed', e);
+                            }
+                          }
+                          if (richerThanCloud && isSupabaseConfigured()) {
+                            void saveInvestigationHistory(item).catch((e) =>
+                              console.warn('[history] merge save cloud failed', e)
+                            );
+                          }
+                        }
                         if (!cancelled) {
                           setHistory(scope(merged));
                         }
+                    } else {
+                      // 无云端时也要重放 ledger
+                      const localNow = await getHistory();
+                      if (!cancelled) {
+                        setHistory(scope(applyDmPersistToHistory(localNow)));
+                      }
                     }
                 } catch (e) {
                     console.error("Supabase history sync failed", e);
@@ -870,7 +922,7 @@ const App: React.FC = () => {
     setHistory((prev) =>
       filterOwnedRecords(
         currentUser,
-        migrateLegacyOwnership(prev, users, depts).items,
+        applyDmPersistToHistory(migrateLegacyOwnership(prev, users, depts).items),
         users,
         depts
       )
@@ -1203,15 +1255,31 @@ const App: React.FC = () => {
     decisionMakerEmailSearchHistory: number[];
   }, opts?: { historyId?: string | null; domain?: string; companyName?: string }) => {
     const matchId = opts?.historyId ?? viewingHistoryIdRef.current;
-    const domainKey = (opts?.domain || analysisDataRef.current?.companyInfo?.website || domainInput || '').toLowerCase();
-    const nameKey = (opts?.companyName || analysisDataRef.current?.companyInfo?.name || '').toLowerCase();
+    const cleanHost = (url?: string | null) =>
+      (url || '')
+        .toLowerCase()
+        .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
+        .split('/')[0]
+        .trim();
+    const domainKey = cleanHost(opts?.domain || analysisDataRef.current?.companyInfo?.website || domainInput || '');
+    const nameKey = (opts?.companyName || analysisDataRef.current?.companyInfo?.name || '').trim().toLowerCase();
+
+    // 1) 先写入耐久化 ledger（刷新后可恢复，避免积分白费）
+    upsertDmPersistRecord({
+      historyId: matchId,
+      domain: domainKey,
+      companyName: opts?.companyName || analysisDataRef.current?.companyInfo?.name,
+      searchedAt: patch.decisionMakerEmailSearchAt,
+      decisionMakers: patch.decisionMakers,
+      searchHistory: patch.decisionMakerEmailSearchHistory,
+    });
 
     setAnalysisData((prev) => {
       if (!prev) return prev;
       const sameView =
         (matchId && viewingHistoryIdRef.current === matchId) ||
-        (prev.companyInfo?.website || '').toLowerCase() === domainKey ||
-        (prev.companyInfo?.name || '').toLowerCase() === nameKey;
+        cleanHost(prev.companyInfo?.website) === domainKey ||
+        (prev.companyInfo?.name || '').trim().toLowerCase() === nameKey;
       if (!sameView) return prev;
       return {
         ...prev,
@@ -1221,35 +1289,89 @@ const App: React.FC = () => {
       };
     });
 
-    setHistory((prev) => {
-      let updatedItem: HistoryItem | null = null;
-      const next = prev.map((h) => {
-        const hit =
-          (matchId && h.id === matchId) ||
-          (!matchId &&
-            ((h.domain || '').toLowerCase() === domainKey ||
-              (h.data?.companyInfo?.name || '').toLowerCase() === nameKey));
-        if (!hit || !h.data) return h;
+    // 2) 同步更新 historyRef，避免批量并发 setState 丢写
+    const list = historyRef.current;
+    let updatedItem: HistoryItem | null = null;
+    const next = list.map((h) => {
+      const hHost = cleanHost(h.domain || h.data?.companyInfo?.website);
+      const hName = (h.data?.companyInfo?.name || '').trim().toLowerCase();
+      const hit =
+        (matchId && h.id === matchId) ||
+        (!!domainKey && !!hHost && domainKey === hHost) ||
+        (!!nameKey && !!hName && nameKey === hName);
+      if (!hit) return h;
+      if (!h.data) {
+        // 极端情况：无 data 也要打上挖掘标记，避免显示「未挖」
         updatedItem = {
           ...h,
           data: {
-            ...h.data,
+            companyInfo: {
+              name: opts?.companyName || h.domain || 'Unknown',
+              headquarters: 'N/A',
+              foundedYear: 'N/A',
+              nature: 'N/A',
+              scale: 'N/A',
+              website: h.domain || domainKey || 'N/A',
+              description: 'N/A',
+            },
             decisionMakers: patch.decisionMakers,
             decisionMakerEmailSearchAt: patch.decisionMakerEmailSearchAt,
             decisionMakerEmailSearchHistory: patch.decisionMakerEmailSearchHistory,
-          },
+          } as AnalysisResult,
         };
         return updatedItem;
-      });
-      if (updatedItem) {
-        persistHistoryItem(updatedItem).catch((e) =>
-          console.error('persist decision maker research failed', e)
-        );
       }
-      return next;
+      updatedItem = {
+        ...h,
+        data: {
+          ...h.data,
+          decisionMakers: patch.decisionMakers,
+          decisionMakerEmailSearchAt: patch.decisionMakerEmailSearchAt,
+          decisionMakerEmailSearchHistory: patch.decisionMakerEmailSearchHistory,
+        },
+      };
+      return updatedItem;
     });
 
-    // 同步写回营销工具任务队列（IndexedDB），避免刷新后联系人变「暂无」
+    if (updatedItem) {
+      historyRef.current = next;
+      setHistory(next);
+      try {
+        await persistHistoryItem(updatedItem);
+      } catch (e) {
+        console.error('persist decision maker research failed', e);
+      }
+    } else {
+      console.warn(
+        '[DM] persist: no matching history item',
+        { matchId, domainKey, nameKey, historyLen: list.length }
+      );
+    }
+
+    // 3) 同步 CRM 联系人，避免列表只看 CRM 时仍像「未挖」
+    if (domainKey || nameKey) {
+      setCrmClients((prev) => {
+        let changed = false;
+        const crmNext = prev.map((c) => {
+          const cHost = cleanHost(c.website);
+          const cName = (c.name || '').trim().toLowerCase();
+          const hit =
+            (domainKey && cHost && domainKey === cHost) || (nameKey && cName && nameKey === cName);
+          if (!hit) return c;
+          changed = true;
+          return {
+            ...c,
+            contacts: patch.decisionMakers,
+            activityLog:
+              (c.activityLog || '') +
+              ` [决策人挖掘 ${new Date(patch.decisionMakerEmailSearchAt).toLocaleString('zh-CN')}]`,
+          };
+        });
+        return changed ? crmNext : prev;
+      });
+    }
+
+    // 4) 同步写回营销工具任务队列
     setAutomationResults((prev) => {
       void mergeDecisionMakersIntoAutomationTasks(prev, {
         domain: domainKey || undefined,

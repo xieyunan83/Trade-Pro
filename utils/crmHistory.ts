@@ -644,7 +644,9 @@ export const findCrmIdsForDiscoveryResults = (
 /** Decision-maker email search already run on this report */
 export const historyHasDmSearch = (item: HistoryItem): boolean =>
   !!item.data?.decisionMakerEmailSearchAt ||
-  !!(item.data?.decisionMakerEmailSearchHistory && item.data.decisionMakerEmailSearchHistory.length > 0);
+  !!(item.data?.decisionMakerEmailSearchHistory && item.data.decisionMakerEmailSearchHistory.length > 0) ||
+  // 兼容：已有带邮箱的决策人但漏写 searchedAt（刷新后勿显示「未挖」）
+  (item.data?.decisionMakers || []).some((d) => !!(d.emailGuess && String(d.emailGuess).includes('@')));
 
 /** 决策人挖掘完成态：未挖 / 已挖有联系人 / 已挖无联系人 */
 export type DmDigStatus = 'none' | 'found' | 'empty';

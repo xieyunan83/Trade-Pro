@@ -271,10 +271,10 @@ export const enqueueDmEmailSearch = (
   };
 
   jobs.unshift(job);
-  // 只保留最近 40 条记录，避免列表过长
-  if (jobs.length > 40) {
+  // 只保留最近 120 条记录；完成项须保留到 UI 可见，禁止过早丢掉未落盘结果
+  if (jobs.length > 120) {
     const removable = jobs.filter((j) => j.status === 'completed' || j.status === 'failed');
-    while (jobs.length > 40 && removable.length) {
+    while (jobs.length > 120 && removable.length) {
       const old = removable.pop();
       if (!old) break;
       const idx = jobs.findIndex((j) => j.id === old.id);

@@ -305,7 +305,10 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
       const bgAt = resolveBackgroundCheckAtIndexed(client, historyIndex);
       const hasBg = clientHasBackgroundCheckIndexed(client, historyIndex);
       const hasProduct = hasRichProductCatalog(historyItem?.data);
-      const hasDm = historyItem ? historyHasDmSearch(historyItem) : false;
+      const hasDm =
+        (historyItem ? historyHasDmSearch(historyItem) : false) ||
+        (Array.isArray(client.contacts) &&
+          client.contacts.some((d) => !!(d.emailGuess && String(d.emailGuess).includes('@'))));
       const dmContactCount = Math.max(
         countAnalysisDecisionMakers(historyItem?.data),
         Array.isArray(client.contacts) ? client.contacts.length : 0
