@@ -3536,18 +3536,65 @@ const countriesLikelyMatch = (a?: string, b?: string): boolean => {
 /** 行业词为空时，从产品关键词推断检索约束，避免模型乱扩到无关行业 */
 const inferIndustryConstraint = (productKeyword: string, industry: string): string => {
   const ind = (industry || '').trim();
-  if (ind) return ind;
+  if (ind) {
+    return `Must operate in industry: ${ind}. Do NOT return companies outside this industry.`;
+  }
   const p = (productKeyword || '').toLowerCase();
-  if (/bubble|wand|soap.?bubble|泡泡|玩具|toy|doll|plush|teddy|lego|puzzle|game|kids|children|baby|infant|juvenile|party.?favor|novelty/i.test(p)) {
-    return 'Toys / children’s products / party favors / outdoor play / novelty gifts（玩具、儿童用品、派对礼品）';
+  if (/bubble|wand|soap.?bubble|泡泡|玩具|toy|doll|plush|teddy|lego|puzzle|game|kids|children|baby|infant|juvenile|party.?favor|novelty|car\s*toy|汽车玩具/i.test(p)) {
+    return 'Toys / children’s products / party favors / outdoor play / novelty gifts（玩具、儿童用品、派对礼品）。严禁返回食品超市、餐饮、生鲜肉类海鲜、银行、软件、建材等无关行业。';
   }
-  if (/silicone|baby|paci|teether|bib|nursery/i.test(p)) {
-    return 'Baby products / nursery / infant feeding（母婴用品）';
+  if (/silicone|baby|paci|teether|bib|nursery|母婴/i.test(p)) {
+    return 'Baby products / nursery / infant feeding（母婴用品）。严禁返回无关的食品杂货、建材等。';
   }
-  if (/furniture|chair|table|sofa|cabinet/i.test(p)) {
-    return 'Furniture / home furnishings（家具家居）';
+  if (/furniture|chair|table|sofa|cabinet|家具/i.test(p)) {
+    return 'Furniture / home furnishings（家具家居）。严禁返回食品、纯玩具零售、纯软件公司。';
   }
-  return `Strictly the same product category as "${productKeyword}" — do NOT expand to unrelated industries`;
+  if (/food|snack|grocery|食品|零食|食材/i.test(p)) {
+    return 'Food / grocery / specialty foods（食品零售与进口）。严禁返回玩具、汽配、建材等无关行业。';
+  }
+  return `Strictly the same product category as "${productKeyword}" — do NOT expand to unrelated industries. If a company does not buy/sell this product, OMIT it.`;
+};
+
+/** 按关键词推断「可软通过」的品类词（禁止用零售/进口等万能词） */
+const softCategoryRegexForKeyword = (productKeyword: string): RegExp | null => {
+  const p = (productKeyword || '').toLowerCase();
+  if (/bubble|wand|soap.?bubble|泡泡|玩具|toy|doll|plush|teddy|lego|puzzle|game|kids|children|juvenile|party.?favor|novelty|car\s*toy|汽车玩具/i.test(p)) {
+    return /玩具|儿童用品|童装|益智|拼图|玩偶|毛绒|泡泡|派对礼品|户外玩具|novelty|\btoys?\b|kids\s*product|children'?s|playset|party\s*favor/i;
+  }
+  if (/silicone|baby|paci|teether|bib|nursery|母婴|奶嘴/i.test(p)) {
+    return /母婴|婴儿|奶嘴|牙胶|bib|nursery|infant|baby\s*product|teether|pacifier/i;
+  }
+  if (/furniture|chair|table|sofa|cabinet|家具/i.test(p)) {
+    return /家具|家居|sofa|furniture|furnishings|cabinet|桌椅/i;
+  }
+  if (/food|snack|grocery|食品|零食|食材|cheese|meat|海鲜/i.test(p)) {
+    return /食品|零食|生鲜|超市|grocery|food\s*retail|specialty\s*food|gourmet|seafood|bakery|餐饮食材/i;
+  }
+  return null;
+};
+
+/** 明显跨品类：关键词是 A、文案却是 B → 直接丢弃 */
+const isHardCrossCategoryMismatch = (productKeyword: string, blob: string): boolean => {
+  const p = (productKeyword || '').toLowerCase();
+  const b = blob.toLowerCase();
+  if (
+    /跨品类|完全不匹配|无关品类|不匹配|完全不采购|重新筛选|与.{0,12}无关|不属于.{0,8}品类|搜索误差/.test(b)
+  ) {
+    return true;
+  }
+  const isToyKw =
+    /bubble|wand|泡泡|玩具|toy|doll|plush|lego|puzzle|kids|children|party.?favor|novelty|car\s*toy|汽车玩具/i.test(p);
+  const isFoodBlob =
+    /食品超市|精品食品|高端食品|生鲜|肉类|海鲜|奶酪|烘焙|餐饮服务|grocery|supermarket|gourmet\s*food|specialty\s*food|seafood|butcher|bakery|cfia|食品零售|纯食品/i.test(
+      b
+    );
+  if (isToyKw && isFoodBlob) return true;
+
+  const isFoodKw = /food|snack|grocery|食品|零食|食材/i.test(p);
+  const isToyBlob = /玩具|汽车玩具|泡泡棒|toy\s*car|\btoys?\b|儿童玩具/i.test(b);
+  if (isFoodKw && isToyBlob) return true;
+
+  return false;
 };
 
 const productRelevanceOk = (
@@ -3556,23 +3603,36 @@ const productRelevanceOk = (
 ): boolean => {
   const score = typeof r.fitScore === 'number' ? r.fitScore : 0;
   if (score > 0 && score < 3) return false;
-  const blob = `${r.name || ''} ${r.mainProducts || ''} ${r.description || ''} ${r.fitReason || ''}`.toLowerCase();
+
+  const blob = `${r.name || ''} ${r.mainProducts || ''} ${r.description || ''} ${r.fitReason || ''}`;
+  const blobLower = blob.toLowerCase();
   const kw = (productKeyword || '').trim().toLowerCase();
-  if (!kw) return score >= 3;
-  const tokens = kw.split(/[\s/_+\-]+/).filter((t) => t.length >= 3);
-  const hit = tokens.some((t) => blob.includes(t));
-  // 中文描述常见玩具/采购词：英文关键词没命中时，高分 + 行业词也可过
-  const softIndustry =
-    /玩具|儿童|母婴|派对|礼品|户外|泡泡|采购|进口|分销|批发|零售|brand|toy|kids|baby|party|import|distribut|wholesale|retail/i.test(
-      blob
-    );
-  if (hit) return true;
-  if (score >= 4 && softIndustry) return true;
-  if (score >= 3 && softIndustry && tokens.length <= 1) return true;
-  // 无分数字段时：至少要命中关键词或明显行业词
-  if (score === 0) return hit || softIndustry;
+  if (!kw) return score >= 4;
+
+  if (isHardCrossCategoryMismatch(kw, blob)) return false;
+
+  const rawParts = kw.split(/[\s/_+\-,，、]+/).map((t) => t.trim()).filter(Boolean);
+  const tokens = [kw, ...rawParts.filter((t) => t.length >= 2)].filter(
+    (t, i, arr) => arr.indexOf(t) === i
+  );
+
+  const hit = tokens.some((t) => blobLower.includes(t.toLowerCase()));
+  const softRe = softCategoryRegexForKeyword(kw);
+  const softHit = softRe ? softRe.test(blob) : false;
+
+  // 必须关键词命中，或（高分 + 同品类软词）。禁止再用「零售/进口」等万能词放行。
+  if (hit && (score === 0 || score >= 3)) return true;
+  if (softHit && score >= 4) return true;
+  if (softHit && score >= 3 && hit) return true;
+  if (score === 0) return hit || softHit;
   return false;
 };
+
+/** 对外：判断搜索结果是否与产品关键词同品类（供列表二次过滤 / 背调前拦截） */
+export const isClientSearchProductRelevant = (
+  r: Pick<ClientSearchResult, 'name' | 'mainProducts' | 'description' | 'fitReason' | 'fitScore'>,
+  productKeyword: string
+): boolean => productRelevanceOk(r, productKeyword);
 
 const filterSearchResultsByMarketAndProduct = (
   results: ClientSearchResult[],
@@ -3627,12 +3687,14 @@ export const searchPotentialClients = async (productKeyword: string, country: st
         : `- Target: relevant markets, but each result must show its REAL HQ country (never write "Global").`
   }
 
-  PRODUCT / INDUSTRY (CRITICAL):
+  PRODUCT / INDUSTRY (CRITICAL — ZERO TOLERANCE FOR CROSS-CATEGORY):
   - Product keyword: "${productKeyword}"
   - Industry constraint: ${industryConstraint}
-  - Companies MUST clearly deal in this product category (or extremely close substitutes).
-  - REJECT unrelated industries (software, banks, chemicals, construction, logistics-only, generic trading with no product fit, etc.).
-  ${stricter ? `- STRICT MODE: If unsure about product fit OR country fit, OMIT the company. Quality > quantity.` : ''}
+  - Companies MUST clearly buy / import / distribute / wholesale / retail THIS product (or extremely close substitutes).
+  - REJECT unrelated industries. Examples of REJECT when keyword is toys/car toy: food supermarket, grocery, restaurant, meat/seafood, bank, software-only, construction, logistics-only, generic trading with no toy assortment.
+  - If evidence shows the company is mainly food / grocery / unrelated category, OMIT it — do NOT return it with a low fitScore or a "mismatch" explanation.
+  - fitReason must explain PRODUCT fit for "${productKeyword}". Never write "跨品类/不匹配/无关" for a returned lead — if mismatched, omit instead.
+  ${stricter ? `- STRICT MODE: If unsure about product fit OR country fit, OMIT the company. Quality > quantity. Prefer fewer correct buyers over filler leads.` : ''}
 
   Preferred buyer types (match ANY): ${typeHint}.
   ${types.length > 1 ? `- Mix buyer types among: ${types.join(', ')}.` : ''}

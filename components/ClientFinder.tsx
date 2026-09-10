@@ -27,7 +27,7 @@ import {
   Bookmark,
   Trash2,
 } from 'lucide-react';
-import { searchPotentialClients } from '../services/geminiService';
+import { searchPotentialClients, isClientSearchProductRelevant } from '../services/geminiService';
 import { CONTINENTS, countryLabel, countrySearchValue, findCountryByEn, type ContinentGroup } from '../data/countriesByContinent';
 import { mergeResultsWithPriorKeywords, stampSearchResults } from '../utils/searchTags';
 import {
@@ -688,6 +688,13 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
+                          const kw = res.searchKeyword || state.product || '';
+                          if (kw && !isClientSearchProductRelevant(res, kw)) {
+                            alert(
+                              `该客户与关键词「${kw}」品类不匹配，已拦截背调以避免浪费 Token。\n请换一家匹配的买家，或重新搜索。`
+                            );
+                            return;
+                          }
                           if (bg.checked) {
                             const tip = timeLabel
                               ? `该公司已于 ${timeLabel} 完成背调。是否再次背调以更新信息？`

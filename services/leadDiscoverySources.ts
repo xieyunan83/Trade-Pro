@@ -150,4 +150,5 @@ MULTI-SOURCE EXTRACTION RULES (when directory / exhibition / yellow-page evidenc
 2) A directory page that lists multiple companies can yield MULTIPLE leads — extract as many distinct buyers as the evidence supports (up to the ask limit).
 3) Skip marketplace seller pages that are clearly Chinese exporters only (Alibaba storefronts of Chinese factories) unless they are overseas importers/distributors.
 4) Still enforce TARGET MARKET + PRODUCT fit. Do not invent domains.
+5) PRODUCT FIT GATE: Never extract a company whose core business is a different category than the product keyword (e.g. food supermarket for "car toy"). Prefer omitting over returning a mismatch.
 `.trim();
