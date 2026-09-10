@@ -1148,9 +1148,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                   </div>
                   <p className="text-[10px] text-slate-500 font-bold leading-relaxed">
                     <strong>三项完全独立</strong>。客户搜索固定优先级：
-                    <strong>Tavily 取证 →（有结果则只整理）Gemini/千问 →（无 Tavily 才）模型自带联网</strong>。
-                    「搜索」下拉只决定整理用 Gemini 还是千问，不会绕过 Tavily。
-                    背调 / 整理按各自下拉：Gemini 优先或仅千问。改完立即生效并同步云端。
+                    <strong>Tavily 取证 →（有结果则只整理）模型整理 →（无 Tavily 才）模型自带联网</strong>。
+                    推荐「Gemini∥千问合并」：两侧并行生成后字段合并，信息更全。
+                    「Gemini 优先」仍为失败才降级千问。「仅千问」不走 Gemini。改完立即生效并同步云端。
                   </p>
                   <p className="text-[10px] font-black text-violet-700 bg-white border border-violet-100 rounded-xl px-3 py-2">
                     生效中：{describeTaskAIRouting()} · 搜索取证优先 Tavily
@@ -1171,13 +1171,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                           onChange={(e) => patchTaskAI(row.key, e.target.value as AIEngineChoice)}
                           className="w-full bg-slate-50 border border-slate-100 rounded-xl px-3 py-2.5 font-bold text-sm"
                         >
+                          <option value="both">Gemini∥千问并行合并（推荐）</option>
                           <option value="gemini">Gemini 优先（失败→千问）</option>
                           <option value="qwen">仅用千问 Qwen</option>
                         </select>
                         <p className="text-[10px] font-bold mt-2 text-violet-700">
-                          {taskAIModels[row.key] === 'gemini'
-                            ? '本项：Gemini → 千问'
-                            : '本项：仅千问'}
+                          {taskAIModels[row.key] === 'both'
+                            ? '本项：Gemini∥千问合并'
+                            : taskAIModels[row.key] === 'gemini'
+                              ? '本项：Gemini → 千问'
+                              : '本项：仅千问'}
                         </p>
                       </div>
                     ))}

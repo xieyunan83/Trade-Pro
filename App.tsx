@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { analyzeCompany, hasApiKeyConfigured, checkApiKeyAvailability, hydrateApiConfigsFromCloud, searchPotentialClients, enableTavilyGeminiQwenCascade } from './services/geminiService';
+import { analyzeCompany, hasApiKeyConfigured, checkApiKeyAvailability, hydrateApiConfigsFromCloud, searchPotentialClients, enableTavilyGeminiQwenCascade, enableGeminiQwenParallelMerge } from './services/geminiService';
 import {
   subscribeCooldown,
   withRateLimitRetry,
@@ -275,6 +275,7 @@ const App: React.FC = () => {
   // 启用 Tavily → Gemini → 千问 降级链；订阅全局限流冷却 UI
   useEffect(() => {
     enableTavilyGeminiQwenCascade();
+    enableGeminiQwenParallelMerge();
     return subscribeCooldown((sec) => setCooldownTime(sec));
   }, []);
 

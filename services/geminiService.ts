@@ -31,6 +31,7 @@ import {
 } from './tavilyService';
 import { LEAD_EVIDENCE_USAGE_HINT, resolveDirectorySitesForMarket } from './leadDiscoverySources';
 import { hasRichProductCatalog } from './productCatalog';
+import { mergeAnalysisRaws, mergeClientSearchResults } from './multiModelMerge';
 import {
   buildFallbackEvidenceFromReport,
   evidenceItemsFromTavilyResults,
@@ -104,7 +105,7 @@ const formatAliyunLimitError = (
 
 const WEB_SEARCH_TASKS: TaskType[] = ['search', 'analysis'];
 
-export type AIEngineChoice = 'qwen' | 'gemini';
+export type AIEngineChoice = 'qwen' | 'gemini' | 'both';
 export type TaskAIModels = {
   search: AIEngineChoice;
   analysis: AIEngineChoice;
@@ -113,12 +114,17 @@ export type TaskAIModels = {
 };
 
 const DEFAULT_TASK_AI_MODELS: TaskAIModels = {
-  search: 'gemini',
-  analysis: 'gemini',
+  search: 'both',
+  analysis: 'both',
   organize: 'gemini',
 };
 
 const TASK_AI_LS_KEY = 'trade_scout_task_ai_models';
+
+const normalizeEngineChoice = (v: unknown, fallback: AIEngineChoice = 'gemini'): AIEngineChoice => {
+  if (v === 'qwen' || v === 'both' || v === 'gemini') return v;
+  return fallback;
+};
 
 export const getTaskAIModels = (): TaskAIModels => {
   if (typeof localStorage === 'undefined') return { ...DEFAULT_TASK_AI_MODELS };
@@ -131,9 +137,9 @@ export const getTaskAIModels = (): TaskAIModels => {
     if (!raw) return { ...DEFAULT_TASK_AI_MODELS };
     const parsed = JSON.parse(raw) as Partial<TaskAIModels>;
     return {
-      search: parsed.search === 'qwen' ? 'qwen' : 'gemini',
-      analysis: parsed.analysis === 'qwen' ? 'qwen' : 'gemini',
-      organize: parsed.organize === 'qwen' ? 'qwen' : 'gemini',
+      search: normalizeEngineChoice(parsed.search, 'both'),
+      analysis: normalizeEngineChoice(parsed.analysis, 'both'),
+      organize: normalizeEngineChoice(parsed.organize, 'gemini'),
     };
   } catch {
     return { ...DEFAULT_TASK_AI_MODELS };
@@ -143,9 +149,9 @@ export const getTaskAIModels = (): TaskAIModels => {
 export const saveTaskAIModels = (models: TaskAIModels) => {
   if (typeof localStorage === 'undefined') return;
   const normalized: TaskAIModels = {
-    search: models.search === 'qwen' ? 'qwen' : 'gemini',
-    analysis: models.analysis === 'qwen' ? 'qwen' : 'gemini',
-    organize: models.organize === 'qwen' ? 'qwen' : 'gemini',
+    search: normalizeEngineChoice(models.search, 'both'),
+    analysis: normalizeEngineChoice(models.analysis, 'both'),
+    organize: normalizeEngineChoice(models.organize, 'gemini'),
   };
   localStorage.setItem(TASK_AI_LS_KEY, JSON.stringify(normalized));
   localStorage.setItem('trade_scout_task_ai_models_ts', String(Date.now()));
@@ -154,7 +160,8 @@ export const saveTaskAIModels = (models: TaskAIModels) => {
 /** 当前三项路由摘要（调试 / 管理后台展示） */
 export const describeTaskAIRouting = (): string => {
   const m = getTaskAIModels();
-  const label = (e: AIEngineChoice) => (e === 'gemini' ? 'Gemini→千问' : '仅千问');
+  const label = (e: AIEngineChoice) =>
+    e === 'both' ? 'Gemini∥千问合并' : e === 'gemini' ? 'Gemini→千问' : '仅千问';
   return `搜索=${label(m.search)} · 背调=${label(m.analysis)} · 整理=${label(m.organize)}`;
 };
 
@@ -180,6 +187,21 @@ export const enableTavilyGeminiQwenCascade = () => {
   if (localStorage.getItem('trade_scout_force_qwen') !== '1') {
     localStorage.setItem('trade_scout_force_qwen', '0');
   }
+};
+
+/** 搜索/背调默认升级为 Gemini∥千问并行合并（仅一次） */
+export const enableGeminiQwenParallelMerge = () => {
+  if (typeof localStorage === 'undefined') return;
+  const flag = 'trade_scout_parallel_merge_v1';
+  if (localStorage.getItem(flag) === '1') return;
+  localStorage.setItem('trade_scout_force_qwen', '0');
+  const cur = getTaskAIModels();
+  saveTaskAIModels({
+    search: cur.search === 'qwen' ? 'qwen' : 'both',
+    analysis: cur.analysis === 'qwen' ? 'qwen' : 'both',
+    organize: cur.organize === 'qwen' ? 'qwen' : cur.organize === 'both' ? 'gemini' : cur.organize,
+  });
+  localStorage.setItem(flag, '1');
 };
 
 /** 按任务类型读取该项路由（search / analysis / organize 各自独立） */
@@ -256,7 +278,13 @@ const SYSTEM_INSTRUCTION = `
 You are "楠哥的小助理" (Nan Ge's Assistant), an elite Foreign Trade Intelligence Agent.
 Your goal is to provide deep, actionable insights for Chinese export suppliers.
 You MUST use 联网搜索 (web search) to find REAL, CURRENT information about companies, websites, and markets.
-DO NOT hallucinate. If data is unavailable, say "公开信息未找到".
+
+PLACEHOLDER RULES:
+- For customs shipment IDs / BOL numbers / private emails: if not found, write "公开信息未找到". NEVER invent them.
+- For SWOT, sales channels, supply-chain role, procurement habits, ecommerce presence, market trends:
+  when official website / evidence shows the business model (retailer, distributor, importer, online shop, etc.),
+  you MUST synthesize concise Chinese insights from that evidence — do NOT leave empty arrays or "N/A" for those sections.
+- Prefer a short reasoned inference labeled by evidence over blank fields.
 
 IDENTITY RULES (CRITICAL — never break these):
 1. The TARGET DOMAIN / official website is the single source of truth for company identity.
@@ -1802,9 +1830,9 @@ export const hydrateApiConfigsFromCloud = async (): Promise<boolean> => {
                     } else {
                       const parsed = JSON.parse(c.apiKey) as TaskAIModels;
                       saveTaskAIModels({
-                        search: parsed.search === 'qwen' ? 'qwen' : 'gemini',
-                        analysis: parsed.analysis === 'qwen' ? 'qwen' : 'gemini',
-                        organize: parsed.organize === 'qwen' ? 'qwen' : 'gemini',
+                        search: normalizeEngineChoice(parsed.search, 'both'),
+                        analysis: normalizeEngineChoice(parsed.analysis, 'both'),
+                        organize: normalizeEngineChoice(parsed.organize, 'gemini'),
                       });
                     }
                 } catch {
@@ -2417,13 +2445,20 @@ const generateContentUnified = async (
       });
     };
 
-    const cascadeLabel = engine === 'gemini' ? 'Gemini→千问' : '仅千问';
+    const cascadeLabel =
+      engine === 'both' ? 'Gemini∥千问并行' : engine === 'gemini' ? 'Gemini→千问' : '仅千问';
     console.log(
       `[AI] Task '${task}' → ${cascadeLabel}` +
         ` | 路由表: 搜索=${map.search}, 背调=${map.analysis}, 整理=${map.organize}` +
         `${needsWebSearch ? ' (联网)' : ' (不联网/用已有证据)'}` +
         `${hasGeminiOfficialKey() ? '' : ' [无Gemini Key]'}`
     );
+
+    // 并行：两侧都跑，成功的结果由调用方字段合并（此处返回首个成功文本，兼容旧调用）
+    if (engine === 'both') {
+      const multi = await generateContentMulti(task, prompt, systemInfo, jsonMode, images, attachments, opts);
+      return multi[0];
+    }
 
     // 该项选「Gemini 优先」：先 Gemini，失败/额度尽再千问
     if (engine === 'gemini') {
@@ -2450,6 +2485,112 @@ const generateContentUnified = async (
 
     // 该项选「仅用千问」
     return await runQwen();
+};
+
+/**
+ * 按任务路由生成 1～N 份原文：both 时 Gemini∥千问并行；否则单路。
+ * 搜索/背调应基于返回数组做 JSON 解析后字段合并。
+ */
+export const generateContentMulti = async (
+  task: TaskType,
+  prompt: string,
+  systemInfo?: string,
+  jsonMode: boolean = false,
+  images: string[] = [],
+  attachments: KnowledgeFile[] = [],
+  opts?: { enableSearch?: boolean }
+): Promise<string[]> => {
+  const needsWebSearch =
+    typeof opts?.enableSearch === 'boolean'
+      ? opts.enableSearch
+      : WEB_SEARCH_TASKS.includes(task);
+  const engine = resolveEngineForTask(task);
+  const systemText = systemInfo || QWEN_SYSTEM;
+
+  const runQwen = async () => {
+    let userContent = buildQwenUserContent(prompt, images, attachments);
+    if (jsonMode && needsWebSearch && typeof userContent === 'string') {
+      userContent += '\n\n【重要】请严格输出 JSON 格式，不要包含 markdown 代码块。';
+    }
+    const messages = [
+      { role: 'system', content: systemText },
+      { role: 'user', content: userContent },
+    ];
+    return callQwenChat(messages, {
+      jsonMode,
+      enableSearch: needsWebSearch,
+      forcedSearch: false,
+      task,
+    });
+  };
+
+  const runGemini = async () => {
+    const configs = getGeminiConfig();
+    if (!configs.length) {
+      throw new Error('未配置 Gemini 官方 API Key，请在管理后台「Gemini 官方」中填写');
+    }
+    const config =
+      configs.find((c) => c.id === 'gemini_official') ||
+      configs.find((c) => c.baseUrl === 'native') ||
+      configs[0];
+    if (images.length || attachments.length) {
+      const text = await tryGeminiFailover(
+        task,
+        prompt,
+        systemText,
+        jsonMode,
+        images,
+        attachments,
+        needsWebSearch
+      );
+      if (!text) throw new Error('Gemini 调用未返回结果');
+      return text;
+    }
+    return callGeminiNative(prompt, { ...config, baseUrl: 'native' }, {
+      jsonMode,
+      enableSearch: needsWebSearch,
+      systemInstruction: systemText,
+    });
+  };
+
+  if (engine === 'both') {
+    const hasG = hasGeminiOfficialKey() || getGeminiConfig().length > 0;
+    console.log(`[AI] Task '${task}' → Gemini∥千问并行合并${hasG ? '' : ' (无Gemini，仅千问)'}`);
+    if (!hasG) {
+      return [await runQwen()];
+    }
+    const settled = await Promise.allSettled([runGemini(), runQwen()]);
+    const out: string[] = [];
+    const errors: string[] = [];
+    settled.forEach((s, i) => {
+      const name = i === 0 ? 'Gemini' : '千问';
+      if (s.status === 'fulfilled' && s.value?.trim()) {
+        out.push(s.value);
+        console.log(`[AI] ${name} OK (${task}), chars=${s.value.length}`);
+      } else if (s.status === 'rejected') {
+        errors.push(`${name}: ${(s.reason as any)?.message || s.reason}`);
+        console.warn(`[AI] ${name} failed (${task})`, s.reason);
+      }
+    });
+    if (!out.length) {
+      throw new Error(`Gemini∥千问均失败。${errors.join('；')}`);
+    }
+    return out;
+  }
+
+  // 单路：避免回调 generateContentUnified（both 时会互相调用）
+  if (engine === 'gemini') {
+    if (hasGeminiOfficialKey() || getGeminiConfig().length > 0) {
+      try {
+        return [await runGemini()];
+      } catch (geminiErr: any) {
+        console.warn(`[AI] Gemini 失败 (${task})，降级千问:`, geminiErr?.message || geminiErr);
+        return [await runQwen()];
+      }
+    }
+    return [await runQwen()];
+  }
+  return [await runQwen()];
 };
 
 // --- Public Methods ---
@@ -2822,20 +2963,26 @@ ${identityBlock}
 ${evidenceBlock}
 
   You MUST use web search. Prefer official website of ${identityDomain}, LinkedIn company page for THAT domain, trade directories, exhibition pages,
-  ImportYeti / Bill of Lading public indexes, news, certification pages. If a fact is unknown, write "公开信息未找到" — NEVER invent customs shipment IDs.
+  ImportYeti / Bill of Lading public indexes, news, certification pages.
+  NEVER invent customs shipment IDs / BOL numbers / private emails — use "公开信息未找到" only for those hard facts.
   When AnySearch evidence is present, treat official page extracts as ground truth for headquarters/city/country.
 
   Action checklist:
   1. Company identity: legal/trading name, HQ city+country (verified for ${identityDomain}), founded year, nature (importer/distributor/retailer/brand/manufacturer), scale, employees. Description geography MUST match HQ.
-  2. Business model: channels, distributors, ecommerce, exhibitions, procurement habits, supply-chain role.
-  3. TRADE INTELLIGENCE (critical for exporters):
-     - HS codes / product categories they likely import
-     - Public customs/shipment clues (summarize; cite source type)
-     - Top source countries
-     - Certifications (CE, FDA, UL, BSCI, ISO, REACH, GRS, OEKO-TEX, etc.) if mentioned on site or news
-     - Preferred Incoterms / MOQ / buying season if found
-     - Risk level (低/中/高/未知) + short notes (sanctions/adverse media only if real evidence)
-  4. DECISION MAKERS — ONLY include people with a REAL full name AND at least one of: public phone, email, or personal LinkedIn.
+  2. Business model & supply chain (REQUIRED — do not leave empty/N/A when website evidence exists):
+     - channels: e.g. 自有电商、实体零售、批发分销、B2B采购
+     - ecommercePresence / exhibitionHistory when clues exist
+     - supplyChain.role / serviceType: e.g. 终端零售商、进口批发、品牌商自营
+     - procurementInfo: short Chinese note on how they likely buy (based on site scale/assortment)
+  3. SWOT (REQUIRED): each of strengths/weaknesses/opportunities/threats MUST have 2–4 concise Chinese bullets inferred from the company type, assortment, and market — not empty arrays.
+  4. TRADE INTELLIGENCE (critical for exporters):
+     - HS codes / product categories they likely import (OK to infer from catalog)
+     - Public customs/shipment clues (summarize; cite source type) — if none, "公开信息未找到"
+     - Top source countries (can infer typical sourcing for this category)
+     - Certifications if mentioned
+     - Preferred Incoterms / MOQ / buying season: if not public, give a cautious industry-typical estimate in Chinese ending with "（行业惯例推断）"; do not invent shipment IDs
+     - Risk level (低/中/高/未知) + short notes
+  5. DECISION MAKERS — ONLY include people with a REAL full name AND at least one of: public phone, email, or personal LinkedIn.
      - Do NOT invent placeholder people with name "公开信息未找到" and empty contact fields.
      - Prefer fewer high-quality contacts over many empty cards.
      - Include public phone / WhatsApp / mobile when found on website Contact pages.
@@ -2843,13 +2990,13 @@ ${evidenceBlock}
      - If no verifiable contacts, return decisionMakers: [].
      - NEVER invent emails. Leave emailGuess empty unless publicly listed.
      - phone / whatsapp only when publicly listed; otherwise leave empty.
-  5. PRODUCTS & PRICING (HIGHEST PRIORITY for catalog DB — do NOT skip):
+  6. PRODUCTS & PRICING (HIGHEST PRIORITY for catalog DB — do NOT skip):
      - Crawl/use official product, shop, catalog, collection pages from web evidence.
      - Extract concrete SKU/product names + category + retail/FOB price band in CNY.
      - Fill websiteCategories, businessScope.coreProducts/relevantProducts, priceSensitivity.
 ${productFocusBlock}
-  6. Financial trends last 5 years — estimate if needed, never all zeros.
-  7. SIMILAR COMPANIES (required, high volume):
+  7. Financial trends last 5 years — estimate if needed, never all zeros.
+  8. SIMILAR COMPANIES (required, high volume):
      - Return 12–15 similarCompanies that are REAL buyers/importers/retailers/distributors in the SAME or closely related market.
      - Prefer same country as the target; if thin, expand to same region (e.g. DACH / Benelux) but keep trade relevance.
      - Each must include: name, website (real domain), country, mainProducts (short Chinese or bilingual).
@@ -2914,9 +3061,18 @@ ${productFocusBlock}
   }
   `;
 
-  // 1. Get Basic Analysis
-  const text = await generateContentUnified('analysis', prompt, SYSTEM_INSTRUCTION, true);
-  const aiResult = extractJson(text);
+  // 1. Gemini∥千问并行取 JSON，字段级合并（单路时仅一份）
+  const texts = await generateContentMulti('analysis', prompt, SYSTEM_INSTRUCTION, true);
+  const raws = texts
+    .map((t) => extractJson(t))
+    .filter((r) => r && typeof r === 'object' && !Array.isArray(r)) as Record<string, any>[];
+  if (!raws.length) {
+    throw new Error('背调模型未返回有效 JSON，请重试或检查 Gemini/千问配置');
+  }
+  const aiResult = raws.length === 1 ? raws[0] : mergeAnalysisRaws(...raws);
+  if (raws.length > 1) {
+    console.log(`[analyzeCompany] merged ${raws.length} model JSONs`);
+  }
   
   // Merge Defaults
   let result: AnalysisResult = {
@@ -3819,8 +3975,8 @@ export const searchPotentialClients = async (productKeyword: string, country: st
   NOTE: Live web evidence was unavailable. Use your web search / grounding to find real companies with real websites.
   ${LEAD_EVIDENCE_USAGE_HINT}`;
 
-    // 有联网证据：只让路由模型整理名单（关联网）；无证据：Gemini→千问自带联网兜底
-    const text = await generateContentUnified(
+    // 有联网证据：只让路由模型整理名单（关联网）；无证据：Gemini∥千问自带联网兜底
+    const texts = await generateContentMulti(
       'search',
       promptWithEvidence,
       SYSTEM_INSTRUCTION,
@@ -3830,15 +3986,23 @@ export const searchPotentialClients = async (productKeyword: string, country: st
       { enableSearch: !webEvidence }
     );
 
-    const parsed = extractJson(text, true);
-    if (!Array.isArray(parsed) || parsed.length === 0) {
+    const mappedLists: ClientSearchResult[][] = [];
+    for (const text of texts) {
+      const parsed = extractJson(text, true);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        mappedLists.push(mapRaw(parsed));
+      }
+    }
+    if (!mappedLists.length) {
       throw new Error(
         webEvidence
           ? '已获取联网/目录证据，但模型未能整理出有效客户列表。请重试或检查关键词。'
           : '搜索未返回有效结果。请确认已配置 Tavily Key，或千问/Gemini 联网可用。'
       );
     }
-    return mapRaw(parsed);
+    if (mappedLists.length === 1) return mappedLists[0];
+    console.log(`[search] merging ${mappedLists.length} model lead lists`);
+    return mergeClientSearchResults(mappedLists, { limit: askLimit });
   };
 
   let mapped: ClientSearchResult[];
