@@ -49,6 +49,8 @@ interface ModuleClientCRMProps {
   onReanalyze?: (client: Client) => void;
   history: HistoryItem[];
   onOpenHistory: (item: HistoryItem) => void;
+  /** 无 HistoryItem 时按客户打开报告（自动化队列等兜底） */
+  onOpenClientReport?: (client: Client) => void;
   productDigBusy?: boolean;
   /** 当前筛选后的客户顺序（含可打开报告的），供报告页上一家/下一家 */
   onNavOrderChange?: (order: { clientId: string; historyId: string }[]) => void;
@@ -190,7 +192,11 @@ const BgStatus = React.memo(
             type="button"
             onClick={onOpenReport}
             disabled={!canOpen}
-            title={canOpen ? `查看背调资料${timeLabel ? `（${timeLabel}）` : ''}` : '已标记背调，但本地无报告'}
+            title={
+              canOpen
+                ? `查看背调资料${timeLabel ? `（${timeLabel}）` : ''}`
+                : '报告缺失（可能曾被清理），请点「再次背调」重新生成'
+            }
             className={`inline-flex items-center gap-1 ${
               canOpen
                 ? 'text-green-600 hover:text-green-700 cursor-pointer'
@@ -203,6 +209,17 @@ const BgStatus = React.memo(
           </button>
           {timeLabel && (
             <span className="text-[10px] font-bold text-slate-500 whitespace-nowrap">{timeLabel}</span>
+          )}
+          {canOpen ? (
+            <button
+              type="button"
+              onClick={onOpenReport}
+              className="inline-flex items-center gap-0.5 text-[10px] font-black text-blue-600 hover:text-blue-700 hover:underline"
+            >
+              <ExternalLink size={10} /> 查看报告
+            </button>
+          ) : (
+            <span className="text-[9px] font-bold text-amber-600">报告需重新背调</span>
           )}
           <button
             type="button"
@@ -238,15 +255,28 @@ const IntelChips: React.FC<{
   hasProduct: boolean;
   dmStatus: DmDigStatus;
   dmContactCount: number;
-}> = ({ hasBg, hasProduct, dmStatus, dmContactCount }) => (
+  canOpenReport?: boolean;
+  onOpenReport?: () => void;
+}> = ({ hasBg, hasProduct, dmStatus, dmContactCount, canOpenReport, onOpenReport }) => (
   <div className="flex flex-wrap gap-1">
-    <span
-      className={`text-[9px] font-black px-1.5 py-0.5 rounded ${
-        hasBg ? 'bg-violet-600 text-white' : 'bg-slate-100 text-slate-400 border border-slate-200'
-      }`}
-    >
-      {hasBg ? '已背调' : '未背调'}
-    </span>
+    {hasBg && canOpenReport && onOpenReport ? (
+      <button
+        type="button"
+        onClick={onOpenReport}
+        className="text-[9px] font-black px-1.5 py-0.5 rounded bg-violet-600 text-white hover:bg-violet-700"
+        title="查看背调报告"
+      >
+        已背调 · 查看
+      </button>
+    ) : (
+      <span
+        className={`text-[9px] font-black px-1.5 py-0.5 rounded ${
+          hasBg ? 'bg-violet-600 text-white' : 'bg-slate-100 text-slate-400 border border-slate-200'
+        }`}
+      >
+        {hasBg ? '已背调' : '未背调'}
+      </span>
+    )}
     <span
       className={`text-[9px] font-black px-1.5 py-0.5 rounded inline-flex items-center gap-0.5 ${
         hasProduct ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-400 border border-slate-200'
@@ -273,6 +303,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   onReanalyze,
   history,
   onOpenHistory,
+  onOpenClientReport,
   productDigBusy,
   onNavOrderChange,
 }) => {
@@ -323,7 +354,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
         dmStatus,
         dmContactCount: hasDm ? dmContactCount : 0,
         bgAt,
-        canOpenReport: !!historyItem,
+        canOpenReport: !!historyItem || hasBg,
       };
     });
   }, [clients, historyIndex]);
@@ -501,14 +532,18 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   );
 
   const openClientReport = useCallback(
-    (item?: HistoryItem) => {
-      if (!item) {
-        alert('未找到该客户的背调报告。请先对该网站重新做一次深度调查。');
+    (client: Client, item?: HistoryItem) => {
+      if (item) {
+        onOpenHistory(item);
         return;
       }
-      onOpenHistory(item);
+      if (onOpenClientReport) {
+        onOpenClientReport(client);
+        return;
+      }
+      alert('未找到该客户的背调报告。请先对该网站重新做一次深度调查。');
     },
-    [onOpenHistory]
+    [onOpenHistory, onOpenClientReport]
   );
 
   const triggerReanalyze = useCallback(
@@ -907,7 +942,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                   <div className="min-w-0">
                     <button
                       type="button"
-                      onClick={() => canOpenReport && openClientReport(historyItem)}
+                      onClick={() => canOpenReport && openClientReport(client, historyItem)}
                       disabled={!canOpenReport}
                       className={`font-bold text-left truncate block w-full text-sm ${
                         canOpenReport
@@ -934,6 +969,8 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                         hasProduct={hasProduct}
                         dmStatus={dmStatus}
                         dmContactCount={dmContactCount}
+                        canOpenReport={canOpenReport}
+                        onOpenReport={() => openClientReport(client, historyItem)}
                       />
                     </div>
                   </div>
@@ -962,7 +999,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                   hasBg={hasBg}
                   canOpen={canOpenReport}
                   timeLabel={formatBackgroundCheckTime(bgAt)}
-                  onOpenReport={() => openClientReport(historyItem)}
+                  onOpenReport={() => openClientReport(client, historyItem)}
                   onReanalyze={() => triggerReanalyze(client, bgAt)}
                 />
               </div>
@@ -1020,7 +1057,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                   <td className="px-3 py-2.5">
                     <button
                       type="button"
-                      onClick={() => canOpenReport && openClientReport(historyItem)}
+                      onClick={() => canOpenReport && openClientReport(client, historyItem)}
                       disabled={!canOpenReport}
                       className={`font-bold text-left text-sm leading-snug line-clamp-2 ${
                         canOpenReport
@@ -1061,7 +1098,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                       hasBg={hasBg}
                       canOpen={canOpenReport}
                       timeLabel={formatBackgroundCheckTime(bgAt)}
-                      onOpenReport={() => openClientReport(historyItem)}
+                      onOpenReport={() => openClientReport(client, historyItem)}
                       onReanalyze={() => triggerReanalyze(client, bgAt)}
                     />
                     <IntelChips
@@ -1069,6 +1106,8 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                       hasProduct={hasProduct}
                       dmStatus={dmStatus}
                       dmContactCount={dmContactCount}
+                      canOpenReport={canOpenReport}
+                      onOpenReport={() => openClientReport(client, historyItem)}
                     />
                   </td>
                   <td className="px-3 py-2.5">

@@ -2761,32 +2761,36 @@ export const analyzeCompany = async (
   ${searchCountry && !isVagueMarketCountry(searchCountry) ? `- Lead market hint: ${searchCountry}. Prefer the entity of this domain that matches this market; still do not invent HQ.` : '- No specific market hint (or Global): still bind identity strictly to the domain above.'}
 `;
 
-  // AnySearch + Tavily 身份证据；失败则软跳过
+  // AnySearch ∥ Tavily 并行取证，缩短背调等待
   let identityEvidence = '';
   let collectedEvidenceItems = evidenceItemsFromTavilyResults([]);
   if (hasDomain) {
-    try {
-      identityEvidence = await gatherIdentityEvidence(canonicalDomain, {
+    const [anyRes, tavilyRes] = await Promise.allSettled([
+      gatherIdentityEvidence(canonicalDomain, {
         companyHint: rawInput,
         searchCountry: searchCountry || undefined,
-      });
-      if (identityEvidence) {
-        console.log('[analyzeCompany] AnySearch identity evidence chars:', identityEvidence.length);
-        collectedEvidenceItems = mergeEvidenceItems(
-          collectedEvidenceItems,
-          parseEvidenceItemsFromText(identityEvidence, 'anysearch')
-        );
-      }
-    } catch (e) {
-      console.warn('[analyzeCompany] AnySearch evidence skipped', e);
-    }
-    try {
-      const tavilyBundle = await gatherTavilyCompanyEvidenceBundle({
+      }),
+      gatherTavilyCompanyEvidenceBundle({
         domain: canonicalDomain,
         companyHint: rawInput,
         searchKeyword: searchKeyword || undefined,
         searchCountry: searchCountry || undefined,
-      });
+      }),
+    ]);
+
+    if (anyRes.status === 'fulfilled' && anyRes.value) {
+      identityEvidence = anyRes.value;
+      console.log('[analyzeCompany] AnySearch identity evidence chars:', identityEvidence.length);
+      collectedEvidenceItems = mergeEvidenceItems(
+        collectedEvidenceItems,
+        parseEvidenceItemsFromText(identityEvidence, 'anysearch')
+      );
+    } else if (anyRes.status === 'rejected') {
+      console.warn('[analyzeCompany] AnySearch evidence skipped', anyRes.reason);
+    }
+
+    if (tavilyRes.status === 'fulfilled') {
+      const tavilyBundle = tavilyRes.value;
       if (tavilyBundle.text) {
         identityEvidence = identityEvidence
           ? `${identityEvidence}\n\n${tavilyBundle.text}`
@@ -2797,8 +2801,8 @@ export const analyzeCompany = async (
         collectedEvidenceItems,
         evidenceItemsFromTavilyResults(tavilyBundle.items)
       );
-    } catch (e) {
-      console.warn('[analyzeCompany] Tavily evidence skipped', e);
+    } else {
+      console.warn('[analyzeCompany] Tavily evidence skipped', tavilyRes.reason);
     }
   }
 

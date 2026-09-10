@@ -29,7 +29,7 @@ import { saveProductProfilesBulk } from './services/db';
 import { addCustomKeyword, addCustomCountry } from './services/taxonomyStore';
 import { normalizeCountryZh } from './utils/countryNormalize';
 import { buildSearchTags, stampSearchResults } from './utils/searchTags';
-import { mergeDiscoveryResultsIntoCrm, mergeHistoryItemsIntoCrm, findCrmIdsForHistoryItem, findCrmIdsForDiscoveryResults, lookupBackgroundCheck, formatBackgroundCheckTime, findHistoryForClient, clientPatchFromAnalysis, CRM_JUNE_2026_CUTOFF_MS, isHistoryInCrm, isSearchResultInCrm, listHistoryIdsAlreadyInCrm } from './utils/crmHistory';
+import { mergeDiscoveryResultsIntoCrm, mergeHistoryItemsIntoCrm, findCrmIdsForHistoryItem, findCrmIdsForDiscoveryResults, lookupBackgroundCheck, formatBackgroundCheckTime, findHistoryForClient, clientPatchFromAnalysis, CRM_JUNE_2026_CUTOFF_MS, isSearchResultInCrm } from './utils/crmHistory';
 import {
   clearCrmTombstonesForClients,
   filterOutCrmTombstones,
@@ -1167,6 +1167,48 @@ const App: React.FC = () => {
     }
   };
 
+  /** CRM：无 HistoryItem 时从自动化队列或域名匹配恢复报告 */
+  const openCrmClientReport = (client: Client) => {
+    const hist = findHistoryForClient(client, historyRef.current);
+    if (hist) {
+      loadFromHistory(hist);
+      return;
+    }
+    const host = (client.website || '')
+      .toLowerCase()
+      .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
+      .split('/')[0];
+    const nameKey = (client.name || '').trim().toLowerCase();
+    const task = automationResultsRef.current.find((t) => {
+      if (t.status !== 'completed' || !t.analysis) return false;
+      const tw = (t.analysis.companyInfo?.website || t.website || '')
+        .toLowerCase()
+        .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
+        .split('/')[0];
+      const tn = (t.analysis.companyInfo?.name || t.clientName || '').trim().toLowerCase();
+      if (host && tw && host === tw) return true;
+      if (nameKey && tn && nameKey === tn) return true;
+      return false;
+    });
+    if (task?.analysis) {
+      const data = normalizeAnalysisResult(task.analysis);
+      setAnalysisData(data);
+      setViewingHistoryId(null);
+      setDomainInput(data.companyInfo?.website || client.website || '');
+      setActiveModule(ModuleType.BACKGROUND);
+      setHistoryOpen(false);
+      setMobileMenuOpen(false);
+      setErrorMsg(null);
+      setLoading(false);
+      // 写回历史，避免下次再丢
+      void saveAnalysisToHistory(data, 'crm-recover').catch((e) =>
+        console.warn('[crm] recover history save failed', e)
+      );
+      return;
+    }
+    alert('未找到该客户的背调报告正文（可能曾被清理）。请点「再次背调」重新生成后即可查看。');
+  };
+
   const resolveCrmNavIndex = (): number => {
     if (!crmNavOrder.length) return -1;
     if (viewingHistoryId) {
@@ -1626,19 +1668,6 @@ const App: React.FC = () => {
           } as Client);
           return [newClient, ...prev];
       });
-      // 已入 CRM 后从记录中心移除对应背调，避免重复操作
-      const matchIds = historyRef.current
-        .filter((h) =>
-          isHistoryInCrm(h, [
-            {
-              id: '_',
-              name: analysisData.companyInfo.name,
-              website,
-            } as Client,
-          ])
-        )
-        .map((h) => h.id);
-      if (matchIds.length) void removeHistoryFromRecordsCenterOnly(matchIds);
       alert("已加入客户管理（含背调标记与 " + (analysisData.decisionMakers?.length || 0) + " 位决策人）");
   };
   
@@ -1728,11 +1757,7 @@ const App: React.FC = () => {
       return next;
     });
 
-    // 已入 CRM 的背调从记录中心移除，避免重复操作（不删 CRM）
-    const importedHistIds = historyItems.map((h) => h.id).filter(Boolean);
-    if (importedHistIds.length) {
-      void removeHistoryFromRecordsCenterOnly(importedHistIds);
-    }
+    // 背调报告必须保留（CRM「查看报告」依赖 HistoryItem）；记录中心仅隐藏已入 CRM 项
     if (archives.length) {
       void pruneDiscoveryArchivesAlreadyInCrm(
         archives.map((a) => a.id),
@@ -1757,32 +1782,7 @@ const App: React.FC = () => {
     if (added) parts.push(`新建 ${added}`);
     if (updated) parts.push(`更新 ${updated}`);
     if (skipped) parts.push(`跳过已存在 ${skipped}`);
-    if (importedHistIds.length) parts.push(`记录中心已移除 ${importedHistIds.length} 条`);
     alert(parts.length ? `CRM 导入完成：${parts.join('，')}` : '没有可导入的客户');
-  };
-
-  /** 仅从记录中心删除背调（本地+云端），不删 CRM、不写墓碑 */
-  const removeHistoryFromRecordsCenterOnly = async (ids: string[]) => {
-    const unique = [...new Set(ids.filter(Boolean))];
-    if (!unique.length) return 0;
-    const idSet = new Set(unique);
-    setHistory((prev) => prev.filter((h) => !idSet.has(h.id)));
-    historyRef.current = historyRef.current.filter((h) => !idSet.has(h.id));
-    if (viewingHistoryIdRef.current && idSet.has(viewingHistoryIdRef.current)) {
-      setAnalysisData(null);
-      setViewingHistoryId(null);
-    }
-    for (const id of unique) {
-      try {
-        await deleteHistoryItem(id);
-      } catch (e) {
-        console.warn('[records] local history delete failed', id, e);
-      }
-      void deleteInvestigationHistory(id).catch((e) =>
-        console.warn('[records] cloud history delete failed', id, e)
-      );
-    }
-    return unique.length;
   };
 
   /** 搜索归档：整份已入 CRM 则删；部分入 CRM 则剔除已入结果 */
@@ -1839,20 +1839,14 @@ const App: React.FC = () => {
     }
   };
 
-  /** 清理记录中心里「已入 CRM」的条目（背调+搜索），保留 CRM 客户 */
+  /** 清理记录中心里「已入 CRM」的搜索归档（背调报告保留，供 CRM 查看） */
   const purgeRecordsAlreadyInCrm = async (opts?: { silent?: boolean }) => {
     const crm = crmClientsRef.current;
-    const histIds = listHistoryIdsAlreadyInCrm(historyRef.current, crm);
-    const removedHist = await removeHistoryFromRecordsCenterOnly(histIds);
     await pruneDiscoveryArchivesAlreadyInCrm(null, crm);
     if (!opts?.silent) {
-      alert(
-        removedHist > 0
-          ? `已从记录中心移除 ${removedHist} 条已入 CRM 的背调（CRM 客户保留）。`
-          : '记录中心没有需要移除的已入 CRM 背调。'
-      );
+      alert('已同步：已入 CRM 的搜索归档已从记录中心清理；背调报告保留，可在客户管理中打开。');
     }
-    return removedHist;
+    return 0;
   };
 
   // RESTORED: Update CRM status if re-analyzed
@@ -2197,7 +2191,7 @@ const App: React.FC = () => {
       clientType: (config.clientTypes || []).join(', '),
     }));
 
-    const runLimited = withConcurrency<void>(1);
+    const runLimited = withConcurrency<void>(2);
     const followUps: Promise<void>[] = [];
     let searchedCount = 0;
     const clientTypeArg = (config.clientTypes || []).join(', ');
@@ -2375,18 +2369,8 @@ const App: React.FC = () => {
       };
 
       try {
-        while (!shouldStopRef.current) {
-          const task = await findNextPending();
-          if (!task) break;
-
-          const limit = checkLimit('analysis');
-          if (!limit.allowed) {
-              setSystemNotice(
-                `今日背调次数已达上限（${limit.current}/${limit.max}），批量任务已暂停。可稍后点「继续待处理任务」，或联系管理员提高限额。`
-              );
-              break;
-          }
-
+        const BATCH_ANALYZE_CONCURRENCY = 2;
+        const runOneBatchTask = async (task: AutomationResult) => {
           const analyzingTask: AutomationResult = { ...task, status: 'analyzing' };
           batchSeedByIdRef.current.set(task.id, analyzingTask);
           syncAutomationResults((prev) =>
@@ -2396,69 +2380,97 @@ const App: React.FC = () => {
           void saveAutomationTask(analyzingTask).catch(() => undefined);
 
           try {
-              const kw = (task.keyword || discoveryState.product || '').trim();
-              if (kw) addCustomKeyword(kw);
-              const result = await withRateLimitRetry(
-                () =>
-                  analyzeCompany(task.website, task.mode || 'economy', {
-                    searchKeyword: kw || undefined,
-                    searchTags: kw ? buildSearchTags(kw, task.country || '') : undefined,
-                    searchCountry: task.country || undefined,
-                  }),
-                {
-                  maxAttempts: 4,
-                  baseWaitSec: 45,
-                  shouldStop: () => shouldStopRef.current,
-                }
-              );
-
-              const completedTask: AutomationResult = {
-                  ...task,
-                  clientName: result.companyInfo?.name || task.clientName,
-                  website: result.companyInfo?.website || task.website,
-                  country: result.companyInfo?.headquarters?.split(',').pop()?.trim() || task.country,
-                  status: 'completed',
-                  completedAt: Date.now(),
-                  analysis: result,
-                  mailGroup: undefined,
-                  keyword: kw || task.keyword || discoveryState.product,
-              };
-
-              batchSeedByIdRef.current.set(task.id, completedTask);
-              await saveAutomationTask(completedTask);
-              syncAutomationResults((prev) => prev.map((t) => (t.id === task.id ? completedTask : t)));
-              refreshBatchProgressFromSession('');
-
-              try {
-                  await saveAnalysisToHistory(result, 'batch');
-              } catch (histErr) {
-                  console.error('批量结果写入历史失败，但任务队列已保存', histErr);
+            const kw = (task.keyword || discoveryState.product || '').trim();
+            if (kw) addCustomKeyword(kw);
+            const result = await withRateLimitRetry(
+              () =>
+                analyzeCompany(task.website, task.mode || 'economy', {
+                  searchKeyword: kw || undefined,
+                  searchTags: kw ? buildSearchTags(kw, task.country || '') : undefined,
+                  searchCountry: task.country || undefined,
+                }),
+              {
+                maxAttempts: 4,
+                baseWaitSec: 45,
+                shouldStop: () => shouldStopRef.current,
               }
+            );
 
-              incrementUsage('analysis');
-              updateCrmStatus(result);
+            const completedTask: AutomationResult = {
+              ...task,
+              clientName: result.companyInfo?.name || task.clientName,
+              website: result.companyInfo?.website || task.website,
+              country: result.companyInfo?.headquarters?.split(',').pop()?.trim() || task.country,
+              status: 'completed',
+              completedAt: Date.now(),
+              analysis: result,
+              mailGroup: undefined,
+              keyword: kw || task.keyword || discoveryState.product,
+            };
+
+            batchSeedByIdRef.current.set(task.id, completedTask);
+            await saveAutomationTask(completedTask);
+            syncAutomationResults((prev) => prev.map((t) => (t.id === task.id ? completedTask : t)));
+            refreshBatchProgressFromSession('');
+
+            try {
+              await saveAnalysisToHistory(result, 'batch');
+            } catch (histErr) {
+              console.error('批量结果写入历史失败，但任务队列已保存', histErr);
+            }
+
+            incrementUsage('analysis');
+            updateCrmStatus(result);
           } catch (e: any) {
-              if (shouldStopRef.current) {
-                const paused: AutomationResult = { ...task, status: 'pending' };
-                batchSeedByIdRef.current.set(task.id, paused);
-                syncAutomationResults((prev) =>
-                  prev.map((t) => (t.id === task.id ? paused : t))
-                );
-                void saveAutomationTask(paused).catch(() => undefined);
-                break;
-              }
-              console.error(`Task ${task.id} failed`, e);
-              const failedTask: AutomationResult = { ...task, status: 'failed' };
-              batchSeedByIdRef.current.set(task.id, failedTask);
-              await saveAutomationTask(failedTask);
-              syncAutomationResults((prev) => prev.map((t) => (t.id === task.id ? failedTask : t)));
-              refreshBatchProgressFromSession('');
-              if (isRateLimitError(e)) {
-                  noteRateLimited(75);
-              }
+            if (shouldStopRef.current) {
+              const paused: AutomationResult = { ...task, status: 'pending' };
+              batchSeedByIdRef.current.set(task.id, paused);
+              syncAutomationResults((prev) =>
+                prev.map((t) => (t.id === task.id ? paused : t))
+              );
+              void saveAutomationTask(paused).catch(() => undefined);
+              return;
+            }
+            console.error(`Task ${task.id} failed`, e);
+            const failedTask: AutomationResult = { ...task, status: 'failed' };
+            batchSeedByIdRef.current.set(task.id, failedTask);
+            await saveAutomationTask(failedTask);
+            syncAutomationResults((prev) => prev.map((t) => (t.id === task.id ? failedTask : t)));
+            refreshBatchProgressFromSession('');
+            if (isRateLimitError(e)) {
+              noteRateLimited(75);
+            }
           }
+        };
 
-          const gap = getCooldownRemainingSec() > 0 ? 5000 : 2500;
+        while (!shouldStopRef.current) {
+          const wave: AutomationResult[] = [];
+          for (let i = 0; i < BATCH_ANALYZE_CONCURRENCY; i++) {
+            const limit = checkLimit('analysis');
+            if (!limit.allowed) {
+              if (wave.length === 0) {
+                setSystemNotice(
+                  `今日背调次数已达上限（${limit.current}/${limit.max}），批量任务已暂停。可稍后点「继续待处理任务」，或联系管理员提高限额。`
+                );
+              }
+              break;
+            }
+            const task = await findNextPending();
+            if (!task) break;
+            // 立刻占位，避免并行波次重复捞到同一任务
+            const claiming: AutomationResult = { ...task, status: 'analyzing' };
+            batchSeedByIdRef.current.set(task.id, claiming);
+            syncAutomationResults((prev) =>
+              prev.map((t) => (t.id === task.id ? claiming : t))
+            );
+            wave.push(task);
+          }
+          if (!wave.length) break;
+
+          await Promise.all(wave.map((t) => runOneBatchTask(t)));
+          if (shouldStopRef.current) break;
+
+          const gap = getCooldownRemainingSec() > 0 ? 4000 : 1500;
           await new Promise((r) => setTimeout(r, gap));
         }
       } finally {
@@ -3137,12 +3149,10 @@ const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUser?.username, history.length, crmClients.length, discoveryArchives.length]);
 
-  // 记录中心：已入 CRM 的背调/搜索自动删除（保留 CRM），避免混淆与重复操作
+  // 记录中心：仅清理已入 CRM 的搜索归档；背调 History 保留（CRM 打开报告需要）
   useEffect(() => {
     if (!currentUser || !userDataReadyRef.current) return;
-    if (!crmClients.length) return;
-    if (!history.length && !discoveryArchives.length) return;
-    const histIds = listHistoryIdsAlreadyInCrm(history, crmClients);
+    if (!crmClients.length || !discoveryArchives.length) return;
     const hasFullyInDiscovery = discoveryArchives.some((d) => {
       const results = d.results || [];
       if (!results.length) return false;
@@ -3154,10 +3164,10 @@ const App: React.FC = () => {
       const inCount = results.filter((r) => isSearchResultInCrm(r, crmClients)).length;
       return inCount > 0 && inCount < results.length;
     });
-    if (!histIds.length && !hasFullyInDiscovery && !hasPartialDiscovery) return;
+    if (!hasFullyInDiscovery && !hasPartialDiscovery) return;
     void purgeRecordsAlreadyInCrm({ silent: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser?.username, history.length, crmClients.length, discoveryArchives.length]);
+  }, [currentUser?.username, crmClients.length, discoveryArchives.length]);
 
   /** 手动清理 2026-06 前 CRM（本地 + 云端，保守日期规则） */
   const handlePurgeCrmBeforeJune2026 = async () => {
@@ -3984,6 +3994,7 @@ const App: React.FC = () => {
                         onReanalyze={(client) => void handleBatchAnalyzeFromCRM([client])}
                         history={history}
                         onOpenHistory={loadFromHistory}
+                        onOpenClientReport={openCrmClientReport}
                         onNavOrderChange={setCrmNavOrder}
                     />
                 )}

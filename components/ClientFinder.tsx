@@ -207,45 +207,54 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
     setErrorMsg(null);
     try {
       const typeArg = selectedTypes.join(', ') || '';
-      // 按国家逐个搜索并分别归档，保证「波兰15 / 荷兰15」都能记上且打对标签
+      // 多国并行搜索（限 2），缩短总等待；仍按国分别归档
       const targets = selectedCountries.length > 0 ? selectedCountries : [''];
       const allStamped: ClientSearchResult[] = [];
       const errors: string[] = [];
+      const COUNTRY_CONCURRENCY = 2;
 
-      for (const country of targets) {
-        try {
-          const searchId = `disc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-          const raw = await searchPotentialClients(
-            state.product,
-            country,
-            state.industry,
-            typeArg,
-            18
-          );
-          const stamped = stampSearchResults(raw, {
-            keyword: state.product,
-            targetCountry: country || 'Global',
-            clientTypes: selectedTypes,
-            searchId,
-          });
-          allStamped.push(...stamped);
+      const searchOneCountry = async (country: string) => {
+        const searchId = `disc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const raw = await searchPotentialClients(
+          state.product,
+          country,
+          state.industry,
+          typeArg,
+          18
+        );
+        const stamped = stampSearchResults(raw, {
+          keyword: state.product,
+          targetCountry: country || 'Global',
+          clientTypes: selectedTypes,
+          searchId,
+        });
+        const archive: DiscoveryArchiveItem = {
+          id: searchId,
+          timestamp: Date.now(),
+          product: state.product,
+          countries: country ? [country] : [],
+          country: country || '',
+          industry: state.industry,
+          clientTypes: selectedTypes,
+          clientType: typeArg,
+          results: stamped,
+        };
+        onSearchArchived?.(archive);
+        return stamped;
+      };
 
-          const archive: DiscoveryArchiveItem = {
-            id: searchId,
-            timestamp: Date.now(),
-            product: state.product,
-            countries: country ? [country] : [],
-            country: country || '',
-            industry: state.industry,
-            clientTypes: selectedTypes,
-            clientType: typeArg,
-            results: stamped,
-          };
-          onSearchArchived?.(archive);
-        } catch (e: any) {
-          console.error(e);
-          errors.push(`${country || '全球'}: ${e?.message || '失败'}`);
-        }
+      for (let i = 0; i < targets.length; i += COUNTRY_CONCURRENCY) {
+        const slice = targets.slice(i, i + COUNTRY_CONCURRENCY);
+        const settled = await Promise.allSettled(slice.map((c) => searchOneCountry(c)));
+        settled.forEach((s, idx) => {
+          const country = slice[idx];
+          if (s.status === 'fulfilled') {
+            allStamped.push(...s.value);
+          } else {
+            console.error(s.reason);
+            errors.push(`${country || '全球'}: ${(s.reason as any)?.message || '失败'}`);
+          }
+        });
       }
 
       // 合并同域名 + 叠加历史关键词标签，避免重复背调

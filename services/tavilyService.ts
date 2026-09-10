@@ -310,26 +310,33 @@ export const gatherTavilyLeadEvidence = async (opts: {
     if (block) chunks.push(block);
   };
 
-  for (const q of primary) {
-    try {
-      await runQuery(q);
-    } catch (e) {
-      if (String((e as any)?.message || e).includes('TAVILY_POOL_EXHAUSTED')) {
+  let poolExhausted = false;
+  const settled = await Promise.allSettled(primary.map((q) => runQuery(q)));
+  for (let i = 0; i < settled.length; i++) {
+    const s = settled[i];
+    if (s.status === 'rejected') {
+      const msg = String((s.reason as any)?.message || s.reason);
+      if (msg.includes('TAVILY_POOL_EXHAUSTED')) {
+        poolExhausted = true;
         console.warn('[tavily] pool exhausted, fall back to Qwen web search');
-        return chunks.join('\n\n').slice(0, MAX_LEAD_EVIDENCE_CHARS);
+      } else {
+        console.warn('[tavily] lead search failed', primary[i], s.reason);
       }
-      console.warn('[tavily] lead search failed', q, e);
     }
+  }
+  if (poolExhausted) {
+    return chunks.join('\n\n').slice(0, MAX_LEAD_EVIDENCE_CHARS);
   }
 
   const joinedLen = chunks.join('\n\n').length;
   if (joinedLen < 2200 && backup.length) {
-    for (const q of backup) {
-      try {
-        await runQuery(q);
-      } catch (e) {
-        if (String((e as any)?.message || e).includes('TAVILY_POOL_EXHAUSTED')) break;
-        console.warn('[tavily] lead backup search failed', q, e);
+    const backupSettled = await Promise.allSettled(backup.map((q) => runQuery(q)));
+    for (let i = 0; i < backupSettled.length; i++) {
+      const s = backupSettled[i];
+      if (s.status === 'rejected') {
+        const msg = String((s.reason as any)?.message || s.reason);
+        if (msg.includes('TAVILY_POOL_EXHAUSTED')) break;
+        console.warn('[tavily] lead backup search failed', backup[i], s.reason);
       }
     }
   }
@@ -386,32 +393,38 @@ export const gatherTavilyCompanyEvidenceBundle = async (opts: {
   const items: TavilyCompanyEvidenceBundle['items'] = [];
   const seenUrls = new Set<string>();
   let topUrls: string[] = [];
-  for (const q of queries.slice(0, 5)) {
-    try {
-      const data = await tavilySearch(q, { maxResults: 6, searchDepth: 'basic', includeAnswer: true });
-      const block = formatTavilyEvidence(data, `TAVILY:${q.slice(0, 40)}`);
-      if (block) chunks.push(block);
-      for (const r of data.results || []) {
-        const url = (r.url || '').trim();
-        if (url && /https?:\/\//i.test(url) && !seenUrls.has(url)) {
-          seenUrls.add(url);
-          items.push({
-            title: (r.title || '').trim() || url,
-            url,
-            snippet: (r.content || '').trim().slice(0, 180),
-            score: typeof r.score === 'number' ? r.score : undefined,
-          });
-        }
-        if (url && /https?:\/\//i.test(url) && topUrls.length < 3) {
-          if (!topUrls.includes(url)) topUrls.push(url);
-        }
+  const querySlice = queries.slice(0, 5);
+  const runCompanyQuery = async (q: string) => {
+    const data = await tavilySearch(q, { maxResults: 6, searchDepth: 'basic', includeAnswer: true });
+    const block = formatTavilyEvidence(data, `TAVILY:${q.slice(0, 40)}`);
+    if (block) chunks.push(block);
+    for (const r of data.results || []) {
+      const url = (r.url || '').trim();
+      if (url && /https?:\/\//i.test(url) && !seenUrls.has(url)) {
+        seenUrls.add(url);
+        items.push({
+          title: (r.title || '').trim() || url,
+          url,
+          snippet: (r.content || '').trim().slice(0, 180),
+          score: typeof r.score === 'number' ? r.score : undefined,
+        });
       }
-    } catch (e) {
-      if (String((e as any)?.message || e).includes('TAVILY_POOL_EXHAUSTED')) {
+      if (url && /https?:\/\//i.test(url) && topUrls.length < 3) {
+        if (!topUrls.includes(url)) topUrls.push(url);
+      }
+    }
+  };
+
+  const settled = await Promise.allSettled(querySlice.map((q) => runCompanyQuery(q)));
+  for (let i = 0; i < settled.length; i++) {
+    const s = settled[i];
+    if (s.status === 'rejected') {
+      const msg = String((s.reason as any)?.message || s.reason);
+      if (msg.includes('TAVILY_POOL_EXHAUSTED')) {
         console.warn('[tavily] pool exhausted, fall back to Qwen web search');
         return { text: '', items: [] };
       }
-      console.warn('[tavily] company search failed', q, e);
+      console.warn('[tavily] company search failed', querySlice[i], s.reason);
     }
   }
 

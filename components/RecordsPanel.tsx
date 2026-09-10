@@ -690,7 +690,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
             <FolderOpen size={18} className="text-cyan-600 flex-shrink-0" /> 记录中心
           </div>
           <div className="text-[10px] sm:text-[11px] text-slate-400 font-semibold mt-0.5 truncate tracking-wide">
-            点击公司可查看背调 · 已入 CRM 的记录已移除（请在 CRM 查看）
+            点击公司可查看背调 · 已入 CRM 的背调在此隐藏（请在客户管理打开报告）
             {history.length + discoveryArchives.length > tabCounts.all
               ? ` · 库内共 ${history.length + discoveryArchives.length}`
               : ''}
