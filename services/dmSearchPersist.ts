@@ -151,3 +151,22 @@ export const mergeHistoryPreferDmRich = (
   }
   return Array.from(map.values()).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 };
+
+/** 按域名 / 公司名查找耐久化挖掘结果 */
+export const findDmPersistForCompany = (
+  domain?: string | null,
+  companyName?: string | null
+): DmPersistRecord | null => {
+  const records = loadDmPersistRecords();
+  if (!records.length) return null;
+  const host = cleanHost(domain);
+  const name = (companyName || '').trim().toLowerCase();
+  const matches = records.filter((r) => {
+    if (host && cleanHost(r.domain) === host) return true;
+    const rn = (r.companyName || '').trim().toLowerCase();
+    if (name && rn && name === rn) return true;
+    return false;
+  });
+  if (!matches.length) return null;
+  return matches.reduce((a, b) => ((b.searchedAt || 0) >= (a.searchedAt || 0) ? b : a));
+};

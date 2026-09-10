@@ -63,6 +63,14 @@ const emptyDecisionMaker = (): DecisionMaker => ({
   influenceScore: 3,
 });
 
+const isUsableDecisionMaker = (d: DecisionMaker) =>
+  !!(d.phone || '').trim() ||
+  !!(d.whatsapp || '').trim() ||
+  !!(d.emailGuess || '').includes('@') ||
+  (!!(d.name || '').trim() &&
+    (d.name || '').trim() !== '公开信息未找到' &&
+    (!!(d.title || '').trim() || !!(d.linkedin || '').trim()));
+
 export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
   data,
   historyId,
@@ -74,9 +82,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
   onAddToCRM,
 }) => {
   const [decisionMakers, setDecisionMakers] = useState(() =>
-    (data.decisionMakers || []).filter(
-      (d) => !!(d.phone || '').trim() || !!(d.whatsapp || '').trim() || !!(d.emailGuess || '').includes('@')
-    )
+    (data.decisionMakers || []).filter(isUsableDecisionMaker)
   );
   const [lastSearchAt, setLastSearchAt] = useState(data.decisionMakerEmailSearchAt);
   const [searchHistory, setSearchHistory] = useState<number[]>(
@@ -89,18 +95,15 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
   const lastAppliedJobIdRef = React.useRef<string | null>(null);
 
   useEffect(() => {
-    setDecisionMakers(
-      (data.decisionMakers || []).filter(
-        (d) =>
-          !!(d.phone || '').trim() ||
-          !!(d.whatsapp || '').trim() ||
-          !!(d.emailGuess || '').includes('@')
-      )
-    );
-    setLastSearchAt(data.decisionMakerEmailSearchAt);
+    const list = (data.decisionMakers || []).filter(isUsableDecisionMaker);
+    setDecisionMakers(list);
+    const inferredAt =
+      data.decisionMakerEmailSearchAt ||
+      (list.some((d) => !!(d.emailGuess && String(d.emailGuess).includes('@'))) ? Date.now() : undefined);
+    setLastSearchAt(inferredAt);
     setSearchHistory(
       data.decisionMakerEmailSearchHistory ||
-        (data.decisionMakerEmailSearchAt ? [data.decisionMakerEmailSearchAt] : [])
+        (inferredAt ? [inferredAt] : [])
     );
     setSelectedIndices(new Set());
   }, [data.decisionMakers, data.decisionMakerEmailSearchAt, data.decisionMakerEmailSearchHistory]);
@@ -291,11 +294,17 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
             <h3 className="text-xl sm:text-2xl font-extrabold text-slate-900 tracking-tight">
               关键决策人挖掘
             </h3>
-            {lastSearchAt ? (
+            {lastSearchAt || decisionMakers.length > 0 ? (
               <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-semibold text-slate-500">
-                <span className="inline-flex items-center gap-1 text-cyan-700">
-                  <Clock size={12} /> 最近搜索：{formatSearchTime(lastSearchAt)}
-                </span>
+                {lastSearchAt ? (
+                  <span className="inline-flex items-center gap-1 text-cyan-700">
+                    <Clock size={12} /> 最近搜索：{formatSearchTime(lastSearchAt)}
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-cyan-700">
+                    <Clock size={12} /> 已有 {decisionMakers.length} 位联系人（来自 CRM / 历史挖掘）
+                  </span>
+                )}
                 {searchHistory.length > 1 && (
                   <span className="text-slate-400">累计搜索 {searchHistory.length} 次</span>
                 )}

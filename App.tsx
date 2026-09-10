@@ -54,7 +54,9 @@ import {
   applyDmPersistToHistory,
   mergeHistoryPreferDmRich,
   upsertDmPersistRecord,
+  findDmPersistForCompany,
 } from './services/dmSearchPersist';
+import { mergeDecisionMakers } from './services/multiModelMerge';
 import { enqueueDmEmailSearch, type DmEmailSearchJob } from './services/dmEmailSearchQueue';
 import {
   enqueueProductDigBatch,
@@ -1128,6 +1130,72 @@ const App: React.FC = () => {
     void enqueueBackgroundAnalysis(domain, override);
   };
 
+  /** 报告页决策人：合并历史 / CRM contacts / 挖掘账本，避免列表有数量、打开却是 0 */
+  const enrichAnalysisDecisionMakers = (
+    data: AnalysisResult,
+    opts?: { historyItem?: HistoryItem | null; client?: Client | null }
+  ): AnalysisResult => {
+    const website = data.companyInfo?.website || opts?.historyItem?.domain || opts?.client?.website || '';
+    const name = data.companyInfo?.name || opts?.client?.name || '';
+    const client =
+      opts?.client ||
+      crmClientsRef.current.find((c) => {
+        const cHost = (c.website || '')
+          .toLowerCase()
+          .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
+          .split('/')[0];
+        const dHost = (website || '')
+          .toLowerCase()
+          .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
+          .split('/')[0];
+        if (dHost && cHost && dHost === cHost) return true;
+        const cn = (c.name || '').trim().toLowerCase();
+        const dn = (name || '').trim().toLowerCase();
+        return !!(cn && dn && cn === dn);
+      });
+
+    const ledger = findDmPersistForCompany(website, name);
+    let dms = Array.isArray(data.decisionMakers) ? [...data.decisionMakers] : [];
+    const rawHist = opts?.historyItem?.data?.decisionMakers;
+    if (Array.isArray(rawHist) && rawHist.length) {
+      dms = mergeDecisionMakers(dms, rawHist);
+    }
+    if (Array.isArray(client?.contacts) && client.contacts.length) {
+      dms = mergeDecisionMakers(dms, client.contacts);
+    }
+    if (Array.isArray(ledger?.decisionMakers) && ledger.decisionMakers.length) {
+      dms = mergeDecisionMakers(dms, ledger.decisionMakers);
+    }
+
+    dms = dms.filter((d) => {
+      const hasEmail = !!(d.emailGuess && String(d.emailGuess).includes('@'));
+      const hasPhone = !!(d.phone || '').trim() || !!(d.whatsapp || '').trim();
+      const hasName = !!(d.name || '').trim() && (d.name || '').trim() !== '公开信息未找到';
+      return hasEmail || hasPhone || (hasName && !!(d.linkedin || d.title));
+    });
+
+    const hasEmailContact = dms.some((d) => !!(d.emailGuess && String(d.emailGuess).includes('@')));
+    const effectiveAt =
+      data.decisionMakerEmailSearchAt ||
+      opts?.historyItem?.data?.decisionMakerEmailSearchAt ||
+      ledger?.searchedAt ||
+      (hasEmailContact ? Date.now() : undefined);
+
+    const histTimes = [
+      ...(data.decisionMakerEmailSearchHistory || []),
+      ...(opts?.historyItem?.data?.decisionMakerEmailSearchHistory || []),
+      ...(ledger?.searchHistory || []),
+      effectiveAt,
+    ].filter((n): n is number => typeof n === 'number' && n > 0);
+
+    return {
+      ...data,
+      decisionMakers: dms,
+      decisionMakerEmailSearchAt: effectiveAt || data.decisionMakerEmailSearchAt,
+      decisionMakerEmailSearchHistory: [...new Set(histTimes)].slice(-30),
+    };
+  };
+
   const loadFromHistory = (item: HistoryItem) => {
     try {
       let data = extractHistoryAnalysis(item);
@@ -1154,8 +1222,10 @@ const App: React.FC = () => {
         alert('该历史记录缺少有效背调数据，无法打开。可对该域名再次背调。');
         return;
       }
-      // 旧报告 SWOT/渠道等常被模型留空：打开时本地启发式补全，避免整页 N/A
+      // 旧报告 SWOT/渠道等常被模型留空：打开时本地启发式补全
       data = synthesizeInsightsFallback(data);
+      // 关键决策人：CRM contacts + 挖掘账本（修复列表有数量、报告页为 0）
+      data = enrichAnalysisDecisionMakers(data, { historyItem: item });
       setAnalysisData(data);
       setViewingHistoryId(item.id);
       setDomainInput(data.companyInfo.website !== 'N/A' ? data.companyInfo.website : item.domain || '');
@@ -1164,7 +1234,7 @@ const App: React.FC = () => {
       setMobileMenuOpen(false);
       setErrorMsg(null);
       setLoading(false);
-      // 补全后写回，下次打开即有内容
+      // 补全后写回（含恢复的决策人）
       void persistHistoryItem({ ...item, data }).catch(() => undefined);
     } catch (e: any) {
       console.error('loadFromHistory failed', e);
@@ -1196,7 +1266,8 @@ const App: React.FC = () => {
       return false;
     });
     if (task?.analysis) {
-      const data = synthesizeInsightsFallback(normalizeAnalysisResult(task.analysis));
+      let data = synthesizeInsightsFallback(normalizeAnalysisResult(task.analysis));
+      data = enrichAnalysisDecisionMakers(data, { client });
       setAnalysisData(data);
       setViewingHistoryId(null);
       setDomainInput(data.companyInfo?.website || client.website || '');
@@ -1205,10 +1276,34 @@ const App: React.FC = () => {
       setMobileMenuOpen(false);
       setErrorMsg(null);
       setLoading(false);
-      // 写回历史，避免下次再丢
       void saveAnalysisToHistory(data, 'crm-recover').catch((e) =>
         console.warn('[crm] recover history save failed', e)
       );
+      return;
+    }
+    // 无完整报告但有 CRM 联系人：至少进入决策人页可见联系人
+    if (client.contacts?.length) {
+      const stub = enrichAnalysisDecisionMakers(
+        normalizeAnalysisResult({
+          companyInfo: {
+            name: client.name,
+            website: client.website || '',
+            headquarters: client.country || 'N/A',
+            foundedYear: 'N/A',
+            nature: client.type || 'N/A',
+            scale: 'N/A',
+            description: client.activityLog || 'N/A',
+          },
+          decisionMakers: client.contacts,
+        }),
+        { client }
+      );
+      setAnalysisData(synthesizeInsightsFallback(stub));
+      setViewingHistoryId(null);
+      setDomainInput(client.website || '');
+      setActiveModule(ModuleType.DECISION_MAKERS);
+      setErrorMsg(null);
+      setLoading(false);
       return;
     }
     alert('未找到该客户的背调报告正文（可能曾被清理）。请点「再次背调」重新生成后即可查看。');
@@ -1893,14 +1988,30 @@ const App: React.FC = () => {
       const keyword =
         (result.searchKeyword || discoveryState.product || '').trim() || undefined;
       if (keyword) addCustomKeyword(keyword);
+
+      // 再次背调不得冲掉已挖掘的决策人：合并旧历史 / CRM / 账本
+      const enriched = enrichAnalysisDecisionMakers(result, {
+        historyItem: historyRef.current.find((h) => {
+          const host = (h.domain || h.data?.companyInfo?.website || '')
+            .toLowerCase()
+            .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
+            .split('/')[0];
+          const dHost = (domain || '')
+            .toLowerCase()
+            .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
+            .split('/')[0];
+          return !!(host && dHost && host === dHost);
+        }),
+      });
+
       const historyItem: HistoryItem = stampOwnership({
           id: `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
           type: ModuleType.BACKGROUND,
           data: {
-            ...result,
-            searchKeyword: result.searchKeyword || keyword,
+            ...enriched,
+            searchKeyword: enriched.searchKeyword || keyword,
             searchTags:
-              result.searchTags ||
+              enriched.searchTags ||
               (keyword ? buildSearchTags(keyword, country !== '未分类' ? country : '') : undefined),
           },
           timestamp: Date.now(),
@@ -1921,7 +2032,7 @@ const App: React.FC = () => {
         ownerUsername: historyItem.ownerUsername,
         departmentId: historyItem.departmentId,
       }).catch((e) => console.warn('[productCatalog] index after history save failed', e));
-      console.log(`[History] saved (${source}):`, domain, 'keyword=', keyword);
+      console.log(`[History] saved (${source}):`, domain, 'keyword=', keyword, 'dms=', enriched.decisionMakers?.length || 0);
       return historyItem;
   };
 
@@ -4249,7 +4360,12 @@ const App: React.FC = () => {
                               className="flex items-center justify-center gap-2 bg-cyan-600 hover:bg-cyan-700 transition-colors text-white px-4 sm:px-6 py-3 rounded-2xl font-semibold shadow-signal touch-manipulation"
                             >
                               <Users size={18} />{' '}
-                              {analysisData.decisionMakerEmailSearchAt ? '再次深挖决策人邮箱' : '后台搜索决策人邮箱'}
+                              {analysisData.decisionMakerEmailSearchAt ||
+                              (analysisData.decisionMakers || []).some(
+                                (d) => !!(d.emailGuess && String(d.emailGuess).includes('@'))
+                              )
+                                ? '再次深挖决策人邮箱'
+                                : '后台搜索决策人邮箱'}
                             </button>
                           )}
                           {hasPermission(currentUser, 'feature.export_ppt') && (
@@ -4275,7 +4391,12 @@ const App: React.FC = () => {
                             ? () => enqueueCurrentDmEmailSearch(analysisData, viewingHistoryId)
                             : undefined
                         }
-                        hasPriorDmSearch={!!analysisData.decisionMakerEmailSearchAt}
+                        hasPriorDmSearch={
+                          !!analysisData.decisionMakerEmailSearchAt ||
+                          (analysisData.decisionMakers || []).some(
+                            (d) => !!(d.emailGuess && String(d.emailGuess).includes('@'))
+                          )
+                        }
                         onReanalyze={
                           hasPermission(currentUser, 'feature.analyze_company')
                             ? handleReanalyzeCurrent

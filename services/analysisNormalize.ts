@@ -162,7 +162,11 @@ export const normalizeAnalysisResult = (raw: unknown): AnalysisResult => {
       (d) =>
         !!(d.phone || '').trim() ||
         !!(d.whatsapp || '').trim() ||
-        !!(d.emailGuess || '').includes('@')
+        !!(d.emailGuess || '').includes('@') ||
+        // 保留有姓名+职位/领英的线索（CRM 同步时可能尚未补全邮箱）
+        (!!(d.name || '').trim() &&
+          (d.name || '').trim() !== '公开信息未找到' &&
+          (!!(d.title || '').trim() || !!(d.linkedin || '').trim()))
     ),
     decisionMakerEmailSearchAt: ai.decisionMakerEmailSearchAt,
     decisionMakerEmailSearchHistory: asArray<number>(ai.decisionMakerEmailSearchHistory),

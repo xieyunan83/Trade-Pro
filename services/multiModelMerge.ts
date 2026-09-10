@@ -123,7 +123,8 @@ const mergeCategories = (a: any[], b: any[]): WebsiteCategory[] => {
   return [...map.values()];
 };
 
-const mergeDecisionMakers = (a: any[], b: any[]): DecisionMaker[] => {
+/** 合并决策人列表（邮箱 / LinkedIn / 姓名去重） */
+export const mergeDecisionMakers = (a: any[], b: any[]): DecisionMaker[] => {
   const map = new Map<string, any>();
   const keyOf = (dm: any) => {
     const email = asStr(dm.emailGuess).toLowerCase();
