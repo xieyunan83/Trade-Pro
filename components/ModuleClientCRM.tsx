@@ -42,6 +42,8 @@ interface ModuleClientCRMProps {
   onBatchProductDig?: (clients: Client[]) => void | Promise<void>;
   /** 手动清理 2026-06 前旧 CRM */
   onPurgeBeforeJune2026?: () => void | Promise<void>;
+  /** 清理跨品类垃圾客户（IT/快递/食品等） */
+  onPurgeNonToyJunk?: () => void | Promise<void>;
   /** 从 GitHub / Supabase / 背调历史恢复 CRM */
   onRecoverCrm?: () => void | Promise<void>;
   onReanalyze?: (client: Client) => void;
@@ -266,6 +268,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   onBatchDmSearch,
   onBatchProductDig,
   onPurgeBeforeJune2026,
+  onPurgeNonToyJunk,
   onRecoverCrm,
   onReanalyze,
   history,
@@ -693,6 +696,16 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
               title="删除 2026年6月之前的 CRM 记录（本地+云端）"
             >
               清理6月前旧数据
+            </button>
+          )}
+          {onPurgeNonToyJunk && (
+            <button
+              type="button"
+              onClick={() => void onPurgeNonToyJunk()}
+              className="inline-flex items-center justify-center gap-2 bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 px-4 py-3 rounded-xl font-bold text-xs shrink-0"
+              title="删除 IT咨询/快递/食品等与玩具主业不符的客户（本地+云端）"
+            >
+              清理跨品类垃圾
             </button>
           )}
         </div>

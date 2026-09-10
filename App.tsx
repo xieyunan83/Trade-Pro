@@ -22,6 +22,8 @@ import {
   rebuildProductCatalogFromHistory,
   loadProductCatalog,
   hasRichProductCatalog,
+  removeProductProfile,
+  productCatalogDomainKey,
 } from './services/productCatalog';
 import { saveProductProfilesBulk } from './services/db';
 import { addCustomKeyword, addCustomCountry } from './services/taxonomyStore';
@@ -33,6 +35,14 @@ import {
   filterOutCrmTombstones,
   markCrmClientsDeleted,
 } from './utils/crmTombstones';
+import {
+  buildJunkCleanupPlan,
+  clearAutoPurgeNonToyJunkFlag,
+  hasAutoPurgedNonToyJunk,
+  isNonToyJunkBlob,
+  junkCleanupPlanCount,
+  markAutoPurgedNonToyJunk,
+} from './utils/junkLeadCleanup';
 import { checkLimit, incrementUsage, updateLocalConfig, resetDailyUsage, getDailyUsagePublic } from './services/limitService';
 import { ModuleType, AnalysisResult, DiscoveryState, Client, User, HistoryItem, AutomationResult, ClientSearchResult, DiscoveryArchiveItem, DecisionMaker, Department, AutomationPipelineConfig, SimilarCompany } from './types';
 import { ModuleBackground } from './components/ModuleBackground';
@@ -2679,6 +2689,196 @@ const App: React.FC = () => {
     void deleteCrmClient(client.id).catch((e) => console.warn('[CRM] cloud delete failed', client.id, e));
   };
 
+  /**
+   * 清理跨品类垃圾客户（IT 咨询 / 快递 / 食品等与玩具主业不符）
+   * 同步删除：背调历史、CRM、搜索归档、产品库（本地 + 云端）
+   */
+  const handlePurgeNonToyJunkLeads = async (opts?: { silentIfEmpty?: boolean; skipConfirm?: boolean }) => {
+    const hist = historyRef.current;
+    const crm = crmClientsRef.current;
+    const disc = discoveryArchives;
+    const plan = buildJunkCleanupPlan(hist, crm, disc);
+    const total = junkCleanupPlanCount(plan);
+    if (total === 0) {
+      if (!opts?.silentIfEmpty) {
+        alert('未发现需要清理的跨品类垃圾客户（IT/快递/食品等）。');
+      }
+      markAutoPurgedNonToyJunk();
+      return { deleted: 0 };
+    }
+    if (!opts?.skipConfirm) {
+      const ok = confirm(
+        `将永久清理与玩具主业不符的资料：\n` +
+          `· 背调 ${plan.historyIds.length} 条\n` +
+          `· CRM ${plan.crmIds.length} 条\n` +
+          `· 搜索归档删除 ${plan.discoveryIds.length} 条 / 精简 ${plan.discoveryPatches.length} 条\n\n` +
+          `本地 + 云端同步删除，不可恢复。继续？`
+      );
+      if (!ok) return { deleted: 0 };
+    }
+
+    const histSet = new Set(plan.historyIds);
+    const crmSet = new Set(plan.crmIds);
+    const discDel = new Set(plan.discoveryIds);
+    const patchMap = new Map(plan.discoveryPatches.map((p) => [p.id, p.results]));
+
+    const doomedCrm = crm.filter((c) => crmSet.has(c.id));
+    if (doomedCrm.length) markCrmClientsDeleted(doomedCrm);
+
+    setHistory((prev) => prev.filter((h) => !histSet.has(h.id)));
+    setCrmClients((prev) => prev.filter((c) => !crmSet.has(c.id)));
+    setDiscoveryArchives((prev) =>
+      prev
+        .filter((d) => !discDel.has(d.id))
+        .map((d) => {
+          const nextResults = patchMap.get(d.id);
+          return nextResults ? { ...d, results: nextResults } : d;
+        })
+    );
+    setAutomationResults((prev) => {
+      const kept: typeof prev = [];
+      for (const t of prev) {
+        const blob = [
+          t.clientName,
+          t.website,
+          t.keyword,
+          t.analysis?.companyInfo?.name,
+          t.analysis?.companyInfo?.description,
+          t.analysis?.companyInfo?.nature,
+          t.analysis?.businessScope?.coreProducts?.join(' '),
+          Array.isArray(t.analysis?.strategy?.actionPlan) ? t.analysis!.strategy!.actionPlan!.join(' ') : '',
+        ]
+          .filter(Boolean)
+          .join(' · ');
+        const kw = t.keyword || t.analysis?.searchKeyword || '';
+        if (isNonToyJunkBlob(blob, kw)) {
+          void deleteAutomationTask(t.id).catch(() => undefined);
+          continue;
+        }
+        kept.push(t);
+      }
+      return kept;
+    });
+
+    if (viewingHistoryId && histSet.has(viewingHistoryId)) {
+      setAnalysisData(null);
+      setViewingHistoryId(null);
+    }
+
+    for (const id of plan.historyIds) {
+      try {
+        await deleteHistoryItem(id);
+      } catch (e) {
+        console.warn('[junk-purge] local history', id, e);
+      }
+      void deleteInvestigationHistory(id).catch((e) =>
+        console.warn('[junk-purge] cloud history', id, e)
+      );
+    }
+    if (plan.crmIds.length) {
+      void deleteCrmClientsBulk(plan.crmIds).catch((e) =>
+        console.warn('[junk-purge] cloud crm bulk', e)
+      );
+    }
+    for (const id of plan.discoveryIds) {
+      const target = disc.find((d) => d.id === id);
+      try {
+        await deleteDiscoveryArchive(id);
+      } catch (e) {
+        console.warn('[junk-purge] local discovery', id, e);
+      }
+      addDiscoveryTombstone(id, target?.product, target?.country);
+      if (isSupabaseConfigured()) {
+        const looksUuid = /^[0-9a-f-]{36}$/i.test(id);
+        if (looksUuid) void deleteDiscoverySearchFromCloud(id);
+        if (target?.product) {
+          void deleteDiscoverySearchesByMeta(target.product, target.country || '');
+        }
+      }
+    }
+    for (const patch of plan.discoveryPatches) {
+      const arch = disc.find((d) => d.id === patch.id);
+      if (!arch) continue;
+      const next = { ...arch, results: patch.results };
+      try {
+        await saveDiscoveryArchive(next);
+      } catch (e) {
+        console.warn('[junk-purge] patch discovery', patch.id, e);
+      }
+    }
+
+    // 产品库：按垃圾域名清理
+    try {
+      const profiles = await loadProductCatalog();
+      const junkHosts = new Set<string>();
+      for (const h of hist) {
+        if (!histSet.has(h.id)) continue;
+        const host = productCatalogDomainKey(h.domain || h.data?.companyInfo?.website);
+        if (host) junkHosts.add(host);
+      }
+      for (const c of doomedCrm) {
+        const host = productCatalogDomainKey(c.website);
+        if (host) junkHosts.add(host);
+      }
+      for (const p of profiles) {
+        const host = productCatalogDomainKey(p.website);
+        if (host && junkHosts.has(host)) {
+          await removeProductProfile(p.id);
+        }
+      }
+    } catch (e) {
+      console.warn('[junk-purge] product catalog', e);
+    }
+
+    // 刷新本地 CRM 全库合并视图
+    try {
+      const depts = departments.length ? departments : loadDepartmentsFromStorage();
+      if (currentUser) {
+        mergeSaveCrmClients(
+          currentUser,
+          crmClientsRef.current.filter((c) => !crmSet.has(c.id)),
+          users,
+          depts
+        );
+      }
+    } catch (e) {
+      console.warn('[junk-purge] mergeSaveCrm', e);
+    }
+
+    markAutoPurgedNonToyJunk();
+    if (!opts?.silentIfEmpty) {
+      alert(
+        `已清理跨品类垃圾：背调 ${plan.historyIds.length}、CRM ${plan.crmIds.length}、` +
+          `搜索归档删 ${plan.discoveryIds.length}/精简 ${plan.discoveryPatches.length}。云端同步中。`
+      );
+    }
+    return { deleted: total };
+  };
+
+  // 登录加载完成后：自动清理一次跨品类垃圾（玩具主业噪音：IT/快递/食品等）
+  useEffect(() => {
+    if (!currentUser || !userDataReadyRef.current) return;
+    if (hasAutoPurgedNonToyJunk()) return;
+    if (!history.length && !crmClients.length && !discoveryArchives.length) {
+      markAutoPurgedNonToyJunk();
+      return;
+    }
+    const plan = buildJunkCleanupPlan(history, crmClients, discoveryArchives);
+    if (junkCleanupPlanCount(plan) === 0) {
+      markAutoPurgedNonToyJunk();
+      return;
+    }
+    markAutoPurgedNonToyJunk();
+    void handlePurgeNonToyJunkLeads({ skipConfirm: true, silentIfEmpty: true }).then((res) => {
+      if (res.deleted > 0) {
+        alert(
+          `已自动清理 ${res.deleted} 处与玩具主业不符的资料（IT咨询/快递/食品等），本地与云端已同步删除。`
+        );
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser?.username, history.length, crmClients.length, discoveryArchives.length]);
+
   /** 手动清理 2026-06 前 CRM（本地 + 云端，保守日期规则） */
   const handlePurgeCrmBeforeJune2026 = async () => {
     if (!hasPermission(currentUser, 'feature.crm_manage')) {
@@ -3260,6 +3460,11 @@ const App: React.FC = () => {
             !!currentUser &&
             (canBrowseAllDepartments(currentUser) || currentUser.role === 'manager')
           }
+          onPurgeNonToyJunk={async () => {
+            clearAutoPurgeNonToyJunkFlag();
+            await handlePurgeNonToyJunkLeads({ skipConfirm: false });
+            return;
+          }}
           onBatchImportToCrm={handleBatchImportRecordsToCrm}
           onBatchReanalyze={handleBatchReanalyzeFromRecords}
           onBatchDmSearch={
@@ -3489,6 +3694,11 @@ const App: React.FC = () => {
                         onDeleteClient={handleDeleteClient}
                         onBatchProductDig={handleBatchProductDigFromCRM}
                         onPurgeBeforeJune2026={handlePurgeCrmBeforeJune2026}
+                        onPurgeNonToyJunk={async () => {
+                          clearAutoPurgeNonToyJunkFlag();
+                          await handlePurgeNonToyJunkLeads({ skipConfirm: false });
+                          return;
+                        }}
                         onRecoverCrm={handleRecoverCrm}
                         productDigBusy={isProductDigQueueBusy() || productDigProgress.active > 0}
                         onReanalyze={(client) => void handleBatchAnalyzeFromCRM([client])}

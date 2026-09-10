@@ -80,6 +80,8 @@ interface RecordsPanelProps {
   onReanalyzeHistory?: (item: HistoryItem) => void;
   /** 是否显示拥有人筛选（主管/总管） */
   showOwnerFilter?: boolean;
+  /** 清理跨品类垃圾客户 */
+  onPurgeNonToyJunk?: () => void | Promise<void>;
 }
 
 const UNCATEGORIZED = '未分类';
@@ -175,6 +177,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   onBulkPatchHistory,
   onReanalyzeHistory,
   showOwnerFilter = false,
+  onPurgeNonToyJunk,
 }) => {
   const [tab, setTab] = useState<RecordTab>('background');
   const [groupBy, setGroupBy] = useState<GroupBy>('keyword');
@@ -926,6 +929,16 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
           >
             {expanded.size >= groups.length ? '全部收起' : '全部展开'}
           </button>
+          {onPurgeNonToyJunk && (
+            <button
+              type="button"
+              onClick={() => void onPurgeNonToyJunk()}
+              className="px-2.5 py-2 rounded-xl bg-rose-50 border border-rose-200 text-[10px] font-black text-rose-700 touch-manipulation whitespace-nowrap"
+              title="删除 IT咨询/快递/食品等与玩具主业不符的背调与 CRM（本地+云端）"
+            >
+              清理跨品类垃圾
+            </button>
+          )}
         </div>
         {canSelect && (
           <div className="flex flex-wrap gap-1.5">
