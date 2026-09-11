@@ -27,6 +27,14 @@ import {
 } from './qwenProxy';
 import { env, getEmailSearchKeys, getAnysearchApiKey } from './env';
 import {
+  getActivePoolKey,
+  getUsablePoolKeys,
+  hydrateProviderPoolFromCloud,
+  listPoolKeys,
+  markPoolKeyExhausted,
+  promotePoolKey,
+} from './apiKeyPool';
+import {
   anysearchBatchSearch,
   gatherIdentityEvidence,
   gatherAnysearchLeadEvidence,
@@ -224,6 +232,7 @@ export const resolveEngineForTask = (task: TaskType): AIEngineChoice => {
 
 const hasGeminiOfficialKey = (): boolean => {
   if (typeof localStorage === 'undefined') return false;
+  if (listPoolKeys('gemini').length > 0) return true;
   return !!localStorage.getItem('trade_scout_gemini_api_key')?.trim();
 };
 
@@ -1720,18 +1729,33 @@ export const testHunterApiKey = async (
 
 export const getGeminiConfig = (): ApiConfig[] => {
     const configs: ApiConfig[] = [];
+    const modelId =
+      (typeof localStorage !== 'undefined'
+        ? localStorage.getItem('trade_scout_gemini_model_id')?.trim()
+        : '') || NATIVE_MODEL;
 
-    // 官方 Gemini Key（管理后台专用字段，优先）
-    if (typeof localStorage !== 'undefined') {
+    // Key 池（多把 Gemini Key，超额轮换）
+    const poolKeys = listPoolKeys('gemini');
+    poolKeys.forEach((key, idx) => {
+      configs.push({
+        id: idx === 0 ? 'gemini_official' : `gemini_pool_${idx}`,
+        apiKey: key,
+        baseUrl: 'native',
+        modelId,
+        priority: idx,
+        taskAssignment: 'default',
+      });
+    });
+
+    // 兼容旧单 Key / 旧池
+    if (typeof localStorage !== 'undefined' && !poolKeys.length) {
         const officialKey = localStorage.getItem('trade_scout_gemini_api_key')?.trim();
-        const officialModel =
-          localStorage.getItem('trade_scout_gemini_model_id')?.trim() || NATIVE_MODEL;
         if (officialKey) {
             configs.push({
                 id: 'gemini_official',
                 apiKey: officialKey,
                 baseUrl: 'native',
-                modelId: officialModel,
+                modelId,
                 priority: 0,
                 taskAssignment: 'default',
             });
@@ -1762,7 +1786,7 @@ export const getGeminiConfig = (): ApiConfig[] => {
             apiKey: env.apiKey,
             baseUrl: 'native',
             modelId: NATIVE_MODEL,
-            priority: 0,
+            priority: 99,
             taskAssignment: 'default',
         });
     }
@@ -1772,6 +1796,7 @@ export const getGeminiConfig = (): ApiConfig[] => {
 
 export const hasApiKeyConfigured = (): boolean => {
     if (env.qwenApiKey) return true;
+    if (typeof localStorage !== 'undefined' && listPoolKeys('qwen').length > 0) return true;
     if (typeof localStorage !== 'undefined' && localStorage.getItem('trade_scout_qwen_api_key')?.trim()) return true;
     if (typeof localStorage !== 'undefined' && localStorage.getItem('trade_scout_gemini_api_key')?.trim()) return true;
     if (getGeminiConfig().length > 0) return true;
@@ -1789,44 +1814,36 @@ export const hydrateApiConfigsFromCloud = async (): Promise<boolean> => {
         const configs = await getAllApiConfigs();
         for (const c of configs) {
             if (c.provider === 'qwen' && c.apiKey?.trim()) {
-                localStorage.setItem('trade_scout_qwen_api_key', c.apiKey.trim());
-                if (c.baseUrl?.trim()) localStorage.setItem('trade_scout_qwen_base_url', c.baseUrl.trim());
-                if (c.modelId?.trim()) localStorage.setItem('trade_scout_qwen_model_id', c.modelId.trim());
+                hydrateProviderPoolFromCloud('qwen', c.apiKey, {
+                  baseUrl: c.baseUrl,
+                  modelId: c.modelId,
+                });
             }
             if (c.provider === 'hunter' && c.apiKey?.trim()) {
-                localStorage.setItem('trade_scout_hunter_api_key', c.apiKey.trim());
+                hydrateProviderPoolFromCloud('hunter', c.apiKey);
             }
             if (c.provider === 'findymail' && c.apiKey?.trim()) {
-                localStorage.setItem('trade_scout_findymail_api_key', c.apiKey.trim());
+                hydrateProviderPoolFromCloud('findymail', c.apiKey);
             }
             if (c.provider === 'anymailfinder' && c.apiKey?.trim()) {
-                localStorage.setItem('trade_scout_anymail_finder_api_key', c.apiKey.trim());
+                hydrateProviderPoolFromCloud('anymailfinder', c.apiKey);
             }
             if (c.provider === 'anysearch' && c.apiKey?.trim()) {
-                localStorage.setItem('trade_scout_anysearch_api_key', c.apiKey.trim());
+                hydrateProviderPoolFromCloud('anysearch', c.apiKey);
             }
             if (c.provider === 'tavily' && c.apiKey?.trim()) {
-                const raw = c.apiKey.trim();
-                try {
-                  const parsed = JSON.parse(raw);
-                  if (Array.isArray(parsed)) {
-                    localStorage.setItem('trade_scout_tavily_api_keys', JSON.stringify(parsed));
-                    localStorage.setItem('trade_scout_tavily_api_key', String(parsed[0] || ''));
-                  } else {
-                    localStorage.setItem('trade_scout_tavily_api_key', raw);
-                  }
-                } catch {
-                  localStorage.setItem('trade_scout_tavily_api_key', raw);
-                }
+                hydrateProviderPoolFromCloud('tavily', c.apiKey, { force: true });
             }
             if (c.provider === 'wan' && c.apiKey?.trim()) {
-                localStorage.setItem('trade_scout_wan_api_key', c.apiKey.trim());
-                if (c.baseUrl?.trim()) localStorage.setItem('trade_scout_wan_base_url', c.baseUrl.trim());
-                if (c.modelId?.trim()) localStorage.setItem('trade_scout_wan_model_id', c.modelId.trim());
+                hydrateProviderPoolFromCloud('wan', c.apiKey, {
+                  baseUrl: c.baseUrl,
+                  modelId: c.modelId,
+                });
             }
             if (c.provider === 'gemini' && c.apiKey?.trim()) {
-                localStorage.setItem('trade_scout_gemini_api_key', c.apiKey.trim());
-                if (c.modelId?.trim()) localStorage.setItem('trade_scout_gemini_model_id', c.modelId.trim());
+                hydrateProviderPoolFromCloud('gemini', c.apiKey, {
+                  modelId: c.modelId,
+                });
             }
             if (c.provider === 'task_ai_models' && c.apiKey?.trim()) {
                 try {
@@ -2198,6 +2215,10 @@ const tryGeminiFailover = async (
       }
     } catch (e: any) {
       lastError = e;
+      const msg = String(e?.message || e);
+      if (/套餐额度已用尽|AllocationQuota|insufficient_quota|API key not valid|401|403/i.test(msg)) {
+        markPoolKeyExhausted('gemini', config.apiKey);
+      }
     }
   }
   if (lastError) console.warn('[AI] Gemini fallback failed:', lastError.message);
@@ -2351,7 +2372,65 @@ const callQwenChat = async (
         }
       }
     }
-    if (isQuotaErr) throw err;
+    if (isQuotaErr) {
+      markPoolKeyExhausted('qwen', config.apiKey);
+      const nextKeys = getUsablePoolKeys('qwen').filter((k) => k !== config.apiKey);
+      for (const nextKey of nextKeys) {
+        try {
+          console.warn('[Qwen] 当前 Key 额度用尽，切换 Key 池下一把…');
+          const nextConfig = await resolveQwenConfig({ ...options.override, apiKey: nextKey });
+          const runWithNext = async (extraPayload: Record<string, unknown> | undefined) => {
+            if (
+              isQwenOpenAICompatible(nextConfig.baseUrl) ||
+              nextConfig.baseUrl.startsWith('/qwen-api') ||
+              nextConfig.baseUrl.startsWith('/api/qwen') ||
+              nextConfig.baseUrl.includes('/qwen-api/') ||
+              nextConfig.baseUrl.includes('__upstream=')
+            ) {
+              return callOpenAICompatible(
+                {
+                  id: 'qwen',
+                  apiKey: nextConfig.apiKey,
+                  baseUrl: nextConfig.baseUrl,
+                  modelId: nextConfig.modelId,
+                  taskAssignment: 'default',
+                },
+                messages,
+                options.jsonMode ?? false,
+                { timeoutMs, extraPayload, maxTokens, proxyOrigin: nextConfig.proxyOrigin }
+              );
+            }
+            const combined = messages
+              .map(
+                (m) =>
+                  `${m.role}: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`
+              )
+              .join('\n\n');
+            return callQwenNative(
+              nextConfig,
+              combined,
+              options.jsonMode ?? false,
+              !!options.enableSearch,
+              timeoutMs,
+              !!options.forcedSearch
+            );
+          };
+          const text = await runWithNext(searchPayload);
+          promotePoolKey('qwen', nextKey);
+          return text;
+        } catch (nextErr: any) {
+          const mNext = String(nextErr?.message || '');
+          if (/套餐额度已用尽|AllocationQuota|Allocated quota|insufficient_quota/i.test(mNext)) {
+            markPoolKeyExhausted('qwen', nextKey);
+            continue;
+          }
+          throw nextErr;
+        }
+      }
+      throw new Error(
+        `${msg0}\n\n千问 Key 池已全部超额/不可用（共 ${listPoolKeys('qwen').length} 把）。请在管理后台添加新 Key 或重置耗尽标记。`
+      );
+    }
 
     // 客户搜索/背调：超时后先再试一次联网（代理已加长，避免立刻丢掉联网）
     if (
@@ -4930,7 +5009,8 @@ const resolveQwenConfig = async (override?: Partial<QwenRuntimeConfig>): Promise
   const readLocal = (key: string) =>
     typeof localStorage !== 'undefined' ? localStorage.getItem(key) || undefined : undefined;
 
-  const localKey = readLocal('trade_scout_qwen_api_key');
+  const poolKey = getActivePoolKey('qwen');
+  const localKey = poolKey || readLocal('trade_scout_qwen_api_key');
   const localBase = readLocal('trade_scout_qwen_base_url');
   const localModel = readLocal('trade_scout_qwen_model_id');
 
@@ -4952,7 +5032,23 @@ const resolveQwenConfig = async (override?: Partial<QwenRuntimeConfig>): Promise
     }
   }
 
-  const apiKey = sanitizeApiKey(override?.apiKey || localKey || cloudConfig?.apiKey || env.qwenApiKey || '');
+  // 云端可能是 JSON 池：取第一把可用
+  let cloudKey = cloudConfig?.apiKey || '';
+  if (cloudKey.trim().startsWith('[') || cloudKey.trim().startsWith('{')) {
+    try {
+      hydrateProviderPoolFromCloud('qwen', cloudKey, {
+        baseUrl: cloudConfig?.baseUrl,
+        modelId: cloudConfig?.modelId,
+      });
+      cloudKey = getActivePoolKey('qwen');
+    } catch {
+      /* keep */
+    }
+  }
+
+  const apiKey = sanitizeApiKey(
+    override?.apiKey || localKey || cloudKey || env.qwenApiKey || getActivePoolKey('qwen') || ''
+  );
   const rawBase =
     override?.baseUrl || localBase || cloudConfig?.baseUrl || env.qwenBaseUrl || DEFAULT_QWEN_BASE;
   const normalized = normalizeQwenBaseUrl(rawBase);
@@ -4961,7 +5057,7 @@ const resolveQwenConfig = async (override?: Partial<QwenRuntimeConfig>): Promise
     (override?.modelId || localModel || cloudConfig?.modelId || env.qwenModelId || DEFAULT_QWEN_MODEL).trim();
 
   if (!apiKey) {
-    throw new Error('未配置 Qwen API Key（请在管理后台、.env.local 或 Supabase 中配置）');
+    throw new Error('未配置 Qwen API Key（请在管理后台 Key 池、.env.local 或 Supabase 中配置）');
   }
 
   // Token Plan 必须用 sk-sp- + token-plan 域名
@@ -4977,6 +5073,7 @@ const resolveQwenConfig = async (override?: Partial<QwenRuntimeConfig>): Promise
     proxyOrigin: proxied.proxyOrigin,
     modelId,
     keyInfo: describeKey(apiKey),
+    poolSize: listPoolKeys('qwen').length,
   });
   return { apiKey, baseUrl: proxied.url, modelId, proxyOrigin: proxied.proxyOrigin };
 };

@@ -1,4 +1,5 @@
 import { bakedAppConfig } from './bakedConfig';
+import { getActivePoolKey, listPoolKeys, setPoolKeys } from './apiKeyPool';
 
 export type DefaultAIModel = 'qwen' | 'gemini' | 'auto';
 
@@ -47,31 +48,56 @@ export const clearSupabaseOverride = (): void => {
 const ls = (key: string): string =>
   (typeof localStorage !== 'undefined' ? localStorage.getItem(key)?.trim() : '') || '';
 
-/** 第三方邮箱搜索 API（管理后台可覆盖 .env.local） */
-export const getEmailSearchKeys = () => ({
-  hunter: ls('trade_scout_hunter_api_key') || read('REACT_APP_HUNTER_API_KEY') || read('HUNTER_API_KEY'),
-  findymail: ls('trade_scout_findymail_api_key') || read('FINDYMAIL_API_KEY'),
-  anymailFinder: ls('trade_scout_anymail_finder_api_key') || read('ANYMAIL_FINDER_API_KEY'),
-});
+/** 第三方邮箱搜索 API（管理后台可覆盖 .env.local；支持 Key 池优先） */
+export const getEmailSearchKeys = () => {
+  const poolFirst = (provider: 'hunter' | 'findymail' | 'anymailfinder', legacyLs: string, envKeys: string[]) => {
+    const active = getActivePoolKey(provider);
+    if (active) return active;
+    const pool = listPoolKeys(provider);
+    if (pool[0]) return pool[0];
+    return ls(legacyLs) || envKeys.map(read).find(Boolean) || '';
+  };
+  return {
+    hunter: poolFirst('hunter', 'trade_scout_hunter_api_key', ['REACT_APP_HUNTER_API_KEY', 'HUNTER_API_KEY']),
+    findymail: poolFirst('findymail', 'trade_scout_findymail_api_key', ['FINDYMAIL_API_KEY']),
+    anymailFinder: poolFirst('anymailfinder', 'trade_scout_anymail_finder_api_key', ['ANYMAIL_FINDER_API_KEY']),
+  };
+};
 
-export const saveEmailSearchKeys = (keys: { hunter?: string; findymail?: string; anymailFinder?: string }) => {
+export const saveEmailSearchKeys = (keys: {
+  hunter?: string | string[];
+  findymail?: string | string[];
+  anymailFinder?: string | string[];
+}) => {
   if (typeof localStorage === 'undefined') return;
-  if (keys.hunter !== undefined) localStorage.setItem('trade_scout_hunter_api_key', keys.hunter.trim());
-  if (keys.findymail !== undefined) localStorage.setItem('trade_scout_findymail_api_key', keys.findymail.trim());
-  if (keys.anymailFinder !== undefined) localStorage.setItem('trade_scout_anymail_finder_api_key', keys.anymailFinder.trim());
+  const saveOne = (provider: 'hunter' | 'findymail' | 'anymailfinder', legacy: string, value?: string | string[]) => {
+    if (value === undefined) return;
+    const arr = (Array.isArray(value) ? value : [value]).map((k) => k.trim()).filter(Boolean);
+    setPoolKeys(provider, arr);
+    localStorage.setItem(legacy, arr[0] || '');
+  };
+  saveOne('hunter', 'trade_scout_hunter_api_key', keys.hunter);
+  saveOne('findymail', 'trade_scout_findymail_api_key', keys.findymail);
+  saveOne('anymailfinder', 'trade_scout_anymail_finder_api_key', keys.anymailFinder);
 };
 
 const LS_ANYSEARCH = 'trade_scout_anysearch_api_key';
 const LS_TAVILY = 'trade_scout_tavily_api_key';
 const LS_TAVILY_POOL = 'trade_scout_tavily_api_keys';
 
-/** AnySearch Key：localStorage（云端同步后）→ 环境变量兜底 */
+/** AnySearch Key：localStorage（云端同步后）→ 环境变量兜底；支持 Key 池 */
 export const getAnysearchApiKey = (): string =>
-  ls(LS_ANYSEARCH) || read('ANYSEARCH_API_KEY') || '';
+  getActivePoolKey('anysearch') ||
+  listPoolKeys('anysearch')[0] ||
+  ls(LS_ANYSEARCH) ||
+  read('ANYSEARCH_API_KEY') ||
+  '';
 
-export const saveAnysearchApiKey = (key: string): void => {
+export const saveAnysearchApiKey = (key: string | string[]): void => {
   if (typeof localStorage === 'undefined') return;
-  localStorage.setItem(LS_ANYSEARCH, (key || '').trim());
+  const arr = (Array.isArray(key) ? key : [key]).map((k) => k.trim()).filter(Boolean);
+  setPoolKeys('anysearch', arr);
+  localStorage.setItem(LS_ANYSEARCH, arr[0] || '');
 };
 
 /** Tavily 单 Key（兼容旧版） */

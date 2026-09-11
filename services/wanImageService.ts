@@ -1,5 +1,6 @@
 import { env } from './env';
 import { getApiConfig as getSupabaseApiConfig } from './supabase';
+import { getActivePoolKey } from './apiKeyPool';
 import {
   buildAliyunFetchHeaders,
   DEFAULT_TOKEN_PLAN_ORIGIN,
@@ -96,11 +97,12 @@ export const resolveWanImageConfig = async (
   }
 
   // 未单独配置万相时，回退到千问 Token Plan 同一套 Key / 域名
-  const qwenKey = readLocal('trade_scout_qwen_api_key') || env.qwenApiKey;
+  const wanPoolKey = getActivePoolKey('wan');
+  const qwenKey = getActivePoolKey('qwen') || readLocal('trade_scout_qwen_api_key') || env.qwenApiKey;
   const qwenBase = readLocal('trade_scout_qwen_base_url') || env.qwenBaseUrl;
 
   const apiKey = sanitizeApiKey(
-    override?.apiKey || localKey || cloud?.apiKey || qwenKey || ''
+    override?.apiKey || wanPoolKey || localKey || cloud?.apiKey || qwenKey || ''
   );
   const rawBase =
     override?.origin ||

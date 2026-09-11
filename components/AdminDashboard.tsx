@@ -13,6 +13,13 @@ import { testTavilyKeyPool, listTavilyKeys, setTavilyKeyPool, getTavilyKeyStatus
 import { testWanImageApi } from '../services/wanImageService';
 import { saveApiConfig, getApiConfig, isSupabaseConfigured, saveKnowledgeFile, getKnowledgeFiles, deleteKnowledgeFile, resetSupabaseClient, testSupabaseConnection } from '../services/supabase';
 import { getSupabaseConfig, saveSupabaseConfig, clearSupabaseOverride, saveEmailSearchKeys, getEmailSearchKeys, getAnysearchApiKey, saveAnysearchApiKey, env } from '../services/env';
+import {
+  listPoolKeys,
+  parseApiKeyPoolPayload,
+  serializeApiKeyPoolPayload,
+  setPoolKeys,
+} from '../services/apiKeyPool';
+import { ApiKeyPoolEditor } from './ApiKeyPoolEditor';
 import { hashPassword, persistUsers, updateUserPassword } from '../services/auth';
 import { loadDepartmentsFromStorage } from '../services/orgStore';
 import { roleLabel } from '../services/permissions';
@@ -74,15 +81,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const [localApiConfigs, setLocalApiConfigs] = useState<ApiConfig[]>([]);
   const [kbFiles, setKbFiles] = useState<KnowledgeFile[]>([]);
   const [proxyUrl, setProxyUrl] = useState('https://corshub.org/api/proxy?');
-  const [qwenApiKey, setQwenApiKey] = useState('');
+  const [qwenKeys, setQwenKeys] = useState<string[]>([]);
   const [qwenBaseUrl, setQwenBaseUrl] = useState('');
   const [qwenModelId, setQwenModelId] = useState('qwen-max');
-  const [geminiApiKey, setGeminiApiKey] = useState('');
+  const [geminiKeys, setGeminiKeys] = useState<string[]>([]);
   const [geminiModelId, setGeminiModelId] = useState('gemini-2.0-flash');
   const [taskAIModels, setTaskAIModels] = useState<TaskAIModels>(() => getTaskAIModels());
   const [isTestingGemini, setIsTestingGemini] = useState(false);
   const [geminiTestMsg, setGeminiTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [wanApiKey, setWanApiKey] = useState('');
+  const [wanKeys, setWanKeys] = useState<string[]>([]);
   const [wanBaseUrl, setWanBaseUrl] = useState('https://token-plan.cn-beijing.maas.aliyuncs.com');
   const [wanModelId, setWanModelId] = useState('wan2.7-image-pro');
   const [defaultAIModel, setDefaultAIModel] = useState<'qwen' | 'gemini' | 'auto'>('qwen');
@@ -92,10 +99,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const [supabaseLiveOk, setSupabaseLiveOk] = useState<boolean | null>(null);
   const [supabaseLiveMsg, setSupabaseLiveMsg] = useState('');
   const [kbCloudError, setKbCloudError] = useState<string | null>(null);
-  const [hunterApiKey, setHunterApiKey] = useState('');
-  const [findymailApiKey, setFindymailApiKey] = useState('');
-  const [anymailFinderApiKey, setAnymailFinderApiKey] = useState('');
-  const [anysearchApiKey, setAnysearchApiKey] = useState('');
+  const [hunterKeys, setHunterKeys] = useState<string[]>([]);
+  const [findymailKeys, setFindymailKeys] = useState<string[]>([]);
+  const [anymailFinderKeys, setAnymailFinderKeys] = useState<string[]>([]);
+  const [anysearchKeys, setAnysearchKeys] = useState<string[]>([]);
   const [tavilyKeys, setTavilyKeys] = useState<string[]>([]);
   const [tavilyDraftKey, setTavilyDraftKey] = useState('');
   const [aliyunProxyMode, setAliyunProxyModeState] = useState<AliyunProxyMode>('auto');
@@ -155,49 +162,57 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     setTaskAIModels(getTaskAIModels());
 
     const loadGeminiKey = async () => {
-      const localKey = localStorage.getItem('trade_scout_gemini_api_key');
+      const pooled = listPoolKeys('gemini');
+      if (pooled.length) setGeminiKeys(pooled);
       const localModel = localStorage.getItem('trade_scout_gemini_model_id');
-      if (localKey) setGeminiApiKey(localKey);
       if (localModel) setGeminiModelId(localModel);
       const cloud = await getApiConfig('gemini');
-      if (!localKey && cloud?.apiKey) setGeminiApiKey(cloud.apiKey);
+      if (!pooled.length && cloud?.apiKey) {
+        const meta = parseApiKeyPoolPayload(cloud.apiKey);
+        setGeminiKeys(meta.keys);
+      }
       if (!localModel && cloud?.modelId) setGeminiModelId(cloud.modelId);
-      // 兼容旧「API 配置池」里 native Gemini
-      if (!localKey && !cloud?.apiKey) {
+      if (!pooled.length && !cloud?.apiKey) {
         try {
           const pool = JSON.parse(localStorage.getItem('trade_scout_api_configs') || '[]') as ApiConfig[];
-          const native = pool.find(
-            (c) =>
-              c.apiKey?.trim() &&
-              (c.baseUrl === 'native' || (c.baseUrl || '').includes('generativelanguage.googleapis.com'))
-          );
-          if (native?.apiKey) {
-            setGeminiApiKey(native.apiKey);
-            if (native.modelId) setGeminiModelId(native.modelId);
-          }
+          const natives = pool
+            .filter(
+              (c) =>
+                c.apiKey?.trim() &&
+                (c.baseUrl === 'native' || (c.baseUrl || '').includes('generativelanguage.googleapis.com'))
+            )
+            .map((c) => sanitizeApiKey(c.apiKey));
+          if (natives.length) setGeminiKeys(natives);
+          const first = pool.find((c) => natives.includes(sanitizeApiKey(c.apiKey)));
+          if (first?.modelId) setGeminiModelId(first.modelId);
         } catch {
           /* ignore */
         }
+      }
+      const legacy = localStorage.getItem('trade_scout_gemini_api_key');
+      if (!pooled.length && legacy?.trim() && !cloud?.apiKey) {
+        setGeminiKeys([sanitizeApiKey(legacy)]);
       }
     };
     void loadGeminiKey();
 
     const loadQwenKey = async () => {
-      const localKey = localStorage.getItem('trade_scout_qwen_api_key');
+      const pooled = listPoolKeys('qwen');
+      if (pooled.length) setQwenKeys(pooled);
       const localBase = localStorage.getItem('trade_scout_qwen_base_url');
       const localModel = localStorage.getItem('trade_scout_qwen_model_id');
-      if (localKey) setQwenApiKey(localKey);
       if (localBase) setQwenBaseUrl(localBase);
       if (localModel) setQwenModelId(localModel);
 
-      // 仅在本地没有配置时，才用云端 / .env 填充，避免覆盖刚录入的 Token Plan Key
       const cloudConfig = await getApiConfig('qwen');
-      if (!localKey && cloudConfig?.apiKey) setQwenApiKey(cloudConfig.apiKey);
+      if (!pooled.length && cloudConfig?.apiKey) {
+        setQwenKeys(parseApiKeyPoolPayload(cloudConfig.apiKey).keys);
+      }
       if (!localBase && cloudConfig?.baseUrl) setQwenBaseUrl(cloudConfig.baseUrl);
       if (!localModel && cloudConfig?.modelId) setQwenModelId(cloudConfig.modelId);
 
-      if (!localKey && !cloudConfig?.apiKey && env.qwenApiKey) {
-        setQwenApiKey(env.qwenApiKey);
+      if (!pooled.length && !cloudConfig?.apiKey && env.qwenApiKey) {
+        setQwenKeys([env.qwenApiKey]);
       }
       if (!localBase && !cloudConfig?.baseUrl && env.qwenBaseUrl) {
         setQwenBaseUrl(env.qwenBaseUrl);
@@ -205,38 +220,49 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
       if (!localModel && !cloudConfig?.modelId && env.qwenModelId) {
         setQwenModelId(env.qwenModelId);
       }
+      const legacy = localStorage.getItem('trade_scout_qwen_api_key');
+      if (!pooled.length && legacy?.trim() && !cloudConfig?.apiKey) {
+        setQwenKeys(parseApiKeyPoolPayload(legacy).keys);
+      }
     };
-    loadQwenKey();
+    void loadQwenKey();
 
     const loadWanKey = async () => {
-      const localKey = localStorage.getItem('trade_scout_wan_api_key');
+      const pooled = listPoolKeys('wan');
+      if (pooled.length) setWanKeys(pooled);
       const localBase = localStorage.getItem('trade_scout_wan_base_url');
       const localModel = localStorage.getItem('trade_scout_wan_model_id');
-      if (localKey) setWanApiKey(localKey);
       if (localBase) setWanBaseUrl(localBase);
       if (localModel) setWanModelId(localModel);
 
       const cloud = await getApiConfig('wan');
-      if (!localKey && cloud?.apiKey) setWanApiKey(cloud.apiKey);
+      if (!pooled.length && cloud?.apiKey) setWanKeys(parseApiKeyPoolPayload(cloud.apiKey).keys);
       if (!localBase && cloud?.baseUrl) setWanBaseUrl(cloud.baseUrl);
       if (!localModel && cloud?.modelId) setWanModelId(cloud.modelId);
 
-      if (!localKey && !cloud?.apiKey && env.wanApiKey) setWanApiKey(env.wanApiKey);
+      if (!pooled.length && !cloud?.apiKey && env.wanApiKey) setWanKeys([env.wanApiKey]);
       if (!localBase && !cloud?.baseUrl && env.wanBaseUrl) setWanBaseUrl(env.wanBaseUrl);
       if (!localModel && !cloud?.modelId && env.wanModelId) setWanModelId(env.wanModelId);
     };
-    loadWanKey();
+    void loadWanKey();
 
     const sb = getSupabaseConfig();
     setSupabaseUrl(sb.url);
     setSupabaseAnonKey(sb.key);
     setSupabaseReady(isSupabaseConfigured());
 
-    const emailKeys = getEmailSearchKeys();
-    setHunterApiKey(emailKeys.hunter);
-    setFindymailApiKey(emailKeys.findymail);
-    setAnymailFinderApiKey(emailKeys.anymailFinder);
-    setAnysearchApiKey(getAnysearchApiKey());
+    setHunterKeys(listPoolKeys('hunter').length ? listPoolKeys('hunter') : [getEmailSearchKeys().hunter].filter(Boolean));
+    setFindymailKeys(
+      listPoolKeys('findymail').length ? listPoolKeys('findymail') : [getEmailSearchKeys().findymail].filter(Boolean)
+    );
+    setAnymailFinderKeys(
+      listPoolKeys('anymailfinder').length
+        ? listPoolKeys('anymailfinder')
+        : [getEmailSearchKeys().anymailFinder].filter(Boolean)
+    );
+    setAnysearchKeys(
+      listPoolKeys('anysearch').length ? listPoolKeys('anysearch') : [getAnysearchApiKey()].filter(Boolean)
+    );
     setTavilyKeys(listTavilyKeys());
 
     const loadEmailKeysFromCloud = async () => {
@@ -248,12 +274,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
         getApiConfig('anysearch'),
         getApiConfig('tavily'),
       ]);
-      if (hunter?.apiKey) setHunterApiKey(hunter.apiKey);
-      if (findymail?.apiKey) setFindymailApiKey(findymail.apiKey);
-      if (anymail?.apiKey) setAnymailFinderApiKey(anymail.apiKey);
+      if (hunter?.apiKey) setHunterKeys(parseApiKeyPoolPayload(hunter.apiKey).keys);
+      if (findymail?.apiKey) setFindymailKeys(parseApiKeyPoolPayload(findymail.apiKey).keys);
+      if (anymail?.apiKey) setAnymailFinderKeys(parseApiKeyPoolPayload(anymail.apiKey).keys);
       if (anysearch?.apiKey) {
-        setAnysearchApiKey(anysearch.apiKey);
-        saveAnysearchApiKey(anysearch.apiKey);
+        const keys = parseApiKeyPoolPayload(anysearch.apiKey).keys;
+        setAnysearchKeys(keys);
+        saveAnysearchApiKey(keys);
       }
       if (tavily?.apiKey) {
         const raw = tavily.apiKey.trim();
@@ -261,6 +288,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
           const parsed = JSON.parse(raw);
           if (Array.isArray(parsed)) {
             setTavilyKeyPool(parsed.map(String));
+            setTavilyKeys(listTavilyKeys());
+          } else if (parsed?.keys) {
+            setTavilyKeyPool(parsed.keys.map(String));
             setTavilyKeys(listTavilyKeys());
           } else {
             setTavilyKeyPool([raw]);
@@ -272,7 +302,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
         }
       }
     };
-    loadEmailKeysFromCloud();
+    void loadEmailKeysFromCloud();
 
     const loadKB = async () => {
       setKbCloudError(null);
@@ -356,75 +386,60 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     try {
       localStorage.setItem('trade_scout_default_ai_model', defaultAIModel);
       saveTaskAIModels(taskAIModels);
-      if (geminiApiKey.trim()) {
-        localStorage.setItem('trade_scout_gemini_api_key', sanitizeApiKey(geminiApiKey));
-      }
-      if (geminiModelId.trim()) {
-        localStorage.setItem('trade_scout_gemini_model_id', geminiModelId.trim());
-      }
-      // 同步一份 native 配置到旧池，兼容其它读取路径；清除中转条目
-      const syncedPool: ApiConfig[] = geminiApiKey.trim()
-        ? [
-            {
-              id: 'gemini_official',
-              apiKey: sanitizeApiKey(geminiApiKey),
-              baseUrl: 'native',
-              modelId: geminiModelId.trim() || 'gemini-2.0-flash',
-              priority: 0,
-              taskAssignment: 'default',
-            },
-          ]
+
+      setPoolKeys('gemini', geminiKeys.map(sanitizeApiKey), { modelId: geminiModelId.trim() });
+      setPoolKeys('qwen', qwenKeys, { baseUrl: qwenBaseUrl.trim(), modelId: qwenModelId.trim() });
+      setPoolKeys('wan', wanKeys.length ? wanKeys : qwenKeys, {
+        baseUrl: (wanBaseUrl.trim() || qwenBaseUrl.trim()) || undefined,
+        modelId: wanModelId.trim() || undefined,
+      });
+      setPoolKeys('hunter', hunterKeys);
+      setPoolKeys('findymail', findymailKeys);
+      setPoolKeys('anymailfinder', anymailFinderKeys);
+      setPoolKeys('anysearch', anysearchKeys);
+
+      const syncedPool: ApiConfig[] = geminiKeys.length
+        ? geminiKeys.map((k, i) => ({
+            id: i === 0 ? 'gemini_official' : `gemini_pool_${i}`,
+            apiKey: sanitizeApiKey(k),
+            baseUrl: 'native',
+            modelId: geminiModelId.trim() || 'gemini-2.0-flash',
+            priority: i,
+            taskAssignment: 'default',
+          }))
         : [];
       setLocalApiConfigs(syncedPool);
       localStorage.setItem('trade_scout_api_configs', JSON.stringify(syncedPool));
-      if (qwenApiKey.trim()) {
-        localStorage.setItem('trade_scout_qwen_api_key', qwenApiKey.trim());
-      }
-      if (qwenBaseUrl.trim()) {
-        localStorage.setItem('trade_scout_qwen_base_url', qwenBaseUrl.trim());
-      }
-      if (qwenModelId.trim()) {
-        localStorage.setItem('trade_scout_qwen_model_id', qwenModelId.trim());
-      }
-      if (wanApiKey.trim()) {
-        localStorage.setItem('trade_scout_wan_api_key', wanApiKey.trim());
-      } else if (qwenApiKey.trim()) {
-        localStorage.setItem('trade_scout_wan_api_key', qwenApiKey.trim());
-      }
-      if (wanBaseUrl.trim()) {
-        localStorage.setItem('trade_scout_wan_base_url', wanBaseUrl.trim());
-      } else if (qwenBaseUrl.trim()) {
-        localStorage.setItem('trade_scout_wan_base_url', qwenBaseUrl.trim());
-      }
-      if (wanModelId.trim()) {
-        localStorage.setItem('trade_scout_wan_model_id', wanModelId.trim());
-      }
 
       saveEmailSearchKeys({
-        hunter: hunterApiKey,
-        findymail: findymailApiKey,
-        anymailFinder: anymailFinderApiKey,
+        hunter: hunterKeys,
+        findymail: findymailKeys,
+        anymailFinder: anymailFinderKeys,
       });
-      saveAnysearchApiKey(anysearchApiKey);
+      saveAnysearchApiKey(anysearchKeys);
       setTavilyKeyPool(tavilyKeys);
 
       const emailLocal = [
-        geminiApiKey.trim() ? 'Gemini✓' : 'Gemini✗',
-        qwenApiKey.trim() ? '千问✓' : '千问✗',
-        anymailFinderApiKey.trim() ? 'Anymail✓' : 'Anymail✗',
-        hunterApiKey.trim() ? 'Hunter✓' : 'Hunter✗',
-        findymailApiKey.trim() ? 'Findymail✓' : 'Findymail✗',
-        anysearchApiKey.trim() ? 'AnySearch✓' : 'AnySearch✗',
+        geminiKeys.length ? `Gemini✓×${geminiKeys.length}` : 'Gemini✗',
+        qwenKeys.length ? `千问✓×${qwenKeys.length}` : '千问✗',
+        anymailFinderKeys.length ? `Anymail✓×${anymailFinderKeys.length}` : 'Anymail✗',
+        hunterKeys.length ? `Hunter✓×${hunterKeys.length}` : 'Hunter✗',
+        findymailKeys.length ? `Findymail✓×${findymailKeys.length}` : 'Findymail✗',
+        anysearchKeys.length ? `AnySearch✓×${anysearchKeys.length}` : 'AnySearch✗',
         tavilyKeys.length ? `Tavily✓×${tavilyKeys.length}` : 'Tavily✗',
       ].join(' · ');
 
       const cloudParts: string[] = [];
       if (isSupabaseConfigured()) {
-        if (qwenApiKey.trim()) {
+        if (qwenKeys.length) {
           const r = await cloudWithTimeout('千问', () =>
             saveApiConfig({
               provider: 'qwen',
-              apiKey: qwenApiKey.trim(),
+              apiKey: serializeApiKeyPoolPayload({
+                keys: qwenKeys,
+                baseUrl: qwenBaseUrl.trim() || undefined,
+                modelId: qwenModelId.trim() || 'qwen-max',
+              }),
               baseUrl: qwenBaseUrl.trim() || undefined,
               modelId: qwenModelId.trim() || 'qwen-max',
             })
@@ -432,11 +447,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
           cloudParts.push(`${r.label}${r.ok ? '✓' : '✗'}`);
         }
 
-        if (geminiApiKey.trim()) {
+        if (geminiKeys.length) {
           const r = await cloudWithTimeout('Gemini', () =>
             saveApiConfig({
               provider: 'gemini',
-              apiKey: sanitizeApiKey(geminiApiKey),
+              apiKey: serializeApiKeyPoolPayload({
+                keys: geminiKeys.map(sanitizeApiKey),
+                modelId: geminiModelId.trim() || 'gemini-2.0-flash',
+              }),
               baseUrl: 'native',
               modelId: geminiModelId.trim() || 'gemini-2.0-flash',
             })
@@ -456,12 +474,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
           cloudParts.push(`${r.label}${r.ok ? '✓' : '✗'}`);
         }
 
-        const wanKeyToSave = wanApiKey.trim() || qwenApiKey.trim();
-        if (wanKeyToSave) {
+        const wanKeysToSave = wanKeys.length ? wanKeys : qwenKeys;
+        if (wanKeysToSave.length) {
           const r = await cloudWithTimeout('万相', () =>
             saveApiConfig({
               provider: 'wan',
-              apiKey: wanKeyToSave,
+              apiKey: serializeApiKeyPoolPayload({
+                keys: wanKeysToSave,
+                baseUrl: (wanBaseUrl.trim() || qwenBaseUrl.trim()) || undefined,
+                modelId: wanModelId.trim() || 'wan2.7-image-pro',
+              }),
               baseUrl: (wanBaseUrl.trim() || qwenBaseUrl.trim()) || undefined,
               modelId: wanModelId.trim() || 'wan2.7-image-pro',
             })
@@ -469,27 +491,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
           cloudParts.push(`${r.label}${r.ok ? '✓' : '✗'}`);
         }
 
-        if (hunterApiKey.trim()) {
+        if (hunterKeys.length) {
           const r = await cloudWithTimeout('Hunter', () =>
-            saveApiConfig({ provider: 'hunter', apiKey: hunterApiKey.trim() })
+            saveApiConfig({
+              provider: 'hunter',
+              apiKey: serializeApiKeyPoolPayload({ keys: hunterKeys }),
+            })
           );
           cloudParts.push(`${r.label}${r.ok ? '✓' : '✗'}`);
         }
-        if (findymailApiKey.trim()) {
+        if (findymailKeys.length) {
           const r = await cloudWithTimeout('Findymail', () =>
-            saveApiConfig({ provider: 'findymail', apiKey: findymailApiKey.trim() })
+            saveApiConfig({
+              provider: 'findymail',
+              apiKey: serializeApiKeyPoolPayload({ keys: findymailKeys }),
+            })
           );
           cloudParts.push(`${r.label}${r.ok ? '✓' : '✗'}`);
         }
-        if (anymailFinderApiKey.trim()) {
+        if (anymailFinderKeys.length) {
           const r = await cloudWithTimeout('Anymail', () =>
-            saveApiConfig({ provider: 'anymailfinder', apiKey: anymailFinderApiKey.trim() })
+            saveApiConfig({
+              provider: 'anymailfinder',
+              apiKey: serializeApiKeyPoolPayload({ keys: anymailFinderKeys }),
+            })
           );
           cloudParts.push(`${r.label}${r.ok ? '✓' : '✗'}`);
         }
-        if (anysearchApiKey.trim()) {
+        if (anysearchKeys.length) {
           const r = await cloudWithTimeout('AnySearch', () =>
-            saveApiConfig({ provider: 'anysearch', apiKey: anysearchApiKey.trim() })
+            saveApiConfig({
+              provider: 'anysearch',
+              apiKey: serializeApiKeyPoolPayload({ keys: anysearchKeys }),
+            })
           );
           cloudParts.push(`${r.label}${r.ok ? '✓' : '✗'}`);
         }
@@ -531,22 +565,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
 
   const handleTestGemini = async () => {
     if (isTestingGemini) return;
-    if (!geminiApiKey.trim()) {
-      setGeminiTestMsg({ ok: false, text: '请先填写 Gemini 官方 API Key' });
+    const key = geminiKeys[0];
+    if (!key?.trim()) {
+      setGeminiTestMsg({ ok: false, text: '请先在 Gemini Key 池中添加至少一把 Key' });
       return;
     }
     setIsTestingGemini(true);
     setGeminiTestMsg(null);
     try {
+      setPoolKeys('gemini', geminiKeys.map(sanitizeApiKey), { modelId: geminiModelId.trim() });
       const result = await testApiKey(
-        sanitizeApiKey(geminiApiKey),
+        sanitizeApiKey(key),
         'native',
         geminiModelId.trim() || 'gemini-2.0-flash'
       );
       setGeminiTestMsg({
         ok: result.success,
         text: result.success
-          ? `${result.message} 可在 AI Studio 查看用量：https://aistudio.google.com/usage`
+          ? `${result.message}（测试 Key 池第 1 把）可在 AI Studio 查看用量：https://aistudio.google.com/usage`
           : result.message,
       });
     } catch (e: any) {
@@ -578,16 +614,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
 
   const handleTestQwen = async (testSearch = false) => {
     if (isTestingQwen) return;
+    const qwenApiKey = qwenKeys[0] || '';
     if (!qwenApiKey.trim()) {
-      const msg = '请先填写 Qwen API Key';
+      const msg = '请先在千问 Key 池中添加至少一把 Key';
       setQwenTestMsg({ ok: false, text: msg });
       return;
     }
-    // 测试前先写入 localStorage，保证请求用的是当前表单里的 Token Plan 配置
-    localStorage.setItem('trade_scout_qwen_api_key', qwenApiKey.trim());
-    if (qwenBaseUrl.trim()) localStorage.setItem('trade_scout_qwen_base_url', qwenBaseUrl.trim());
-    else localStorage.setItem('trade_scout_qwen_base_url', 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1');
-    if (qwenModelId.trim()) localStorage.setItem('trade_scout_qwen_model_id', qwenModelId.trim());
+    setPoolKeys('qwen', qwenKeys, {
+      baseUrl: qwenBaseUrl.trim() || 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
+      modelId: qwenModelId.trim(),
+    });
 
     setIsTestingQwen(true);
     setQwenTestMsg({
@@ -598,7 +634,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
     });
     try {
       const result = await testQwenApiKey(qwenApiKey, qwenBaseUrl, qwenModelId, testSearch);
-      setQwenTestMsg({ ok: result.success, text: result.message });
+      setQwenTestMsg({
+        ok: result.success,
+        text: result.success ? `${result.message}（测试 Key 池第 1 把，共 ${qwenKeys.length}）` : result.message,
+      });
     } catch (e: any) {
       setQwenTestMsg({ ok: false, text: `Qwen 测试异常: ${e?.message || String(e)}` });
     } finally {
@@ -608,9 +647,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
 
   const handleTestWan = async () => {
     if (isTestingWan) return;
-    const key = (wanApiKey.trim() || qwenApiKey.trim()).replace(/\s+/g, '');
+    const key = ((wanKeys[0] || qwenKeys[0] || '')).replace(/\s+/g, '');
     if (!key) {
-      setWanTestMsg({ ok: false, text: '请先填写万相 API Key（可与千问 Token Plan 共用）' });
+      setWanTestMsg({ ok: false, text: '请先在万相/千问 Key 池中添加 Key' });
       return;
     }
     const base =
@@ -619,20 +658,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
       'https://token-plan.cn-beijing.maas.aliyuncs.com';
     const origin = (() => {
       try {
-        return key.startsWith('sk-sp-')
-          ? 'https://token-plan.cn-beijing.maas.aliyuncs.com'
-          : new URL(base.startsWith('http') ? base : `https://${base}`).origin;
+        return new URL(base.startsWith('http') ? base : `https://${base}`).origin;
       } catch {
         return 'https://token-plan.cn-beijing.maas.aliyuncs.com';
       }
     })();
-    localStorage.setItem('trade_scout_wan_api_key', key);
-    localStorage.setItem('trade_scout_wan_base_url', origin);
-    localStorage.setItem('trade_scout_wan_model_id', wanModelId.trim() || 'wan2.7-image-pro');
-    setWanBaseUrl(origin);
-    if (!wanApiKey.trim()) setWanApiKey(key);
+    setPoolKeys('wan', wanKeys.length ? wanKeys : qwenKeys, {
+      baseUrl: origin,
+      modelId: wanModelId.trim(),
+    });
     setIsTestingWan(true);
-    setWanTestMsg({ ok: true, text: '正在测试万相连接（最长约 45 秒）…' });
+    setWanTestMsg({ ok: true, text: '正在测试万相…' });
     try {
       const result = await testWanImageApi({
         apiKey: key,
@@ -649,15 +685,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
 
   const handleTestAnymail = async () => {
     if (isTestingAnymail) return;
-    if (!anymailFinderApiKey.trim()) {
-      setAnymailTestMsg({ ok: false, text: '请先填写 AnymailFinder API Key' });
+    const key = anymailFinderKeys[0] || '';
+    if (!key.trim()) {
+      setAnymailTestMsg({ ok: false, text: '请先在 AnymailFinder Key 池中添加 Key' });
       return;
     }
-    localStorage.setItem('trade_scout_anymail_finder_api_key', anymailFinderApiKey.trim());
+    setPoolKeys('anymailfinder', anymailFinderKeys);
     setIsTestingAnymail(true);
     setAnymailTestMsg({ ok: true, text: '正在测试 AnymailFinder（最长约 20 秒）…' });
     try {
-      const result = await testAnymailFinderApiKey(anymailFinderApiKey.trim());
+      const result = await testAnymailFinderApiKey(key.trim());
       setAnymailTestMsg({ ok: result.success, text: result.message });
     } catch (e: any) {
       setAnymailTestMsg({ ok: false, text: `AnymailFinder 测试异常: ${e?.message || String(e)}` });
@@ -668,18 +705,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
 
   const handleTestHunter = async () => {
     if (isTestingHunter) return;
-    if (!hunterApiKey.trim()) {
-      setHunterTestMsg({ ok: false, text: '请先填写 Hunter.io API Key' });
+    const key = hunterKeys[0] || '';
+    if (!key.trim()) {
+      setHunterTestMsg({ ok: false, text: '请先在 Hunter Key 池中添加 Key' });
       return;
     }
-    localStorage.setItem('trade_scout_hunter_api_key', hunterApiKey.trim());
+    setPoolKeys('hunter', hunterKeys);
     setIsTestingHunter(true);
-    setHunterTestMsg({ ok: true, text: '正在测试 Hunter.io（最长约 20 秒）…' });
+    setHunterTestMsg({ ok: true, text: '正在测试 Hunter…' });
     try {
-      const result = await testHunterApiKey(hunterApiKey.trim());
+      const result = await testHunterApiKey(key.trim());
       setHunterTestMsg({ ok: result.success, text: result.message });
     } catch (e: any) {
-      setHunterTestMsg({ ok: false, text: `Hunter.io 测试异常: ${e?.message || String(e)}` });
+      setHunterTestMsg({ ok: false, text: `Hunter 测试异常: ${e?.message || String(e)}` });
     } finally {
       setIsTestingHunter(false);
     }
@@ -687,13 +725,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
 
   const handleTestAnysearch = async () => {
     if (isTestingAnysearch) return;
-    if (!anysearchApiKey.trim()) {
-      setAnysearchTestMsg({ ok: false, text: '请先填写 AnySearch API Key' });
+    const key = anysearchKeys[0] || '';
+    if (!key.trim()) {
+      setAnysearchTestMsg({ ok: false, text: '请先在 AnySearch Key 池中添加 Key' });
       return;
     }
-    saveAnysearchApiKey(anysearchApiKey.trim());
+    saveAnysearchApiKey(anysearchKeys);
     setIsTestingAnysearch(true);
-    setAnysearchTestMsg({ ok: true, text: '正在测试 AnySearch（最长约 40 秒）…' });
+    setAnysearchTestMsg({ ok: true, text: '正在测试 AnySearch…' });
     try {
       const result = await testAnysearchApiKey();
       setAnysearchTestMsg({ ok: result.success, text: result.message });
@@ -1121,7 +1160,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                       <Key className="text-blue-600" /> API 与模型路由
                     </h3>
                     <p className="text-xs sm:text-sm text-slate-400 font-bold mt-1">
-                      Gemini 官方 Key + 千问 Key；可按「搜索 / 背调 / 整理」分别选择引擎。决策人挖掘与图片生成配置不变。
+                      各模块支持多 API Key 池：超额/鉴权失败自动切下一把。可按「搜索 / 背调 / 整理」分别选择引擎。
                     </p>
                   </div>
                   <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
@@ -1227,15 +1266,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="md:col-span-2">
                       <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">
-                        Gemini API Key
+                        Gemini Key 池（可多把，超额自动切换）
                       </label>
-                      <input
-                        type="password"
-                        autoComplete="off"
-                        value={geminiApiKey}
-                        onChange={(e) => setGeminiApiKey(e.target.value)}
-                        placeholder="AIza... 或 AQ...."
-                        className="w-full bg-white border border-sky-100 rounded-xl px-4 py-3 font-bold text-sm"
+                      <ApiKeyPoolEditor
+                        provider="gemini"
+                        keys={geminiKeys}
+                        onChange={setGeminiKeys}
+                        placeholder="粘贴 AIza... / AQ.... 后点添加"
+                        hint="同一模型可配置多把 Google AI Studio Key；某把额度/鉴权失败会自动切下一把。"
                       />
                     </div>
                     <div>
@@ -1258,7 +1296,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                         className="w-full bg-sky-600 hover:bg-sky-700 text-white px-5 py-3 rounded-xl font-black flex items-center justify-center gap-2 disabled:opacity-50"
                       >
                         {isTestingGemini ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} fill="currentColor" />}
-                        测试 Gemini 连接
+                        测试 Gemini（第 1 把）
                       </button>
                     </div>
                   </div>
@@ -1332,13 +1370,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                       </button>
                     </div>
                     <div className="md:col-span-2">
-                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Qwen API Key</label>
-                      <input
-                        type="password"
-                        value={qwenApiKey}
-                        onChange={e => setQwenApiKey(e.target.value)}
-                        placeholder="sk-sp-...（Token Plan）或 sk-ws-...（工作空间）"
-                        className="w-full bg-white border border-emerald-100 rounded-xl px-4 py-3 font-bold text-sm"
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">
+                        千问 Key 池（可多把，超额自动切换）
+                      </label>
+                      <ApiKeyPoolEditor
+                        provider="qwen"
+                        keys={qwenKeys}
+                        onChange={setQwenKeys}
+                        placeholder="粘贴 sk-sp-... 后点添加"
+                        hint="同一 Base/模型可挂多把 Token Plan Key；某把额度用尽会自动切下一把。"
                       />
                     </div>
                     <div className="md:col-span-2">
@@ -1431,18 +1471,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     <Image size={16} /> 万相图片生成（wan2.7-image-pro）
                   </div>
                   <p className="text-xs text-slate-500 font-medium">
-                    与上方千问共用同一把 Token Plan Key（sk-sp-）和域名 token-plan.cn-beijing.maas.aliyuncs.com。
-                    Key 留空则自动用千问 Key。海报长图默认 wan2.7-image-pro；请确认套餐已开通该模型。
+                    可配置独立万相 Key 池；留空则回退使用千问 Key 池。海报长图默认 wan2.7-image-pro。
                   </p>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="md:col-span-2">
-                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">万相 API Key（可选）</label>
-                      <input
-                        type="password"
-                        value={wanApiKey}
-                        onChange={e => setWanApiKey(e.target.value)}
-                        placeholder="留空则与千问共用 sk-sp-... Key"
-                        className="w-full bg-white border border-pink-100 rounded-xl px-4 py-3 font-bold text-sm"
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">
+                        万相 Key 池（可选）
+                      </label>
+                      <ApiKeyPoolEditor
+                        provider="wan"
+                        keys={wanKeys}
+                        onChange={setWanKeys}
+                        placeholder="粘贴 sk-sp-... 后点添加；可留空共用千问池"
+                        hint="不添加则自动使用千问 Key 池。"
                       />
                     </div>
                     <div className="md:col-span-2">
@@ -1494,33 +1535,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                   </p>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="md:col-span-2">
-                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Hunter.io API Key（Anymail 无结果时回退）</label>
-                      <input
-                        type="password"
-                        value={hunterApiKey}
-                        onChange={e => setHunterApiKey(e.target.value)}
-                        placeholder="hunter.io 控制台获取"
-                        className="w-full bg-white border border-violet-100 rounded-xl px-4 py-3 font-bold text-sm text-slate-950"
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">
+                        Hunter.io Key 池
+                      </label>
+                      <ApiKeyPoolEditor
+                        provider="hunter"
+                        keys={hunterKeys}
+                        onChange={setHunterKeys}
+                        placeholder="粘贴 Hunter Key 后点添加"
                       />
                     </div>
-                    <div>
-                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Findymail API Key（可选补充）</label>
-                      <input
-                        type="password"
-                        value={findymailApiKey}
-                        onChange={e => setFindymailApiKey(e.target.value)}
-                        placeholder="app.findymail.com"
-                        className="w-full bg-white border border-violet-100 rounded-xl px-4 py-3 font-bold text-sm text-slate-950"
+                    <div className="md:col-span-2">
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">
+                        Findymail Key 池（可选）
+                      </label>
+                      <ApiKeyPoolEditor
+                        provider="findymail"
+                        keys={findymailKeys}
+                        onChange={setFindymailKeys}
+                        placeholder="粘贴 Findymail Key 后点添加"
                       />
                     </div>
-                    <div>
-                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">AnymailFinder API Key（主用）</label>
-                      <input
-                        type="password"
-                        value={anymailFinderApiKey}
-                        onChange={e => setAnymailFinderApiKey(e.target.value)}
-                        placeholder="anymailfinder.com"
-                        className="w-full bg-white border border-violet-100 rounded-xl px-4 py-3 font-bold text-sm text-slate-950"
+                    <div className="md:col-span-2">
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">
+                        AnymailFinder Key 池（主用）
+                      </label>
+                      <ApiKeyPoolEditor
+                        provider="anymailfinder"
+                        keys={anymailFinderKeys}
+                        onChange={setAnymailFinderKeys}
+                        placeholder="粘贴 AnymailFinder Key 后点添加"
                       />
                     </div>
                   </div>
@@ -1565,15 +1609,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                   </p>
                   <div>
                     <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">
-                      AnySearch API Key（as_sk_...）
+                      AnySearch Key 池（as_sk_...）
                     </label>
-                    <input
-                      type="password"
-                      autoComplete="off"
-                      value={anysearchApiKey}
-                      onChange={(e) => setAnysearchApiKey(e.target.value)}
-                      placeholder="https://anysearch.com/console/api-keys"
-                      className="w-full bg-white border border-cyan-100 rounded-xl px-4 py-3 font-bold text-sm text-slate-950"
+                    <ApiKeyPoolEditor
+                      provider="anysearch"
+                      keys={anysearchKeys}
+                      onChange={setAnysearchKeys}
+                      placeholder="粘贴 as_sk_... 后点添加"
                     />
                   </div>
                   <div className="flex flex-wrap justify-end gap-2">
