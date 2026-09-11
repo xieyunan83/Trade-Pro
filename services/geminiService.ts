@@ -1,5 +1,14 @@
 
 import { AnalysisResult, ClientSearchResult, DecisionMaker, ChatMessage, KnowledgeFile, KeywordExtractionResult, MailGroup, EmailTemplateRequest, ApiConfig, TaskType, StrategyChatContext } from "../types";
+import {
+  buildKnowledgeExcerpts,
+  compressImageBase64,
+  isPayloadTooLargeError,
+  prepareChatAttachments,
+  SAFE_AI_PROXY_BODY_BYTES,
+  shrinkMessagesToBudget,
+  slimChatHistoryForAi,
+} from '../utils/aiContextPack';
 import { getAllFilesFromDB } from "./db";
 import { getApiConfig as getSupabaseApiConfig, getAllApiConfigs, isSupabaseConfigured } from './supabase';
 import {
@@ -2092,19 +2101,39 @@ const buildQwenUserContent = (
     { type: 'text', text: prompt },
   ];
 
-  images.forEach(img => {
+  // 图片数量上限，避免代理 413
+  const maxImages = 2;
+  let imageParts = 0;
+
+  images.forEach((img) => {
+    if (imageParts >= maxImages) return;
+    imageParts += 1;
     parts.push({
       type: 'image_url',
       image_url: { url: img.startsWith('data:') ? img : `data:image/jpeg;base64,${img}` },
     });
   });
 
-  attachments.forEach(file => {
+  attachments.forEach((file) => {
     if (file.type === 'youtube') {
       parts.push({ type: 'text', text: `[Reference YouTube Link: ${file.data}]` });
-    } else if (file.mimeType?.startsWith('text/') || ['txt', 'md', 'csv', 'json'].includes(file.type)) {
-      parts.push({ type: 'text', text: `[File: ${file.name}]\n${file.data.substring(0, 8000)}` });
+    } else if (
+      file.mimeType?.startsWith('text/') ||
+      ['txt', 'md', 'csv', 'json'].includes(file.type) ||
+      // prepareChatAttachments 已把文本解码成明文
+      (file.mimeType === 'text/plain' && file.data && !file.data.startsWith('/9j/') && file.data.length < 50_000)
+    ) {
+      const body =
+        file.data.length > 8000 && /[\u4e00-\u9fffA-Za-z]/.test(file.data.slice(0, 100))
+          ? file.data.substring(0, 8000)
+          : file.data.substring(0, 8000);
+      parts.push({ type: 'text', text: `[File: ${file.name}]\n${body}` });
     } else if (file.mimeType?.startsWith('image/') && file.data) {
+      if (imageParts >= maxImages) {
+        parts.push({ type: 'text', text: `[Image omitted due to size limit: ${file.name}]` });
+        return;
+      }
+      imageParts += 1;
       parts.push({
         type: 'image_url',
         image_url: {
@@ -2400,7 +2429,19 @@ const generateContentUnified = async (
     const systemText = systemInfo || QWEN_SYSTEM;
 
     const runQwen = async () => {
-      let userContent = buildQwenUserContent(prompt, images, attachments);
+      const slimImages: string[] = [];
+      for (const img of (images || []).slice(0, 2)) {
+        try {
+          const c = await compressImageBase64(img, 'image/jpeg', { maxSide: 1280, quality: 0.7 });
+          slimImages.push(c.data);
+        } catch {
+          slimImages.push(img);
+        }
+      }
+      const slimAtt = attachments?.length
+        ? await prepareChatAttachments(attachments, { maxImages: 2, maxTextChars: 6_000 })
+        : [];
+      let userContent = buildQwenUserContent(prompt, slimImages, slimAtt);
       if (jsonMode && needsWebSearch && typeof userContent === 'string') {
         userContent += '\n\n【重要】请严格输出 JSON 格式，不要包含 markdown 代码块。';
       }
@@ -2631,10 +2672,24 @@ export const testApiKey = async (apiKey: string, baseUrl?: string, modelId?: str
 };
 
 export const generateMailGroupStrategy = async (client: AnalysisResult, productImages: string[], knowledgeBaseFiles: KnowledgeFile[]): Promise<MailGroup> => {
+    const kbHints = [
+      client.companyInfo?.name || '',
+      client.searchKeyword || '',
+      ...(client.businessScope?.coreProducts || []).slice(0, 6),
+    ].filter(Boolean);
+    const kbSnippet = buildKnowledgeExcerpts(knowledgeBaseFiles, {
+      maxTotalChars: 8_000,
+      maxPerFile: 800,
+      maxFiles: 10,
+      hints: kbHints,
+    });
     const prompt = `
     Role: Sales Expert (楠哥的小助理). Write 3 Cold Emails for ${client.companyInfo.name}.
     They sell: ${client.businessScope.coreProducts.join(', ')}.
     Their pain points/weaknesses (from SWOT): ${client.swot.weaknesses.join(', ')}.
+
+    Our product / company knowledge excerpts (may be partial):
+    ${kbSnippet || '(no text knowledge files)'}
     
     Structure:
     1. Analysis: Briefly explain WHY you chose this angle (1 sentence, in Chinese).
@@ -2644,7 +2699,8 @@ export const generateMailGroupStrategy = async (client: AnalysisResult, productI
 
     Output JSON: { "analysis": "...", "email1": "...", "email2": "...", "email3": "..." }
     `;
-    const text = await generateContentUnified('email', prompt, undefined, true, productImages, knowledgeBaseFiles);
+    // 勿把整库文件当 attachments（易触发代理 413）；最多带 1 张产品图
+    const text = await generateContentUnified('email', prompt, undefined, true, (productImages || []).slice(0, 1), []);
     const res = extractJson(text);
     return {
         analysis: res.analysis || "Generated",
@@ -2658,6 +2714,12 @@ export const generateConsolidatedEmailStrategy = async (clients: AnalysisResult[
     if (clients.length === 0) return { analysis: 'No Data', email1: '', email2: '', email3: '' };
     
     const clientSummary = clients.slice(0, 10).map(c => `- ${c.companyInfo.name} (${c.companyInfo.nature})`).join('\n');
+    const kbSnippet = buildKnowledgeExcerpts(knowledgeBaseFiles, {
+      maxTotalChars: 8_000,
+      maxPerFile: 800,
+      maxFiles: 10,
+      hints: [context, ...clients.slice(0, 3).map((c) => c.companyInfo?.name || '')],
+    });
     
     const prompt = `
     Role: Sales Expert (楠哥的小助理). 
@@ -2667,6 +2729,9 @@ export const generateConsolidatedEmailStrategy = async (clients: AnalysisResult[
     
     Client Examples in this batch:
     ${clientSummary}
+
+    Our product / company knowledge excerpts:
+    ${kbSnippet || '(no text knowledge files)'}
     
     Requirement:
     Create a generalized but high-converting sequence that addresses common pain points in this industry/sector.
@@ -2680,7 +2745,7 @@ export const generateConsolidatedEmailStrategy = async (clients: AnalysisResult[
 
     Output JSON: { "analysis": "...", "email1": "...", "email2": "...", "email3": "..." }
     `;
-    const text = await generateContentUnified('email', prompt, undefined, true, [], knowledgeBaseFiles);
+    const text = await generateContentUnified('email', prompt, undefined, true, [], []);
     const res = extractJson(text);
     return {
         analysis: res.analysis || "Generated",
@@ -4647,7 +4712,7 @@ export const streamStrategyChat = async function* (
     });
     const keywords = Array.from(new Set((strategyContext?.keywords || []).map((k) => k.trim()).filter(Boolean)));
     const countries = Array.from(new Set((strategyContext?.countries || []).map((c) => c.trim()).filter(Boolean)));
-    const marketLeads = (strategyContext?.marketLeads || []).slice(0, 30);
+    const marketLeads = (strategyContext?.marketLeads || []).slice(0, 20);
 
     let systemInstruction = `${QWEN_SYSTEM} 你是高级外贸策略顾问，擅长开发信撰写、谈判话术与市场进入策略。`;
     systemInstruction += `\n\n写作要求：\n- 若提供了具体背调客户，策略与开发信必须针对该公司画像、产品与痛点。\n- 若提供了关键词/国家市场上下文，可写面向整个目标市场的通用开发信框架，并说明可如何按客户微调。\n- 用户上传的附件优先作为「我方产品/报价」参考，勿编造未出现的规格与价格。\n- 回复使用中文为主，开发信正文可用英文（外贸常用）。`;
@@ -4695,18 +4760,42 @@ export const streamStrategyChat = async function* (
       systemInstruction += `\n\n当前为通用模式：用户未绑定具体背调客户或市场标签，可先追问目标客户/市场再给策略。`;
     }
 
+    // 系统知识库：只抽相关文本摘录，禁止把 70+ 文件/大图整包塞进代理（会 413 FUNCTION_PAYLOAD_TOO_LARGE）
     if (knowledgeBase.length > 0) {
-        const kbText = knowledgeBase.map(f => `[KB: ${f.name}]\n${f.data.substring(0, 500)}...`).join("\n\n");
-        systemInstruction += `\n\n知识库:\n${kbText}`;
+      const hints = [
+        ...keywords,
+        ...companies.map((c) => c.companyInfo?.name || ''),
+        ...companies.flatMap((c) => c.businessScope?.coreProducts || []).slice(0, 8),
+        newMessage.slice(0, 80),
+        ...(newAttachments || []).map((a) => a.name),
+      ].filter(Boolean) as string[];
+      const kbText = buildKnowledgeExcerpts(knowledgeBase, {
+        maxTotalChars: 8_000,
+        maxPerFile: 700,
+        maxFiles: 10,
+        hints,
+      });
+      if (kbText) {
+        systemInstruction += `\n\n## 我方知识库摘录（已自动压缩，共 ${knowledgeBase.length} 个文件中选取）\n${kbText}`;
+      }
     }
 
-    const messages: any[] = [
-        { role: 'system', content: systemInstruction },
-        ...history.filter(m => m.id !== 'init').map(m => ({ role: m.role, content: m.text })),
-        { role: 'user', content: buildQwenUserContent(newMessage, [], newAttachments) },
-    ];
+    const slimAttachments = await prepareChatAttachments(newAttachments || [], {
+      maxImages: 2,
+      maxTextChars: 5_000,
+    });
+    const historyMsgs = slimChatHistoryForAi(history, { maxTurns: 12, maxCharsPerMsg: 4_000 });
+    const searchExtra = qwenSearchPayload(true);
 
-    const response = await fetchWithTimeout(baseUrl, {
+    let messages: Array<{ role: string; content: unknown }> = [
+        { role: 'system', content: systemInstruction },
+        ...historyMsgs,
+        { role: 'user', content: buildQwenUserContent(newMessage || '（见附件）', [], slimAttachments) },
+    ];
+    messages = shrinkMessagesToBudget(messages, searchExtra, SAFE_AI_PROXY_BODY_BYTES);
+
+    const doFetch = async (msgs: Array<{ role: string; content: unknown }>) =>
+      fetchWithTimeout(baseUrl, {
         method: 'POST',
         headers: buildAliyunFetchHeaders({
             targetUrl: baseUrl,
@@ -4715,15 +4804,43 @@ export const streamStrategyChat = async function* (
         }),
         body: JSON.stringify({
             model: config.modelId,
-            messages,
+            messages: msgs,
             stream: true,
-            ...qwenSearchPayload(true),
+            ...searchExtra,
         }),
     }, 120_000);
 
+    let response = await doFetch(messages);
+
     if (!response.ok) {
         const errText = await response.text();
-        throw new Error(`千问对话失败: ${response.status} ${errText}`);
+        const err = new Error(`千问对话失败: ${response.status} ${errText}`);
+        if (isPayloadTooLargeError(err) || response.status === 413) {
+          // 自动降级：去掉图片与知识库长文，再试一次
+          const minimalSystem =
+            `${QWEN_SYSTEM} 你是外贸策略顾问。请根据用户问题写开发策略/英文开发信。` +
+            (keywords.length ? `\n关键词: ${keywords.join(', ')}` : '') +
+            (countries.length ? `\n国家: ${countries.join(', ')}` : '') +
+            (companies[0]?.companyInfo?.name ? `\n客户: ${companies[0].companyInfo.name}` : '');
+          messages = [
+            { role: 'system', content: minimalSystem.slice(0, 4_000) },
+            {
+              role: 'user',
+              content:
+                (newMessage || '请撰写开发策略与三封英文开发信').slice(0, 6_000) +
+                '\n\n（说明：因请求体积限制，附件/知识库全文未上传；请基于文字描述作答。）',
+            },
+          ];
+          response = await doFetch(messages);
+          if (!response.ok) {
+            const errText2 = await response.text();
+            throw new Error(
+              `千问对话失败: ${response.status} ${errText2}\n\n提示：附件或知识库过大触发了代理限制。请去掉大图/PDF后重试，或清空对话历史。`
+            );
+          }
+        } else {
+          throw err;
+        }
     }
 
     const reader = response.body?.getReader();

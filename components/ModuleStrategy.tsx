@@ -10,6 +10,7 @@ import {
 } from '../types';
 import { streamStrategyChat, generateMailGroupStrategy } from '../services/geminiService';
 import { getAllFilesFromDB } from '../services/db';
+import { compressImageBase64 } from '../utils/aiContextPack';
 import { getCustomKeywords, getCustomCountries } from '../services/taxonomyStore';
 import { formatBackgroundCheckTime } from '../utils/crmHistory';
 import {
@@ -270,8 +271,8 @@ export const ModuleStrategy: React.FC<Props> = ({
           continue;
         }
 
-        if (file.size > 10 * 1024 * 1024) {
-          alert(`Chat Attachment ${file.name} is too large (Max 10MB).`);
+        if (file.size > 4 * 1024 * 1024) {
+          alert(`Chat Attachment ${file.name} is too large (Max 4MB). Please compress the image.`);
           continue;
         }
 
@@ -285,12 +286,47 @@ export const ModuleStrategy: React.FC<Props> = ({
               name: file.name + ' (Converted)',
               type: 'txt',
               mimeType: 'text/plain',
-              data: btoa(unescape(encodeURIComponent(text))),
-              size: file.size,
+              data: text,
+              size: text.length,
             });
           } catch (err) {
             console.error('Word conversion failed', err);
           }
+          continue;
+        }
+
+        if (isImage) {
+          const dataUrl = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (e) => resolve(String(e.target?.result || ''));
+            reader.onerror = () => reject(new Error('read failed'));
+            reader.readAsDataURL(file);
+          });
+          const compressed = await compressImageBase64(dataUrl, fileType || 'image/jpeg', {
+            maxSide: 1280,
+            quality: 0.72,
+          });
+          processed.push({
+            id: Date.now() + '-' + i + Math.random().toString(36).substr(2, 9),
+            name: file.name,
+            type: 'jpg',
+            mimeType: compressed.mimeType,
+            data: compressed.data,
+            size: Math.ceil((compressed.data.length * 3) / 4),
+          });
+          continue;
+        }
+
+        if (isText) {
+          const text = await file.text();
+          processed.push({
+            id: Date.now() + '-' + i + Math.random().toString(36).substr(2, 9),
+            name: file.name,
+            type: 'txt',
+            mimeType: 'text/plain',
+            data: text.slice(0, 20_000),
+            size: Math.min(text.length, 20_000),
+          });
           continue;
         }
 
@@ -403,7 +439,12 @@ export const ModuleStrategy: React.FC<Props> = ({
       }
     } catch (e: any) {
       console.error(e);
-      const errorText = e.message || 'Unknown error';
+      let errorText = e.message || 'Unknown error';
+      if (/413|FUNCTION_PAYLOAD_TOO_LARGE|Request Entity Too Large/i.test(errorText)) {
+        errorText =
+          '请求体积过大（附件或系统知识库过多）。已自动压缩仍失败时，请：去掉大图/PDF、减少附件，或点右上角清空对话后再试。\n\n' +
+          errorText;
+      }
       setMessages((prev) => [
         ...prev,
         {
