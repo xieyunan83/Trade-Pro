@@ -21,10 +21,36 @@ export default defineConfig(({ mode }) => {
     process.env.ANYSEARCH_API_KEY = env.ANYSEARCH_API_KEY;
   }
 
+  const dmId = pick(
+    'REACT_APP_ALIYUN_EMAIL_ACCESS_KEY_ID',
+    'ALIYUN_DM_ACCESS_KEY_ID',
+    'REACT_APP_ALIYUN_DM_ACCESS_KEY_ID'
+  );
+  const dmSecret = pick(
+    'REACT_APP_ALIYUN_EMAIL_ACCESS_KEY_SECRET',
+    'ALIYUN_DM_ACCESS_KEY_SECRET',
+    'REACT_APP_ALIYUN_DM_ACCESS_KEY_SECRET'
+  );
+  const dmFrom = pick(
+    'REACT_APP_ALIYUN_EMAIL_FROM',
+    'ALIYUN_DM_ACCOUNT_NAME',
+    'REACT_APP_ALIYUN_DM_ACCOUNT_NAME'
+  );
+  if (dmId) process.env.ALIYUN_DM_ACCESS_KEY_ID = dmId;
+  if (dmSecret) process.env.ALIYUN_DM_ACCESS_KEY_SECRET = dmSecret;
+  if (dmFrom) process.env.ALIYUN_DM_ACCOUNT_NAME = dmFrom;
+
   return {
     plugins: [
       react(),
-      aliyunDevProxyPlugin(fallbackOrigin, { anysearchApiKey: env.ANYSEARCH_API_KEY || '' }),
+      aliyunDevProxyPlugin(fallbackOrigin, {
+        anysearchApiKey: env.ANYSEARCH_API_KEY || '',
+        directMailEnv: {
+          accessKeyId: dmId,
+          accessKeySecret: dmSecret,
+          accountName: dmFrom,
+        },
+      }),
     ],
     build: {
       sourcemap: false,
@@ -50,6 +76,16 @@ export default defineConfig(({ mode }) => {
       'process.env.VITE_GITHUB_REPO': JSON.stringify(env.VITE_GITHUB_REPO || ''),
       'process.env.REACT_APP_SUPABASE_URL': JSON.stringify(env.REACT_APP_SUPABASE_URL || ''),
       'process.env.REACT_APP_SUPABASE_ANON_KEY': JSON.stringify(env.REACT_APP_SUPABASE_ANON_KEY || ''),
+      // 邮件推送：仅在本地已配置时注入，便于邮件模块自动就绪
+      'process.env.REACT_APP_ALIYUN_EMAIL_ACCESS_KEY_ID': JSON.stringify(dmId),
+      'process.env.REACT_APP_ALIYUN_EMAIL_ACCESS_KEY_SECRET': JSON.stringify(dmSecret),
+      'process.env.REACT_APP_ALIYUN_EMAIL_FROM': JSON.stringify(dmFrom),
+      'process.env.REACT_APP_ALIYUN_EMAIL_FROM_ALIAS': JSON.stringify(
+        env.REACT_APP_ALIYUN_EMAIL_FROM_ALIAS || env.ALIYUN_DM_FROM_ALIAS || ''
+      ),
+      'process.env.REACT_APP_ALIYUN_EMAIL_REGION': JSON.stringify(
+        env.REACT_APP_ALIYUN_EMAIL_REGION || env.ALIYUN_DM_REGION || 'cn-hangzhou'
+      ),
     }
   }
 })

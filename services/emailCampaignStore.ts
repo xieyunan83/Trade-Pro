@@ -2,6 +2,7 @@
  * 邮件营销本地持久化（模板 / 任务 / 阿里云配置）
  */
 import type { AliyunConfig, EmailTask, EmailTemplate } from '../types';
+import { mergeAliyunConfigWithEnv } from './aliyunEmailEnv';
 
 const KEY = 'trade_scout_email_campaign_v1';
 
@@ -22,16 +23,20 @@ const empty = (): EmailCampaignStore => ({
 export const loadEmailCampaignStore = (): EmailCampaignStore => {
   try {
     const raw = localStorage.getItem(KEY);
-    if (!raw) return empty();
-    const parsed = JSON.parse(raw) as EmailCampaignStore;
-    return {
-      config: parsed.config || null,
-      templates: Array.isArray(parsed.templates) ? parsed.templates : [],
-      tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
-      updatedAt: parsed.updatedAt || Date.now(),
-    };
+    let parsed: EmailCampaignStore = empty();
+    if (raw) {
+      const j = JSON.parse(raw) as EmailCampaignStore;
+      parsed = {
+        config: j.config || null,
+        templates: Array.isArray(j.templates) ? j.templates : [],
+        tasks: Array.isArray(j.tasks) ? j.tasks : [],
+        updatedAt: j.updatedAt || Date.now(),
+      };
+    }
+    const merged = mergeAliyunConfigWithEnv(parsed.config);
+    return { ...parsed, config: merged };
   } catch {
-    return empty();
+    return { ...empty(), config: mergeAliyunConfigWithEnv(null) };
   }
 };
 

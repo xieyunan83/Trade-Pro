@@ -51,11 +51,24 @@ export default async function handler(req: any, res: any) {
     }
 
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
-    const accessKeyId = String(body.accessKeyId || process.env.ALIYUN_DM_ACCESS_KEY_ID || '').trim();
-    const accessKeySecret = String(
-      body.accessKeySecret || process.env.ALIYUN_DM_ACCESS_KEY_SECRET || ''
+    const accessKeyId = String(
+      body.accessKeyId ||
+        process.env.ALIYUN_DM_ACCESS_KEY_ID ||
+        process.env.REACT_APP_ALIYUN_EMAIL_ACCESS_KEY_ID ||
+        ''
     ).trim();
-    const accountName = String(body.accountName || process.env.ALIYUN_DM_ACCOUNT_NAME || '').trim();
+    const accessKeySecret = String(
+      body.accessKeySecret ||
+        process.env.ALIYUN_DM_ACCESS_KEY_SECRET ||
+        process.env.REACT_APP_ALIYUN_EMAIL_ACCESS_KEY_SECRET ||
+        ''
+    ).trim();
+    const accountName = String(
+      body.accountName ||
+        process.env.ALIYUN_DM_ACCOUNT_NAME ||
+        process.env.REACT_APP_ALIYUN_EMAIL_FROM ||
+        ''
+    ).trim();
     const toAddress = String(body.toAddress || '').trim();
     const subject = String(body.subject || '').trim();
     const htmlBody = String(body.htmlBody || body.textBody || '').trim();

@@ -45,6 +45,15 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
 
   const maybeForcePasswordChange = (user: User) => {
     if (user.isFirstLogin) {
+      try {
+        const until = Number(localStorage.getItem('trade_scout_pwd_change_skip_until') || 0);
+        if (until && Date.now() < until) {
+          finishLogin({ ...user, isFirstLogin: false });
+          return;
+        }
+      } catch {
+        /* ignore */
+      }
       setForceChange(user);
       setError('');
       return;
@@ -219,6 +228,24 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
             className="w-full bg-slate-900 text-white py-3 rounded-xl font-black disabled:opacity-60"
           >
             {loading ? '保存中…' : '保存并进入系统'}
+          </button>
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => {
+              try {
+                localStorage.setItem(
+                  'trade_scout_pwd_change_skip_until',
+                  String(Date.now() + 30 * 24 * 60 * 60 * 1000)
+                );
+              } catch {
+                /* ignore */
+              }
+              finishLogin({ ...forceChange, isFirstLogin: false });
+            }}
+            className="w-full text-slate-500 text-sm font-bold py-2 hover:text-slate-800"
+          >
+            暂时跳过，先进入系统（30 天内不再强制）
           </button>
         </form>
       </div>

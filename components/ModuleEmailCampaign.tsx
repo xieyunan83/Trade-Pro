@@ -631,8 +631,9 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
             <Settings className="text-blue-600" /> 阿里云邮件推送配置
           </h3>
           <p className="text-xs text-slate-500 font-medium mb-6">
-            经 <code className="bg-slate-100 px-1 rounded">/api/directmail</code> 同源签名发送。也可在
-            Vercel 配置 <code className="bg-slate-100 px-1 rounded">ALIYUN_DM_*</code> 环境变量，表单可留空密钥。
+            已自动读取 <code className="bg-slate-100 px-1 rounded">.env.local</code> 中的
+            REACT_APP_ALIYUN_EMAIL_*（若已填写）。本地开发经{' '}
+            <code className="bg-slate-100 px-1 rounded">/api/directmail</code> 发送，无需再配 Vercel。
           </p>
           <div className="space-y-6">
             <div className="grid grid-cols-2 gap-4">

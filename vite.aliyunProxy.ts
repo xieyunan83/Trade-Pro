@@ -195,7 +195,14 @@ function mountOriginProxy(
  */
 export function aliyunDevProxyPlugin(
   fallbackOrigin = 'https://dashscope.aliyuncs.com',
-  opts?: { anysearchApiKey?: string }
+  opts?: {
+    anysearchApiKey?: string;
+    directMailEnv?: {
+      accessKeyId?: string;
+      accessKeySecret?: string;
+      accountName?: string;
+    };
+  }
 ): Plugin {
   return {
     name: 'aliyun-dev-proxy',
@@ -222,6 +229,164 @@ export function aliyunDevProxyPlugin(
         stripAuthorization: true,
       });
       mountOriginProxy(server, '/tavily-api', () => 'https://api.tavily.com');
+
+      // 本地 DirectMail：与生产 /api/directmail 同路径，便于 npm run dev 真发信
+      server.middlewares.use('/api/directmail', (req, res) => {
+        void handleLocalDirectMail(req, res, opts?.directMailEnv);
+      });
     },
   };
+}
+
+type DirectMailEnv = {
+  accessKeyId?: string;
+  accessKeySecret?: string;
+  accountName?: string;
+};
+
+async function readReqBody(req: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const c of req) chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c));
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+async function handleLocalDirectMail(
+  req: IncomingMessage,
+  res: ServerResponse,
+  envKeys?: DirectMailEnv
+) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'content-type');
+  res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS');
+  if (req.method === 'OPTIONS') {
+    res.statusCode = 204;
+    res.end();
+    return;
+  }
+  if (req.method !== 'POST') {
+    res.statusCode = 405;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ ok: false, error: 'Only POST' }));
+    return;
+  }
+
+  try {
+    const crypto = await import('node:crypto');
+    const raw = await readReqBody(req);
+    const body = raw ? JSON.parse(raw) : {};
+    const accessKeyId = String(
+      body.accessKeyId || envKeys?.accessKeyId || process.env.ALIYUN_DM_ACCESS_KEY_ID || ''
+    ).trim();
+    const accessKeySecret = String(
+      body.accessKeySecret ||
+        envKeys?.accessKeySecret ||
+        process.env.ALIYUN_DM_ACCESS_KEY_SECRET ||
+        ''
+    ).trim();
+    const accountName = String(
+      body.accountName || envKeys?.accountName || process.env.ALIYUN_DM_ACCOUNT_NAME || ''
+    ).trim();
+    const toAddress = String(body.toAddress || '').trim();
+    const subject = String(body.subject || '').trim();
+    const htmlBody = String(body.htmlBody || body.textBody || '').trim();
+    const regionId = String(body.regionId || 'cn-hangzhou').trim();
+
+    if (!accessKeyId || !accessKeySecret || !accountName) {
+      res.statusCode = 400;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(
+        JSON.stringify({
+          ok: false,
+          error:
+            '缺少 AccessKey / 发信地址。请在 .env.local 填写 REACT_APP_ALIYUN_EMAIL_*，或邮件模块「接口配置」。',
+        })
+      );
+      return;
+    }
+    if (!toAddress || !subject || !htmlBody) {
+      res.statusCode = 400;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ ok: false, error: '缺少 toAddress / subject / htmlBody' }));
+      return;
+    }
+
+    const percentEncode = (s: string) =>
+      encodeURIComponent(s)
+        .replace(/!/g, '%21')
+        .replace(/'/g, '%27')
+        .replace(/\(/g, '%28')
+        .replace(/\)/g, '%29')
+        .replace(/\*/g, '%2A');
+
+    const params: Record<string, string> = {
+      AccessKeyId: accessKeyId,
+      Action: 'SingleSendMail',
+      Format: 'JSON',
+      Version: '2015-11-23',
+      SignatureMethod: 'HMAC-SHA1',
+      SignatureVersion: '1.0',
+      SignatureNonce: crypto.randomUUID(),
+      Timestamp: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+      RegionId: regionId,
+      AccountName: accountName,
+      AddressType: String(body.addressType === 0 ? 0 : 1),
+      ReplyToAddress: body.replyToAddress ? 'true' : 'false',
+      ToAddress: toAddress,
+      Subject: subject,
+      HtmlBody: htmlBody,
+    };
+    if (body.fromAlias) params.FromAlias = String(body.fromAlias);
+    if (body.tagName) params.TagName = String(body.tagName);
+
+    const sorted = Object.keys(params)
+      .sort()
+      .map((k) => `${percentEncode(k)}=${percentEncode(params[k])}`)
+      .join('&');
+    const stringToSign = `POST&${percentEncode('/')}&${percentEncode(sorted)}`;
+    params.Signature = crypto
+      .createHmac('sha1', `${accessKeySecret}&`)
+      .update(stringToSign)
+      .digest('base64');
+
+    const form = Object.keys(params)
+      .map((k) => `${percentEncode(k)}=${percentEncode(params[k])}`)
+      .join('&');
+
+    const endpoint =
+      regionId.includes('singapore') || regionId === 'ap-southeast-1'
+        ? 'https://dm.ap-southeast-1.aliyuncs.com/'
+        : 'https://dm.aliyuncs.com/';
+
+    const upstream = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: form,
+    });
+    const text = await upstream.text();
+    let data: any = {};
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { raw: text };
+    }
+    if (data.Code) {
+      res.statusCode = 400;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(
+        JSON.stringify({
+          ok: false,
+          error: `${data.Code}: ${data.Message || ''}`,
+          RequestId: data.RequestId,
+        })
+      );
+      return;
+    }
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ ok: true, RequestId: data.RequestId, ...data }));
+  } catch (e: any) {
+    res.statusCode = 500;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ ok: false, error: e?.message || 'DirectMail local proxy failed' }));
+  }
 }
