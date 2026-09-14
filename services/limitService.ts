@@ -1,4 +1,3 @@
-
 import { GlobalConfig, DailyUsage, TaskType } from '../types';
 
 /** 默认额度放宽：额度由用户自己的 API 承担，20 次/天会误伤批量背调 */
@@ -10,6 +9,15 @@ let currentConfig: GlobalConfig = {
   },
   systemNotice: ''
 };
+
+/** 按登录用户隔离本地用量，避免多人共用一台机器互相挤占 */
+let usageScope = 'local';
+
+export const setUsageScope = (username: string | null | undefined) => {
+  usageScope = (username || 'local').trim().toLowerCase() || 'local';
+};
+
+const usageStorageKey = () => `trade_scout_usage_v2:${usageScope}`;
 
 export const updateLocalConfig = (config: GlobalConfig) => {
   // 兼容旧云端配置 analysis:20 —— 过低会误停批量背调
@@ -41,6 +49,7 @@ export const checkLimit = (type: TaskType | 'analysis' | 'search') => {
     current,
     max: configured <= 0 ? 0 : configured,
     unlimited: configured <= 0,
+    scope: usageScope,
   };
 };
 
@@ -64,7 +73,8 @@ export const getDailyUsagePublic = (): DailyUsage => getDailyUsage();
 
 const getDailyUsage = (): DailyUsage => {
   const today = new Date().toISOString().split('T')[0];
-  const saved = localStorage.getItem('trade_scout_usage');
+  const key = usageStorageKey();
+  const saved = localStorage.getItem(key) || localStorage.getItem('trade_scout_usage');
   if (saved) {
     try {
       const parsed = JSON.parse(saved) as DailyUsage;
@@ -77,7 +87,7 @@ const getDailyUsage = (): DailyUsage => {
 };
 
 const saveDailyUsage = (usage: DailyUsage) => {
-  localStorage.setItem('trade_scout_usage', JSON.stringify(usage));
+  localStorage.setItem(usageStorageKey(), JSON.stringify(usage));
 };
 
 // 启动时：若仍是旧默认 analysis:20 且今日已用满，自动抬高配置并清零，避免批量莫名停住

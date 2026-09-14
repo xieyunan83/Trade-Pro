@@ -72,6 +72,8 @@ CREATE INDEX IF NOT EXISTS idx_crm_clients_user_updated
   ON crm_clients (user_id, updated_at DESC);
 
 -- ==================== RLS（允许 anon 读写，便于本工具本地开发） ====================
+-- 警告：生产环境请执行 scripts/supabase-rls-harden.sql，并将应用 VITE_WORKSPACE_ID
+-- 设为同一随机长串；密钥勿长期存于可被 anon 读取的表。
 ALTER TABLE knowledge_base ENABLE ROW LEVEL SECURITY;
 ALTER TABLE api_configs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE investigation_history ENABLE ROW LEVEL SECURITY;

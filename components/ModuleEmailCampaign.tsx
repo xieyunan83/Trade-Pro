@@ -1,31 +1,70 @@
-
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import ReactQuill from 'react-quill';
 import 'react-quill/dist/quill.snow.css';
 import { Client, EmailTask, EmailTemplate, AliyunConfig } from '../types';
-import { Mail, Send, Plus, Trash2, Edit2, CheckCircle2, AlertTriangle, Loader2, Settings, FileText, Layout, Users, Clock, X, Briefcase } from 'lucide-react';
+import {
+  Mail,
+  Send,
+  Plus,
+  Trash2,
+  Edit2,
+  CheckCircle2,
+  AlertTriangle,
+  Loader2,
+  Settings,
+  FileText,
+  Layout,
+  Users,
+  Clock,
+  X,
+  Briefcase,
+} from 'lucide-react';
+import { loadEmailCampaignStore, saveEmailCampaignStore } from '../services/emailCampaignStore';
+import { isDirectMailConfigured, sendDirectMail } from '../services/directMailService';
 
 interface ModuleEmailCampaignProps {
   crmClients: Client[];
   onAddClients: (newClients: Client[]) => void;
+  /** 真实发送成功后回写 CRM lastContactSent + 活动日志 */
+  onEmailsSent?: (payload: {
+    companyName: string;
+    clientId?: string;
+    to: string;
+    subject: string;
+  }[]) => void;
+  currentUsername?: string;
 }
 
-export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({ 
-  crmClients, 
-  onAddClients
+export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
+  crmClients,
+  onEmailsSent,
 }) => {
-  const [tasks, setTasks] = useState<EmailTask[]>([]);
-  const [templates, setTemplates] = useState<EmailTemplate[]>([]);
-  const [config, setConfig] = useState<AliyunConfig | null>(null);
+  const initial = loadEmailCampaignStore();
+  const [tasks, setTasks] = useState<EmailTask[]>(initial.tasks);
+  const [templates, setTemplates] = useState<EmailTemplate[]>(initial.templates);
+  const [config, setConfig] = useState<AliyunConfig | null>(initial.config);
   const [activeTab, setActiveTab] = useState<'tasks' | 'templates' | 'config'>('tasks');
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
   const [roleFilter, setRoleFilter] = useState<'all' | 'Buyer' | 'CEO' | 'Other'>('all');
   const [isCreatingTemplate, setIsCreatingTemplate] = useState(false);
-  const [newTemplate, setNewTemplate] = useState<EmailTemplate>({ id: '', name: '', subject: '', body: '', lastUpdated: Date.now() });
+  const [newTemplate, setNewTemplate] = useState<EmailTemplate>({
+    id: '',
+    name: '',
+    subject: '',
+    body: '',
+    lastUpdated: Date.now(),
+  });
+  const [sending, setSending] = useState(false);
+  const [sendMsg, setSendMsg] = useState('');
   const quillRef = useRef<ReactQuill>(null);
 
   const macros = ['{{company_name}}', '{{contact_name}}'];
+  const dmReady = isDirectMailConfigured(config);
+
+  useEffect(() => {
+    saveEmailCampaignStore({ tasks, templates, config });
+  }, [tasks, templates, config]);
 
   const contactMatchesRole = (contact: { type?: string; title?: string; emailGuess?: string }) => {
     if (!contact.emailGuess?.includes('@')) return false;
@@ -33,16 +72,21 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
     if (roleFilter === 'Buyer') {
       return (
         contact.type === 'Buyer' ||
-        /buyer|procurement|purchasing|sourcing|category|merchandis|采购|买手|供应链/i.test(contact.title || '')
+        /buyer|procurement|purchasing|sourcing|category|merchandis|采购|买手|供应链/i.test(
+          contact.title || ''
+        )
       );
     }
     if (roleFilter === 'CEO') {
       return contact.type === 'CEO' || /ceo|founder|owner|president|总经理|创始/i.test(contact.title || '');
     }
-    return contact.type === 'Other' || (!contact.type && !/buyer|ceo|procurement|purchasing/i.test(contact.title || ''));
+    return (
+      contact.type === 'Other' ||
+      (!contact.type && !/buyer|ceo|procurement|purchasing/i.test(contact.title || ''))
+    );
   };
 
-  const importableContacts = React.useMemo(() => {
+  const importableContacts = useMemo(() => {
     const rows: Array<{ client: Client; contact: NonNullable<Client['contacts']>[number] }> = [];
     for (const client of crmClients) {
       for (const contact of client.contacts || []) {
@@ -65,10 +109,12 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
       existing.add(email.toLowerCase());
       newTasks.push({
         id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-        recipientName: contact.name || [contact.firstName, contact.lastName].filter(Boolean).join(' ') || '',
+        recipientName:
+          contact.name || [contact.firstName, contact.lastName].filter(Boolean).join(' ') || '',
         recipientEmail: email,
         recipientTitle: contact.title || contact.type || '',
         companyName: client.name || '',
+        clientId: client.id,
         status: 'pending',
         sentAt: undefined,
       });
@@ -82,55 +128,44 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
   };
 
   const insertMacroToSubject = (macro: string) => {
-      setNewTemplate(prev => ({ ...prev, subject: prev.subject + macro }));
+    setNewTemplate((prev) => ({ ...prev, subject: prev.subject + macro }));
   };
 
   const insertMacroToBody = (macro: string) => {
+    const quill = quillRef.current?.getEditor();
+    if (quill) {
+      const range = quill.getSelection(true);
+      quill.insertText(range.index, macro);
+    }
+  };
+
+  const insertImageToBody = useCallback(() => {
+    const url = prompt('请输入图片链接:');
+    if (url) {
       const quill = quillRef.current?.getEditor();
       if (quill) {
-          const range = quill.getSelection(true);
-          quill.insertText(range.index, macro);
+        const range = quill.getSelection(true);
+        quill.insertEmbed(range.index, 'image', url);
       }
-  };
-
-  const insertImageToBody = React.useCallback(() => {
-      const url = prompt('请输入图片链接:');
-      if (url) {
-          const quill = quillRef.current?.getEditor();
-          if (quill) {
-              const range = quill.getSelection(true);
-              quill.insertEmbed(range.index, 'image', url);
-          }
-      }
+    }
   }, []);
 
-  const modules = React.useMemo(() => ({
-    toolbar: {
+  const modules = useMemo(
+    () => ({
+      toolbar: {
         container: [
-            [{ 'header': [1, 2, false] }],
-            ['bold', 'italic', 'underline', 'strike', 'blockquote'],
-            [{ 'color': [] }, { 'background': [] }],
-            [{ 'list': 'ordered'}, { 'list': 'bullet' }, { 'indent': '-1'}, { 'indent': '+1' }],
-            ['link', 'image'],
-            ['clean']
+          [{ header: [1, 2, false] }],
+          ['bold', 'italic', 'underline', 'strike', 'blockquote'],
+          [{ color: [] }, { background: [] }],
+          [{ list: 'ordered' }, { list: 'bullet' }, { indent: '-1' }, { indent: '+1' }],
+          ['link', 'image'],
+          ['clean'],
         ],
-        handlers: {
-            image: insertImageToBody
-        }
-    }
-  }), [insertImageToBody]);
-  
-  const addClientsToTasks = (clients: Client[]) => {
-    const newTasks: EmailTask[] = clients.map(client => ({
-      id: Date.now().toString() + client.id,
-      recipientName: client.contacts && client.contacts.length > 0 ? client.contacts[0].name : '',
-      recipientEmail: client.contacts && client.contacts.length > 0 ? client.contacts[0].emailGuess || '' : '',
-      companyName: client.name || '',
-      status: 'pending',
-      sentAt: null
-    }));
-    setTasks([...tasks, ...newTasks]);
-  };
+        handlers: { image: insertImageToBody },
+      },
+    }),
+    [insertImageToBody]
+  );
 
   const [configInput, setConfigInput] = useState<AliyunConfig>({
     accessKeyId: config?.accessKeyId || '',
@@ -140,52 +175,119 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
     replyToAddress: config?.replyToAddress || false,
     addressType: config?.addressType || 1,
     tagName: config?.tagName || '',
-    regionId: config?.regionId || 'cn-hangzhou'
+    regionId: config?.regionId || 'cn-hangzhou',
   });
 
   const onSaveConfig = (newConfig: AliyunConfig) => {
     setConfig(newConfig);
-    alert('配置已保存');
+    alert('配置已保存到本机（刷新不丢失）。生产环境建议改用服务端 ALIYUN_DM_* 环境变量。');
   };
-  
+
   const onSaveTemplate = () => {
-      setTemplates([...templates, { ...newTemplate, id: Date.now().toString(), lastUpdated: Date.now() }]);
-      setIsCreatingTemplate(false);
-      setNewTemplate({ id: '', name: '', subject: '', body: '', lastUpdated: Date.now() });
+    setTemplates([...templates, { ...newTemplate, id: Date.now().toString(), lastUpdated: Date.now() }]);
+    setIsCreatingTemplate(false);
+    setNewTemplate({ id: '', name: '', subject: '', body: '', lastUpdated: Date.now() });
   };
-  const onDeleteTemplate = (id: string) => setTemplates(templates.filter(t => t.id !== id));
-  const processTemplate = (template: EmailTemplate, client: Client) => {
-    const contact = client.contacts && client.contacts.length > 0 ? client.contacts[0] : { name: '', emailGuess: '' };
-    const replacements: { [key: string]: string } = {
-      '{{company_name}}': client.name || '',
-      '{{contact_name}}': contact.name || '',
+  const onDeleteTemplate = (id: string) => setTemplates(templates.filter((t) => t.id !== id));
+
+  const processTemplateForTask = (template: EmailTemplate, task: EmailTask) => {
+    const replacements: Record<string, string> = {
+      '{{company_name}}': task.companyName || '',
+      '{{contact_name}}': task.recipientName || '',
     };
-    
     let subject = template.subject;
     let body = template.body;
-    
-    Object.keys(replacements).forEach(key => {
+    Object.keys(replacements).forEach((key) => {
       subject = subject.replace(new RegExp(key, 'g'), replacements[key]);
       body = body.replace(new RegExp(key, 'g'), replacements[key]);
     });
-    
     return { subject, body };
   };
 
-  const onSendBatch = (taskIds: string[], templateId: string) => {
-    const template = templates.find(t => t.id === templateId);
-    if (!template) return;
-    
-    const selectedClients = crmClients.filter(c => taskIds.includes(c.id));
-    
-    selectedClients.forEach(client => {
-      const { subject, body } = processTemplate(template, client);
-      const contact = client.contacts && client.contacts.length > 0 ? client.contacts[0] : { emailGuess: '' };
-      console.log(`Sending email to ${contact.emailGuess}: ${subject}`);
-      // Integrate AliCloud sending logic here
-    });
-    
-    alert(`Sending batch to ${selectedClients.length} recipients using template ${template.name}`);
+  const onSendBatch = async (taskIds: string[], templateId: string) => {
+    const template = templates.find((t) => t.id === templateId);
+    if (!template) {
+      alert('请选择模板');
+      return;
+    }
+    if (!dmReady || !config) {
+      alert('请先在「接口配置」填写完整的阿里云 DirectMail 参数后再发送。');
+      setActiveTab('config');
+      return;
+    }
+
+    const targets = tasks.filter((t) => taskIds.includes(t.id) && t.status !== 'success');
+    if (!targets.length) {
+      alert('没有可发送的任务（已成功的不会重复发送）');
+      return;
+    }
+
+    if (
+      !confirm(
+        `将通过阿里云 DirectMail 真实发送 ${targets.length} 封邮件。\n仅成功投递后会回写 CRM「最近发信」。\n确认继续？`
+      )
+    ) {
+      return;
+    }
+
+    setSending(true);
+    setSendMsg('');
+    const crmWrites: Array<{ companyName: string; clientId?: string; to: string; subject: string }> =
+      [];
+    let okCount = 0;
+    let failCount = 0;
+
+    for (const task of targets) {
+      setTasks((prev) =>
+        prev.map((t) => (t.id === task.id ? { ...t, status: 'sending', error: undefined } : t))
+      );
+      const { subject, body } = processTemplateForTask(template, task);
+      const result = await sendDirectMail({
+        config,
+        toAddress: task.recipientEmail,
+        subject,
+        htmlBody: body,
+        fromAlias: template.senderName || config.fromAlias,
+      });
+      if (result.ok) {
+        okCount += 1;
+        crmWrites.push({
+          companyName: task.companyName,
+          clientId: task.clientId,
+          to: task.recipientEmail,
+          subject,
+        });
+        setTasks((prev) =>
+          prev.map((t) =>
+            t.id === task.id
+              ? {
+                  ...t,
+                  status: 'success',
+                  sentAt: Date.now(),
+                  requestId: result.requestId,
+                  error: undefined,
+                }
+              : t
+          )
+        );
+      } else {
+        failCount += 1;
+        setTasks((prev) =>
+          prev.map((t) =>
+            t.id === task.id
+              ? { ...t, status: 'failed', error: result.error || '发送失败' }
+              : t
+          )
+        );
+      }
+      // 轻微间隔，降低限流
+      await new Promise((r) => setTimeout(r, 400));
+    }
+
+    if (crmWrites.length && onEmailsSent) onEmailsSent(crmWrites);
+    setSendMsg(`完成：成功 ${okCount}，失败 ${failCount}`);
+    setSending(false);
+    setSelectedTaskIds(new Set());
   };
 
   const toggleTask = (id: string) => {
@@ -197,24 +299,29 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
 
   return (
     <div className="max-w-7xl mx-auto space-y-4 sm:space-y-8 animate-fade-in">
+      <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-900">
+        邮件营销已接入阿里云 DirectMail 真实发送。未配置接口时「立即群发」不可用（不会假装发送）。
+        任务/模板/配置已本地持久化。发送成功后会回写 CRM 最近发信与活动记录。
+      </div>
+
       <div className="flex flex-wrap gap-2 bg-white p-2 rounded-2xl border border-slate-200 shadow-sm w-full sm:w-fit overflow-x-auto">
-        <button 
+        <button
           onClick={() => setActiveTab('tasks')}
           className={`flex-1 sm:flex-none px-4 sm:px-6 py-2 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center justify-center gap-2 touch-manipulation ${activeTab === 'tasks' ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'}`}
         >
           <Users size={16} /> 发送任务
         </button>
-        <button 
+        <button
           onClick={() => setActiveTab('templates')}
           className={`flex-1 sm:flex-none px-4 sm:px-6 py-2 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center justify-center gap-2 touch-manipulation ${activeTab === 'templates' ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'}`}
         >
           <Layout size={16} /> 邮件模板
         </button>
-        <button 
+        <button
           onClick={() => setActiveTab('config')}
           className={`flex-1 sm:flex-none px-4 sm:px-6 py-2 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center justify-center gap-2 touch-manipulation ${activeTab === 'config' ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'}`}
         >
-          <Settings size={16} /> 接口配置
+          <Settings size={16} /> 接口配置 {dmReady ? '✓' : ''}
         </button>
       </div>
 
@@ -223,24 +330,40 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
           <div className="bg-white p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm space-y-4">
             <div className="flex flex-col lg:flex-row lg:justify-between lg:items-center gap-4">
               <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 w-full lg:w-auto">
-                <h3 className="text-base sm:text-lg font-black text-slate-800">待发送列表 ({tasks.length})</h3>
-                <select 
-                  value={selectedTemplateId} 
-                  onChange={e => setSelectedTemplateId(e.target.value)}
+                <h3 className="text-base sm:text-lg font-black text-slate-800">
+                  待发送列表 ({tasks.length})
+                </h3>
+                <select
+                  value={selectedTemplateId}
+                  onChange={(e) => setSelectedTemplateId(e.target.value)}
                   className="w-full sm:w-auto px-4 py-2 rounded-xl border border-slate-200 text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none"
                 >
                   <option value="">选择发送模板...</option>
-                  {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  {templates.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
                 </select>
               </div>
-              <button 
-                disabled={selectedTaskIds.size === 0 || !selectedTemplateId || !config}
+              <button
+                disabled={
+                  sending || selectedTaskIds.size === 0 || !selectedTemplateId || !dmReady
+                }
                 onClick={() => onSendBatch(Array.from(selectedTaskIds), selectedTemplateId)}
                 className="bg-blue-600 hover:bg-blue-700 text-white px-6 sm:px-8 py-3 rounded-xl font-black shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 w-full lg:w-auto touch-manipulation"
+                title={!dmReady ? '请先完成接口配置' : undefined}
               >
-                <Send size={18} /> 立即群发 ({selectedTaskIds.size})
+                {sending ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
+                {sending ? '发送中…' : `真实群发 (${selectedTaskIds.size})`}
               </button>
             </div>
+            {!dmReady && (
+              <p className="text-xs font-bold text-rose-600">
+                DirectMail 未配置：请到「接口配置」填写 AccessKey 与发信地址。未配置时不会发送任何邮件。
+              </p>
+            )}
+            {sendMsg && <p className="text-xs font-bold text-emerald-700">{sendMsg}</p>}
 
             <div className="rounded-2xl border border-violet-100 bg-violet-50/60 p-4 space-y-3">
               <div className="flex items-center gap-2 text-sm font-black text-violet-800">
@@ -276,10 +399,10 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
               <thead>
                 <tr className="bg-slate-50 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">
                   <th className="px-6 py-4 w-12">
-                    <input 
-                      type="checkbox" 
-                      onChange={e => {
-                        if (e.target.checked) setSelectedTaskIds(new Set(tasks.map(t => t.id)));
+                    <input
+                      type="checkbox"
+                      onChange={(e) => {
+                        if (e.target.checked) setSelectedTaskIds(new Set(tasks.map((t) => t.id)));
                         else setSelectedTaskIds(new Set());
                       }}
                       className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
@@ -295,14 +418,16 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
               <tbody className="divide-y divide-slate-50">
                 {tasks.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-6 py-12 text-center text-slate-400 font-bold">暂无发送任务，请先按岗位从 CRM 导入</td>
+                    <td colSpan={6} className="px-6 py-12 text-center text-slate-400 font-bold">
+                      暂无发送任务，请先按岗位从 CRM 导入
+                    </td>
                   </tr>
                 ) : (
-                  tasks.map(task => (
+                  tasks.map((task) => (
                     <tr key={task.id} className="hover:bg-slate-50/50 transition-colors">
                       <td className="px-6 py-4">
-                        <input 
-                          type="checkbox" 
+                        <input
+                          type="checkbox"
                           checked={selectedTaskIds.has(task.id)}
                           onChange={() => toggleTask(task.id)}
                           className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
@@ -310,25 +435,39 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
                       </td>
                       <td className="px-6 py-4">
                         <div className="font-bold text-slate-800">{task.recipientName}</div>
-                        <div className="text-[10px] text-slate-400 font-bold">{task.recipientEmail}</div>
+                        <div className="text-[10px] text-slate-400 font-bold">
+                          {task.recipientEmail}
+                        </div>
+                        {task.error && (
+                          <div className="text-[10px] text-rose-500 font-bold mt-1">{task.error}</div>
+                        )}
                       </td>
                       <td className="px-6 py-4">
-                        <div className="text-xs font-bold text-slate-600">{task.recipientTitle || '—'}</div>
+                        <div className="text-xs font-bold text-slate-600">
+                          {task.recipientTitle || '—'}
+                        </div>
                       </td>
                       <td className="px-6 py-4">
                         <div className="text-sm font-bold text-slate-600">{task.companyName}</div>
                       </td>
                       <td className="px-6 py-4">
-                        <div className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-tighter ${
-                          task.status === 'success' ? 'bg-green-100 text-green-600' :
-                          task.status === 'failed' ? 'bg-red-100 text-red-600' :
-                          task.status === 'sending' ? 'bg-blue-100 text-blue-600' :
-                          'bg-slate-100 text-slate-400'
-                        }`}>
-                          {task.status === 'sending' ? <Loader2 className="animate-spin" size={10}/> : null}
-                          {task.status === 'success' ? <CheckCircle2 size={10}/> : null}
-                          {task.status === 'failed' ? <AlertTriangle size={10}/> : null}
-                          {task.status === 'pending' ? <Clock size={10}/> : null}
+                        <div
+                          className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-tighter ${
+                            task.status === 'success'
+                              ? 'bg-green-100 text-green-600'
+                              : task.status === 'failed'
+                                ? 'bg-red-100 text-red-600'
+                                : task.status === 'sending'
+                                  ? 'bg-blue-100 text-blue-600'
+                                  : 'bg-slate-100 text-slate-400'
+                          }`}
+                        >
+                          {task.status === 'sending' ? (
+                            <Loader2 className="animate-spin" size={10} />
+                          ) : null}
+                          {task.status === 'success' ? <CheckCircle2 size={10} /> : null}
+                          {task.status === 'failed' ? <AlertTriangle size={10} /> : null}
+                          {task.status === 'pending' ? <Clock size={10} /> : null}
                           {task.status}
                         </div>
                       </td>
@@ -348,28 +487,57 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
 
       {activeTab === 'templates' && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div onClick={() => { setNewTemplate({ id: '', name: '', subject: '', body: '', lastUpdated: Date.now() }); setIsCreatingTemplate(true); }} className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm flex flex-col items-center justify-center border-dashed cursor-pointer hover:bg-slate-50 transition-all min-h-[200px]">
+          <div
+            onClick={() => {
+              setNewTemplate({ id: '', name: '', subject: '', body: '', lastUpdated: Date.now() });
+              setIsCreatingTemplate(true);
+            }}
+            className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm flex flex-col items-center justify-center border-dashed cursor-pointer hover:bg-slate-50 transition-all min-h-[200px]"
+          >
             <div className="bg-blue-50 p-4 rounded-2xl text-blue-600 mb-4">
               <Plus size={32} />
             </div>
             <h4 className="text-lg font-black text-slate-800">创建新模板</h4>
-            <p className="text-slate-400 font-bold text-sm">使用 AI 或手动编写邮件模板</p>
+            <p className="text-slate-400 font-bold text-sm">手动编写，支持宏变量</p>
           </div>
-          {templates.map(template => (
-            <div key={template.id} className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm hover:border-blue-200 transition-all group">
+          {templates.map((template) => (
+            <div
+              key={template.id}
+              className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm hover:border-blue-200 transition-all group"
+            >
               <div className="flex justify-between items-start mb-4">
                 <div className="bg-slate-50 p-3 rounded-2xl text-slate-400">
                   <FileText size={24} />
                 </div>
                 <div className="flex gap-2">
-                  <button className="p-2 text-slate-400 hover:bg-slate-50 rounded-lg transition-colors"><Edit2 size={16} /></button>
-                  <button onClick={() => onDeleteTemplate(template.id)} className="p-2 text-red-400 hover:bg-red-50 rounded-lg transition-colors"><Trash2 size={16} /></button>
+                  <button
+                    type="button"
+                    className="p-2 text-slate-400 hover:bg-slate-50 rounded-lg transition-colors"
+                    onClick={() => {
+                      setNewTemplate(template);
+                      setIsCreatingTemplate(true);
+                      setTemplates((prev) => prev.filter((t) => t.id !== template.id));
+                    }}
+                  >
+                    <Edit2 size={16} />
+                  </button>
+                  <button
+                    onClick={() => onDeleteTemplate(template.id)}
+                    className="p-2 text-red-400 hover:bg-red-50 rounded-lg transition-colors"
+                  >
+                    <Trash2 size={16} />
+                  </button>
                 </div>
               </div>
               <h4 className="text-xl font-black text-slate-800 mb-2">{template.name}</h4>
-              <div className="text-xs font-bold text-slate-400 mb-4 truncate">主题: {template.subject}</div>
+              <div className="text-xs font-bold text-slate-400 mb-4 truncate">
+                主题: {template.subject}
+              </div>
               <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 h-32 overflow-hidden relative">
-                <div className="text-xs text-slate-500 leading-relaxed" dangerouslySetInnerHTML={{ __html: template.body }}></div>
+                <div
+                  className="text-xs text-slate-500 leading-relaxed"
+                  dangerouslySetInnerHTML={{ __html: template.body }}
+                ></div>
                 <div className="absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-slate-50 to-transparent"></div>
               </div>
             </div>
@@ -378,105 +546,174 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
       )}
 
       {isCreatingTemplate && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
-              <div className="bg-white rounded-3xl shadow-2xl w-full max-w-4xl animate-fade-in p-8">
-                  <div className="flex justify-between items-center mb-6">
-                      <h3 className="text-2xl font-black text-slate-800">创建邮件模板</h3>
-                      <button onClick={() => setIsCreatingTemplate(false)}><X size={24} className="text-slate-400"/></button>
-                  </div>
-                  <div className="space-y-6">
-                      <input type="text" placeholder="模板名称" value={newTemplate.name || ''} onChange={e => setNewTemplate({...newTemplate, name: e.target.value})} className="w-full p-3 border rounded-xl font-bold" />
-                      
-                      <div className="space-y-2">
-                        <label className="text-xs font-black text-slate-400 uppercase tracking-widest">邮件主题</label>
-                            <div className="flex gap-2">
-                            <input type="text" placeholder="邮件主题" value={newTemplate.subject || ''} onChange={e => setNewTemplate({...newTemplate, subject: e.target.value})} className="flex-1 p-3 border rounded-xl font-bold" />
-                            {macros.map(m => <button type="button" key={m} onClick={() => insertMacroToSubject(m)} className="bg-slate-100 px-3 py-1 rounded-lg text-xs font-bold hover:bg-slate-200">{m}</button>)}
-                        </div>
-                      </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-4xl animate-fade-in p-8 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-2xl font-black text-slate-800">编辑邮件模板</h3>
+              <button onClick={() => setIsCreatingTemplate(false)}>
+                <X size={24} className="text-slate-400" />
+              </button>
+            </div>
+            <div className="space-y-6">
+              <input
+                type="text"
+                placeholder="模板名称"
+                value={newTemplate.name || ''}
+                onChange={(e) => setNewTemplate({ ...newTemplate, name: e.target.value })}
+                className="w-full p-3 border rounded-xl font-bold"
+              />
 
-                      <div className="space-y-2">
-                        <label className="text-xs font-black text-slate-400 uppercase tracking-widest">邮件正文</label>
-                        <div className="flex gap-2 mb-2">
-                            {macros.map(m => <button type="button" key={m} onClick={() => insertMacroToBody(m)} className="bg-slate-100 px-3 py-1 rounded-lg text-xs font-bold hover:bg-slate-200">{m}</button>)}
-                        </div>
-                        <ReactQuill ref={quillRef} theme="snow" modules={modules} value={newTemplate.body || ''} onChange={body => setNewTemplate({...newTemplate, body})} className="h-64 mb-12" />
-                      </div>
-                      
-                      <button onClick={onSaveTemplate} className="w-full bg-blue-600 text-white py-4 rounded-xl font-black shadow-lg hover:bg-blue-700">保存模板</button>
-                  </div>
+              <div className="space-y-2">
+                <label className="text-xs font-black text-slate-400 uppercase tracking-widest">
+                  邮件主题
+                </label>
+                <div className="flex gap-2 flex-wrap">
+                  <input
+                    type="text"
+                    placeholder="邮件主题"
+                    value={newTemplate.subject || ''}
+                    onChange={(e) => setNewTemplate({ ...newTemplate, subject: e.target.value })}
+                    className="flex-1 min-w-[200px] p-3 border rounded-xl font-bold"
+                  />
+                  {macros.map((m) => (
+                    <button
+                      type="button"
+                      key={m}
+                      onClick={() => insertMacroToSubject(m)}
+                      className="bg-slate-100 px-3 py-1 rounded-lg text-xs font-bold hover:bg-slate-200"
+                    >
+                      {m}
+                    </button>
+                  ))}
+                </div>
               </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-black text-slate-400 uppercase tracking-widest">
+                  邮件正文
+                </label>
+                <div className="flex gap-2 mb-2 flex-wrap">
+                  {macros.map((m) => (
+                    <button
+                      type="button"
+                      key={m}
+                      onClick={() => insertMacroToBody(m)}
+                      className="bg-slate-100 px-3 py-1 rounded-lg text-xs font-bold hover:bg-slate-200"
+                    >
+                      {m}
+                    </button>
+                  ))}
+                </div>
+                <ReactQuill
+                  ref={quillRef}
+                  theme="snow"
+                  modules={modules}
+                  value={newTemplate.body || ''}
+                  onChange={(body) => setNewTemplate({ ...newTemplate, body })}
+                  className="h-64 mb-12"
+                />
+              </div>
+
+              <button
+                onClick={onSaveTemplate}
+                className="w-full bg-blue-600 text-white py-4 rounded-xl font-black shadow-lg hover:bg-blue-700"
+              >
+                保存模板
+              </button>
+            </div>
           </div>
+        </div>
       )}
 
       {activeTab === 'config' && (
         <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm max-w-2xl mx-auto">
-          <h3 className="text-2xl font-black text-slate-800 mb-8 flex items-center gap-2">
+          <h3 className="text-2xl font-black text-slate-800 mb-4 flex items-center gap-2">
             <Settings className="text-blue-600" /> 阿里云邮件推送配置
           </h3>
+          <p className="text-xs text-slate-500 font-medium mb-6">
+            经 <code className="bg-slate-100 px-1 rounded">/api/directmail</code> 同源签名发送。也可在
+            Vercel 配置 <code className="bg-slate-100 px-1 rounded">ALIYUN_DM_*</code> 环境变量，表单可留空密钥。
+          </p>
           <div className="space-y-6">
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">AccessKey ID</label>
-                <input 
-                  type="text" 
+                <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
+                  AccessKey ID
+                </label>
+                <input
+                  type="text"
                   value={configInput.accessKeyId}
-                  onChange={e => setConfigInput({...configInput, accessKeyId: e.target.value})}
+                  onChange={(e) => setConfigInput({ ...configInput, accessKeyId: e.target.value })}
                   className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold"
                 />
               </div>
               <div>
-                <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">AccessKey Secret</label>
-                <input 
-                  type="password" 
+                <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
+                  AccessKey Secret
+                </label>
+                <input
+                  type="password"
                   value={configInput.accessKeySecret}
-                  onChange={e => setConfigInput({...configInput, accessKeySecret: e.target.value})}
+                  onChange={(e) =>
+                    setConfigInput({ ...configInput, accessKeySecret: e.target.value })
+                  }
                   className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold"
                 />
               </div>
             </div>
             <div>
-              <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">发信地址 (Account Name)</label>
-              <input 
-                type="text" 
+              <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
+                发信地址 (Account Name)
+              </label>
+              <input
+                type="text"
                 value={configInput.accountName}
-                onChange={e => setConfigInput({...configInput, accountName: e.target.value})}
+                onChange={(e) => setConfigInput({ ...configInput, accountName: e.target.value })}
                 placeholder="offer@service.example.com"
                 className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold"
               />
             </div>
             <div>
-              <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">发信人别名 (Sender Alias)</label>
-              <input 
-                type="text" 
+              <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
+                发信人别名 (Sender Alias)
+              </label>
+              <input
+                type="text"
                 value={configInput.fromAlias}
-                onChange={e => setConfigInput({...configInput, fromAlias: e.target.value})}
+                onChange={(e) => setConfigInput({ ...configInput, fromAlias: e.target.value })}
                 placeholder="Kevin from TradeScout"
                 className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold"
               />
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Region ID</label>
-                <input 
-                  type="text" 
+                <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
+                  Region ID
+                </label>
+                <input
+                  type="text"
                   value={configInput.regionId}
-                  onChange={e => setConfigInput({...configInput, regionId: e.target.value})}
+                  onChange={(e) => setConfigInput({ ...configInput, regionId: e.target.value })}
                   className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold"
                 />
               </div>
               <div>
-                <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Tag Name</label>
-                <input 
-                  type="text" 
+                <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
+                  Tag Name
+                </label>
+                <input
+                  type="text"
                   value={configInput.tagName}
-                  onChange={e => setConfigInput({...configInput, tagName: e.target.value})}
+                  onChange={(e) => setConfigInput({ ...configInput, tagName: e.target.value })}
                   className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold"
                 />
               </div>
             </div>
-            <button onClick={() => onSaveConfig(configInput)} className="w-full bg-slate-900 text-white py-4 rounded-xl font-black shadow-lg hover:bg-blue-600 transition-all">
-              保存配置 (Save Configuration)
+            <button
+              onClick={() => onSaveConfig(configInput)}
+              className="w-full bg-slate-900 text-white py-4 rounded-xl font-black shadow-lg hover:bg-blue-600 transition-all"
+            >
+              保存配置
             </button>
           </div>
         </div>

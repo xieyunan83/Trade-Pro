@@ -7,14 +7,91 @@ import { defaultPermissionsForRole } from './permissions';
 const USERS_KEY = 'trade_scout_users';
 const USERS_UPDATED_KEY = 'trade_scout_users_updated_at';
 
-export async function hashPassword(password: string): Promise<string> {
+const PBKDF2_PREFIX = 'pbkdf2$';
+const PBKDF2_ITERATIONS = 120_000;
+
+const toHex = (buf: ArrayBuffer | Uint8Array): string =>
+  Array.from(buf instanceof Uint8Array ? buf : new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+
+const fromHex = (hex: string): Uint8Array => {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return out;
+};
+
+/** 旧版无盐 SHA-256（仅用于校验兼容） */
+async function hashPasswordLegacySha256(password: string): Promise<string> {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(password));
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  return toHex(buf);
+}
+
+/** 新密码：PBKDF2-SHA256 + 随机盐（格式 pbkdf2$iter$saltHex$hashHex） */
+export async function hashPassword(password: string): Promise<string> {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(password),
+    'PBKDF2',
+    false,
+    ['deriveBits']
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
+    key,
+    256
+  );
+  return `${PBKDF2_PREFIX}${PBKDF2_ITERATIONS}$${toHex(salt)}$${toHex(bits)}`;
+}
+
+async function verifyPbkdf2(password: string, stored: string): Promise<boolean> {
+  const parts = stored.split('$');
+  if (parts.length !== 4 || parts[0] !== 'pbkdf2') return false;
+  const iterations = Number(parts[1]) || PBKDF2_ITERATIONS;
+  const salt = fromHex(parts[2]);
+  const expected = parts[3];
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(password),
+    'PBKDF2',
+    false,
+    ['deriveBits']
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
+    key,
+    256
+  );
+  return toHex(bits) === expected;
 }
 
 export async function verifyPassword(password: string, storedHash: string | undefined): Promise<boolean> {
   if (!storedHash) return false;
-  return (await hashPassword(password)) === storedHash;
+  if (storedHash.startsWith(PBKDF2_PREFIX)) return verifyPbkdf2(password, storedHash);
+  // 兼容旧 SHA-256
+  return (await hashPasswordLegacySha256(password)) === storedHash;
+}
+
+/** 是否仍为常见默认口令（兼容新旧哈希） */
+export async function isPasswordDefault(passwordHash: string | undefined, plain: string): Promise<boolean> {
+  if (!passwordHash) return true;
+  return verifyPassword(plain, passwordHash);
+}
+
+/** 登录成功后若仍是旧哈希，透明升级为 PBKDF2 */
+export async function upgradePasswordHashIfNeeded(
+  users: User[],
+  username: string,
+  plainPassword: string
+): Promise<User[]> {
+  const user = findUserByName(users, username);
+  if (!user?.password || user.password.startsWith(PBKDF2_PREFIX)) return users;
+  const ok = await verifyPassword(plainPassword, user.password);
+  if (!ok) return users;
+  const next = updateUserPassword(users, username, await hashPassword(plainPassword));
+  await persistUsers(next);
+  return next;
 }
 
 export function loadUsersFromStorage(): User[] {
@@ -160,18 +237,13 @@ async function fetchGitHubUsersBundle(): Promise<{ users: User[]; updatedAt: num
 async function isStillDefaultPasswords(users: User[]): Promise<boolean> {
   const admin = findUserByName(users, 'admin');
   if (!admin?.password) return true;
-  const defaultAdminHash = await hashPassword('admin123');
-  // 只要 admin 仍是默认密码，视为「未定制」；避免用手机端默认账号覆盖电脑端已改密码
-  if (admin.password !== defaultAdminHash) return false;
-  // 若有额外用户，也算已定制
+  // 只要 admin 仍是默认密码，视为「未定制」
+  if (!(await isPasswordDefault(admin.password, 'admin123'))) return false;
   if (users.some((u) => u.username.trim().toLowerCase() !== 'admin' && u.username.trim().toLowerCase() !== 'user')) {
     return false;
   }
   const user = findUserByName(users, 'user');
-  if (user?.password) {
-    const defaultUserHash = await hashPassword('user123');
-    if (user.password !== defaultUserHash) return false;
-  }
+  if (user?.password && !(await isPasswordDefault(user.password, 'user123'))) return false;
   return true;
 }
 
@@ -273,14 +345,53 @@ export async function authenticateUser(username: string, password: string): Prom
   if (!user?.password?.trim()) return null;
   if (user.disabled) return null;
   const ok = await verifyPassword(trimmedPwd, user.password);
-  return ok ? normalizeUser(user) : null;
+  if (!ok) return null;
+
+  let nextUsers = users;
+  if (!user.password.startsWith(PBKDF2_PREFIX)) {
+    nextUsers = await upgradePasswordHashIfNeeded(users, trimmedUser, trimmedPwd);
+  }
+
+  const fresh = findUserByName(nextUsers, trimmedUser) || user;
+  // 默认口令强制提示改密（不阻断登录，由 UI 引导）
+  const mustChangePassword =
+    fresh.isFirstLogin ||
+    (await isPasswordDefault(fresh.password, 'admin123')) ||
+    (await isPasswordDefault(fresh.password, 'user123'));
+
+  return normalizeUser({ ...fresh, isFirstLogin: mustChangePassword ? true : fresh.isFirstLogin });
 }
 
 export function updateUserPassword(users: User[], username: string, hashedPassword: string): User[] {
   const key = username.trim().toLowerCase();
   return users.map(u =>
-    u.username.trim().toLowerCase() === key ? { ...u, password: hashedPassword } : u
+    u.username.trim().toLowerCase() === key
+      ? { ...u, password: hashedPassword, isFirstLogin: false }
+      : u
   );
+}
+
+/** 用户主动改密 */
+export async function changeUserPassword(
+  username: string,
+  oldPassword: string,
+  newPassword: string
+): Promise<{ ok: boolean; message: string; users?: User[] }> {
+  const users = loadUsersFromStorage();
+  const user = findUserByName(users, username);
+  if (!user?.password) return { ok: false, message: '用户不存在' };
+  if (!(await verifyPassword(oldPassword, user.password))) {
+    return { ok: false, message: '原密码不正确' };
+  }
+  if (!newPassword || newPassword.trim().length < 8) {
+    return { ok: false, message: '新密码至少 8 位' };
+  }
+  if (['admin123', 'user123'].includes(newPassword.trim())) {
+    return { ok: false, message: '请勿使用系统默认密码' };
+  }
+  const next = updateUserPassword(users, username, await hashPassword(newPassword.trim()));
+  await persistUsers(next);
+  return { ok: true, message: '密码已更新', users: next };
 }
 
 export async function createDefaultUsers(): Promise<User[]> {

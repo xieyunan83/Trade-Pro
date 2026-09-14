@@ -280,6 +280,15 @@ export interface Client {
   lastContactReceived: string;
   nextFollowUpDate: string;
   activityLog: string;
+  /** 结构化活动事件（可选；与 activityLog 同步追加） */
+  activityEvents?: Array<{
+    id: string;
+    at: number;
+    kind: string;
+    summary: string;
+    detail?: string;
+    by?: string;
+  }>;
   contacts?: DecisionMaker[]; // Added contacts list
   /** 搜索来源关键词 */
   searchKeyword?: string;
@@ -676,7 +685,7 @@ export interface EmailTemplate {
     subject: string;
     senderName?: string; // New field for Sender Alias override
     body: string; // HTML content
-    attachments?: string[]; // List of file names (visual only for now)
+    attachments?: string[]; // 附件文件名列表（上传能力逐步完善）
     lastUpdated: number;
 }
 
@@ -687,7 +696,11 @@ export interface EmailTask {
     /** 收件人岗位/职位 */
     recipientTitle?: string;
     companyName: string;
+    /** 关联 CRM client id（便于回写） */
+    clientId?: string;
     status: 'pending' | 'sending' | 'success' | 'failed';
     error?: string;
     sentAt?: number;
+    /** DirectMail RequestId */
+    requestId?: string;
 }

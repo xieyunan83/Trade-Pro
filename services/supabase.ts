@@ -1,8 +1,12 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { KnowledgeFile, HistoryItem, DiscoveryState, Client, DiscoveryArchiveItem, CustomerProductProfile } from '../types'
 import { getSupabaseConfig, isSupabaseConfigured } from './env'
+import { encodeSecret, decodeSecret } from './secretCodec'
+import { getCloudWorkspaceId } from './workspaceId'
 
 export { isSupabaseConfigured }
+
+const cloudUid = () => getCloudWorkspaceId()
 
 export interface ApiConfig {
   provider: string
@@ -61,26 +65,10 @@ export const supabase = new Proxy({} as SupabaseClient, {
   },
 });
 
-// ==================== 工具函数 ====================
+/** 云端密钥编解码（v2 混淆，兼容旧 Base64） */
+const encrypt = (text: string): string => encodeSecret(text)
 
-// 简单加密（Base64，生产环境建议用更强加密）
-const encrypt = (text: string): string => {
-  try {
-    return btoa(text)
-  } catch (e) {
-    console.error('加密失败:', e)
-    return text
-  }
-}
-
-const decrypt = (encrypted: string): string => {
-  try {
-    return atob(encrypted)
-  } catch (e) {
-    console.error('解密失败:', e)
-    return encrypted
-  }
-}
+const decrypt = (encrypted: string): string => decodeSecret(encrypted)
 
 // ==================== API配置管理 ====================
 
@@ -93,7 +81,7 @@ export const saveApiConfig = async (config: ApiConfig): Promise<boolean> => {
     const { error } = await supabase
       .from('api_configs')
       .upsert({
-        user_id: 'default',
+        user_id: cloudUid(),
         provider: config.provider,
         encrypted_key: encrypt(config.apiKey),
         base_url: config.baseUrl,
@@ -179,7 +167,7 @@ export const fetchAppUsersFromCloud = async (): Promise<CloudUsersBundle | null>
     const { data, error } = await supabase
       .from('api_configs')
       .select('*')
-      .eq('user_id', 'default')
+      .eq('user_id', cloudUid())
       .eq('provider', APP_USERS_PROVIDER)
       .maybeSingle()
 
@@ -210,7 +198,7 @@ export const saveAppUsersToCloud = async (
       .from('api_configs')
       .upsert(
         {
-          user_id: 'default',
+          user_id: cloudUid(),
           provider: APP_USERS_PROVIDER,
           encrypted_key: encrypt(payload),
           base_url: null,
@@ -266,7 +254,7 @@ export const saveKnowledge = async (item: {
     const { error } = await supabase
       .from('knowledge_base')
       .insert({
-        user_id: 'default',
+        user_id: cloudUid(),
         title: item.title,
         content: item.content,
         category: item.category,
@@ -343,7 +331,7 @@ export const saveKnowledgeFile = async (file: KnowledgeFile): Promise<{ ok: bool
       .from('knowledge_base')
       .upsert({
         id: file.id,
-        user_id: 'default',
+        user_id: cloudUid(),
         title: file.name,
         content: packKnowledgeContent(file),
         category: file.type,
@@ -503,7 +491,7 @@ export const saveInvestigationHistory = async (item: HistoryItem): Promise<boole
     const { error } = await supabase
       .from('investigation_history')
       .upsert({
-        user_id: 'default',
+        user_id: cloudUid(),
         local_id: item.id,
         domain: item.domain,
         module_type: item.type,
@@ -561,7 +549,7 @@ export const saveDiscoverySearch = async (state: DiscoveryState): Promise<boolea
     const { error } = await supabase
       .from('discovery_searches')
       .insert({
-        user_id: 'default',
+        user_id: cloudUid(),
         product: state.product,
         country: countryStr,
         industry: state.industry,
@@ -688,7 +676,7 @@ export const saveCrmClientsBulk = async (clients: Client[]): Promise<boolean> =>
     }
 
     const rows = clients.map(c => ({
-      user_id: 'default',
+      user_id: cloudUid(),
       local_id: c.id,
       client_data: c,
       updated_at: new Date().toISOString(),
@@ -767,7 +755,7 @@ export const saveProductProfileCloud = async (profile: CustomerProductProfile): 
     const { error } = await supabase
       .from('product_profiles')
       .upsert({
-        user_id: 'default',
+        user_id: cloudUid(),
         local_id: profile.id,
         website: profile.website || '',
         company_name: profile.companyName || '',

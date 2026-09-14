@@ -42,6 +42,10 @@
     "api/tavily.ts": {
       "maxDuration": 60,
       "memory": 256
+    },
+    "api/directmail.ts": {
+      "maxDuration": 30,
+      "memory": 256
     }
   },
   "rewrites": [

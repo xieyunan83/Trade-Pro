@@ -111,6 +111,10 @@ import { AdminDashboard } from './components/AdminDashboard';
 import { 
   LayoutDashboard, PackageSearch, Users, PenTool, Network, Search, Loader2, Menu, Globe, Zap, FileSpreadsheet, History, Clock, ChevronRight, AlertTriangle, RefreshCw, LogOut, Briefcase, Ruler, CheckCircle2, Hourglass, StopCircle, PlayCircle, Layers, Mail, Cloud, Download, Info, Link2, X, Database, Image, Trash2, Ban, Target
 } from 'lucide-react';
+import { ALWAYS_ACTIVE_MODULES, NAV_MODULE_DEFS } from './services/moduleNav';
+import { useModuleHashRoute } from './hooks/useModuleHashRoute';
+import { setUsageScope } from './services/limitService';
+import { appendClientActivity, markEmailSentOnClient } from './services/crmActivity';
 import {
   addExcludedCompany,
   hydrateExcludedCompaniesFromCloud,
@@ -133,6 +137,7 @@ const App: React.FC = () => {
   
   const [domainInput, setDomainInput] = useState('');
   const [activeModule, setActiveModule] = useState<ModuleType>(ModuleType.DISCOVERY);
+  useModuleHashRoute(activeModule, setActiveModule);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [analysisData, setAnalysisData] = useState<AnalysisResult | null>(null);
@@ -3024,6 +3029,7 @@ const App: React.FC = () => {
   const handleLogout = () => {
     resetWorkspaceForUserSwitch();
     lastWorkspaceUserRef.current = null;
+    setUsageScope(null);
     setCurrentUser(null);
   };
   const handleSyncToGitHub = async () => { if(!currentUser) return; setIsSyncing(true); try { await backupUserHistory(currentUser.username, history); await saveCRMToCloud(crmClients); alert("数据同步成功!"); } catch (e: any) { alert("同步失败: " + e.message); } finally { setIsSyncing(false); } };
@@ -3791,7 +3797,10 @@ const App: React.FC = () => {
     if (!authReady) return <div className="h-screen flex items-center justify-center bg-slate-50"><Loader2 className="animate-spin text-blue-600" size={40} /></div>;
     return (
       <Login
-        onLogin={setCurrentUser}
+        onLogin={(u) => {
+          setUsageScope(u.username);
+          setCurrentUser(u);
+        }}
         onUsersChange={(next) => setUsers(next)}
       />
     );
@@ -3821,20 +3830,8 @@ const App: React.FC = () => {
       );
   }
 
-  const alwaysActiveModules = [ModuleType.DISCOVERY, ModuleType.PROMO_GENERATOR, ModuleType.CLIENT_CRM, ModuleType.PRODUCT_MATCH, ModuleType.STRATEGY, ModuleType.EMAIL_CAMPAIGN, ModuleType.IMAGE_GENERATOR];
-  const navModules = [
-            { id: ModuleType.DISCOVERY, label: '客户搜索', sub: 'Discovery', icon: Globe },
-            { id: ModuleType.BACKGROUND, label: '背景调查', sub: 'Background', icon: LayoutDashboard },
-            { id: ModuleType.PRODUCTS, label: '产品分析', sub: 'Products', icon: PackageSearch },
-            { id: ModuleType.DECISION_MAKERS, label: '决策人挖掘', sub: 'Contacts', icon: Users },
-            { id: ModuleType.STRATEGY, label: '开发策略', sub: 'Strategy', icon: PenTool },
-            { id: ModuleType.SIMILAR, label: '同类推荐', sub: 'Similar', icon: Network },
-            { id: ModuleType.PRODUCT_MATCH, label: '新品匹配', sub: 'Match', icon: Target },
-            { id: ModuleType.CLIENT_CRM, label: '客户管理', sub: 'CRM', icon: Briefcase },
-            { id: ModuleType.EMAIL_CAMPAIGN, label: '邮件营销', sub: 'DirectMail', icon: Mail }, 
-            { id: ModuleType.IMAGE_GENERATOR, label: '海报/生图', sub: 'Poster', icon: Image },
-            { id: ModuleType.PROMO_GENERATOR, label: '营销工具', sub: 'Tools', icon: Ruler },
-          ].filter((item) => canAccessModule(currentUser, item.id));
+  const alwaysActiveModules = ALWAYS_ACTIVE_MODULES;
+  const navModules = NAV_MODULE_DEFS.filter((item) => canAccessModule(currentUser, item.id));
 
   return (
     <AccessGate user={currentUser} onLogout={handleLogout}>
@@ -3987,7 +3984,7 @@ const App: React.FC = () => {
             </button>
             <button onClick={handleLogout} className="w-full flex items-center gap-2 px-4 py-3 text-rose-300 hover:bg-rose-500/10 rounded-xl text-sm font-semibold transition-colors"><LogOut size={18} /> 退出登录</button>
             <div className="px-4 pt-1 text-[9px] font-semibold text-slate-600 text-center select-all tracking-wide">
-              版本 v20260804t · 客户搜索优先Tavily
+              版本 v20260914 · 备份见 docs/ROLLBACK.md
             </div>
         </div>
       </aside>
@@ -4268,7 +4265,39 @@ const App: React.FC = () => {
                     />
                 )}
                 {activeModule === ModuleType.EMAIL_CAMPAIGN && (
-                    <ModuleEmailCampaign crmClients={crmClients} onAddClients={handleAddClients} />
+                    <ModuleEmailCampaign
+                      crmClients={crmClients}
+                      onAddClients={handleAddClients}
+                      currentUsername={currentUser.username}
+                      onEmailsSent={(rows) => {
+                        setCrmClients((prev) => {
+                          let next = prev;
+                          for (const row of rows) {
+                            next = next.map((c) => {
+                              if (row.clientId && c.id === row.clientId) {
+                                return markEmailSentOnClient(c, {
+                                  to: row.to,
+                                  subject: row.subject,
+                                  by: currentUser.username,
+                                });
+                              }
+                              const nameHit =
+                                row.companyName &&
+                                (c.name || '').toLowerCase() === row.companyName.toLowerCase();
+                              if (!row.clientId && nameHit) {
+                                return markEmailSentOnClient(c, {
+                                  to: row.to,
+                                  subject: row.subject,
+                                  by: currentUser.username,
+                                });
+                              }
+                              return c;
+                            });
+                          }
+                          return next;
+                        });
+                      }}
+                    />
                 )}
                 {activeModule === ModuleType.IMAGE_GENERATOR && (
                     <ModuleImageGenerator />
@@ -4328,6 +4357,29 @@ const App: React.FC = () => {
                               generatedEmails: emails,
                               generatedEmailsAt: Date.now(),
                             };
+                            // 仅记录「已生成」活动，不改 lastContactSent（未真实发送）
+                            const cName = (nextData.companyInfo?.name || '').toLowerCase();
+                            const cSite = (nextData.companyInfo?.website || '')
+                              .toLowerCase()
+                              .replace(/^https?:\/\//, '');
+                            setCrmClients((prev) =>
+                              prev.map((c) => {
+                                const hit =
+                                  (c.name || '').toLowerCase() === cName ||
+                                  (!!cSite &&
+                                    (c.website || '')
+                                      .toLowerCase()
+                                      .replace(/^https?:\/\//, '')
+                                      .includes(cSite));
+                                if (!hit) return c;
+                                return appendClientActivity(c, {
+                                  kind: 'mail_group',
+                                  summary: '已生成 Mail Group 开发信（尚未发送）',
+                                  detail: emails.sendTip || emails.analysis?.slice(0, 120),
+                                  by: currentUser.username,
+                                });
+                              })
+                            );
                             const domainKey = (nextData.companyInfo?.website || '').toLowerCase();
                             const nameKey = (nextData.companyInfo?.name || '').toLowerCase();
                             const currentKey = (

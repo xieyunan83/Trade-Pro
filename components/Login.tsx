@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { User } from '../types';
 import { User as UserIcon, Lock, Loader2, AlertTriangle, Cpu } from 'lucide-react';
-import { authenticateUser } from '../services/auth';
+import { authenticateUser, changeUserPassword } from '../services/auth';
 import {
   bindCurrentDevice,
   confirmLocalMacForBoundDevice,
@@ -30,11 +30,26 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
   const [pendingUser, setPendingUser] = useState<User | null>(null);
   const [bindMode, setBindMode] = useState<'first' | 'remac'>('first');
   const [macInput, setMacInput] = useState('');
+  const [forceChange, setForceChange] = useState<User | null>(null);
+  const [newPwd, setNewPwd] = useState('');
+  const [newPwd2, setNewPwd2] = useState('');
 
   const finishLogin = (user: User) => {
     setPendingUser(null);
     setMacInput('');
+    setForceChange(null);
+    setNewPwd('');
+    setNewPwd2('');
     onLogin(user);
+  };
+
+  const maybeForcePasswordChange = (user: User) => {
+    if (user.isFirstLogin) {
+      setForceChange(user);
+      setError('');
+      return;
+    }
+    finishLogin(user);
   };
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -69,13 +84,13 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
       clearLoginFailures(nameCheck.value);
 
       if (!needsAccessControl(user)) {
-        finishLogin(user);
+        maybeForcePasswordChange(user);
         return;
       }
 
       const access = await evaluateEmployeeAccess(user);
       if (access.ok) {
-        finishLogin(user);
+        maybeForcePasswordChange(user);
         return;
       }
 
@@ -119,7 +134,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
           setError(access.message);
           return;
         }
-        finishLogin(pendingUser);
+        maybeForcePasswordChange(pendingUser);
         return;
       }
 
@@ -134,7 +149,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
         setError(access.message);
         return;
       }
-      finishLogin(res.user);
+      maybeForcePasswordChange(res.user);
     } catch (err) {
       console.error('device bind failed', err);
       setError('设备绑定失败，请稍后重试');
@@ -142,6 +157,73 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
       setLoading(false);
     }
   };
+
+  const handleForceChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!forceChange) return;
+    setLoading(true);
+    setError('');
+    try {
+      if (newPwd.trim() !== newPwd2.trim()) {
+        setError('两次输入的新密码不一致');
+        return;
+      }
+      const res = await changeUserPassword(forceChange.username, password, newPwd);
+      if (!res.ok) {
+        setError(res.message);
+        return;
+      }
+      onUsersChange?.(res.users || []);
+      finishLogin({ ...forceChange, isFirstLogin: false });
+    } catch (err) {
+      console.error(err);
+      setError('改密失败，请稍后重试');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (forceChange) {
+    return (
+      <div className="tp-login min-h-screen min-h-[100dvh] flex flex-col items-center justify-center p-4 sm:p-6">
+        <form
+          onSubmit={handleForceChangePassword}
+          className="w-full max-w-md bg-white/95 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-4"
+        >
+          <h2 className="text-xl font-black text-slate-900">请修改默认密码</h2>
+          <p className="text-sm text-slate-500 font-medium">
+            账号 <strong>{forceChange.username}</strong> 仍在使用默认或首次登录密码，须先设置新密码（至少 8 位）才能继续。
+          </p>
+          {error && <div className="text-sm font-bold text-rose-600">{error}</div>}
+          <input
+            type="password"
+            placeholder="新密码"
+            value={newPwd}
+            onChange={(e) => setNewPwd(e.target.value)}
+            className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold"
+            required
+            minLength={8}
+          />
+          <input
+            type="password"
+            placeholder="确认新密码"
+            value={newPwd2}
+            onChange={(e) => setNewPwd2(e.target.value)}
+            className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold"
+            required
+            minLength={8}
+          />
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-slate-900 text-white py-3 rounded-xl font-black disabled:opacity-60"
+          >
+            {loading ? '保存中…' : '保存并进入系统'}
+          </button>
+        </form>
+      </div>
+    );
+  }
 
   return (
     <div className="tp-login min-h-screen min-h-[100dvh] flex flex-col items-center justify-center p-4 sm:p-6 relative overflow-hidden">

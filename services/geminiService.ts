@@ -18,6 +18,11 @@ import {
   YIBING_MAIL_GROUP_RULES,
   YIBING_STRATEGY_CHAT_HINT,
 } from './yibingMailGroup';
+import {
+  buildAnalysisFingerprint,
+  getCachedAnalysis,
+  setCachedAnalysis,
+} from './analysisCache';
 import { getAllFilesFromDB } from "./db";
 import { getApiConfig as getSupabaseApiConfig, getAllApiConfigs, isSupabaseConfigured } from './supabase';
 import {
@@ -3032,11 +3037,19 @@ Output JSON only:
 export const analyzeCompany = async (
   domainOrName: string,
   mode: 'detailed' | 'economy' = 'detailed',
-  opts?: { searchKeyword?: string; searchTags?: string[]; searchCountry?: string }
+  opts?: { searchKeyword?: string; searchTags?: string[]; searchCountry?: string; skipCache?: boolean }
 ): Promise<AnalysisResult> => {
   const searchKeyword = (opts?.searchKeyword || '').trim();
   const searchCountry = (opts?.searchCountry || '').trim();
   const rawInput = (domainOrName || '').trim();
+  const cacheFp = buildAnalysisFingerprint(rawInput, mode, { searchKeyword, searchCountry });
+  if (!opts?.skipCache) {
+    const cached = getCachedAnalysis(cacheFp);
+    if (cached?.companyInfo?.name) {
+      console.info('[analyzeCompany] cache hit', cacheFp);
+      return cached;
+    }
+  }
   const canonicalDomain = cleanDomain(rawInput).toLowerCase();
   const hasDomain = Boolean(canonicalDomain && canonicalDomain.includes('.') && !/\s/.test(canonicalDomain));
   const identityDomain = hasDomain ? canonicalDomain : rawInput;
@@ -3505,7 +3518,13 @@ ${productFocusBlock}
   // 模型仍空时：用已有描述/品类做本地启发式补全，避免整页 N/A
   normalized = synthesizeInsightsFallback(normalized);
 
-  return normalizeAnalysisResult(normalized);
+  const finalResult = normalizeAnalysisResult(normalized);
+  try {
+    setCachedAnalysis(cacheFp, finalResult);
+  } catch {
+    /* ignore */
+  }
+  return finalResult;
 };
 
 const coerceRiskLevel = (v: unknown): '低' | '中' | '高' | '未知' => {
