@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Client, CRM_FUNNEL_STAGES, HistoryItem } from '../types';
+import { Client, CRM_FUNNEL_STAGES, HistoryItem, DecisionMaker } from '../types';
 import {
   Search,
   CheckCircle2,
@@ -12,6 +12,7 @@ import {
   CalendarClock,
   PackageSearch,
   Users,
+  UserPlus,
 } from 'lucide-react';
 import {
   buildHistoryLookupIndex,
@@ -24,6 +25,8 @@ import { exportClientsToExcel } from '../services/exportService';
 import { IndustryMultiSelect } from './IndustryMultiSelect';
 import { PaginationBar } from './PaginationBar';
 import { DmStatusChip } from './DmStatusChip';
+import { CrmContactsEditor } from './CrmContactsEditor';
+import { appendClientActivity } from '../services/crmActivity';
 
 interface ModuleClientCRMProps {
   clients: Client[];
@@ -318,6 +321,35 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   const [filterStatus, setFilterStatus] = useState<Client['status'] | 'all' | 'overdue'>('all');
   const [selectedClientIds, setSelectedClientIds] = useState<Set<string>>(new Set());
   const [page, setPage] = useState(1);
+  const [contactsEditorId, setContactsEditorId] = useState<string | null>(null);
+
+  const contactsEditorClient = useMemo(
+    () => (contactsEditorId ? clients.find((c) => c.id === contactsEditorId) || null : null),
+    [clients, contactsEditorId]
+  );
+
+  const saveClientContacts = useCallback(
+    (clientId: string, contacts: DecisionMaker[]) => {
+      setClients((prev) =>
+        prev.map((c) => {
+          if (c.id !== clientId) return c;
+          const prevCount = (c.contacts || []).length;
+          let next: Client = { ...c, contacts };
+          if (contacts.length > prevCount) {
+            const added = contacts[0];
+            next = appendClientActivity(next, {
+              kind: 'note',
+              summary: `手动添加联系人：${added?.name || added?.emailGuess || '未命名'}`,
+              detail: [added?.title, added?.emailGuess].filter(Boolean).join(' · '),
+            });
+            next = { ...next, contacts };
+          }
+          return next;
+        })
+      );
+    },
+    [setClients]
+  );
 
   const resolveOwner = useCallback((client: Client, historyItem?: HistoryItem) => {
     return (client.ownerUsername || historyItem?.ownerUsername || '').trim();
@@ -963,6 +995,14 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                 <div className="flex items-start gap-1 flex-shrink-0">
                   <button
                     type="button"
+                    onClick={() => setContactsEditorId(client.id)}
+                    className="text-indigo-600 hover:text-indigo-700 p-1"
+                    title="管理联系人"
+                  >
+                    <UserPlus size={16} />
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => triggerReanalyze(client, bgAt)}
                     className="text-amber-600 hover:text-amber-700 p-1"
                     title="再次背调"
@@ -1099,6 +1139,14 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                     <div className="flex items-center gap-1.5">
                       <button
                         type="button"
+                        onClick={() => setContactsEditorId(client.id)}
+                        className="text-indigo-600 hover:text-indigo-700 p-0.5"
+                        title="管理联系人（可手动添加）"
+                      >
+                        <UserPlus size={15} />
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => triggerReanalyze(client, bgAt)}
                         className="text-amber-600 hover:text-amber-700 p-0.5"
                         title="再次背调"
@@ -1135,6 +1183,14 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
             </>
           }
           className="px-1 pb-4"
+        />
+      )}
+
+      {contactsEditorClient && (
+        <CrmContactsEditor
+          client={contactsEditorClient}
+          onClose={() => setContactsEditorId(null)}
+          onSaveContacts={(contacts) => saveClientContacts(contactsEditorClient.id, contacts)}
         />
       )}
     </div>

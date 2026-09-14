@@ -57,6 +57,13 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
   });
   const [sending, setSending] = useState(false);
   const [sendMsg, setSendMsg] = useState('');
+  const [manualForm, setManualForm] = useState({
+    recipientEmail: '',
+    recipientName: '',
+    recipientTitle: '',
+    companyName: '',
+    clientId: '',
+  });
   const quillRef = useRef<ReactQuill>(null);
 
   const macros = ['{{company_name}}', '{{contact_name}}'];
@@ -125,6 +132,49 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
     }
     setTasks((prev) => [...prev, ...newTasks]);
     alert(`已按岗位导入 ${newTasks.length} 位收件人`);
+  };
+
+  const addManualRecipient = () => {
+    const email = manualForm.recipientEmail.trim();
+    if (!email.includes('@')) {
+      alert('请填写有效的收件人邮箱');
+      return;
+    }
+    if (tasks.some((t) => t.recipientEmail.toLowerCase() === email.toLowerCase())) {
+      alert('该邮箱已在待发送列表中');
+      return;
+    }
+    const linked = manualForm.clientId
+      ? crmClients.find((c) => c.id === manualForm.clientId)
+      : undefined;
+    const task: EmailTask = {
+      id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      recipientEmail: email,
+      recipientName: manualForm.recipientName.trim() || email.split('@')[0],
+      recipientTitle: manualForm.recipientTitle.trim() || '',
+      companyName: manualForm.companyName.trim() || linked?.name || '',
+      clientId: linked?.id || manualForm.clientId || undefined,
+      status: 'pending',
+    };
+    setTasks((prev) => [task, ...prev]);
+    setManualForm({
+      recipientEmail: '',
+      recipientName: '',
+      recipientTitle: '',
+      companyName: '',
+      clientId: '',
+    });
+    setSendMsg(`已手动添加：${task.recipientEmail}`);
+  };
+
+  const removeTask = (id: string) => {
+    setTasks((prev) => prev.filter((t) => t.id !== id));
+    setSelectedTaskIds((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
   };
 
   const insertMacroToSubject = (macro: string) => {
@@ -365,6 +415,65 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
             )}
             {sendMsg && <p className="text-xs font-bold text-emerald-700">{sendMsg}</p>}
 
+            <div className="rounded-2xl border border-emerald-100 bg-emerald-50/60 p-4 space-y-3">
+              <div className="flex items-center gap-2 text-sm font-black text-emerald-800">
+                <Plus size={16} /> 手动添加收件人
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                <input
+                  value={manualForm.recipientEmail}
+                  onChange={(e) => setManualForm((f) => ({ ...f, recipientEmail: e.target.value }))}
+                  placeholder="邮箱 *（必填）"
+                  className="px-3 py-2.5 rounded-xl border border-emerald-200 bg-white text-sm font-bold"
+                />
+                <input
+                  value={manualForm.recipientName}
+                  onChange={(e) => setManualForm((f) => ({ ...f, recipientName: e.target.value }))}
+                  placeholder="姓名"
+                  className="px-3 py-2.5 rounded-xl border border-emerald-200 bg-white text-sm font-bold"
+                />
+                <input
+                  value={manualForm.recipientTitle}
+                  onChange={(e) => setManualForm((f) => ({ ...f, recipientTitle: e.target.value }))}
+                  placeholder="岗位"
+                  className="px-3 py-2.5 rounded-xl border border-emerald-200 bg-white text-sm font-bold"
+                />
+                <input
+                  value={manualForm.companyName}
+                  onChange={(e) => setManualForm((f) => ({ ...f, companyName: e.target.value }))}
+                  placeholder="公司名"
+                  className="px-3 py-2.5 rounded-xl border border-emerald-200 bg-white text-sm font-bold"
+                />
+                <select
+                  value={manualForm.clientId}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    const c = crmClients.find((x) => x.id === id);
+                    setManualForm((f) => ({
+                      ...f,
+                      clientId: id,
+                      companyName: f.companyName || c?.name || '',
+                    }));
+                  }}
+                  className="px-3 py-2.5 rounded-xl border border-emerald-200 bg-white text-sm font-bold"
+                >
+                  <option value="">关联 CRM 客户（可选）</option>
+                  {crmClients.slice(0, 300).map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={addManualRecipient}
+                  className="inline-flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl text-sm font-black"
+                >
+                  <Plus size={16} /> 加入待发送
+                </button>
+              </div>
+            </div>
+
             <div className="rounded-2xl border border-violet-100 bg-violet-50/60 p-4 space-y-3">
               <div className="flex items-center gap-2 text-sm font-black text-violet-800">
                 <Briefcase size={16} /> 按岗位从 CRM 导入收件人
@@ -413,13 +522,14 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
                   <th className="px-6 py-4">所属公司</th>
                   <th className="px-6 py-4">状态</th>
                   <th className="px-6 py-4">发送时间</th>
+                  <th className="px-6 py-4 w-16">操作</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
                 {tasks.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-6 py-12 text-center text-slate-400 font-bold">
-                      暂无发送任务，请先按岗位从 CRM 导入
+                    <td colSpan={7} className="px-6 py-12 text-center text-slate-400 font-bold">
+                      暂无发送任务，可手动添加或从 CRM 导入
                     </td>
                   </tr>
                 ) : (
@@ -475,6 +585,16 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
                         <div className="text-xs font-bold text-slate-400">
                           {task.sentAt ? new Date(task.sentAt).toLocaleString() : '-'}
                         </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <button
+                          type="button"
+                          onClick={() => removeTask(task.id)}
+                          className="p-2 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg"
+                          title="移除"
+                        >
+                          <Trash2 size={16} />
+                        </button>
                       </td>
                     </tr>
                   ))
