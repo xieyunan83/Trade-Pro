@@ -9,6 +9,15 @@ import {
   shrinkMessagesToBudget,
   slimChatHistoryForAi,
 } from '../utils/aiContextPack';
+import {
+  buildCompactClientBrief,
+  buildCompactOurOfferBrief,
+  buildYibingMailGroupPrompt,
+  isColdEmailIntent,
+  normalizeMailGroupResult,
+  YIBING_MAIL_GROUP_RULES,
+  YIBING_STRATEGY_CHAT_HINT,
+} from './yibingMailGroup';
 import { getAllFilesFromDB } from "./db";
 import { getApiConfig as getSupabaseApiConfig, getAllApiConfigs, isSupabaseConfigured } from './supabase';
 import {
@@ -2826,85 +2835,40 @@ export const generateMailGroupStrategy = async (client: AnalysisResult, productI
     ].filter(Boolean);
     const kbSnippet = buildKnowledgeExcerpts(knowledgeBaseFiles, {
       purpose: 'email',
-      hints: [
-        ...kbHints,
-        '产品',
-        '优势',
-        '规格',
-        'MOQ',
-        'OEM',
-        'catalog',
-        'product',
-      ],
+      hints: [...kbHints, '产品', '优势', '规格', 'MOQ', 'OEM', 'catalog', 'product'],
     });
-    const prompt = `
-    Role: Sales Expert (楠哥的小助理). Write 3 Cold Emails for ${client.companyInfo.name}.
-    They sell: ${client.businessScope.coreProducts.join(', ')}.
-    Their pain points/weaknesses (from SWOT): ${client.swot.weaknesses.join(', ')}.
-
-    Our product / company knowledge excerpts (may be partial):
-    ${kbSnippet || '(no text knowledge files)'}
-    
-    Structure:
-    1. Analysis: Briefly explain WHY you chose this angle (1 sentence, in Chinese).
-    2. Email 1: The Hook (Soft introduction, mentioning their specific product).
-    3. Email 2: Value Prop (Focus on profit margin or better supply chain).
-    4. Email 3: Case Study/Social Proof (Short & punchy).
-
-    Output JSON: { "analysis": "...", "email1": "...", "email2": "...", "email3": "..." }
-    `;
-    // 勿把整库文件当 attachments（易触发代理 413）；最多带 1 张产品图
-    const text = await generateContentUnified('email', prompt, undefined, true, (productImages || []).slice(0, 1), []);
+    const prompt = buildYibingMailGroupPrompt({
+      mode: 'single',
+      clientBrief: buildCompactClientBrief(client),
+      offerBrief: buildCompactOurOfferBrief(kbSnippet),
+    });
+    // 勿把整库当 attachments；最多 1 张产品图
+    const text = await generateContentUnified('email', prompt, YIBING_MAIL_GROUP_RULES, true, (productImages || []).slice(0, 1), []);
     const res = extractJson(text);
-    return {
-        analysis: res.analysis || "Generated",
-        email1: res.email1 || "Draft 1",
-        email2: res.email2 || "Draft 2",
-        email3: res.email3 || "Draft 3"
-    };
+    return normalizeMailGroupResult(res);
 };
 
 export const generateConsolidatedEmailStrategy = async (clients: AnalysisResult[], knowledgeBaseFiles: KnowledgeFile[], context: string = ''): Promise<MailGroup> => {
     if (clients.length === 0) return { analysis: 'No Data', email1: '', email2: '', email3: '' };
-    
-    const clientSummary = clients.slice(0, 10).map(c => `- ${c.companyInfo.name} (${c.companyInfo.nature})`).join('\n');
+
+    const primary = clients[0];
+    const peers = clients
+      .slice(0, 6)
+      .map((c) => `${c.companyInfo?.name || '—'} (${c.companyInfo?.nature || '—'})`)
+      .join('; ');
     const kbSnippet = buildKnowledgeExcerpts(knowledgeBaseFiles, {
       purpose: 'email',
-      hints: [context, '产品', '优势', 'catalog', ...clients.slice(0, 3).map((c) => c.companyInfo?.name || '')],
+      hints: [context, '产品', '优势', 'catalog', primary?.companyInfo?.name || ''],
     });
-    
-    const prompt = `
-    Role: Sales Expert (楠哥的小助理). 
-    Task: Write a Universal Cold Email Sequence suitable for a group of ${clients.length} similar potential clients.
-    
-    My Campaign Context/Goal: "${context}"
-    
-    Client Examples in this batch:
-    ${clientSummary}
-
-    Our product / company knowledge excerpts:
-    ${kbSnippet || '(no text knowledge files)'}
-    
-    Requirement:
-    Create a generalized but high-converting sequence that addresses common pain points in this industry/sector.
-    Integrate my Campaign Goal keywords and our product advantages found in the attached Knowledge Base.
-    
-    Structure:
-    1. Analysis: Strategy behind this mass-outreach template (In Chinese).
-    2. Email 1: General Industry Hook (Using my context).
-    3. Email 2: Product Fit & Value (Referencing KB advantages).
-    4. Email 3: Meeting Request.
-
-    Output JSON: { "analysis": "...", "email1": "...", "email2": "...", "email3": "..." }
-    `;
-    const text = await generateContentUnified('email', prompt, undefined, true, [], []);
+    const prompt = buildYibingMailGroupPrompt({
+      mode: 'batch',
+      batchContext: `${context}\nPeer buyers: ${peers}`,
+      clientBrief: buildCompactClientBrief(primary),
+      offerBrief: buildCompactOurOfferBrief(kbSnippet),
+    });
+    const text = await generateContentUnified('email', prompt, YIBING_MAIL_GROUP_RULES, true, [], []);
     const res = extractJson(text);
-    return {
-        analysis: res.analysis || "Generated",
-        email1: res.email1 || "Draft 1",
-        email2: res.email2 || "Draft 2",
-        email3: res.email3 || "Draft 3"
-    };
+    return normalizeMailGroupResult(res);
 };
 
 
@@ -4866,19 +4830,33 @@ export const streamStrategyChat = async function* (
     const countries = Array.from(new Set((strategyContext?.countries || []).map((c) => c.trim()).filter(Boolean)));
     const marketLeads = (strategyContext?.marketLeads || []).slice(0, 20);
 
+    const coldEmailMode = isColdEmailIntent(newMessage) || history.some((m) => isColdEmailIntent(m.text || ''));
+
     let systemInstruction = `${QWEN_SYSTEM} 你是高级外贸策略顾问，擅长开发信撰写、谈判话术与市场进入策略。`;
     systemInstruction += `\n\n写作要求：\n- 若提供了具体背调客户，策略与开发信必须针对该公司画像、产品与痛点。\n- 若提供了关键词/国家市场上下文，可写面向整个目标市场的通用开发信框架，并说明可如何按客户微调。\n- 用户上传的附件优先作为「我方产品/报价」参考，勿编造未出现的规格与价格。\n- 回复使用中文为主，开发信正文可用英文（外贸常用）。`;
+    if (coldEmailMode) {
+      systemInstruction += `\n\n${YIBING_STRATEGY_CHAT_HINT}\n${YIBING_MAIL_GROUP_RULES}`;
+      systemInstruction += `\n输出格式：先给简短中文策略，再给 Subject 1/2/3 + Email 1/2/3（可直接复制）。`;
+    }
 
     if (companies.length) {
-      systemInstruction += `\n\n## 已选背调客户（${companies.length}）`;
-      for (const c of companies.slice(0, 5)) {
-        const info = c.companyInfo || ({} as AnalysisResult['companyInfo']);
-        const dms = (c.decisionMakers || [])
-          .slice(0, 5)
-          .map((d) => `${d.name || ''} (${d.title || ''})`)
-          .filter((s) => s.trim() !== '()')
-          .join('; ');
-        systemInstruction += `
+      if (coldEmailMode) {
+        // 开发信：只塞极简买家卡，省 Token
+        systemInstruction += `\n\n## Buyer cards (${Math.min(companies.length, 3)})\n`;
+        systemInstruction += companies
+          .slice(0, 3)
+          .map((c) => buildCompactClientBrief(c))
+          .join('\n---\n');
+      } else {
+        systemInstruction += `\n\n## 已选背调客户（${companies.length}）`;
+        for (const c of companies.slice(0, 5)) {
+          const info = c.companyInfo || ({} as AnalysisResult['companyInfo']);
+          const dms = (c.decisionMakers || [])
+            .slice(0, 5)
+            .map((d) => `${d.name || ''} (${d.title || ''})`)
+            .filter((s) => s.trim() !== '()')
+            .join('; ');
+          systemInstruction += `
 ### ${info.name || '未知公司'}
 - 网址: ${info.website || '—'}
 - 总部/城市: ${info.headquarters || '—'} / ${info.city || '—'}
@@ -4890,6 +4868,7 @@ export const streamStrategyChat = async function* (
 - SWOT弱点: ${(c.swot?.weaknesses || []).slice(0, 4).join('; ') || '—'}
 - 决策人线索: ${dms || '—'}
 `;
+        }
       }
     }
 
@@ -4922,11 +4901,13 @@ export const streamStrategyChat = async function* (
         ...(newAttachments || []).map((a) => a.name),
       ].filter(Boolean) as string[];
       const kbText = buildKnowledgeExcerpts(knowledgeBase, {
-        purpose: 'chat',
+        purpose: coldEmailMode ? 'email' : 'chat',
         hints,
       });
       if (kbText) {
-        systemInstruction += `\n\n## 我方知识库摘录（精简，共 ${knowledgeBase.length} 个文件中选取相关文本）\n${kbText}`;
+        systemInstruction += coldEmailMode
+          ? `\n\n## Our offer (KB excerpt)\n${buildCompactOurOfferBrief(kbText)}`
+          : `\n\n## 我方知识库摘录（精简，共 ${knowledgeBase.length} 个文件中选取相关文本）\n${kbText}`;
       }
     }
 
@@ -4969,15 +4950,16 @@ export const streamStrategyChat = async function* (
           // 自动降级：去掉图片与知识库长文，再试一次
           const minimalSystem =
             `${QWEN_SYSTEM} 你是外贸策略顾问。请根据用户问题写开发策略/英文开发信。` +
+            (coldEmailMode ? `\n${YIBING_STRATEGY_CHAT_HINT}` : '') +
             (keywords.length ? `\n关键词: ${keywords.join(', ')}` : '') +
             (countries.length ? `\n国家: ${countries.join(', ')}` : '') +
-            (companies[0]?.companyInfo?.name ? `\n客户: ${companies[0].companyInfo.name}` : '');
+            (companies[0] ? `\n${buildCompactClientBrief(companies[0]).slice(0, 500)}` : '');
           messages = [
             { role: 'system', content: minimalSystem.slice(0, 4_000) },
             {
               role: 'user',
               content:
-                (newMessage || '请撰写开发策略与三封英文开发信').slice(0, 6_000) +
+                (newMessage || '请按 Mail Group 写三封英文开发信（含 Subject）').slice(0, 6_000) +
                 '\n\n（说明：因请求体积限制，附件/知识库全文未上传；请基于文字描述作答。）',
             },
           ];
@@ -5026,8 +5008,18 @@ export const extractKeywordsFromMedia = async (file: KnowledgeFile): Promise<Key
 };
 
 export const generateColdEmail = async (companyName: string, request: EmailTemplateRequest): Promise<string> => {
-  const prompt = `Write a Cold Email for ${companyName}. Style: ${request.style}. Context: ${request.sourceContext}. Product: ${request.ourProducts}. Advantages: ${request.advantages}. Hook: ${request.personalHook}.`;
-  return await generateContentUnified('email', prompt, SYSTEM_INSTRUCTION);
+  const prompt = `${YIBING_MAIL_GROUP_RULES}
+
+Write ONE cold email (Mail Group style) for ${companyName}.
+Style hint: ${request.style || 'professional conversational'}
+Source: ${(request.sourceContext || '').slice(0, 200)}
+Our products: ${(request.ourProducts || '').slice(0, 300)}
+Advantages: ${(request.advantages || '').slice(0, 300)}
+Personal hook: ${(request.personalHook || '').slice(0, 200)}
+
+Rules: English, 70-110 words, concrete, no fluff, end with a reply hook.
+Output plain text: Subject: ... then blank line then body.`;
+  return await generateContentUnified('email', prompt, YIBING_MAIL_GROUP_RULES, true, [], []);
 };
 // ==================== Qwen 模型支持 ====================
 

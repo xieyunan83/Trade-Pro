@@ -397,22 +397,25 @@ const addEmailStrategySlidesFromGroup = (pptx: any, mailGroup: any) => {
         const slide = pptx.addSlide();
         slide.background = { color: "FFFFFF" };
         slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 10, h: 1.0, fill: COLORS.DARK_BG });
-        slide.addText("开发信策略分析 (Outreach Strategy)", { x: 0.5, y: 0.3, fontSize: 20, bold: true, color: "FFFFFF", valign: 'middle' });
+        slide.addText("Mail Group 策略 (毅冰思路)", { x: 0.5, y: 0.3, fontSize: 20, bold: true, color: "FFFFFF", valign: 'middle' });
         
-        slide.addText("AI 策略逻辑:", { x: 0.5, y: 1.3, fontSize: 12, bold: true, color: COLORS.ACCENT_BLUE });
+        slide.addText("策略逻辑:", { x: 0.5, y: 1.3, fontSize: 12, bold: true, color: COLORS.ACCENT_BLUE });
         slide.addShape(pptx.ShapeType.rect, { x: 0.5, y: 1.6, w: 9, h: 3.5, fill: "F8FAFC", line: { color: "E2E8F0" } });
-        slide.addText(sanitize(mailGroup.analysis), { 
+        const analysisText = [sanitize(mailGroup.analysis), mailGroup.sendTip ? `发送提示: ${sanitize(mailGroup.sendTip)}` : '']
+          .filter(Boolean)
+          .join('\n\n');
+        slide.addText(analysisText, { 
             x: 0.6, y: 1.7, w: 8.8, h: 3.3, 
             ...bodyTextOpts(10),
         });
 
-        createEmailSlide(pptx, "Email 1: The Hook (破冰)", mailGroup.email1);
-        createEmailSlide(pptx, "Email 2: Value Prop (价值)", mailGroup.email2);
-        createEmailSlide(pptx, "Email 3: Case Study (证明)", mailGroup.email3);
+        createEmailSlide(pptx, "Email 1 · 匹配破冰", mailGroup.email1, mailGroup.subject1);
+        createEmailSlide(pptx, "Email 2 · 实力证明", mailGroup.email2, mailGroup.subject2);
+        createEmailSlide(pptx, "Email 3 · 钩子收口", mailGroup.email3, mailGroup.subject3);
     }
 };
 
-const createEmailSlide = (pptx: any, title: string, content: string) => {
+const createEmailSlide = (pptx: any, title: string, content: string, subject?: string) => {
     const slide = pptx.addSlide();
     slide.background = { color: "FFFFFF" };
     
@@ -421,7 +424,8 @@ const createEmailSlide = (pptx: any, title: string, content: string) => {
     
     slide.addShape(pptx.ShapeType.rect, { x: 0.5, y: 1.0, w: 9, h: 4.2, fill: "F8FAFC", line: { color: "CBD5E1", dashType: "solid" } });
     
-    slide.addText(sanitize(content), { 
+    const body = subject ? `Subject: ${sanitize(subject)}\n\n${sanitize(content)}` : sanitize(content);
+    slide.addText(body, { 
         x: 0.7, y: 1.2, w: 8.6, h: 3.8, 
         ...bodyTextOpts(9),
     });

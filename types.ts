@@ -158,6 +158,12 @@ export interface MailGroup {
   email1: string;
   email2: string;
   email3: string;
+  /** 毅冰 Mail Group：多变主题 */
+  subject1?: string;
+  subject2?: string;
+  subject3?: string;
+  /** 发送提示（如：同日连发、末封钩子） */
+  sendTip?: string;
 }
 
 export interface AutomationResult {

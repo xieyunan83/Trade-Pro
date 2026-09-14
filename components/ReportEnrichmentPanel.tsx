@@ -81,24 +81,30 @@ export const ReportEnrichmentPanel: React.FC<{
       {emails && (
         <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-indigo-200 shadow-sm">
           <h3 className="text-lg sm:text-xl font-black text-slate-800 mb-2 flex items-center gap-2">
-            <PenTool className="text-indigo-600" /> 已保存开发信
+            <PenTool className="text-indigo-600" /> Mail Group 开发信
             {data.generatedEmailsAt && (
               <span className="text-[11px] font-bold text-slate-400 ml-auto">
                 {new Date(data.generatedEmailsAt).toLocaleString('zh-CN')}
               </span>
             )}
           </h3>
-          <p className="text-sm font-bold text-indigo-800 mb-4 bg-indigo-50 p-3 rounded-xl">{emails.analysis}</p>
+          <p className="text-sm font-bold text-indigo-800 mb-2 bg-indigo-50 p-3 rounded-xl">{emails.analysis}</p>
+          {emails.sendTip && (
+            <p className="text-xs font-bold text-amber-800 mb-4 bg-amber-50 p-2 rounded-lg">发送提示：{emails.sendTip}</p>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             {[
-              { label: '邮件 1 · 破冰', body: emails.email1 },
-              { label: '邮件 2 · 价值', body: emails.email2 },
-              { label: '邮件 3 · 证明', body: emails.email3 },
+              { label: '匹配破冰', subject: emails.subject1, body: emails.email1 },
+              { label: '实力证明', subject: emails.subject2, body: emails.email2 },
+              { label: '钩子收口', subject: emails.subject3, body: emails.email3 },
             ].map((item) => (
               <div key={item.label} className="border border-slate-200 rounded-xl p-3 bg-slate-50">
                 <div className="text-[10px] font-black text-slate-500 uppercase mb-2 flex items-center gap-1">
                   <Mail size={12} /> {item.label}
                 </div>
+                {item.subject && (
+                  <p className="text-[11px] font-bold text-slate-800 mb-2">Subject: {item.subject}</p>
+                )}
                 <p className="text-xs text-slate-700 whitespace-pre-wrap leading-relaxed max-h-40 overflow-y-auto">
                   {item.body}
                 </p>
