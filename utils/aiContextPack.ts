@@ -63,23 +63,49 @@ export const isImageKnowledgeFile = (file: KnowledgeFile): boolean => {
   return mime.startsWith('image/') || ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'].includes(ext);
 };
 
-const scoreFileRelevance = (file: KnowledgeFile, hints: string[]): number => {
-  const blob = `${file.name} ${file.type} ${file.mimeType || ''}`.toLowerCase();
+const PRODUCT_HINT_WORDS = [
+  '产品',
+  '优势',
+  '规格',
+  '报价',
+  'catalog',
+  'product',
+  'advantage',
+  'spec',
+  'price',
+  'moq',
+  'oem',
+  'odm',
+  '开发信',
+  'email',
+  '玩具',
+  'toy',
+];
+
+const scoreFileRelevance = (file: KnowledgeFile, hints: string[], previewText = ''): number => {
+  const nameBlob = `${file.name} ${file.type} ${file.mimeType || ''}`.toLowerCase();
+  const contentBlob = previewText.slice(0, 1200).toLowerCase();
   let score = 0;
   if (isTextishKnowledgeFile(file)) score += 20;
-  if (isImageKnowledgeFile(file)) score -= 5;
+  if (/\.md$/i.test(file.name) || file.name.includes('(Converted)')) score += 15;
+  if (isImageKnowledgeFile(file)) score -= 50;
   for (const h of hints) {
     const t = h.trim().toLowerCase();
-    if (t.length >= 2 && blob.includes(t)) score += 12;
+    if (t.length < 2) continue;
+    if (nameBlob.includes(t)) score += 14;
+    if (contentBlob.includes(t)) score += 18;
   }
-  // 略偏好较小文件
-  if (file.size > 0 && file.size < 200_000) score += 3;
+  for (const w of PRODUCT_HINT_WORDS) {
+    if (nameBlob.includes(w) || contentBlob.includes(w)) score += 4;
+  }
+  // 略偏好较小文本文件
+  if (file.size > 0 && file.size < 80_000) score += 3;
+  if (file.size > 500_000) score -= 8;
   return score;
 };
 
 /**
- * 从系统知识库挑可读摘录（默认不塞整库/大图进请求）。
- * 70+ 文件场景下避免 system prompt 与代理体膨胀。
+ * 从系统知识库挑可读摘录（仅文本类；开发信/策略用小预算，避免慢+烧 Token）。
  */
 export const buildKnowledgeExcerpts = (
   files: KnowledgeFile[],
@@ -88,17 +114,34 @@ export const buildKnowledgeExcerpts = (
     maxPerFile?: number;
     maxFiles?: number;
     hints?: string[];
+    /** email = 更小预算默认 */
+    purpose?: 'email' | 'chat' | 'general';
   }
 ): string => {
-  const maxTotal = opts?.maxTotalChars ?? 10_000;
-  const maxPerFile = opts?.maxPerFile ?? 900;
-  const maxFiles = opts?.maxFiles ?? 12;
+  const purpose = opts?.purpose || 'general';
+  const defaults =
+    purpose === 'email'
+      ? { maxTotalChars: 2_400, maxPerFile: 600, maxFiles: 4 }
+      : purpose === 'chat'
+        ? { maxTotalChars: 3_500, maxPerFile: 700, maxFiles: 5 }
+        : { maxTotalChars: 6_000, maxPerFile: 800, maxFiles: 8 };
+
+  const maxTotal = opts?.maxTotalChars ?? defaults.maxTotalChars;
+  const maxPerFile = opts?.maxPerFile ?? defaults.maxPerFile;
+  const maxFiles = opts?.maxFiles ?? defaults.maxFiles;
   const hints = opts?.hints || [];
 
-  const ranked = [...(files || [])]
-    .filter((f) => f && (f.name || f.data))
-    .filter((f) => isTextishKnowledgeFile(f) || (!isImageKnowledgeFile(f) && !String(f.mimeType || '').startsWith('video/') && !String(f.mimeType || '').startsWith('audio/')))
-    .map((f) => ({ f, score: scoreFileRelevance(f, hints) }))
+  // 只取文本/已转换 Markdown，绝不把 PDF/图片 base64 解码进 prompt
+  const textCandidates = [...(files || [])].filter(
+    (f) => f && (f.name || f.data) && isTextishKnowledgeFile(f)
+  );
+
+  const ranked = textCandidates
+    .map((f) => {
+      const preview = decodeKnowledgeText(f, 400);
+      return { f, score: scoreFileRelevance(f, hints, preview), preview };
+    })
+    .filter((x) => x.preview.length >= 8)
     .sort((a, b) => b.score - a.score)
     .slice(0, maxFiles);
 
@@ -118,15 +161,23 @@ export const buildKnowledgeExcerpts = (
 
   if (!parts.length && files?.length) {
     const names = files
-      .slice(0, 40)
+      .filter((f) => isTextishKnowledgeFile(f))
+      .slice(0, 20)
       .map((f) => f.name)
       .filter(Boolean)
       .join('、');
-    return `（知识库共 ${files.length} 个文件，未内嵌正文以免撑爆请求。文件名：${names}${files.length > 40 ? '…' : ''}。请用户在对话中单独附上需要引用的资料。）`;
+    if (!names) {
+      return `（知识库 ${files.length} 个文件多为图片/PDF 原件，未内嵌正文。请上传产品说明 txt/md，或使用「转 Markdown」后再写开发信。）`;
+    }
+    return `（未匹配到足够相关的文本摘录。文本文件：${names}。请在提问中写明产品名/卖点，或单独附上资料。）`;
   }
 
   return parts.join('\n\n');
 };
+
+/** 仅保留可供 AI 摘录的文本类知识库文件（避免把整库大图载入内存后再丢弃） */
+export const filterTextKnowledgeFiles = (files: KnowledgeFile[]): KnowledgeFile[] =>
+  (files || []).filter((f) => isTextishKnowledgeFile(f));
 
 /** 浏览器端压缩图片，降低代理 413 */
 export const compressImageBase64 = async (

@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/db';
 import { testApiKey, testQwenApiKey, testAnymailFinderApiKey, testHunterApiKey, testAnysearchApiKey, getTaskAIModels, saveTaskAIModels, describeTaskAIRouting, sanitizeApiKey, type TaskAIModels, type AIEngineChoice } from '../services/geminiService';
-import { testTavilyKeyPool, listTavilyKeys, setTavilyKeyPool, getTavilyKeyStatuses, clearTavilyExhausted } from '../services/tavilyService';
+import { testTavilyKeyPool, listTavilyKeys, setTavilyKeyPool, mergeTavilyKeyPool, getTavilyKeyStatuses, clearTavilyExhausted } from '../services/tavilyService';
 import { testWanImageApi } from '../services/wanImageService';
 import { saveApiConfig, getApiConfig, isSupabaseConfigured, saveKnowledgeFile, getKnowledgeFiles, deleteKnowledgeFile, resetSupabaseClient, testSupabaseConnection } from '../services/supabase';
 import { getSupabaseConfig, saveSupabaseConfig, clearSupabaseOverride, saveEmailSearchKeys, getEmailSearchKeys, getAnysearchApiKey, saveAnysearchApiKey, env } from '../services/env';
@@ -264,6 +264,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
       listPoolKeys('anysearch').length ? listPoolKeys('anysearch') : [getAnysearchApiKey()].filter(Boolean)
     );
     setTavilyKeys(listTavilyKeys());
+    // 旧版把 429 误标「本月耗尽」：升级后清一次错误标记，恢复可用 Key
+    try {
+      const flag = 'trade_scout_tavily_exhaust_fix_v2';
+      if (!localStorage.getItem(flag)) {
+        clearTavilyExhausted();
+        localStorage.setItem(flag, '1');
+      }
+    } catch {
+      /* ignore */
+    }
 
     const loadEmailKeysFromCloud = async () => {
       if (!isSupabaseConfigured()) return;
@@ -287,19 +297,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
         try {
           const parsed = JSON.parse(raw);
           if (Array.isArray(parsed)) {
-            setTavilyKeyPool(parsed.map(String));
-            setTavilyKeys(listTavilyKeys());
+            mergeTavilyKeyPool(parsed.map(String));
           } else if (parsed?.keys) {
-            setTavilyKeyPool(parsed.keys.map(String));
-            setTavilyKeys(listTavilyKeys());
+            mergeTavilyKeyPool(parsed.keys.map(String));
           } else {
-            setTavilyKeyPool([raw]);
-            setTavilyKeys(listTavilyKeys());
+            mergeTavilyKeyPool([raw]);
           }
         } catch {
-          setTavilyKeyPool([raw]);
-          setTavilyKeys(listTavilyKeys());
+          mergeTavilyKeyPool([raw]);
         }
+        setTavilyKeys(listTavilyKeys());
       }
     };
     void loadEmailKeysFromCloud();
@@ -530,7 +537,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
 
         if (tavilyKeys.length) {
           const r = await cloudWithTimeout('Tavily', () =>
-            saveApiConfig({ provider: 'tavily', apiKey: JSON.stringify(tavilyKeys) })
+            saveApiConfig({
+              provider: 'tavily',
+              apiKey: serializeApiKeyPoolPayload({ keys: tavilyKeys }),
+            })
           );
           cloudParts.push(`${r.label}${r.ok ? '✓' : '✗'}`);
         }
@@ -1531,7 +1541,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     <Mail size={16} /> 第三方邮箱搜索 API
                   </div>
                   <p className="text-[10px] text-slate-500 font-bold leading-relaxed">
-                    决策人邮箱优先用 AnymailFinder「公司域名搜索」（1 积分最多 20 个已验证邮箱）；若 Anymail 未找到任何联系人，再自动回退 Hunter.io。Hunter 额度用尽时静默跳过、不报错。Findymail 仅作可选补充。结果会标注来源与是否已验证。
+                    决策人邮箱：AnymailFinder 主搜；Hunter 会在 Anymail 无结果、或邮箱仍不足时做 domain-search，并对缺邮箱人名做 email-finder。测试通后请「保存配置」。Findymail 仅作可选补充。
                   </p>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="md:col-span-2">
@@ -1651,7 +1661,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     </a>
                   </div>
                   <p className="text-[10px] text-slate-500 font-bold leading-relaxed">
-                    可添加多把 tvly Key（例如 5×1000=5000 月积分）。某把额度用尽会自动切下一把；全部用尽后搜索/背调改走 <strong>Gemini → 千问</strong> 联网。Key 仅存本机/云端，勿提交 Git。
+                    可添加多把 tvly Key。仅「真实额度用尽」才标本月跳过；429 限流会换下一把、不会误标耗尽。添加后请点「保存配置」同步云端，否则刷新可能丢 Key。全部用尽后搜索/背调改走 <strong>Gemini → 千问</strong> 联网。
                   </p>
                   <div className="flex gap-2">
                     <input

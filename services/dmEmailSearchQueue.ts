@@ -181,7 +181,10 @@ const pump = async () => {
           const foundEmails = (research.decisionMakers || []).filter((d) => d.emailGuess?.includes('@')).length;
           if (foundEmails === 0 && (research.stats?.added || 0) + (research.stats?.upgraded || 0) === 0) {
             job.error = keyStatus.anymail
-              ? 'Anymail 未返回联系人' + (keyStatus.hunter ? '，Hunter 回退也无结果（或额度已用尽已静默跳过）' : '（未配置 Hunter 回退）')
+              ? 'Anymail 未返回联系人' +
+                (keyStatus.hunter
+                  ? `，Hunter 亦无新增（hunterFound=${research.stats?.hunterFound ?? 0}；额度用尽时会静默跳过）`
+                  : '（未配置 Hunter）')
               : '仅配置了 Hunter，本次未找到联系人（额度用尽时会静默跳过）';
           }
           notify();

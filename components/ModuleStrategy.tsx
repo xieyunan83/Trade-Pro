@@ -10,7 +10,7 @@ import {
 } from '../types';
 import { streamStrategyChat, generateMailGroupStrategy } from '../services/geminiService';
 import { getAllFilesFromDB } from '../services/db';
-import { compressImageBase64 } from '../utils/aiContextPack';
+import { compressImageBase64, filterTextKnowledgeFiles } from '../utils/aiContextPack';
 import { getCustomKeywords, getCustomCountries } from '../services/taxonomyStore';
 import { formatBackgroundCheckTime } from '../utils/crmHistory';
 import {
@@ -105,7 +105,8 @@ export const ModuleStrategy: React.FC<Props> = ({
     const loadFiles = async () => {
       try {
         const files = await getAllFilesFromDB();
-        setKnowledgeBase(files);
+        // 只保留文本类进策略上下文，避免 70+ 大图/PDF 原件拖慢开发信并烧 Token
+        setKnowledgeBase(filterTextKnowledgeFiles(files));
       } catch (e) {
         console.error('Failed to load KB from DB', e);
       }
@@ -467,7 +468,7 @@ export const ModuleStrategy: React.FC<Props> = ({
     setIsGeneratingEmails(true);
     setGenerateMsg('');
     try {
-      const kbFiles = await getAllFilesFromDB();
+      const kbFiles = filterTextKnowledgeFiles(await getAllFilesFromDB());
       const mailGroup = await generateMailGroupStrategy(primaryCompany, [], kbFiles);
       await onSaveGeneratedEmails(mailGroup, primaryCompany);
       setGenerateMsg('开发信已生成并保存到背调报告，下载 PPT 时会自动包含。');

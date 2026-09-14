@@ -8,6 +8,7 @@ import { getTavilyApiKeys, saveTavilyApiKeys, getTavilyApiKey } from './env';
 import { isLocalDevHost } from './qwenProxy';
 import { getApiConfig, isSupabaseConfigured } from './supabase';
 import { buildLeadDiscoveryQueries } from './leadDiscoverySources';
+import { setPoolKeys } from './apiKeyPool';
 
 const TIMEOUT_MS = 40_000;
 const MAX_EVIDENCE_CHARS = 14_000;
@@ -93,7 +94,16 @@ export const clearTavilyExhausted = () => {
 
 export const isQuotaExhaustedError = (err: unknown): boolean => {
   const msg = String((err as any)?.message || err || '');
-  return /402|429|payment|quota|credit|limit|insufficient|exceeded|usage|余额|额度|用尽|耗尽/i.test(msg);
+  // 勿把 429 / 笼统 limit、usage 当成「本月额度用尽」，否则会把整池 Key 全部误标耗尽
+  if (/429|rate\s*limit|too many requests|throttl|请求过于频繁/i.test(msg)) return false;
+  return /402|payment\s*required|insufficient[_\s-]?quota|quota[_\s-]?exceed|credits?\s*(exhausted|exceeded|depleted)|out of credits|余额不足|额度.*用尽|套餐额度|AllocationQuota|Allocated quota|payment|billing/i.test(
+    msg
+  );
+};
+
+export const isTavilyRateLimitError = (err: unknown): boolean => {
+  const msg = String((err as any)?.message || err || '');
+  return /429|rate\s*limit|too many requests|throttl|请求过于频繁/i.test(msg);
 };
 
 /** 规范化后的全部 Key（去重） */
@@ -130,9 +140,24 @@ export const setTavilyKeyPool = (keys: string[]) => {
     ...new Set(keys.map((k) => k.replace(/^Bearer\s+/i, '').trim()).filter(Boolean)),
   ];
   saveTavilyApiKeys(cleaned);
+  // 同步到通用 Key 池，避免两套存储不一致
+  setPoolKeys('tavily', cleaned);
   if (typeof localStorage !== 'undefined') {
     localStorage.setItem(LS_ACTIVE_IDX, '0');
   }
+};
+
+/** 合并本地与云端 Key，避免云端旧 6 把覆盖本机新加的第 7 把 */
+export const mergeTavilyKeyPool = (incoming: string[]) => {
+  const merged = [
+    ...new Set(
+      [...listTavilyKeys(), ...incoming]
+        .map((k) => k.replace(/^Bearer\s+/i, '').trim())
+        .filter(Boolean)
+    ),
+  ];
+  setTavilyKeyPool(merged);
+  return merged;
 };
 
 export const hydrateTavilyKeyFromCloud = async (): Promise<void> => {
@@ -144,13 +169,17 @@ export const hydrateTavilyKeyFromCloud = async (): Promise<void> => {
     try {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        setTavilyKeyPool(parsed.map(String));
+        mergeTavilyKeyPool(parsed.map(String));
+        return;
+      }
+      if (parsed?.keys && Array.isArray(parsed.keys)) {
+        mergeTavilyKeyPool(parsed.keys.map(String));
         return;
       }
     } catch {
       /* single key string */
     }
-    setTavilyKeyPool([raw]);
+    mergeTavilyKeyPool([raw]);
   } catch {
     /* ignore */
   }
@@ -227,7 +256,12 @@ const tavilyPost = async <T = any>(
         console.warn(`[tavily] rotate after quota on ${maskKey(key)}`);
         continue;
       }
-      // 非额度错误：也尝试下一把（防单 Key 临时故障），但不标记耗尽
+      if (isTavilyRateLimitError(e)) {
+        // 限流：换下一把，不标记本月耗尽
+        console.warn(`[tavily] rate limit on ${maskKey(key)}, try next key`);
+        continue;
+      }
+      // 其它瞬时错误：换下一把，不标记耗尽
       console.warn(`[tavily] key ${maskKey(key)} failed, try next:`, (e as any)?.message || e);
       continue;
     }

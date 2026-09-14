@@ -1245,6 +1245,7 @@ export type DecisionMakerResearchStats = {
   upgraded: number;
   verified: number;
   anymailFound: number;
+  hunterFound: number;
   linkedinDiscovered: number;
   reFoundAfterInvalid: number;
 };
@@ -1260,7 +1261,7 @@ export type DecisionMakerResearchResult = {
  * 1) 角色决策人接口优先（官方返回 person_job_title，与官网页一致）
  * 2) 公司域名搜索拿更多邮箱 → AnySearch + 大模型补全姓名/职位/领英
  * 3) 已有 LinkedIn 但缺职位：用 person+linkedin_url 补职位（官网同款有职位）
- * 4) 仅当 Anymail 完全无邮箱时，才回退 Hunter domain-search
+ * 4) Hunter：Anymail 无结果时 domain-search；有结果但邮箱仍不足时补充；并对缺邮箱人名做 email-finder
  */
 export const researchDecisionMakerEmails = async (opts: {
   domain: string;
@@ -1282,6 +1283,7 @@ export const researchDecisionMakerEmails = async (opts: {
     upgraded: 0,
     verified: 0,
     anymailFound: 0,
+    hunterFound: 0,
     linkedinDiscovered: 0,
     reFoundAfterInvalid: 0,
   };
@@ -1576,12 +1578,21 @@ export const researchDecisionMakerEmails = async (opts: {
       }
     }
 
-    // ——— 4) 仅当 Anymail 完全未找到邮箱时，才回退 Hunter（避免浪费 Hunter 额度）———
+    // ——— 4) Hunter 补充（测通却从不调用的根因：以前仅「Anymail 完全 0 邮箱」才跑）———
+    // 策略：Anymail 无结果 → 必跑 domain-search；有结果但邮箱 < 5 → 仍跑 domain-search 补齐；
+    // 并对仍缺邮箱的真实人名做 email-finder（最多 8 人）。
     const anymailFoundContacts = stats.anymailFound > 0 || countWithEmail() > emailsBeforeAnymail;
-    const needHunterFallback = hasHunter && domain && domain.includes('.') && !anymailFoundContacts;
+    const emailCountAfterAnymail = countWithEmail();
+    const needHunterDomain =
+      hasHunter &&
+      !!domain &&
+      domain.includes('.') &&
+      (!anymailFoundContacts || emailCountAfterAnymail < 5);
 
-    if (needHunterFallback) {
-      console.info('[DM] Anymail 无邮箱结果，回退 Hunter.io domain-search');
+    if (needHunterDomain) {
+      console.info(
+        `[DM] Hunter domain-search（Anymail ${anymailFoundContacts ? `已有 ${emailCountAfterAnymail} 邮箱，补充` : '无结果，回退'}）`
+      );
       try {
         const hunterHit = await fetchHunterEmails(domain);
         for (const p of hunterHit.people) {
@@ -1590,11 +1601,67 @@ export const researchDecisionMakerEmails = async (opts: {
           seenEmails.add(em);
           merged.push(stampChecked(p, searchedAt));
           stats.added += 1;
+          stats.hunterFound += 1;
           if (p.linkedin) stats.linkedinDiscovered += 1;
         }
       } catch (hunterErr) {
-        // 额度/网络问题：静默，保留已有结果
-        console.info('[DM] Hunter fallback skipped (no user-facing error)', hunterErr);
+        console.info('[DM] Hunter domain-search skipped', hunterErr);
+      }
+    }
+
+    if (hasHunter && domain && domain.includes('.')) {
+      const missing = merged.filter(
+        (d) =>
+          isLikelyRealPerson(d) &&
+          !emailKey(d) &&
+          !!(d.firstName || (d.name || '').trim().split(/\s+/)[0])
+      );
+      const toFind = missing.slice(0, 8);
+      if (toFind.length) {
+        console.info(`[DM] Hunter email-finder 补全 ${toFind.length} 位缺邮箱决策人`);
+      }
+      for (const dm of toFind) {
+        const first =
+          dm.firstName ||
+          (dm.name || '')
+            .trim()
+            .split(/\s+/)[0] ||
+          '';
+        const last =
+          dm.lastName ||
+          (dm.name || '')
+            .trim()
+            .split(/\s+/)
+            .slice(1)
+            .join(' ') ||
+          '';
+        if (!first) continue;
+        try {
+          const found = await findEmailWithHunter(first, last, domain);
+          if (!found?.email) continue;
+          const em = found.email.toLowerCase();
+          if (seenEmails.has(em)) continue;
+          seenEmails.add(em);
+          const idx = merged.findIndex((x) => x === dm || (x.name === dm.name && x.title === dm.title));
+          if (idx >= 0) {
+            merged[idx] = stampChecked(
+              {
+                ...merged[idx],
+                emailGuess: found.email,
+                emailSource: 'Hunter.io',
+                source: merged[idx].source || 'Hunter.io',
+                emailStatus: found.confidence >= 0.85 ? 'valid' : 'unverified',
+                isVerified: found.confidence >= 0.85,
+                confidence: found.confidence,
+              },
+              searchedAt
+            );
+            stats.upgraded += 1;
+            stats.hunterFound += 1;
+          }
+        } catch (e) {
+          console.info('[DM] Hunter email-finder skipped for', first, e);
+        }
       }
     }
   } catch (e) {
@@ -1832,7 +1899,8 @@ export const hydrateApiConfigsFromCloud = async (): Promise<boolean> => {
                 hydrateProviderPoolFromCloud('anysearch', c.apiKey);
             }
             if (c.provider === 'tavily' && c.apiKey?.trim()) {
-                hydrateProviderPoolFromCloud('tavily', c.apiKey, { force: true });
+                // 合并而非 force 覆盖，避免云端旧列表丢掉本机新加的 Key
+                hydrateProviderPoolFromCloud('tavily', c.apiKey, { force: false });
             }
             if (c.provider === 'wan' && c.apiKey?.trim()) {
                 hydrateProviderPoolFromCloud('wan', c.apiKey, {
@@ -2757,10 +2825,17 @@ export const generateMailGroupStrategy = async (client: AnalysisResult, productI
       ...(client.businessScope?.coreProducts || []).slice(0, 6),
     ].filter(Boolean);
     const kbSnippet = buildKnowledgeExcerpts(knowledgeBaseFiles, {
-      maxTotalChars: 8_000,
-      maxPerFile: 800,
-      maxFiles: 10,
-      hints: kbHints,
+      purpose: 'email',
+      hints: [
+        ...kbHints,
+        '产品',
+        '优势',
+        '规格',
+        'MOQ',
+        'OEM',
+        'catalog',
+        'product',
+      ],
     });
     const prompt = `
     Role: Sales Expert (楠哥的小助理). Write 3 Cold Emails for ${client.companyInfo.name}.
@@ -2794,10 +2869,8 @@ export const generateConsolidatedEmailStrategy = async (clients: AnalysisResult[
     
     const clientSummary = clients.slice(0, 10).map(c => `- ${c.companyInfo.name} (${c.companyInfo.nature})`).join('\n');
     const kbSnippet = buildKnowledgeExcerpts(knowledgeBaseFiles, {
-      maxTotalChars: 8_000,
-      maxPerFile: 800,
-      maxFiles: 10,
-      hints: [context, ...clients.slice(0, 3).map((c) => c.companyInfo?.name || '')],
+      purpose: 'email',
+      hints: [context, '产品', '优势', 'catalog', ...clients.slice(0, 3).map((c) => c.companyInfo?.name || '')],
     });
     
     const prompt = `
@@ -4849,13 +4922,11 @@ export const streamStrategyChat = async function* (
         ...(newAttachments || []).map((a) => a.name),
       ].filter(Boolean) as string[];
       const kbText = buildKnowledgeExcerpts(knowledgeBase, {
-        maxTotalChars: 8_000,
-        maxPerFile: 700,
-        maxFiles: 10,
+        purpose: 'chat',
         hints,
       });
       if (kbText) {
-        systemInstruction += `\n\n## 我方知识库摘录（已自动压缩，共 ${knowledgeBase.length} 个文件中选取）\n${kbText}`;
+        systemInstruction += `\n\n## 我方知识库摘录（精简，共 ${knowledgeBase.length} 个文件中选取相关文本）\n${kbText}`;
       }
     }
 
