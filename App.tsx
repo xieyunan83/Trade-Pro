@@ -67,7 +67,11 @@ import {
   isProductDigQueueBusy,
 } from './services/productDigQueue';
 import type { ProductDigCompletePayload } from './services/productDigQueue';
-import { OrgPermissionPanel } from './components/OrgPermissionPanel';
+import { ManagerSystemPanel } from './components/ManagerSystemPanel';
+import {
+  hydrateDeptApiKeysFromCloud,
+  setKeyResolutionContext,
+} from './services/deptApiKeys';
 import { loadDepartmentsFromStorage } from './services/orgStore';
 import {
   canAccessModule,
@@ -983,6 +987,21 @@ const App: React.FC = () => {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 故意不依赖 currentUser，防止同步循环
   }, [users]);
+
+  useEffect(() => {
+    if (!currentUser) {
+      setKeyResolutionContext({});
+      return;
+    }
+    setKeyResolutionContext({
+      username: currentUser.username,
+      role: currentUser.role,
+      departmentId: currentUser.departmentId,
+    });
+    if (currentUser.departmentId) {
+      void hydrateDeptApiKeysFromCloud(currentUser.departmentId);
+    }
+  }, [currentUser?.username, currentUser?.role, currentUser?.departmentId]);
 
   useEffect(() => {
       if (!currentUser || !userDataReadyRef.current) return;
@@ -3030,6 +3049,7 @@ const App: React.FC = () => {
     resetWorkspaceForUserSwitch();
     lastWorkspaceUserRef.current = null;
     setUsageScope(null);
+    setKeyResolutionContext({});
     setCurrentUser(null);
   };
   const handleSyncToGitHub = async () => { if(!currentUser) return; setIsSyncing(true); try { await backupUserHistory(currentUser.username, history); await saveCRMToCloud(crmClients); alert("数据同步成功!"); } catch (e: any) { alert("同步失败: " + e.message); } finally { setIsSyncing(false); } };
@@ -3946,14 +3966,14 @@ const App: React.FC = () => {
               <span className="truncate"><span className="md:hidden">{item.label}</span><span className="hidden md:inline">{item.label} <span className="text-[10px] font-medium opacity-50">({item.sub})</span></span></span>
             </button>
           ))}
-          {hasPermission(currentUser, 'feature.manage_team_users') && currentUser.role === 'manager' && (
+          {currentUser.role === 'manager' && (
             <button
               type="button"
               onClick={() => { setTeamManageOpen(true); setMobileMenuOpen(false); }}
               className="tp-nav-item w-full flex items-center gap-3 px-3 sm:px-4 py-3 sm:py-3.5 rounded-xl text-sm font-semibold touch-manipulation"
             >
               <Users size={18} className="flex-shrink-0 text-signal-400" />
-              <span>团队权限</span>
+              <span>系统管理</span>
             </button>
           )}
         </nav>
@@ -4761,27 +4781,14 @@ const App: React.FC = () => {
       )}
 
       {teamManageOpen && currentUser.role === 'manager' && (
-        <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-900/50">
-          <div className="bg-[#F0F2F5] w-full sm:max-w-5xl sm:rounded-3xl max-h-[92vh] overflow-y-auto shadow-2xl">
-            <div className="sticky top-0 z-10 bg-white border-b px-4 py-3 flex items-center justify-between">
-              <div>
-                <div className="text-base font-black text-slate-800">团队权限管理</div>
-                <div className="text-[11px] font-bold text-slate-400">仅可管理本部门普通员工；各部门数据互不共享</div>
-              </div>
-              <button type="button" onClick={() => setTeamManageOpen(false)} className="text-slate-400 hover:text-slate-700 font-black px-3 py-2">关闭</button>
-            </div>
-            <div className="p-4">
-              <OrgPermissionPanel
-                currentUser={currentUser}
-                users={users}
-                setUsers={setUsers}
-                departments={departments}
-                setDepartments={setDepartments}
-                mode="manager"
-              />
-            </div>
-          </div>
-        </div>
+        <ManagerSystemPanel
+          currentUser={currentUser}
+          users={users}
+          setUsers={setUsers}
+          departments={departments}
+          setDepartments={setDepartments}
+          onClose={() => setTeamManageOpen(false)}
+        />
       )}
 
     </div>

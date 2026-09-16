@@ -117,8 +117,10 @@ export const saveTavilyApiKey = (key: string): void => {
   }
 };
 
-/** Tavily Key 池（多账号额度轮换） */
+/** Tavily Key 池（多账号额度轮换）；含部门主管配置的优先 Key */
 export const getTavilyApiKeys = (): string[] => {
+  const fromPool = listPoolKeys('tavily');
+  if (fromPool.length) return fromPool;
   if (typeof localStorage !== 'undefined') {
     try {
       const raw = localStorage.getItem(LS_TAVILY_POOL);

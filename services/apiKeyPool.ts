@@ -144,9 +144,31 @@ export const markPoolKeyExhausted = (provider: ApiKeyPoolProvider, key: string) 
   set.add(k);
   writeExhausted(provider, set);
   console.warn(`[keypool:${provider}] exhausted this month:`, maskApiKey(k));
-  // 把耗尽的放到队尾，优先用其它 Key
-  const all = listPoolKeys(provider).filter((x) => x !== k);
-  if (all.length) setPoolKeys(provider, [...all, k]);
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mod = require('./deptApiKeys') as typeof import('./deptApiKeys');
+    if (
+      (provider === 'qwen' || provider === 'tavily' || provider === 'anymailfinder') &&
+      mod.isKeyInCurrentDeptPool(provider, k)
+    ) {
+      mod.rotateDeptPoolKeyToEnd(provider, k);
+      return;
+    }
+  } catch {
+    /* ignore */
+  }
+  // 只旋转全局池，避免把部门 Key 写进全局存储
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mod = require('./deptApiKeys') as typeof import('./deptApiKeys');
+    const globalOnly = listPoolKeys(provider).filter(
+      (x) => x !== k && !mod.isKeyInCurrentDeptPool(provider, x)
+    );
+    setPoolKeys(provider, [...globalOnly, k]);
+  } catch {
+    const all = listPoolKeys(provider).filter((x) => x !== k);
+    if (all.length) setPoolKeys(provider, [...all, k]);
+  }
 };
 
 export const clearPoolExhausted = (provider: ApiKeyPoolProvider) => {
@@ -155,38 +177,50 @@ export const clearPoolExhausted = (provider: ApiKeyPoolProvider) => {
 };
 
 export const listPoolKeys = (provider: ApiKeyPoolProvider): string[] => {
-  if (typeof localStorage === 'undefined') return [];
-  try {
-    const raw = localStorage.getItem(poolLsKey(provider));
-    if (raw) {
-      const meta = parseApiKeyPoolPayload(raw);
-      if (meta.keys.length) return meta.keys;
-    }
-  } catch {
-    /* ignore */
-  }
-  // 兼容旧单 Key + Tavily 专用池
-  const legacy = legacySingleKey[provider];
-  if (legacy) {
-    const single = localStorage.getItem(legacy)?.trim();
-    if (single) {
-      const meta = parseApiKeyPoolPayload(single);
-      if (meta.keys.length) return meta.keys;
-      return [normalizeApiKey(single)].filter(Boolean);
-    }
-  }
-  if (provider === 'tavily') {
+  const listGlobal = (): string[] => {
+    if (typeof localStorage === 'undefined') return [];
     try {
-      const raw = localStorage.getItem('trade_scout_tavily_api_keys');
+      const raw = localStorage.getItem(poolLsKey(provider));
       if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) return uniqueKeys(parsed.map(String));
+        const meta = parseApiKeyPoolPayload(raw);
+        if (meta.keys.length) return meta.keys;
       }
     } catch {
       /* ignore */
     }
+    const legacy = legacySingleKey[provider];
+    if (legacy) {
+      const single = localStorage.getItem(legacy)?.trim();
+      if (single) {
+        const meta = parseApiKeyPoolPayload(single);
+        if (meta.keys.length) return meta.keys;
+        return [normalizeApiKey(single)].filter(Boolean);
+      }
+    }
+    if (provider === 'tavily') {
+      try {
+        const raw = localStorage.getItem('trade_scout_tavily_api_keys');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) return uniqueKeys(parsed.map(String));
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    return [];
+  };
+
+  let dept: string[] = [];
+  try {
+    // 延迟加载，避免与 deptApiKeys 循环依赖
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mod = require('./deptApiKeys') as typeof import('./deptApiKeys');
+    dept = mod.listDeptPoolKeysForProvider(provider) || [];
+  } catch {
+    dept = [];
   }
-  return [];
+  return uniqueKeys([...dept, ...listGlobal()]);
 };
 
 export const getUsablePoolKeys = (provider: ApiKeyPoolProvider): string[] => {
@@ -268,6 +302,24 @@ export const removePoolKey = (provider: ApiKeyPoolProvider, key: string): string
 export const promotePoolKey = (provider: ApiKeyPoolProvider, key: string) => {
   const k = normalizeApiKey(key);
   if (!k) return;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mod = require('./deptApiKeys') as typeof import('./deptApiKeys');
+    if (
+      (provider === 'qwen' || provider === 'tavily' || provider === 'anymailfinder') &&
+      mod.isKeyInCurrentDeptPool(provider, k)
+    ) {
+      mod.promoteDeptPoolKey(provider, k);
+      return;
+    }
+    const rest = listPoolKeys(provider).filter(
+      (x) => x !== k && !mod.isKeyInCurrentDeptPool(provider, x)
+    );
+    setPoolKeys(provider, [k, ...rest]);
+    return;
+  } catch {
+    /* fallthrough */
+  }
   const rest = listPoolKeys(provider).filter((x) => x !== k);
   setPoolKeys(provider, [k, ...rest]);
 };

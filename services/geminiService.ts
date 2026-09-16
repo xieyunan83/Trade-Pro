@@ -5093,8 +5093,20 @@ const resolveQwenConfig = async (override?: Partial<QwenRuntimeConfig>): Promise
 
   const poolKey = getActivePoolKey('qwen');
   const localKey = poolKey || readLocal('trade_scout_qwen_api_key');
-  const localBase = readLocal('trade_scout_qwen_base_url');
-  const localModel = readLocal('trade_scout_qwen_model_id');
+  let deptBase: string | undefined;
+  let deptModel: string | undefined;
+  try {
+    const { getDeptPoolMeta } = await import('./deptApiKeys');
+    const meta = getDeptPoolMeta('qwen');
+    if (meta?.keys?.length) {
+      deptBase = meta.baseUrl;
+      deptModel = meta.modelId;
+    }
+  } catch {
+    /* ignore */
+  }
+  const localBase = deptBase || readLocal('trade_scout_qwen_base_url');
+  const localModel = deptModel || readLocal('trade_scout_qwen_model_id');
 
   // 测试连接若已带完整 override，跳过云端读取，避免 Supabase 挂起拖死后台
   const hasFullOverride = !!(override?.apiKey?.trim() && override?.baseUrl?.trim());
