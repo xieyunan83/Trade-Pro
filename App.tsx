@@ -4288,7 +4288,9 @@ const App: React.FC = () => {
                     <ModuleEmailCampaign
                       crmClients={crmClients}
                       onAddClients={handleAddClients}
-                      currentUsername={currentUser.username}
+                      currentUser={currentUser}
+                      users={users}
+                      departments={departments}
                       onEmailsSent={(rows) => {
                         setCrmClients((prev) => {
                           let next = prev;

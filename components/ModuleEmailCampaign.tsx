@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import ReactQuill from 'react-quill';
 import 'react-quill/dist/quill.snow.css';
-import { Client, EmailTask, EmailTemplate, AliyunConfig } from '../types';
+import { Client, EmailTask, EmailTemplate, AliyunConfig, User, Department } from '../types';
 import {
   Mail,
   Send,
@@ -19,8 +19,12 @@ import {
   X,
   Briefcase,
 } from 'lucide-react';
-import { loadEmailCampaignStore, saveEmailCampaignStore } from '../services/emailCampaignStore';
+import {
+  loadEmailCampaignStoreForUser,
+  saveEmailCampaignStoreForUser,
+} from '../services/emailCampaignStore';
 import { isDirectMailConfigured, sendDirectMail } from '../services/directMailService';
+import { filterOwnedRecords } from '../services/permissions';
 
 interface ModuleEmailCampaignProps {
   crmClients: Client[];
@@ -32,14 +36,32 @@ interface ModuleEmailCampaignProps {
     to: string;
     subject: string;
   }[]) => void;
-  currentUsername?: string;
+  currentUser: User;
+  users: User[];
+  departments: Department[];
 }
 
 export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
   crmClients,
   onEmailsSent,
+  currentUser,
+  users,
+  departments,
 }) => {
-  const initial = loadEmailCampaignStore();
+  // CRM 再过滤一层，防止上游漏传未隔离数据
+  const visibleCrmClients = useMemo(
+    () => filterOwnedRecords(currentUser, crmClients, users, departments),
+    [crmClients, currentUser, users, departments]
+  );
+
+  // 用完整 crmClients 做归属回填，再用权限过滤可见集
+  const initial = useMemo(
+    () => loadEmailCampaignStoreForUser(currentUser, users, departments, crmClients),
+    // 仅登录用户变化时重载；避免 CRM 列表抖动清空编辑中任务
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentUser.username, currentUser.role, currentUser.departmentId]
+  );
+
   const [tasks, setTasks] = useState<EmailTask[]>(initial.tasks);
   const [templates, setTemplates] = useState<EmailTemplate[]>(initial.templates);
   const [config, setConfig] = useState<AliyunConfig | null>(initial.config);
@@ -65,13 +87,51 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
     clientId: '',
   });
   const quillRef = useRef<ReactQuill>(null);
+  /** 切换用户后跳过一次保存，避免用上一用户的 state 写穿 */
+  const skipNextSaveRef = useRef(false);
 
   const macros = ['{{company_name}}', '{{contact_name}}'];
   const dmReady = isDirectMailConfigured(config);
 
+  const stampOwnership = useCallback(
+    <T extends { ownerUsername?: string; departmentId?: string }>(item: T): T => ({
+      ...item,
+      ownerUsername: (item.ownerUsername || '').trim() || currentUser.username,
+      departmentId: (item.departmentId || '').trim() || currentUser.departmentId,
+    }),
+    [currentUser.username, currentUser.departmentId]
+  );
+
+  // 切换登录用户时重载可见数据
   useEffect(() => {
-    saveEmailCampaignStore({ tasks, templates, config });
-  }, [tasks, templates, config]);
+    skipNextSaveRef.current = true;
+    const next = loadEmailCampaignStoreForUser(
+      currentUser,
+      users,
+      departments,
+      crmClients
+    );
+    setTasks(next.tasks);
+    setTemplates(next.templates);
+    setConfig(next.config);
+    setSelectedTaskIds(new Set());
+    setSendMsg('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser.username, currentUser.role, currentUser.departmentId]);
+
+  useEffect(() => {
+    if (skipNextSaveRef.current) {
+      skipNextSaveRef.current = false;
+      return;
+    }
+    saveEmailCampaignStoreForUser(
+      currentUser,
+      users,
+      departments,
+      { tasks, templates, config },
+      crmClients
+    );
+  }, [tasks, templates, config, currentUser, users, departments, crmClients]);
 
   const contactMatchesRole = (contact: { type?: string; title?: string; emailGuess?: string }) => {
     if (!contact.emailGuess?.includes('@')) return false;
@@ -95,13 +155,13 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
 
   const importableContacts = useMemo(() => {
     const rows: Array<{ client: Client; contact: NonNullable<Client['contacts']>[number] }> = [];
-    for (const client of crmClients) {
+    for (const client of visibleCrmClients) {
       for (const contact of client.contacts || []) {
         if (contactMatchesRole(contact)) rows.push({ client, contact });
       }
     }
     return rows;
-  }, [crmClients, roleFilter]);
+  }, [visibleCrmClients, roleFilter]);
 
   const importFromCrmByRole = () => {
     if (!importableContacts.length) {
@@ -114,17 +174,22 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
       const email = (contact.emailGuess || '').trim();
       if (!email || existing.has(email.toLowerCase())) continue;
       existing.add(email.toLowerCase());
-      newTasks.push({
-        id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-        recipientName:
-          contact.name || [contact.firstName, contact.lastName].filter(Boolean).join(' ') || '',
-        recipientEmail: email,
-        recipientTitle: contact.title || contact.type || '',
-        companyName: client.name || '',
-        clientId: client.id,
-        status: 'pending',
-        sentAt: undefined,
-      });
+      newTasks.push(
+        stampOwnership({
+          id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          recipientName:
+            contact.name || [contact.firstName, contact.lastName].filter(Boolean).join(' ') || '',
+          recipientEmail: email,
+          recipientTitle: contact.title || contact.type || '',
+          companyName: client.name || '',
+          clientId: client.id,
+          status: 'pending' as const,
+          sentAt: undefined,
+          // 任务归属跟 CRM 客户一致，便于主管看本部门
+          ownerUsername: client.ownerUsername || currentUser.username,
+          departmentId: client.departmentId || currentUser.departmentId,
+        })
+      );
     }
     if (!newTasks.length) {
       alert('没有新增收件人（可能已全部在列表中）');
@@ -145,17 +210,19 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
       return;
     }
     const linked = manualForm.clientId
-      ? crmClients.find((c) => c.id === manualForm.clientId)
+      ? visibleCrmClients.find((c) => c.id === manualForm.clientId)
       : undefined;
-    const task: EmailTask = {
+    const task = stampOwnership({
       id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       recipientEmail: email,
       recipientName: manualForm.recipientName.trim() || email.split('@')[0],
       recipientTitle: manualForm.recipientTitle.trim() || '',
       companyName: manualForm.companyName.trim() || linked?.name || '',
       clientId: linked?.id || manualForm.clientId || undefined,
-      status: 'pending',
-    };
+      status: 'pending' as const,
+      ownerUsername: linked?.ownerUsername || currentUser.username,
+      departmentId: linked?.departmentId || currentUser.departmentId,
+    });
     setTasks((prev) => [task, ...prev]);
     setManualForm({
       recipientEmail: '',
@@ -234,9 +301,16 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
   };
 
   const onSaveTemplate = () => {
-    setTemplates([...templates, { ...newTemplate, id: Date.now().toString(), lastUpdated: Date.now() }]);
-    setIsCreatingTemplate(false);
-    setNewTemplate({ id: '', name: '', subject: '', body: '', lastUpdated: Date.now() });
+      setTemplates([
+        ...templates,
+        stampOwnership({
+          ...newTemplate,
+          id: Date.now().toString(),
+          lastUpdated: Date.now(),
+        }),
+      ]);
+      setIsCreatingTemplate(false);
+      setNewTemplate({ id: '', name: '', subject: '', body: '', lastUpdated: Date.now() });
   };
   const onDeleteTemplate = (id: string) => setTemplates(templates.filter((t) => t.id !== id));
 
@@ -349,9 +423,8 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
 
   return (
     <div className="max-w-7xl mx-auto space-y-4 sm:space-y-8 animate-fade-in">
-      <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-900">
-        邮件营销已接入阿里云 DirectMail 真实发送。未配置接口时「立即群发」不可用（不会假装发送）。
-        任务/模板/配置已本地持久化。发送成功后会回写 CRM 最近发信与活动记录。
+      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-bold text-slate-600">
+        数据隔离：员工仅见自己导入/添加的收件人；主管仅见本部门；跨部门不可见。CRM 导入范围与客户管理一致。
       </div>
 
       <div className="flex flex-wrap gap-2 bg-white p-2 rounded-2xl border border-slate-200 shadow-sm w-full sm:w-fit overflow-x-auto">
@@ -448,7 +521,7 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
                   value={manualForm.clientId}
                   onChange={(e) => {
                     const id = e.target.value;
-                    const c = crmClients.find((x) => x.id === id);
+                    const c = visibleCrmClients.find((x) => x.id === id);
                     setManualForm((f) => ({
                       ...f,
                       clientId: id,
@@ -457,8 +530,8 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
                   }}
                   className="px-3 py-2.5 rounded-xl border border-emerald-200 bg-white text-sm font-bold"
                 >
-                  <option value="">关联 CRM 客户（可选）</option>
-                  {crmClients.slice(0, 300).map((c) => (
+                  <option value="">关联 CRM 客户（可选，仅你可见范围内）</option>
+                  {visibleCrmClients.slice(0, 300).map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name}
                     </option>

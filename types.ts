@@ -679,16 +679,6 @@ export interface AliyunConfig {
     regionId: string; // cn-hangzhou, ap-southeast-1
 }
 
-export interface EmailTemplate {
-    id: string;
-    name: string;
-    subject: string;
-    senderName?: string; // New field for Sender Alias override
-    body: string; // HTML content
-    attachments?: string[]; // 附件文件名列表（上传能力逐步完善）
-    lastUpdated: number;
-}
-
 export interface EmailTask {
     id: string;
     recipientEmail: string;
@@ -703,4 +693,19 @@ export interface EmailTask {
     sentAt?: number;
     /** DirectMail RequestId */
     requestId?: string;
+    /** 归属：与 CRM 一致，用于部门隔离 */
+    ownerUsername?: string;
+    departmentId?: string;
+}
+
+export interface EmailTemplate {
+    id: string;
+    name: string;
+    subject: string;
+    senderName?: string; // New field for Sender Alias override
+    body: string; // HTML content
+    attachments?: string[]; // 附件文件名列表（上传能力逐步完善）
+    lastUpdated: number;
+    ownerUsername?: string;
+    departmentId?: string;
 }
