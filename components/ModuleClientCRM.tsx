@@ -645,9 +645,14 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
       {/* 漏斗 */}
       <div className="bg-white p-4 sm:p-5 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-sm font-black text-slate-800">CRM 商机漏斗</h3>
+          <div className="min-w-0">
+            <h3 className="text-sm font-black text-slate-800">正式客户 · 商机漏斗</h3>
+            <p className="text-[10px] font-semibold text-slate-400 mt-0.5">
+              只统计已加入 CRM 的公司。背调作业在「营销工具」；未入 CRM 的档案在「记录中心」。
+            </p>
+          </div>
           <div className="text-[11px] font-bold text-slate-400">
-            共 {clients.length} 家
+            正式客户 {clients.length} 家
             {filteredEnriched.length !== clients.length && (
               <span className="text-blue-600 ml-1">· 筛选 {filteredEnriched.length} 家</span>
             )}

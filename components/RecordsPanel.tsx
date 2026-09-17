@@ -689,11 +689,16 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
           <div className="font-extrabold text-slate-900 text-base sm:text-lg flex items-center gap-2 tracking-tight">
             <FolderOpen size={18} className="text-cyan-600 flex-shrink-0" /> 记录中心
           </div>
-          <div className="text-[10px] sm:text-[11px] text-slate-400 font-semibold mt-0.5 truncate tracking-wide">
-            点击公司可查看背调 · 已入 CRM 的背调在此隐藏（请在客户管理打开报告）
-            {history.length + discoveryArchives.length > tabCounts.all
-              ? ` · 库内共 ${history.length + discoveryArchives.length}`
-              : ''}
+          <div className="text-[10px] sm:text-[11px] text-slate-500 font-semibold mt-0.5 space-y-0.5">
+            <div>
+              可见 {tabCounts.all} 条（搜索归档 {tabCounts.search} · 未入 CRM 背调 {tabCounts.background}）
+              {history.length + discoveryArchives.length > tabCounts.all
+                ? ` · 库存档案 ${history.length + discoveryArchives.length}（含已入 CRM 后在此隐藏的背调）`
+                : ''}
+            </div>
+            <div className="text-slate-400 truncate tracking-wide">
+              这里是研究档案，不是正式客户数。已入 CRM 的背调请到「客户管理」打开报告；背调作业进度看「营销工具」。
+            </div>
           </div>
         </div>
         <button
@@ -763,7 +768,9 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
         <span className="inline-flex text-[9px] font-black bg-indigo-50 text-indigo-700 border border-indigo-100 px-1.5 py-0.5 rounded">
           已入CRM
         </span>
-        <span className="text-slate-300 ml-0.5">与客户管理/营销工具同一套状态；已入CRM的背调在客户管理查看</span>
+        <span className="text-slate-300 ml-0.5">
+          状态口径与营销工具/客户管理一致；已入 CRM 的背调改在客户管理查看
+        </span>
       </div>
       {(tab === 'background' || tab === 'all' || tab === 'search') && (
         <div className="px-3 py-2 border-b border-slate-100 flex flex-wrap gap-2 items-center bg-slate-50/60 shrink-0">

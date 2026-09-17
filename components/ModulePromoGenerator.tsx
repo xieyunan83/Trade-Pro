@@ -159,6 +159,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
 
   const completedCount = automationResults.filter((r) => r.status === 'completed' && r.analysis).length;
   const crmOnlyCount = allRows.filter((r) => r.source === 'crm').length;
+  const inCrmOnListCount = allRows.filter((r) => r.intel.inCrm).length;
 
   const countryOptions = useMemo(
     () =>
@@ -823,31 +824,54 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
 
       <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
         <div className="p-4 sm:p-6 border-b border-slate-100 flex flex-col gap-3 bg-slate-50/50">
-          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
-            <h3 className="text-lg font-black text-slate-800 flex items-center gap-2 flex-wrap">
-              <Clock className="text-slate-400" /> 客户列表 ({allRows.length})
-              {automationResults.length > 0 && (
-                <span className="text-xs font-black text-slate-500 bg-slate-100 px-2 py-1 rounded-lg">
-                  队列 {automationResults.length}
-                </span>
-              )}
-              {crmOnlyCount > 0 && (
-                <span className="text-xs font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg">
-                  CRM 同步 {crmOnlyCount}
-                </span>
-              )}
-              {completedCount > 0 && (
-                <span className="text-xs font-black text-green-600 bg-green-50 px-2 py-1 rounded-lg">
-                  队列已完成 {completedCount}
-                </span>
-              )}
-              {hasActiveFilters && (
-                <span className="text-xs font-black text-blue-600 bg-blue-50 px-2 py-1 rounded-lg">
-                  筛选后 {filteredResults.length}
-                </span>
-              )}
-            </h3>
-            <div className="flex flex-wrap gap-2">
+          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-3">
+            <div className="min-w-0 space-y-1.5">
+              <h3 className="text-lg font-black text-slate-800 flex items-center gap-2 flex-wrap">
+                <Clock className="text-slate-400 shrink-0" /> 背调作业 ({allRows.length})
+                {automationResults.length > 0 && (
+                  <span
+                    className="text-xs font-black text-slate-500 bg-slate-100 px-2 py-1 rounded-lg"
+                    title="自动化流水线任务总数（含待跑/失败/进行中/已完成）"
+                  >
+                    队列任务 {automationResults.length}
+                  </span>
+                )}
+                {completedCount > 0 && (
+                  <span
+                    className="text-xs font-black text-green-600 bg-green-50 px-2 py-1 rounded-lg"
+                    title="队列中已跑完且有背调报告的任务数（≠ 已进 CRM）"
+                  >
+                    已出报告 {completedCount}
+                  </span>
+                )}
+                {inCrmOnListCount > 0 && (
+                  <span
+                    className="text-xs font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg"
+                    title="本列表中已对应到客户管理正式客户的行数"
+                  >
+                    已入 CRM {inCrmOnListCount}
+                  </span>
+                )}
+                {crmOnlyCount > 0 && (
+                  <span
+                    className="text-xs font-black text-violet-600 bg-violet-50 px-2 py-1 rounded-lg"
+                    title="客户管理里有、但队列里没有对应任务的补录行（不是 CRM 总数）"
+                  >
+                    仅 CRM 补录 {crmOnlyCount}
+                  </span>
+                )}
+                {hasActiveFilters && (
+                  <span className="text-xs font-black text-blue-600 bg-blue-50 px-2 py-1 rounded-lg">
+                    筛选后 {filteredResults.length}
+                  </span>
+                )}
+              </h3>
+              <p className="text-[11px] font-semibold text-slate-400 leading-relaxed">
+                本页统计的是背调作业（队列为主），不是正式客户数。正式客户看「客户管理」；未入 CRM
+                的背调档案看「记录中心」。
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2 shrink-0">
               {(completedCount > 0 || selectedTasks.length > 0) && (
                 <button
                   onClick={handleBatchExport}
@@ -1151,7 +1175,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
               {allRows.length === 0 ? (
                 <tr>
                   <td colSpan={11} className="px-6 py-12 text-center text-slate-400 font-bold">
-                    暂无客户：请启动自动化流水线，或在客户管理中添加客户后将自动同步到此列表
+                    暂无背调作业：请启动自动化流水线；客户管理中的正式客户若队列里没有，会少量补录到此列表
                   </td>
                 </tr>
               ) : filteredResults.length === 0 ? (
@@ -1398,7 +1422,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
               <span>
                 第 {(safePage - 1) * pageSize + 1}–
                 {Math.min(safePage * pageSize, filteredResults.length)} 条 / 共 {filteredResults.length} 条
-                {hasActiveFilters ? `（已筛选，列表总计 ${allRows.length}）` : ''}
+                {hasActiveFilters ? `（已筛选，作业总计 ${allRows.length}）` : ''}
               </span>
               <span className="text-slate-300">|</span>
               <label className="inline-flex items-center gap-1.5">
