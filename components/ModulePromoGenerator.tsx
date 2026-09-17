@@ -1123,9 +1123,9 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse min-w-[1180px]">
+          <table className="w-full text-left border-collapse min-w-[1180px] table-fixed">
             <thead>
-              <tr className="bg-slate-50 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">
+              <tr className="bg-slate-50 text-[10px] font-black text-slate-400 tracking-wide border-b border-slate-100">
                 <th className="px-3 py-3 w-10">
                   <input
                     type="checkbox"
@@ -1135,16 +1135,16 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                     title="全选本页"
                   />
                 </th>
-                <th className="px-3 py-3">客户信息</th>
-                <th className="px-3 py-3">国家</th>
-                <th className="px-3 py-3">拥有人</th>
-                <th className="px-3 py-3">行业</th>
-                <th className="px-3 py-3">关键词</th>
-                <th className="px-3 py-3">联系人</th>
-                <th className="px-3 py-3">状态</th>
-                <th className="px-3 py-3">背调时间</th>
-                <th className="px-3 py-3">模式</th>
-                <th className="px-3 py-3 text-right">操作</th>
+                <th className="px-3 py-3 w-[18%]">客户信息</th>
+                <th className="px-3 py-3 w-[8%]">国家</th>
+                <th className="px-3 py-3 w-[8%]">拥有人</th>
+                <th className="px-3 py-3 w-[12%]">行业</th>
+                <th className="px-3 py-3 w-[10%]">关键词</th>
+                <th className="px-3 py-3 w-[12%]">联系人</th>
+                <th className="px-3 py-3 w-[9%]">状态</th>
+                <th className="px-3 py-3 w-[10%]">背调时间</th>
+                <th className="px-3 py-3 w-[6%]">模式</th>
+                <th className="px-3 py-3 w-[7%] text-right">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -1189,12 +1189,12 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                           className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                         />
                       </td>
-                      <td className="px-3 py-2.5 max-w-[220px]">
+                      <td className="px-3 py-2.5 overflow-hidden">
                         <div className="font-bold text-slate-800 truncate text-sm">{row.clientName}</div>
                         <div className="text-[10px] text-slate-400 font-bold truncate">{row.website}</div>
                         {(row.intel.bestAnalysis?.companyInfo?.scale ||
                           task?.analysis?.companyInfo?.scale) && (
-                          <div className="text-[9px] text-slate-400 font-bold mt-0.5">
+                          <div className="text-[9px] text-slate-400 font-bold mt-0.5 truncate">
                             规模:{' '}
                             {row.intel.bestAnalysis?.companyInfo?.scale ||
                               task?.analysis?.companyInfo?.scale}
@@ -1226,12 +1226,12 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                           )}
                         </div>
                       </td>
-                      <td className="px-3 py-2.5 text-xs font-bold text-slate-600 whitespace-nowrap">
-                        {row.country || '—'}
+                      <td className="px-3 py-2.5 text-xs font-bold text-slate-600 whitespace-nowrap overflow-hidden">
+                        <span className="truncate block">{row.country || '—'}</span>
                       </td>
-                      <td className="px-3 py-2.5">
+                      <td className="px-3 py-2.5 overflow-hidden">
                         <span
-                          className={`inline-flex max-w-[100px] truncate text-[11px] font-black px-2 py-0.5 rounded-md ${
+                          className={`inline-flex max-w-full truncate text-[11px] font-black px-2 py-0.5 rounded-md ${
                             owner
                               ? 'bg-indigo-50 text-indigo-700 border border-indigo-100'
                               : 'bg-slate-50 text-slate-400 border border-slate-100'
@@ -1241,18 +1241,19 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                           {owner || '—'}
                         </span>
                       </td>
-                      <td className="px-3 py-2.5 text-xs font-bold text-slate-600 max-w-[140px]">
-                        <span className="line-clamp-2" title={industry || undefined}>
+                      <td className="px-3 py-2.5 text-xs font-bold text-slate-600 overflow-hidden">
+                        <span className="line-clamp-2 break-words" title={industry || undefined}>
                           {industry || '—'}
                         </span>
                       </td>
-                      <td className="px-4 py-4">
-                        <div className="flex flex-wrap gap-1 max-w-[160px]">
+                      <td className="px-3 py-2.5 overflow-hidden">
+                        <div className="flex flex-wrap gap-1">
                           {kws.length ? (
                             kws.slice(0, 3).map((k) => (
                               <span
                                 key={k}
-                                className="inline-flex bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded text-[9px] font-black"
+                                className="inline-flex max-w-full truncate bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded text-[9px] font-black"
+                                title={k}
                               >
                                 {k}
                               </span>
@@ -1265,9 +1266,9 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                           )}
                         </div>
                       </td>
-                      <td className="px-4 py-4 max-w-[180px]">
+                      <td className="px-3 py-2.5 overflow-hidden">
                         {contact ? (
-                          <div>
+                          <div className="min-w-0">
                             <div className="text-xs font-bold text-slate-800 truncate">
                               {contact.name || '—'}
                             </div>
@@ -1290,17 +1291,17 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                         ) : row.intel.dmStatus === 'empty' ? (
                           <DmStatusChip status="empty" showIcon />
                         ) : (
-                          <span className="text-slate-300 text-xs font-bold">暂无</span>
+                          <span className="text-slate-300 text-xs font-bold whitespace-nowrap">暂无</span>
                         )}
                       </td>
-                      <td className="px-4 py-4">
+                      <td className="px-3 py-2.5 overflow-hidden">
                         {row.source === 'crm' ? (
-                          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-tighter bg-indigo-100 text-indigo-700">
+                          <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-black uppercase tracking-tighter bg-indigo-100 text-indigo-700">
                             <Building2 size={10} /> CRM
                           </div>
                         ) : (
                           <div
-                            className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-tighter ${
+                            className={`inline-flex max-w-full items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-black uppercase tracking-tighter ${
                               row.status === 'completed'
                                 ? 'bg-green-100 text-green-600'
                                 : row.status === 'failed'
@@ -1311,27 +1312,27 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                             }`}
                           >
                             {row.status === 'analyzing' || row.status === 'generating_email' ? (
-                              <Loader2 className="animate-spin" size={10} />
+                              <Loader2 className="animate-spin shrink-0" size={10} />
                             ) : null}
-                            {row.status === 'completed' ? <CheckCircle2 size={10} /> : null}
-                            {row.status === 'failed' ? <AlertTriangle size={10} /> : null}
-                            {row.status === 'pending' ? <Hourglass size={10} /> : null}
-                            {String(row.status).replace('_', ' ')}
+                            {row.status === 'completed' ? <CheckCircle2 className="shrink-0" size={10} /> : null}
+                            {row.status === 'failed' ? <AlertTriangle className="shrink-0" size={10} /> : null}
+                            {row.status === 'pending' ? <Hourglass className="shrink-0" size={10} /> : null}
+                            <span className="truncate">{String(row.status).replace('_', ' ')}</span>
                           </div>
                         )}
                       </td>
-                      <td className="px-4 py-4">
-                        <span className="text-[11px] font-bold text-slate-600 whitespace-nowrap">
+                      <td className="px-3 py-2.5 overflow-hidden">
+                        <span className="text-[11px] font-bold text-slate-600 whitespace-nowrap block truncate">
                           {bgAt || '—'}
                         </span>
                       </td>
-                      <td className="px-4 py-4">
-                        <span className="text-[10px] font-black text-slate-400 uppercase">
+                      <td className="px-3 py-2.5 overflow-hidden">
+                        <span className="text-[10px] font-black text-slate-400 uppercase truncate block">
                           {row.mode || (row.source === 'crm' ? '—' : 'economy')}
                         </span>
                       </td>
-                      <td className="px-4 py-4 text-right">
-                        <div className="flex justify-end gap-1">
+                      <td className="px-3 py-2.5 text-right overflow-hidden">
+                        <div className="flex justify-end gap-0.5 flex-wrap">
                           {(row.intel.hasBg ||
                             (task?.status === 'completed' && task.analysis) ||
                             row.intel.historyItem) && (
