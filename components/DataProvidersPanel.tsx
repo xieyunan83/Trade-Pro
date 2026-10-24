@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Database, ExternalLink, Loader2, Save, CheckCircle2, AlertTriangle } from 'lucide-react';
+import type { User } from '../types';
 import {
   DATA_PROVIDER_DEFS,
   type DataProviderId,
@@ -8,6 +9,8 @@ import {
   saveDataProvider,
 } from '../services/dataProviders';
 import { CRM_ENHANCEMENT_ROADMAP, PHASE_LABEL } from '../services/upgradeRoadmap';
+import { ModuleBuyerLibrary } from './ModuleBuyerLibrary';
+import { ModuleCustomsIntel } from './ModuleCustomsIntel';
 
 const blank = (): DataProviderMeta => ({
   enabled: false,
@@ -17,8 +20,12 @@ const blank = (): DataProviderMeta => ({
   extra: {},
 });
 
+type Props = {
+  currentUser: User;
+};
+
 /** 管理后台 · 数据接入：产品库/海关/3D/视频等提供商配置骨架 */
-export const DataProvidersPanel: React.FC = () => {
+export const DataProvidersPanel: React.FC<Props> = ({ currentUser }) => {
   const [map, setMap] = useState<Record<string, DataProviderMeta>>({});
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<string | null>(null);
@@ -77,8 +84,10 @@ export const DataProvidersPanel: React.FC = () => {
           <div>
             <h3 className="font-black text-slate-900 text-lg">数据接入（升级骨架）</h3>
             <p className="text-sm text-slate-500 font-medium mt-1 max-w-3xl leading-relaxed">
-              预填小竹熊、霄鸟云、海关、图生 3D、万相视频等凭证。当前仅持久化配置，业务同步/调用将按 P0→P2
-              逐步接通。已有千问 / 万相图 / Tavily / Hunter 等仍在「API 配置」页管理。
+              预填小竹熊、霄鸟云、海关、图生 3D、万相视频等凭证。自有买家库与海关情报为
+              <strong className="text-slate-700">后台数据库</strong>
+              （前台导航已隐藏）：仅在员工「客户搜索」命中相关公司时优先调用，不足再联网。
+              已有千问 / 万相图 / Tavily / Hunter 等仍在「API 配置」页管理。
             </p>
           </div>
         </div>
@@ -108,6 +117,20 @@ export const DataProvidersPanel: React.FC = () => {
             </li>
           ))}
         </ul>
+      </div>
+
+      <div className="space-y-4 rounded-2xl border border-teal-100 bg-teal-50/40 p-4 sm:p-5">
+        <div>
+          <div className="text-xs font-black text-teal-800 uppercase tracking-widest">
+            后台数据库 · 客户搜索优先源
+          </div>
+          <p className="text-sm text-teal-900/80 font-medium mt-1 max-w-3xl leading-relaxed">
+            在此维护自有买家库与海关缓存。前台用户看不到独立菜单；只有搜索产品关键词时，
+            与目标相关的公司才会出现在搜索结果里，并标注「未联网」。
+          </p>
+        </div>
+        <ModuleBuyerLibrary currentUser={currentUser} history={[]} />
+        <ModuleCustomsIntel currentUser={currentUser} />
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">

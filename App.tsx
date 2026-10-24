@@ -109,8 +109,6 @@ import { ModuleImageGenerator } from './components/ModuleImageGenerator';
 import { ModuleComingSoon } from './components/ModuleComingSoon';
 import { ModuleProductCatalog } from './components/ModuleProductCatalog';
 import { ModuleProductQuote } from './components/ModuleProductQuote';
-import { ModuleBuyerLibrary } from './components/ModuleBuyerLibrary';
-import { ModuleCustomsIntel } from './components/ModuleCustomsIntel';
 import { ModuleProductDesign2D } from './components/ModuleProductDesign2D';
 import { SphereNav, type SphereNavPhase } from './components/SphereNav';
 import { ClientFinder } from './components/ClientFinder';
@@ -4306,12 +4304,6 @@ const App: React.FC = () => {
                 )}
                 {activeModule === ModuleType.PRODUCT_QUOTE && currentUser && (
                     <ModuleProductQuote currentUser={currentUser} />
-                )}
-                {activeModule === ModuleType.BUYER_LIBRARY && currentUser && (
-                    <ModuleBuyerLibrary currentUser={currentUser} history={history} />
-                )}
-                {activeModule === ModuleType.CUSTOMS_INTEL && currentUser && (
-                    <ModuleCustomsIntel currentUser={currentUser} />
                 )}
                 {activeModule === ModuleType.PRODUCT_DESIGN_2D && currentUser && (
                     <ModuleProductDesign2D currentUser={currentUser} />

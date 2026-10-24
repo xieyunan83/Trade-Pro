@@ -26,8 +26,6 @@ import {
   BadgeCheck,
   Factory,
   Truck,
-  Library,
-  Ship,
   Warehouse,
   FileSpreadsheet,
   MailPlus,
@@ -64,18 +62,6 @@ export const PLATFORM_SECTIONS: PlatformSection[] = [
     icon: Globe,
     items: [
       { id: ModuleType.DISCOVERY, label: '客户搜索', sub: 'Discovery', icon: Globe },
-      {
-        id: ModuleType.BUYER_LIBRARY,
-        label: '自有买家库',
-        sub: 'Buyer DB',
-        icon: Library,
-      },
-      {
-        id: ModuleType.CUSTOMS_INTEL,
-        label: '海关情报',
-        sub: 'Customs',
-        icon: Ship,
-      },
       { id: ModuleType.BACKGROUND, label: '背景调查', sub: 'Background', icon: LayoutDashboard },
       { id: ModuleType.PRODUCTS, label: '产品分析', sub: 'Products', icon: PackageSearch },
       { id: ModuleType.DECISION_MAKERS, label: '决策人挖掘', sub: 'Contacts', icon: Users },

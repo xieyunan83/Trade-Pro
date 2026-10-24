@@ -61,6 +61,7 @@ import {
   hasTavilyKey,
 } from './tavilyService';
 import { LEAD_EVIDENCE_USAGE_HINT, resolveDirectorySitesForMarket } from './leadDiscoverySources';
+import { collectInternalLeads, mergeInternalOverOnline } from './internalLeadSources';
 import { hasRichProductCatalog } from './productCatalog';
 import { mergeAnalysisRaws, mergeClientSearchResults, isEmptyPlaceholder, preferString } from './multiModelMerge';
 import {
@@ -4566,6 +4567,26 @@ export const searchPotentialClients = async (productKeyword: string, country: st
   const targetMarket = singleMarket ? countries[0] : countries.filter((c) => !isVagueMarketCountry(c)).join(', ');
   // 单次请求控制体量；证据充足时可略提高（仍有硬上限，不影响其它模块）
   const effectiveLimit = Math.min(Math.max(limit, 3), countries.length > 1 ? 14 : 22);
+
+  // ⓪ 自有买家库 + 海关缓存：与产品关键词相关才注入；足量则跳过互联网搜索
+  const primaryMarketHint = singleMarket ? countries[0] : country;
+  const internalLeads = collectInternalLeads({
+    productKeyword,
+    country: primaryMarketHint,
+    industry,
+    limit: effectiveLimit,
+  });
+  if (internalLeads.length > 0) {
+    console.log(
+      `[search] priority=0 internal DB hits=${internalLeads.length} (buyer_library/customs)`
+    );
+  }
+  if (internalLeads.length >= effectiveLimit) {
+    console.log('[search] internal DB filled quota — skip Tavily / online search');
+    return filterExcludedSearchResults(internalLeads.slice(0, effectiveLimit));
+  }
+  const onlineAskLimit = Math.max(3, effectiveLimit - internalLeads.length);
+
   const industryConstraint = inferIndustryConstraint(productKeyword, industry);
   const typeHint = types.length
     ? types.join(', ')
@@ -4749,12 +4770,17 @@ export const searchPotentialClients = async (productKeyword: string, country: st
     return mergeClientSearchResults(mappedLists, { limit: askLimit });
   };
 
-  let mapped: ClientSearchResult[];
+  let mapped: ClientSearchResult[] = [];
   try {
-    mapped = await runOnce(effectiveLimit, false);
+    mapped = await runOnce(onlineAskLimit, false);
   } catch (firstErr: any) {
     const msg = String(firstErr?.message || firstErr);
-    if (/超时|timeout|504|上游超时|Gateway/i.test(msg) && effectiveLimit > 6) {
+    // 已有库内命中时：联网失败不整单失败，直接返回库内结果
+    if (internalLeads.length > 0) {
+      console.warn('[search] online failed; returning internal DB hits only', msg);
+      return filterExcludedSearchResults(internalLeads);
+    }
+    if (/超时|timeout|504|上游超时|Gateway/i.test(msg) && onlineAskLimit > 6) {
       console.warn('[search] 首次超时，缩小结果数后重试…');
       mapped = await runOnce(6, true);
     } else {
@@ -4766,17 +4792,18 @@ export const searchPotentialClients = async (productKeyword: string, country: st
   let filtered = filterSearchResultsByMarketAndProduct(mapped, {
     productKeyword,
     targetCountry: primaryTarget,
-    limit: effectiveLimit,
-  });
+    limit: onlineAskLimit,
+  }).map((r) => ({ ...r, leadSource: r.leadSource || ('online' as const) }));
 
   // 过滤后过少：严格模式补搜一次（不删已有合格结果，合并去重）
-  if (filtered.length < Math.min(effectiveLimit, Math.max(3, Math.ceil(limit * 0.6)))) {
+  const onlineFloor = Math.min(onlineAskLimit, Math.max(2, Math.ceil(onlineAskLimit * 0.5)));
+  if (filtered.length < onlineFloor) {
     try {
       console.warn(
-        `[search] 合格结果仅 ${filtered.length}/${effectiveLimit}，严格补搜中…`,
+        `[search] 合格结果仅 ${filtered.length}/${onlineAskLimit}，严格补搜中…`,
         { productKeyword, country: primaryTarget }
       );
-      const extra = await runOnce(effectiveLimit, true);
+      const extra = await runOnce(onlineAskLimit, true);
       const merged = [...filtered, ...extra];
       const seen = new Set<string>();
       const deduped: ClientSearchResult[] = [];
@@ -4789,8 +4816,8 @@ export const searchPotentialClients = async (productKeyword: string, country: st
       filtered = filterSearchResultsByMarketAndProduct(deduped, {
         productKeyword,
         targetCountry: primaryTarget,
-        limit: effectiveLimit,
-      });
+        limit: onlineAskLimit,
+      }).map((r) => ({ ...r, leadSource: r.leadSource || ('online' as const) }));
     } catch (e) {
       console.warn('[search] 严格补搜失败，沿用已有过滤结果', e);
     }
@@ -4805,11 +4832,14 @@ export const searchPotentialClients = async (productKeyword: string, country: st
     }));
   }
 
+  // 库内优先合并：同公司优先用买家库/海关字段，不再为库内公司重复计联网成本
+  const combined = mergeInternalOverOnline(internalLeads, filtered, effectiveLimit);
+
   console.log(
-    `[search] ${productKeyword} @ ${primaryTarget || 'global'}: raw=${mapped.length} kept=${filtered.length}`
+    `[search] ${productKeyword} @ ${primaryTarget || 'global'}: internal=${internalLeads.length} online_raw=${mapped.length} kept=${combined.length}`
   );
 
-  return filterExcludedSearchResults(filtered);
+  return filterExcludedSearchResults(combined);
 };
 
 export const streamStrategyChat = async function* (

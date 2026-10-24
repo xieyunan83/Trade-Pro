@@ -37,6 +37,31 @@ export const saveCustomsCache = (rows: CustomsShipment[]) => {
   localStorage.setItem(LS, JSON.stringify(rows));
 };
 
+/** 本地海关缓存检索（产品词 / HS / 公司名） */
+export const searchCustomsCache = (
+  query: string,
+  rows: CustomsShipment[] = loadCustomsCache()
+): CustomsShipment[] => {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const tokens = q.split(/[\s,，;/|+\-_.]+/).filter((t) => t.length >= 2);
+  return rows.filter((r) => {
+    const blob = [
+      r.consignee,
+      r.shipper,
+      r.productDesc,
+      r.hsCode,
+      r.linkedCompanyName,
+      r.originCountry,
+      r.destCountry,
+    ]
+      .join(' ')
+      .toLowerCase();
+    if (blob.includes(q)) return true;
+    return tokens.some((t) => blob.includes(t));
+  });
+};
+
 /** 占位：后续接海关 API */
 export const queryCustomsProvider = async (
   _q: string

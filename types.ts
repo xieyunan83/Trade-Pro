@@ -625,6 +625,11 @@ export interface ClientSearchResult {
   searchId?: string;
   /** 是否曾出现在历史搜索归档中（同域名） */
   previouslySearched?: boolean;
+  /**
+   * 线索来源：自有买家库 / 海关缓存命中时优先展示，无需再走互联网搜索；
+   * online 为联网补搜结果。
+   */
+  leadSource?: 'buyer_library' | 'customs' | 'online';
 }
 
 export interface EmailTemplateRequest {

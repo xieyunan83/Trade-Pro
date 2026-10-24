@@ -253,8 +253,6 @@ export const SphereNav: React.FC<Props> = ({
                         ? 'Soon'
                         : (
                             [
-                              ModuleType.BUYER_LIBRARY,
-                              ModuleType.CUSTOMS_INTEL,
                               ModuleType.PRODUCT_CATALOG,
                               ModuleType.PRODUCT_QUOTE,
                               ModuleType.PRODUCT_DESIGN_2D,

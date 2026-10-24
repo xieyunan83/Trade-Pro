@@ -36,17 +36,19 @@ export const saveBuyerRecords = (rows: BuyerRecord[]) => {
   localStorage.setItem(LS, JSON.stringify(rows));
 };
 
-/** 占位：库优先搜索 */
+/** 库内检索：公司名 / 域名 / 国家 / 行业品类 */
 export const searchBuyerLibrary = (
   query: string,
   records: BuyerRecord[] = loadBuyerRecords()
 ): BuyerRecord[] => {
   const q = query.trim().toLowerCase();
   if (!q) return [];
-  return records.filter(
-    (r) =>
-      r.companyName.toLowerCase().includes(q) ||
-      (r.domain || '').toLowerCase().includes(q) ||
-      (r.country || '').toLowerCase().includes(q)
-  );
+  const tokens = q.split(/[\s,，;/|+\-_.]+/).filter((t) => t.length >= 2);
+  return records.filter((r) => {
+    const blob = [r.companyName, r.domain, r.country, r.industry, ...(r.emails || [])]
+      .join(' ')
+      .toLowerCase();
+    if (blob.includes(q)) return true;
+    return tokens.some((t) => blob.includes(t));
+  });
 };

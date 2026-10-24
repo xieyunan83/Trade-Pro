@@ -17,7 +17,7 @@ type Props = {
 const newId = () => `by_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
 /**
- * 自有买家库：库优先检索。
+ * 自有买家库（后台）：前台无导航；客户搜索按关键词命中时优先调用。
  * 存储独立；从背调「复制」入库，绝不写回/删除 history 或 CRM。
  */
 export const ModuleBuyerLibrary: React.FC<Props> = ({ currentUser, history }) => {
@@ -132,7 +132,10 @@ export const ModuleBuyerLibrary: React.FC<Props> = ({ currentUser, history }) =>
         <div className="inline-flex items-center gap-2 text-cyan-700 font-black text-xs uppercase tracking-widest">
           <Library size={14} /> Buyer Library
         </div>
-        <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">自有买家库</h2>
+        <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">自有买家库（后台）</h2>
+        <p className="text-xs text-teal-800/80 font-bold mt-1">
+          前台已隐藏 · 仅在「客户搜索」命中相关公司时注入结果
+        </p>
         <p className="text-sm text-slate-500 font-medium mt-1 max-w-3xl">
           检索顺序：先搜本库 → 未命中再在线补搜（在线补搜接通后启用）。存储键{' '}
           <code className="text-xs bg-slate-100 px-1 rounded">trade_scout_buyer_library_v1</code>

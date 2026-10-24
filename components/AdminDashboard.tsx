@@ -1199,17 +1199,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                   </div>
                   <p className="text-[10px] text-slate-500 font-bold leading-relaxed">
                     <strong>三项完全独立</strong>。客户搜索固定优先级：
-                    <strong>Tavily 取证 →（有结果则只整理）模型整理 →（无 Tavily 才）模型自带联网</strong>。
-                    推荐「Gemini∥千问合并」：两侧并行生成后字段合并，信息更全。
-                    「Gemini 优先」仍为失败才降级千问。「仅千问」不走 Gemini。改完立即生效并同步云端。
+                    <strong>自有买家库/海关缓存（相关才命中）→ Tavily 取证 →（有结果则只整理）模型整理 →（无 Tavily 才）模型自带联网</strong>。
+                    库内已有公司直接调用，不重复联网。推荐「Gemini∥千问合并」。改完立即生效并同步云端。
                   </p>
                   <p className="text-[10px] font-black text-violet-700 bg-white border border-violet-100 rounded-xl px-3 py-2">
-                    生效中：{describeTaskAIRouting()} · 搜索取证优先 Tavily
+                    生效中：{describeTaskAIRouting()} · 库内优先 → Tavily
                   </p>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     {(
                       [
-                        { key: 'search' as const, label: '客户搜索', hint: '①Tavily → ②本项整理引擎' },
+                        { key: 'search' as const, label: '客户搜索', hint: '①库内 → ②Tavily → ③整理' },
                         { key: 'analysis' as const, label: '背调分析', hint: '仅影响：单次 / 批量背调' },
                         { key: 'organize' as const, label: '资料整理', hint: '仅影响：开发信 / 关键词 / 策略' },
                       ] as const
@@ -1750,7 +1749,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
 
             {activeTab === 'data' && (
               <div className="animate-fade-in -m-4 sm:-m-6 md:-m-10">
-                <DataProvidersPanel />
+                <DataProvidersPanel currentUser={currentUser} />
               </div>
             )}
 

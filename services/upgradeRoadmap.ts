@@ -19,24 +19,26 @@ export type ModuleRoadmap = {
 export const MODULE_ROADMAP: Partial<Record<ModuleType, ModuleRoadmap>> = {
   [ModuleType.BUYER_LIBRARY]: {
     phase: 'P0',
-    summary: '自有买家库优先命中，未命中再走在线搜索与静默背调补全。',
+    summary:
+      '后台数据库（前台隐藏）：客户搜索按产品关键词命中时优先调用；不足再联网补搜。',
     bullets: [
+      '前台无独立导航；管理入口在「系统管理 → 数据接入」',
       '入库：黄页/政府名录/历史背调/海关沉淀',
-      '检索：公司名 / 域名 / 国家 / 品类',
-      '未命中：Tavily / AnySearch 补搜并写回',
-      '与 CRM、决策人邮箱缓存打通',
+      '客户搜索：与关键词相关才展示；库内公司不重复联网',
+      '与 CRM、决策人邮箱缓存打通（后续）',
     ],
     inspiredBy: ['苏维智搜 · 客户资源库', '网易 · 企业库'],
     providers: ['yellow_pages', 'tavily', 'anysearch'],
   },
   [ModuleType.CUSTOMS_INTEL]: {
     phase: 'P0',
-    summary: '海关/提单数据关联公司档案，补充贸易伙伴与可选联系人。',
+    summary:
+      '后台海关/提单缓存（前台隐藏）：客户搜索命中相关贸易记录时直接调用。',
     bullets: [
-      '按 HS / 公司名 / 国家查询贸易记录',
-      '关联已有背调与买家库实体',
-      '带联系人字段时回写邮箱库（需确认才消耗找邮额度）',
-      '明细查询计入企业配额',
+      '前台无独立导航；管理入口在「系统管理 → 数据接入」',
+      '按 HS / 品名 / 公司名与搜索关键词关联',
+      '命中公司优先用缓存字段，跳过互联网重复取证',
+      '明细外呼计入企业配额（接通数据商后）',
     ],
     inspiredBy: ['网易外贸通 · 海关', '腾道 / ImportGenius'],
     providers: ['customs'],

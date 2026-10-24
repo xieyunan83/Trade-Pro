@@ -13,7 +13,7 @@ type Props = {
   currentUser: User;
 };
 
-/** 海关情报：独立缓存；查询不触碰 CRM/背调 */
+/** 海关情报（后台）：前台无导航；客户搜索命中时优先调用。独立缓存，不触碰 CRM/背调 */
 export const ModuleCustomsIntel: React.FC<Props> = ({ currentUser }) => {
   const [q, setQ] = useState('');
   const [rows, setRows] = useState<CustomsShipment[]>(() => loadCustomsCache());
@@ -65,7 +65,10 @@ export const ModuleCustomsIntel: React.FC<Props> = ({ currentUser }) => {
         <div className="inline-flex items-center gap-2 text-sky-700 font-black text-xs uppercase tracking-widest">
           <Ship size={14} /> Customs
         </div>
-        <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">海关情报</h2>
+        <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">海关情报（后台）</h2>
+        <p className="text-xs text-sky-800/80 font-bold mt-1">
+          前台已隐藏 · 仅在「客户搜索」命中相关贸易记录时注入结果
+        </p>
         <p className="text-sm text-slate-500 font-medium mt-1 max-w-3xl">
           查询结果缓存在{' '}
           <code className="text-xs bg-slate-100 px-1 rounded">trade_scout_customs_cache_v1</code>
