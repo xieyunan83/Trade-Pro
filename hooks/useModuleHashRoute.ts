@@ -22,36 +22,21 @@ const MODULE_ALIASES: Record<string, ModuleType> = {
   image_generator: ModuleType.IMAGE_GENERATOR,
   product_match: ModuleType.PRODUCT_MATCH,
   match: ModuleType.PRODUCT_MATCH,
+  product_design_2d: ModuleType.PRODUCT_DESIGN_2D,
+  product_design_3d: ModuleType.PRODUCT_DESIGN_3D,
+  product_3d_print: ModuleType.PRODUCT_3D_PRINT,
+  product_ai_video: ModuleType.PRODUCT_AI_VIDEO,
+  site_builder: ModuleType.SITE_BUILDER,
+  social_content: ModuleType.SOCIAL_CONTENT,
+  whatsapp: ModuleType.WHATSAPP,
+  eco_parts: ModuleType.ECO_PARTS,
+  eco_merch: ModuleType.ECO_MERCH,
+  eco_cert: ModuleType.ECO_CERT,
+  eco_audit: ModuleType.ECO_AUDIT,
+  eco_delivery: ModuleType.ECO_DELIVERY,
 };
 
-const moduleToSlug = (m: ModuleType): string => {
-  switch (m) {
-    case ModuleType.DISCOVERY:
-      return 'discovery';
-    case ModuleType.BACKGROUND:
-      return 'background';
-    case ModuleType.PRODUCTS:
-      return 'products';
-    case ModuleType.DECISION_MAKERS:
-      return 'decision_makers';
-    case ModuleType.STRATEGY:
-      return 'strategy';
-    case ModuleType.SIMILAR:
-      return 'similar';
-    case ModuleType.PROMO_GENERATOR:
-      return 'promo';
-    case ModuleType.CLIENT_CRM:
-      return 'crm';
-    case ModuleType.EMAIL_CAMPAIGN:
-      return 'email';
-    case ModuleType.IMAGE_GENERATOR:
-      return 'image';
-    case ModuleType.PRODUCT_MATCH:
-      return 'product_match';
-    default:
-      return 'discovery';
-  }
-};
+const moduleToSlug = (m: ModuleType): string => String(m);
 
 export const parseModuleFromHash = (): ModuleType | null => {
   try {

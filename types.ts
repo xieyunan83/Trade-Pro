@@ -12,6 +12,22 @@ export enum ModuleType {
   IMAGE_GENERATOR = 'image_generator',
   /** 新品反查：用我方新品匹配已背调客户产品库 */
   PRODUCT_MATCH = 'product_match',
+  /** —— 产品板块（框架占位 / 逐步落地） —— */
+  PRODUCT_DESIGN_2D = 'product_design_2d',
+  PRODUCT_DESIGN_3D = 'product_design_3d',
+  PRODUCT_3D_PRINT = 'product_3d_print',
+  PRODUCT_AI_VIDEO = 'product_ai_video',
+  /** —— 宣发板块 —— */
+  SITE_BUILDER = 'site_builder',
+  SOCIAL_CONTENT = 'social_content',
+  /** —— 联动板块 —— */
+  WHATSAPP = 'whatsapp',
+  /** —— 生态板块 —— */
+  ECO_PARTS = 'eco_parts',
+  ECO_MERCH = 'eco_merch',
+  ECO_CERT = 'eco_cert',
+  ECO_AUDIT = 'eco_audit',
+  ECO_DELIVERY = 'eco_delivery',
 }
 
 /** 系统角色：管理员 / 总管 / 部门主管 / 部门员工 */
@@ -30,6 +46,18 @@ export type PermissionKey =
   | 'module.email_campaign'
   | 'module.image_generator'
   | 'module.product_match'
+  | 'module.product_design_2d'
+  | 'module.product_design_3d'
+  | 'module.product_3d_print'
+  | 'module.product_ai_video'
+  | 'module.site_builder'
+  | 'module.social_content'
+  | 'module.whatsapp'
+  | 'module.eco_parts'
+  | 'module.eco_merch'
+  | 'module.eco_cert'
+  | 'module.eco_audit'
+  | 'module.eco_delivery'
   | 'feature.search_clients'
   | 'feature.product_redig'
   | 'feature.analyze_company'

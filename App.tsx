@@ -106,6 +106,8 @@ import { ModuleClientCRM } from './components/ModuleClientCRM';
 import { ModuleProductMatch } from './components/ModuleProductMatch';
 import { ModuleEmailCampaign } from './components/ModuleEmailCampaign'; 
 import { ModuleImageGenerator } from './components/ModuleImageGenerator';
+import { ModuleComingSoon } from './components/ModuleComingSoon';
+import { SphereNav } from './components/SphereNav';
 import { ClientFinder } from './components/ClientFinder';
 import { RecordsPanel, archiveToDiscoveryState } from './components/RecordsPanel';
 import { Login } from './components/Login';
@@ -115,7 +117,8 @@ import { AdminDashboard } from './components/AdminDashboard';
 import { 
   LayoutDashboard, PackageSearch, Users, PenTool, Network, Search, Loader2, Menu, Globe, Zap, FileSpreadsheet, History, Clock, ChevronRight, AlertTriangle, RefreshCw, LogOut, Briefcase, Ruler, CheckCircle2, Hourglass, StopCircle, PlayCircle, Layers, Mail, Cloud, Download, Info, Link2, X, Database, Image, Trash2, Ban, Target
 } from 'lucide-react';
-import { ALWAYS_ACTIVE_MODULES, NAV_MODULE_DEFS } from './services/moduleNav';
+import { ALWAYS_ACTIVE_MODULES } from './services/moduleNav';
+import { findSectionByModule, findNavItem } from './services/platformSections';
 import { useModuleHashRoute } from './hooks/useModuleHashRoute';
 import { setUsageScope } from './services/limitService';
 import { appendClientActivity, markEmailSentOnClient } from './services/crmActivity';
@@ -148,6 +151,8 @@ const App: React.FC = () => {
   const [viewingHistoryId, setViewingHistoryId] = useState<string | null>(null);
   const [crmNavOrder, setCrmNavOrder] = useState<{ clientId: string; historyId: string }[]>([]);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  /** 球体导航是否展开（开始 → 板块/子菜单） */
+  const [sphereNavExpanded, setSphereNavExpanded] = useState(false);
   
   const [historyOpen, setHistoryOpen] = useState(false);
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -3851,7 +3856,8 @@ const App: React.FC = () => {
   }
 
   const alwaysActiveModules = ALWAYS_ACTIVE_MODULES;
-  const navModules = NAV_MODULE_DEFS.filter((item) => canAccessModule(currentUser, item.id));
+  const activeSectionMeta = findSectionByModule(activeModule);
+  const activeNavItem = findNavItem(activeModule);
 
   return (
     <AccessGate user={currentUser} onLogout={handleLogout}>
@@ -3860,11 +3866,24 @@ const App: React.FC = () => {
       {mobileMenuOpen && (
         <div className="fixed inset-0 bg-ink-950/60 backdrop-blur-sm z-20 md:hidden" onClick={() => setMobileMenuOpen(false)} />
       )}
-      <aside className={`tp-sidebar fixed md:static z-30 h-full w-[min(100vw-3rem,18rem)] md:w-72 border-r transition-transform duration-300 ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'} flex flex-col`}>
-        <div className="p-6 border-b border-white/5 flex items-center gap-3">
-            <div className="tp-brand-mark p-2.5 rounded-xl text-white"><Zap size={20} /></div>
-            <div>
-                <h1 className="text-lg font-extrabold text-white tracking-tight leading-tight">楠哥的小助理 <span className="text-signal-400">Pro</span></h1>
+      <aside
+        className={`tp-sidebar tp-sphere-rail fixed md:static z-30 h-full border-r transition-all duration-300 ${
+          mobileMenuOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
+        } ${
+          sphereNavExpanded
+            ? 'w-[min(100vw-2rem,20rem)] md:w-[19rem]'
+            : 'w-[5.75rem] md:w-[5.75rem]'
+        } flex flex-col`}
+      >
+        <div
+          className={`border-b border-white/5 flex items-center gap-3 ${
+            sphereNavExpanded ? 'p-4' : 'p-3 justify-center'
+          }`}
+        >
+            <div className="tp-brand-mark p-2.5 rounded-xl text-white shrink-0"><Zap size={18} /></div>
+            {sphereNavExpanded && (
+            <div className="min-w-0">
+                <h1 className="text-base font-extrabold text-white tracking-tight leading-tight truncate">楠哥的小助理 <span className="text-signal-400">Pro</span></h1>
                 <div className="text-[10px] text-slate-400 font-semibold uppercase tracking-[0.14em] mt-1 flex items-center gap-1.5">
                   <span className="tp-live-dot w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
                   {currentUser.username}
@@ -3875,17 +3894,18 @@ const App: React.FC = () => {
                       : ''}
                 </div>
             </div>
+            )}
         </div>
         
-        {systemNotice && (
-            <div className="bg-amber-400/10 p-3 mx-4 mt-4 rounded-xl border border-amber-300/25 text-amber-100 text-xs font-semibold flex items-start gap-2">
+        {systemNotice && sphereNavExpanded && (
+            <div className="bg-amber-400/10 p-3 mx-3 mt-3 rounded-xl border border-amber-300/25 text-amber-100 text-xs font-semibold flex items-start gap-2">
                 <Info size={14} className="flex-shrink-0 mt-0.5 text-amber-300"/>
                 {systemNotice}
             </div>
         )}
 
-        {(isAutomating || batchProgress.active || productDigProgress.active > 0) && (
-            <div className="mx-4 mt-4 p-3 bg-slate-900 rounded-xl border border-slate-800 shadow-lg text-white space-y-3">
+        {(isAutomating || batchProgress.active || productDigProgress.active > 0) && sphereNavExpanded && (
+            <div className="mx-3 mt-3 p-3 bg-slate-900 rounded-xl border border-slate-800 shadow-lg text-white space-y-3">
                 {(isAutomating || batchProgress.active) && (
                   <div>
                     <div className="flex justify-between items-center mb-2">
@@ -3959,54 +3979,34 @@ const App: React.FC = () => {
             </div>
         )}
 
-        <nav className="p-3 sm:p-4 space-y-1 flex-1 overflow-y-auto custom-scrollbar">
-          {navModules.map(item => (
-            <button key={item.id} onClick={() => { setActiveModule(item.id); setMobileMenuOpen(false); }} disabled={!analysisData && !alwaysActiveModules.includes(item.id)} className={`tp-nav-item w-full flex items-center gap-3 px-3 sm:px-4 py-3 sm:py-3.5 rounded-xl text-sm font-semibold transition-all touch-manipulation disabled:opacity-30 ${activeModule === item.id ? 'is-active' : ''}`}>
-              <item.icon size={18} className={`flex-shrink-0 ${activeModule === item.id ? 'text-signal-300' : 'text-slate-500'}`} />
-              <span className="truncate"><span className="md:hidden">{item.label}</span><span className="hidden md:inline">{item.label} <span className="text-[10px] font-medium opacity-50">({item.sub})</span></span></span>
-            </button>
-          ))}
-          {currentUser.role === 'manager' && (
-            <button
-              type="button"
-              onClick={() => { setTeamManageOpen(true); setMobileMenuOpen(false); }}
-              className="tp-nav-item w-full flex items-center gap-3 px-3 sm:px-4 py-3 sm:py-3.5 rounded-xl text-sm font-semibold touch-manipulation"
-            >
-              <Users size={18} className="flex-shrink-0 text-signal-400" />
-              <span>系统管理</span>
-            </button>
-          )}
-        </nav>
-
-        <div className="p-4 border-t border-white/5 space-y-2">
-            <div 
-                className={`px-4 py-2.5 rounded-xl border border-emerald-400/20 bg-emerald-400/10 flex items-center gap-2 mb-2 cursor-pointer hover:bg-emerald-400/15 transition-colors ${isKBSyncing ? 'opacity-70' : ''}`}
-            >
-                {isKBSyncing ? <Loader2 size={16} className="text-emerald-300 animate-spin" /> : <CheckCircle2 size={16} className="text-emerald-300" />}
-                <div>
-                    <div className="text-[10px] font-bold text-emerald-200 uppercase tracking-[0.12em]">System Files Loaded</div>
-                    <div className="text-[10px] text-emerald-300/80 font-medium">
-                        {kbCount} Files Ready to Use
-                    </div>
-                </div>
-            </div>
-            <button
-              onClick={() => {
-                if (!hasPermission(currentUser, 'feature.records_center')) {
-                  alert('你没有「记录中心」权限，请联系管理员或部门主管开通。');
-                  return;
-                }
-                setHistoryOpen(!historyOpen);
-              }}
-              className="w-full flex items-center justify-between px-4 py-3 bg-white/5 hover:bg-white/10 text-slate-200 rounded-xl text-sm font-semibold transition-colors border border-white/5"
-            >
-                <span className="flex items-center gap-2"><History size={18} className="text-signal-400" /> 记录中心</span><ChevronRight size={16} className={`transition-transform text-slate-500 ${historyOpen ? 'rotate-90' : ''}`} />
-            </button>
-            <button onClick={handleLogout} className="w-full flex items-center gap-2 px-4 py-3 text-rose-300 hover:bg-rose-500/10 rounded-xl text-sm font-semibold transition-colors"><LogOut size={18} /> 退出登录</button>
-            <div className="px-4 pt-1 text-[9px] font-semibold text-slate-600 text-center select-all tracking-wide">
-              版本 v20260914 · 备份见 docs/ROLLBACK.md
-            </div>
+        <div className="flex-1 min-h-0 flex flex-col">
+          <SphereNav
+            currentUser={currentUser}
+            activeModule={activeModule}
+            analysisData={analysisData}
+            historyOpen={historyOpen}
+            onExpandedChange={setSphereNavExpanded}
+            onSelectModule={(m) => {
+              setActiveModule(m);
+              setMobileMenuOpen(false);
+            }}
+            onOpenRecords={() => setHistoryOpen((v) => !v)}
+            onOpenTeamManage={
+              currentUser.role === 'manager'
+                ? () => {
+                    setTeamManageOpen(true);
+                    setMobileMenuOpen(false);
+                  }
+                : undefined
+            }
+            onLogout={handleLogout}
+          />
         </div>
+        {sphereNavExpanded && (
+          <div className="px-3 pb-3 text-[9px] font-semibold text-slate-600 text-center select-all tracking-wide">
+            v20260914 · 五板块框架
+          </div>
+        )}
       </aside>
       
       {historyOpen && (
@@ -4155,7 +4155,8 @@ const App: React.FC = () => {
 
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col overflow-hidden relative min-w-0">
-        <header className="tp-header px-3 sm:px-6 py-3 sm:py-4 flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4 z-10">
+        <header className="tp-header px-3 sm:px-6 lg:px-8 py-3 sm:py-4 flex flex-col gap-3 z-10">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4">
           <div className="flex items-center gap-3 sm:contents">
             <button onClick={() => setMobileMenuOpen(true)} className="md:hidden p-2 text-slate-500 flex-shrink-0 touch-manipulation" aria-label="打开菜单"><Menu size={24} /></button>
             <div className="flex-1 relative group min-w-0 sm:order-none">
@@ -4172,9 +4173,23 @@ const App: React.FC = () => {
           <button onClick={() => handleAnalyzeInput()} disabled={loading || !domainInput.trim()} className="tp-btn-primary text-white px-6 sm:px-8 py-3 rounded-2xl font-extrabold disabled:opacity-50 w-full sm:w-auto sm:min-w-[140px] flex justify-center items-center touch-manipulation flex-shrink-0">
             {loading ? <Loader2 className="animate-spin" size={20} /> : '深度调查'}
           </button>
+          </div>
+          {(activeSectionMeta || activeNavItem) && (
+            <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold text-slate-500">
+              <span className="uppercase tracking-[0.16em] text-cyan-700/80">板块</span>
+              <span className="text-slate-800">{activeSectionMeta?.label || '—'}</span>
+              <span className="text-slate-300">/</span>
+              <span className="text-slate-700">{activeNavItem?.label || activeModule}</span>
+              {activeNavItem?.comingSoon && (
+                <span className="text-[9px] font-black uppercase tracking-wider text-amber-700 bg-amber-50 border border-amber-100 px-2 py-0.5 rounded-md">
+                  框架占位
+                </span>
+              )}
+            </div>
+          )}
         </header>
 
-        <div className="tp-main-stage flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 relative custom-scrollbar">
+        <div className="tp-main-stage flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 lg:px-8 relative custom-scrollbar">
           {cooldownTime > 0 && (
               <div className="absolute inset-0 bg-mist-50/85 z-50 flex flex-col items-center justify-center backdrop-blur-md animate-fade-in cursor-wait">
                   <div className="relative"><Hourglass size={64} className="text-signal-500 animate-pulse" /><div className="absolute -top-2 -right-2 bg-rose-500 text-white w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs">{cooldownTime}</div></div>
@@ -4324,6 +4339,22 @@ const App: React.FC = () => {
                 {activeModule === ModuleType.IMAGE_GENERATOR && (
                     <ModuleImageGenerator />
                 )}
+                {(
+                  [
+                    ModuleType.PRODUCT_DESIGN_2D,
+                    ModuleType.PRODUCT_DESIGN_3D,
+                    ModuleType.PRODUCT_3D_PRINT,
+                    ModuleType.PRODUCT_AI_VIDEO,
+                    ModuleType.SITE_BUILDER,
+                    ModuleType.SOCIAL_CONTENT,
+                    ModuleType.WHATSAPP,
+                    ModuleType.ECO_PARTS,
+                    ModuleType.ECO_MERCH,
+                    ModuleType.ECO_CERT,
+                    ModuleType.ECO_AUDIT,
+                    ModuleType.ECO_DELIVERY,
+                  ] as ModuleType[]
+                ).includes(activeModule) && <ModuleComingSoon module={activeModule} />}
                 {activeModule === ModuleType.PROMO_GENERATOR && (
                     <ModulePromoGenerator 
                         onStartAutomation={handleStartQueueGeneration} 

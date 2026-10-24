@@ -20,6 +20,18 @@ export const PERMISSION_CATALOG: Array<{
   { key: 'module.image_generator', label: '海报/生图', group: '模块', description: '海报与万相生图' },
   { key: 'module.promo_generator', label: '营销工具', group: '模块', description: '营销辅助工具' },
   { key: 'module.product_match', label: '新品匹配', group: '模块', description: '用我方新品匹配已背调客户产品库' },
+  { key: 'module.product_design_2d', label: '产品平面设计', group: '模块', description: '产品板块 · 平面图生成' },
+  { key: 'module.product_design_3d', label: '产品 3D 设计', group: '模块', description: '产品板块 · 3D 图生成' },
+  { key: 'module.product_3d_print', label: '3D 打印', group: '模块', description: '产品板块 · 3D 打印交付' },
+  { key: 'module.product_ai_video', label: '产品 AI 视频', group: '模块', description: '产品板块 · 故事短剧视频' },
+  { key: 'module.site_builder', label: '独立站生成', group: '模块', description: '宣发板块 · Vibe 独立站' },
+  { key: 'module.social_content', label: '发文素材', group: '模块', description: '宣发板块 · 社媒发文加工' },
+  { key: 'module.whatsapp', label: 'WhatsApp 联系', group: '模块', description: '联动板块 · WhatsApp' },
+  { key: 'module.eco_parts', label: '产品配件', group: '模块', description: '生态板块 · 配件' },
+  { key: 'module.eco_merch', label: '产品周边', group: '模块', description: '生态板块 · 周边' },
+  { key: 'module.eco_cert', label: '产品认证', group: '模块', description: '生态板块 · 认证' },
+  { key: 'module.eco_audit', label: '验厂机构', group: '模块', description: '生态板块 · 验厂' },
+  { key: 'module.eco_delivery', label: '交付出货', group: '模块', description: '生态板块 · 出货' },
   { key: 'feature.search_clients', label: '执行客户搜索', group: '功能', description: '发起联网搜索客户' },
   { key: 'feature.product_redig', label: '产品品类补做', group: '功能', description: '仅对旧背调缺品类/价格的客户补采；新背调已自动含品类' },
   { key: 'feature.analyze_company', label: '单次背调', group: '功能', description: '对单个公司做背调' },
@@ -44,6 +56,18 @@ const MODULE_TO_PERM: Record<ModuleType, PermissionKey> = {
   [ModuleType.IMAGE_GENERATOR]: 'module.image_generator',
   [ModuleType.PROMO_GENERATOR]: 'module.promo_generator',
   [ModuleType.PRODUCT_MATCH]: 'module.product_match',
+  [ModuleType.PRODUCT_DESIGN_2D]: 'module.product_design_2d',
+  [ModuleType.PRODUCT_DESIGN_3D]: 'module.product_design_3d',
+  [ModuleType.PRODUCT_3D_PRINT]: 'module.product_3d_print',
+  [ModuleType.PRODUCT_AI_VIDEO]: 'module.product_ai_video',
+  [ModuleType.SITE_BUILDER]: 'module.site_builder',
+  [ModuleType.SOCIAL_CONTENT]: 'module.social_content',
+  [ModuleType.WHATSAPP]: 'module.whatsapp',
+  [ModuleType.ECO_PARTS]: 'module.eco_parts',
+  [ModuleType.ECO_MERCH]: 'module.eco_merch',
+  [ModuleType.ECO_CERT]: 'module.eco_cert',
+  [ModuleType.ECO_AUDIT]: 'module.eco_audit',
+  [ModuleType.ECO_DELIVERY]: 'module.eco_delivery',
 };
 
 /** 新员工默认权限：不含邮箱搜索、PPT 下载等需管理员显式开通的功能 */
@@ -59,6 +83,18 @@ const USER_BASELINE: PermissionKey[] = [
   'module.image_generator',
   'module.promo_generator',
   'module.product_match',
+  'module.product_design_2d',
+  'module.product_design_3d',
+  'module.product_3d_print',
+  'module.product_ai_video',
+  'module.site_builder',
+  'module.social_content',
+  'module.whatsapp',
+  'module.eco_parts',
+  'module.eco_merch',
+  'module.eco_cert',
+  'module.eco_audit',
+  'module.eco_delivery',
   'feature.search_clients',
   'feature.analyze_company',
   'feature.product_redig',
@@ -66,6 +102,22 @@ const USER_BASELINE: PermissionKey[] = [
 ];
 
 export const ALL_PERMISSION_KEYS: PermissionKey[] = PERMISSION_CATALOG.map((p) => p.key);
+
+/** 五板块改革新增的模块权限（旧账号本地 permissions 数组可能缺失） */
+const PLATFORM_V2_MODULE_KEYS: PermissionKey[] = [
+  'module.product_design_2d',
+  'module.product_design_3d',
+  'module.product_3d_print',
+  'module.product_ai_video',
+  'module.site_builder',
+  'module.social_content',
+  'module.whatsapp',
+  'module.eco_parts',
+  'module.eco_merch',
+  'module.eco_cert',
+  'module.eco_audit',
+  'module.eco_delivery',
+];
 
 /** 可浏览全部部门业务数据（系统管理员 / 总管） */
 export const canBrowseAllDepartments = (user: User | null | undefined): boolean => {
@@ -78,10 +130,24 @@ export const defaultPermissionsForRole = (role: UserRole): PermissionKey[] => {
   return [...USER_BASELINE];
 };
 
+/** 旧权限列表软升级：已有核心模块的账号自动补齐新导航权限（不改存储，仅运行时） */
+const withPlatformV2Modules = (perms: PermissionKey[]): PermissionKey[] => {
+  const next = [...new Set(perms)];
+  const hasCore =
+    next.includes('module.discovery') ||
+    next.includes('module.client_crm') ||
+    next.includes('module.image_generator');
+  if (!hasCore) return next;
+  for (const k of PLATFORM_V2_MODULE_KEYS) {
+    if (!next.includes(k)) next.push(k);
+  }
+  return next;
+};
+
 export const effectivePermissions = (user: User): PermissionKey[] => {
   if (user.role === 'admin') return [...ALL_PERMISSION_KEYS];
   if (user.permissions !== undefined && user.permissions !== null) {
-    return [...new Set(user.permissions)];
+    return withPlatformV2Modules([...user.permissions]);
   }
   return defaultPermissionsForRole(user.role);
 };
