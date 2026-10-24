@@ -107,7 +107,7 @@ import { ModuleProductMatch } from './components/ModuleProductMatch';
 import { ModuleEmailCampaign } from './components/ModuleEmailCampaign'; 
 import { ModuleImageGenerator } from './components/ModuleImageGenerator';
 import { ModuleComingSoon } from './components/ModuleComingSoon';
-import { SphereNav } from './components/SphereNav';
+import { SphereNav, type SphereNavPhase } from './components/SphereNav';
 import { ClientFinder } from './components/ClientFinder';
 import { RecordsPanel, archiveToDiscoveryState } from './components/RecordsPanel';
 import { Login } from './components/Login';
@@ -151,8 +151,21 @@ const App: React.FC = () => {
   const [viewingHistoryId, setViewingHistoryId] = useState<string | null>(null);
   const [crmNavOrder, setCrmNavOrder] = useState<{ clientId: string; historyId: string }[]>([]);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  /** 球体导航是否展开（开始 → 板块/子菜单） */
-  const [sphereNavExpanded, setSphereNavExpanded] = useState(false);
+  /** 球体导航相位：决定固定坞宽度（主区让位，滚动时坞始终贴边） */
+  const [sphereNavPhase, setSphereNavPhase] = useState<SphereNavPhase>('start');
+  const sphereNavExpanded = sphereNavPhase !== 'start';
+  const dockWidthClass =
+    sphereNavPhase === 'submenu'
+      ? 'w-[min(100vw-1rem,15.5rem)]'
+      : sphereNavPhase === 'sections'
+        ? 'w-[4.5rem]'
+        : 'w-[4.25rem]';
+  const dockPadClass =
+    sphereNavPhase === 'submenu'
+      ? 'md:pl-[15.5rem]'
+      : sphereNavPhase === 'sections'
+        ? 'md:pl-[4.5rem]'
+        : 'md:pl-[4.25rem]';
   
   const [historyOpen, setHistoryOpen] = useState(false);
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -3864,60 +3877,33 @@ const App: React.FC = () => {
     <div
       className={`tp-app flex min-h-screen min-h-[100dvh] overflow-hidden ${
         sphereNavExpanded ? 'is-nav-expanded' : ''
-      }`}
+      } ${sphereNavPhase === 'submenu' ? 'is-nav-submenu' : ''}`}
     >
       {/* Mobile sidebar backdrop */}
       {mobileMenuOpen && (
-        <div className="fixed inset-0 bg-ink-950/40 backdrop-blur-sm z-20 md:hidden" onClick={() => setMobileMenuOpen(false)} />
+        <div className="fixed inset-0 bg-ink-950/50 backdrop-blur-sm z-30 md:hidden" onClick={() => setMobileMenuOpen(false)} />
       )}
+      {/* 固定贴边导航坞：滚动主区时始终跟随视口 */}
       <aside
-        className={`tp-sidebar tp-sphere-rail fixed md:static z-30 h-full ${
+        className={`tp-sidebar tp-sphere-rail fixed inset-y-0 left-0 z-40 h-[100dvh] ${
           mobileMenuOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
-        } ${
-          sphereNavExpanded
-            ? 'w-[min(100vw-2rem,20rem)] md:w-[19rem]'
-            : 'w-[5.75rem] md:w-[5.75rem]'
-        } flex flex-col`}
+        } ${dockWidthClass} flex flex-col`}
         aria-label="平台导航坞"
       >
-        <div
-          className={`border-b border-cyan-900/5 flex items-center gap-3 ${
-            sphereNavExpanded ? 'p-4' : 'p-3 justify-center'
-          }`}
-        >
-            <div className="tp-brand-mark p-2.5 rounded-xl text-white shrink-0"><Zap size={18} /></div>
-            {sphereNavExpanded && (
-            <div className="min-w-0">
-                <h1 className="tp-brand-title text-base font-extrabold tracking-tight leading-tight truncate">楠哥的小助理 <span className="text-cyan-600">Pro</span></h1>
-                <div className="tp-brand-meta text-[10px] font-semibold uppercase tracking-[0.14em] mt-1 flex items-center gap-1.5">
-                  <span className="tp-live-dot w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                  {currentUser.username}
-                  {currentUser.role === 'director'
-                    ? ' · 总管'
-                    : currentUser.role === 'manager'
-                      ? ' · 主管'
-                      : ''}
-                </div>
-            </div>
-            )}
+        <div className="tp-dock-brand flex items-center justify-center py-2.5 border-b border-cyan-400/15 shrink-0">
+          <div className="tp-brand-mark p-2 rounded-xl text-white" title={`楠哥的小助理 · ${currentUser.username}`}>
+            <Zap size={16} />
+          </div>
         </div>
-        
-        {systemNotice && sphereNavExpanded && (
-            <div className="bg-amber-50/90 p-3 mx-3 mt-3 rounded-xl border border-amber-200/80 text-amber-900 text-xs font-semibold flex items-start gap-2">
-                <Info size={14} className="flex-shrink-0 mt-0.5 text-amber-600"/>
-                {systemNotice}
-            </div>
-        )}
 
-        {(isAutomating || batchProgress.active || productDigProgress.active > 0) && sphereNavExpanded && (
-            <div className="mx-3 mt-3 p-3 bg-white/75 rounded-xl border border-cyan-200/50 shadow-sm text-slate-800 space-y-3 backdrop-blur-md">
+        {(isAutomating || batchProgress.active || productDigProgress.active > 0) && sphereNavPhase === 'submenu' && (
+            <div className="mx-1.5 mt-2 p-2 bg-slate-950/50 rounded-xl border border-cyan-400/20 text-slate-100 space-y-2 backdrop-blur-md">
                 {(isAutomating || batchProgress.active) && (
                   <div>
-                    <div className="flex justify-between items-center mb-2">
-                        <span className="text-xs font-bold text-emerald-700 flex items-center gap-1">
-                          <Loader2 className="animate-spin" size={10}/> 批量背调进行中
+                    <div className="flex justify-between items-center mb-1">
+                        <span className="text-[9px] font-bold text-emerald-300 flex items-center gap-1">
+                          <Loader2 className="animate-spin" size={9}/> 背调
                         </span>
-                        <span className="text-[10px] text-slate-400">后台运行</span>
                     </div>
                     {(() => {
                       const done = batchProgress.done;
@@ -3925,61 +3911,15 @@ const App: React.FC = () => {
                       const total = batchProgress.total || Math.max(done + failed, 1);
                       const pct = total ? Math.round(((done + failed) / total) * 100) : 0;
                       return (
-                        <>
-                          <div className="text-xs font-bold mb-1">
-                            {done + failed} / {total} 已处理
-                            {failed > 0 ? `（失败 ${failed}）` : ''}
+                          <div className="h-1 rounded-full bg-slate-700 overflow-hidden">
+                            <div className="h-full bg-emerald-400 transition-all" style={{ width: `${pct}%` }} />
                           </div>
-                          <div className="h-1.5 rounded-full bg-slate-200 overflow-hidden mb-2">
-                            <div className="h-full bg-emerald-500 transition-all" style={{ width: `${pct}%` }} />
-                          </div>
-                          {batchProgress.currentName && (
-                            <div className="text-[10px] text-slate-500 truncate mb-2">
-                              当前：{batchProgress.currentName}
-                            </div>
-                          )}
-                        </>
                       );
                     })()}
                   </div>
                 )}
-                {productDigProgress.active > 0 && (
-                  <div>
-                    <div className="flex justify-between items-center mb-2">
-                        <span className="text-xs font-bold text-teal-700 flex items-center gap-1">
-                          <Loader2 className="animate-spin" size={10}/> 品类补做进行中
-                        </span>
-                        <span className="text-[10px] text-slate-400">后台运行</span>
-                    </div>
-                    <div className="text-xs font-bold mb-1">
-                      {productDigProgress.completed + productDigProgress.failed} / {productDigProgress.total} 已处理
-                      {productDigProgress.failed > 0 ? `（失败 ${productDigProgress.failed}）` : ''}
-                    </div>
-                    <div className="h-1.5 rounded-full bg-slate-200 overflow-hidden mb-2">
-                      <div
-                        className="h-full bg-teal-500 transition-all"
-                        style={{
-                          width: `${
-                            productDigProgress.total
-                              ? Math.round(
-                                  ((productDigProgress.completed + productDigProgress.failed) /
-                                    productDigProgress.total) *
-                                    100
-                                )
-                              : 0
-                          }%`,
-                        }}
-                      />
-                    </div>
-                    {productDigProgress.runningName && (
-                      <div className="text-[10px] text-slate-500 truncate mb-2">
-                        当前：{productDigProgress.runningName}
-                      </div>
-                    )}
-                  </div>
-                )}
-                <button onClick={stopAutomation} className="w-full bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold py-2 rounded-lg flex items-center justify-center gap-1 transition-colors">
-                    <StopCircle size={12} /> 停止后台任务
+                <button onClick={stopAutomation} className="w-full bg-rose-600/90 hover:bg-rose-600 text-white text-[9px] font-bold py-1.5 rounded-lg flex items-center justify-center gap-1">
+                    <StopCircle size={10} /> 停止
                 </button>
             </div>
         )}
@@ -3990,7 +3930,7 @@ const App: React.FC = () => {
             activeModule={activeModule}
             analysisData={analysisData}
             historyOpen={historyOpen}
-            onExpandedChange={setSphereNavExpanded}
+            onPhaseChange={setSphereNavPhase}
             onSelectModule={(m) => {
               setActiveModule(m);
               setMobileMenuOpen(false);
@@ -4007,11 +3947,6 @@ const App: React.FC = () => {
             onLogout={handleLogout}
           />
         </div>
-        {sphereNavExpanded && (
-          <div className="px-3 pb-3 text-[9px] font-semibold text-slate-500 text-center select-all tracking-wide">
-            v20260914 · 一体导航
-          </div>
-        )}
       </aside>
       
       {historyOpen && (
@@ -4158,8 +4093,8 @@ const App: React.FC = () => {
           </div>
       )}
 
-      {/* Main Content Area — 与导航坞共用画布；展开时被挤开，不被覆盖 */}
-      <div className="tp-workspace">
+      {/* 主区：用 padding 给固定坞让位，滚动时坞不跟着走丢 */}
+      <div className={`tp-workspace ${dockPadClass} transition-[padding] duration-300 ease-out w-full`}>
       <main className="flex-1 flex flex-col overflow-hidden relative min-w-0">
         <header className="tp-header px-3 sm:px-6 lg:px-8 py-3 sm:py-4 flex flex-col gap-3 z-10">
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4">
@@ -4777,7 +4712,9 @@ const App: React.FC = () => {
       )}
 
       {/* 后台任务条统一放左下，避免挡住 CRM 右下角翻页 */}
-      <div className="fixed bottom-4 left-4 md:left-[17.5rem] z-[60] flex flex-col-reverse gap-3 w-[min(100vw-2rem,22rem)] pointer-events-none [&>*]:pointer-events-auto">
+      <div className={`fixed bottom-4 left-4 z-[60] flex flex-col-reverse gap-3 w-[min(100vw-2rem,22rem)] pointer-events-none [&>*]:pointer-events-auto ${
+        sphereNavPhase === 'submenu' ? 'md:left-[16.5rem]' : 'md:left-[5rem]'
+      }`}>
         {hasPermission(currentUser, 'feature.dm_email_search') && <DmEmailSearchPanel />}
         <ProductDigPanel />
       </div>

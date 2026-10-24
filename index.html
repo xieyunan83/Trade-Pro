@@ -176,31 +176,41 @@
         }
         .tp-main-stage > * { position: relative; z-index: 1; }
 
-        /* ——— 导航坞：玻璃态，融入整页，不再是独立黑条 ——— */
+        /* ——— 导航坞：窄轨 + 深空玻璃，固定贴边跟随视口 ——— */
         .tp-sidebar {
           background:
             linear-gradient(
-              90deg,
-              rgba(255, 255, 255, 0.72) 0%,
-              rgba(241, 248, 252, 0.55) 55%,
-              rgba(241, 248, 252, 0.18) 100%
+              180deg,
+              rgba(8, 16, 32, 0.92) 0%,
+              rgba(10, 22, 40, 0.88) 45%,
+              rgba(7, 14, 28, 0.94) 100%
             ) !important;
-          border-right: 1px solid rgba(6, 182, 212, 0.14) !important;
+          border-right: 1px solid rgba(34, 211, 238, 0.22) !important;
           box-shadow:
-            1px 0 0 rgba(255, 255, 255, 0.65) inset,
-            12px 0 40px -28px rgba(8, 145, 178, 0.35);
-          backdrop-filter: blur(22px) saturate(1.35);
-          -webkit-backdrop-filter: blur(22px) saturate(1.35);
+            1px 0 0 rgba(103, 232, 249, 0.08) inset,
+            16px 0 48px -20px rgba(0, 0, 0, 0.55),
+            0 0 60px -24px rgba(6, 182, 212, 0.45);
+          backdrop-filter: blur(24px) saturate(1.4);
+          -webkit-backdrop-filter: blur(24px) saturate(1.4);
+        }
+        .tp-sidebar::before {
+          content: '';
+          position: absolute;
+          inset: 0;
+          pointer-events: none;
+          opacity: 0.45;
+          background-image:
+            linear-gradient(rgba(34, 211, 238, 0.06) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(34, 211, 238, 0.05) 1px, transparent 1px);
+          background-size: 18px 18px;
+          mask-image: linear-gradient(180deg, black, transparent 88%);
         }
         .tp-sidebar .tp-brand-mark {
           background: linear-gradient(135deg, #22d3ee 0%, #0891b2 55%, #0e7490 100%);
-          box-shadow: 0 0 0 1px rgba(255,255,255,0.35) inset, 0 10px 24px -8px rgba(6, 182, 212, 0.55);
-        }
-        .tp-sidebar .tp-brand-title {
-          color: #0b1220;
-        }
-        .tp-sidebar .tp-brand-meta {
-          color: #64748b;
+          box-shadow:
+            0 0 0 1px rgba(255,255,255,0.28) inset,
+            0 0 20px rgba(34, 211, 238, 0.55),
+            0 8px 18px -8px rgba(6, 182, 212, 0.8);
         }
         .tp-nav-item {
           position: relative;
@@ -427,40 +437,40 @@
           max-width: 90rem !important;
         }
 
-        /* ——— Sphere dock：特效在导航坞内展开，主区被挤开而非遮挡 ——— */
+        /* ——— Sphere dock：窄轨固定 + 侧挂子菜单，主区 padding 让位 ——— */
         .tp-sphere-rail {
           overflow: hidden;
           flex-shrink: 0;
-          transition: width 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+          transition: width 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+        }
+        .tp-sphere-flyout {
+          background: linear-gradient(180deg, rgba(12, 24, 44, 0.55), rgba(8, 16, 32, 0.35));
+          border-left: 1px solid rgba(34, 211, 238, 0.16);
+          box-shadow: -8px 0 28px -18px rgba(0, 0, 0, 0.5);
         }
         .tp-sphere-nav-hint {
-          color: #64748b;
-        }
-        .tp-sphere-nav-link {
-          color: #0e7490;
-        }
-        .tp-sphere-nav-link:hover {
-          color: #155e75;
+          color: rgba(148, 163, 184, 0.85);
         }
         .tp-sphere-chrome {
-          color: #334155;
+          color: rgba(186, 230, 253, 0.85);
         }
         .tp-sphere-chrome:hover {
-          color: #0f172a;
-          background: rgba(6, 182, 212, 0.08);
+          color: #ecfeff;
+          background: rgba(34, 211, 238, 0.12);
         }
         .tp-sphere-foot-btn {
-          color: #334155;
+          color: rgba(226, 232, 240, 0.8);
           border: 1px solid transparent;
         }
         .tp-sphere-foot-btn:hover {
-          background: rgba(6, 182, 212, 0.08);
-          border-color: rgba(6, 182, 212, 0.16);
+          background: rgba(34, 211, 238, 0.12);
+          border-color: rgba(34, 211, 238, 0.22);
         }
         .tp-sphere-foot-btn.is-on {
-          background: rgba(6, 182, 212, 0.12);
-          color: #0e7490;
-          border-color: rgba(6, 182, 212, 0.28);
+          background: rgba(34, 211, 238, 0.18);
+          color: #ecfeff;
+          border-color: rgba(34, 211, 238, 0.35);
+          box-shadow: 0 0 16px -6px rgba(34, 211, 238, 0.7);
         }
         .tp-sphere {
           position: relative;
@@ -473,14 +483,14 @@
           -webkit-tap-highlight-color: transparent;
         }
         .tp-sphere-start {
-          width: 4.25rem;
-          height: 4.25rem;
+          width: 3.35rem;
+          height: 3.35rem;
         }
         .tp-sphere-core {
           position: relative;
           z-index: 2;
-          width: 4.25rem;
-          height: 4.25rem;
+          width: 3.35rem;
+          height: 3.35rem;
           border-radius: 999px;
           display: flex;
           flex-direction: column;
@@ -488,120 +498,121 @@
           justify-content: center;
           color: #ecfeff;
           font-weight: 800;
-          letter-spacing: 0.12em;
+          letter-spacing: 0.1em;
           background:
             radial-gradient(circle at 32% 28%, rgba(255,255,255,0.55), transparent 42%),
             radial-gradient(circle at 70% 78%, rgba(8,145,178,0.55), transparent 50%),
             linear-gradient(145deg, #22d3ee 0%, #0284c7 48%, #0e7490 100%);
           box-shadow:
             0 0 0 1px rgba(255,255,255,0.35) inset,
-            0 12px 28px -8px rgba(6,182,212,0.65),
-            0 0 48px -4px rgba(34,211,238,0.55);
+            0 10px 22px -8px rgba(6,182,212,0.75),
+            0 0 36px -2px rgba(34,211,238,0.65);
           transition: transform 0.25s ease, box-shadow 0.25s ease;
+          animation: tpSphereBreath 3.2s ease-in-out infinite;
         }
         .tp-sphere-start:hover .tp-sphere-core {
-          transform: scale(1.06) rotate(-6deg);
+          transform: scale(1.08) rotate(-8deg);
+          animation: none;
           box-shadow:
-            0 0 0 1px rgba(255,255,255,0.4) inset,
-            0 16px 36px -8px rgba(6,182,212,0.85),
-            0 0 64px -2px rgba(34,211,238,0.7);
+            0 0 0 1px rgba(255,255,255,0.45) inset,
+            0 14px 32px -8px rgba(6,182,212,0.95),
+            0 0 56px 0 rgba(34,211,238,0.75);
         }
         .tp-sphere-label {
-          font-size: 0.78rem;
-          text-shadow: 0 1px 8px rgba(8,47,73,0.35);
+          font-size: 0.65rem;
+          text-shadow: 0 1px 8px rgba(8,47,73,0.45);
         }
         .tp-sphere-ring {
           position: absolute;
-          inset: -6px;
+          inset: -5px;
           border-radius: 999px;
-          border: 1px solid rgba(8, 145, 178, 0.35);
-          animation: tpSphereSpin 8s linear infinite;
+          border: 1px solid rgba(103, 232, 249, 0.45);
+          animation: tpSphereSpin 7s linear infinite;
           pointer-events: none;
         }
         .tp-sphere-ring::before {
           content: '';
           position: absolute;
-          width: 6px;
-          height: 6px;
+          width: 5px;
+          height: 5px;
           border-radius: 999px;
-          background: #22d3ee;
-          top: 4px;
+          background: #67e8f9;
+          top: 2px;
           left: 50%;
-          box-shadow: 0 0 10px #22d3ee;
+          box-shadow: 0 0 12px #67e8f9;
         }
         .tp-sphere-ring-delay {
-          inset: -12px;
-          border-color: rgba(14,165,233,0.22);
-          animation-duration: 12s;
+          inset: -10px;
+          border-color: rgba(14,165,233,0.28);
+          animation-duration: 11s;
           animation-direction: reverse;
         }
         .tp-sphere-ring-sm {
-          inset: -4px;
-          animation-duration: 10s;
+          inset: -3px;
+          animation-duration: 9s;
         }
         .tp-sphere-section {
-          width: 4.5rem;
-          height: 4.5rem;
-          animation: tpSphereIn 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+          width: 3.45rem;
+          height: 3.45rem;
+          animation: tpSphereIn 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
         }
         .tp-sphere-core-sm {
-          width: 4.5rem;
-          height: 4.5rem;
+          width: 3.45rem;
+          height: 3.45rem;
           background:
-            radial-gradient(circle at 30% 25%, rgba(255,255,255,0.55), transparent 40%),
-            linear-gradient(145deg, color-mix(in srgb, var(--sphere-accent, #22d3ee) 78%, white), color-mix(in srgb, var(--sphere-accent, #22d3ee) 45%, #0e7490));
+            radial-gradient(circle at 30% 25%, rgba(255,255,255,0.5), transparent 40%),
+            linear-gradient(145deg, color-mix(in srgb, var(--sphere-accent, #22d3ee) 82%, white), color-mix(in srgb, var(--sphere-accent, #22d3ee) 40%, #020617));
           box-shadow:
-            0 0 0 1px rgba(255,255,255,0.4) inset,
-            0 10px 24px -10px color-mix(in srgb, var(--sphere-accent, #22d3ee) 65%, transparent),
-            0 0 32px -6px color-mix(in srgb, var(--sphere-accent, #22d3ee) 50%, transparent);
+            0 0 0 1px rgba(255,255,255,0.35) inset,
+            0 8px 18px -8px color-mix(in srgb, var(--sphere-accent, #22d3ee) 70%, transparent),
+            0 0 24px -4px color-mix(in srgb, var(--sphere-accent, #22d3ee) 55%, transparent);
           color: #fff;
         }
         .tp-sphere-section.is-hot .tp-sphere-core-sm {
           box-shadow:
             0 0 0 1px rgba(255,255,255,0.45) inset,
-            0 0 0 2px color-mix(in srgb, var(--sphere-accent, #22d3ee) 45%, transparent),
-            0 14px 32px -8px color-mix(in srgb, var(--sphere-accent, #22d3ee) 75%, transparent);
+            0 0 0 2px color-mix(in srgb, var(--sphere-accent, #22d3ee) 55%, transparent),
+            0 0 28px 0 color-mix(in srgb, var(--sphere-accent, #22d3ee) 70%, transparent);
         }
         .tp-sphere-label-sm {
-          font-size: 0.68rem;
-          letter-spacing: 0.14em;
+          font-size: 0.55rem;
+          letter-spacing: 0.12em;
           font-weight: 800;
         }
         .tp-sphere-orbit {
-          min-height: 12rem;
+          min-height: 8rem;
         }
         .tp-sphere-orbit-ring {
           position: absolute;
           left: 50%;
           top: 50%;
-          width: 9.5rem;
-          height: 9.5rem;
+          width: 3.8rem;
+          height: 12rem;
           transform: translate(-50%, -50%);
           border-radius: 999px;
-          border: 1px dashed rgba(8, 145, 178, 0.28);
-          animation: tpSphereOrbitSpin 22s linear infinite;
+          border: 1px dashed rgba(103, 232, 249, 0.22);
+          animation: tpSphereOrbitSpin 18s linear infinite;
           pointer-events: none;
         }
         .tp-sphere-leaf {
-          border: 1px solid rgba(15, 23, 42, 0.06);
-          background: rgba(255, 255, 255, 0.55);
-          color: #0f172a;
-          box-shadow: 0 1px 0 rgba(255,255,255,0.8) inset;
+          border: 1px solid rgba(148, 163, 184, 0.12);
+          background: rgba(255, 255, 255, 0.06);
+          color: #e2e8f0;
         }
         .tp-sphere-leaf:hover:not(:disabled) {
-          background: rgba(255, 255, 255, 0.88);
-          border-color: rgba(6, 182, 212, 0.35);
-          box-shadow: 0 8px 20px -14px rgba(8, 145, 178, 0.45);
+          background: rgba(34, 211, 238, 0.12);
+          border-color: rgba(34, 211, 238, 0.35);
+          box-shadow: 0 0 18px -10px rgba(34, 211, 238, 0.8);
         }
         .tp-sphere-leaf.is-active {
-          background: linear-gradient(90deg, rgba(6,182,212,0.16), rgba(255,255,255,0.7));
-          border-color: rgba(6, 182, 212, 0.4);
+          background: linear-gradient(90deg, rgba(6,182,212,0.28), rgba(255,255,255,0.06));
+          border-color: rgba(34, 211, 238, 0.45);
         }
         .tp-sphere-leaf .tp-leaf-title {
-          color: #0f172a;
+          color: #f1f5f9;
         }
         .tp-sphere-leaf .tp-leaf-sub {
-          color: #64748b;
+          color: rgba(148, 163, 184, 0.9);
         }
         .tp-sphere-mini {
           width: 1.85rem;
@@ -614,7 +625,7 @@
           background:
             radial-gradient(circle at 30% 25%, rgba(255,255,255,0.4), transparent 45%),
             linear-gradient(145deg, color-mix(in srgb, var(--sphere-accent, #22d3ee) 85%, white), color-mix(in srgb, var(--sphere-accent, #22d3ee) 40%, #0f172a));
-          box-shadow: 0 0 0 1px rgba(255,255,255,0.25) inset;
+          box-shadow: 0 0 0 1px rgba(255,255,255,0.25) inset, 0 0 12px -2px rgba(34,211,238,0.5);
         }
         @keyframes tpSphereSpin {
           from { transform: rotate(0deg); }
@@ -628,14 +639,16 @@
           from { transform: translate(-50%, -50%) rotate(0deg); }
           to { transform: translate(-50%, -50%) rotate(360deg); }
         }
-        /* 主内容区跟随导航坞宽度平滑让位，保证不被球体覆盖 */
+        @keyframes tpSphereBreath {
+          0%, 100% { box-shadow: 0 0 0 1px rgba(255,255,255,0.35) inset, 0 10px 22px -8px rgba(6,182,212,0.75), 0 0 28px -2px rgba(34,211,238,0.45); }
+          50% { box-shadow: 0 0 0 1px rgba(255,255,255,0.4) inset, 0 12px 26px -8px rgba(6,182,212,0.9), 0 0 42px 0 rgba(34,211,238,0.7); }
+        }
         .tp-workspace {
           flex: 1;
           min-width: 0;
           display: flex;
           flex-direction: column;
           overflow: hidden;
-          transition: none;
         }
 
         .custom-scrollbar::-webkit-scrollbar { width: 7px; }
