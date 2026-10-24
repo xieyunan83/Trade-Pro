@@ -12,7 +12,16 @@ export enum ModuleType {
   IMAGE_GENERATOR = 'image_generator',
   /** 新品反查：用我方新品匹配已背调客户产品库 */
   PRODUCT_MATCH = 'product_match',
-  /** —— 产品板块（框架占位 / 逐步落地） —— */
+  /** —— 商机增强（框架占位） —— */
+  /** 自有买家库：库优先检索，未命中再在线补搜 */
+  BUYER_LIBRARY = 'buyer_library',
+  /** 海关情报：提单/贸易伙伴关联公司档案 */
+  CUSTOMS_INTEL = 'customs_intel',
+  /** —— 产品板块 —— */
+  /** 我方产品库（可同步小竹熊 / 霄鸟云） */
+  PRODUCT_CATALOG = 'product_catalog',
+  /** 报价 / 选品单 / PI 草稿 */
+  PRODUCT_QUOTE = 'product_quote',
   PRODUCT_DESIGN_2D = 'product_design_2d',
   PRODUCT_DESIGN_3D = 'product_design_3d',
   PRODUCT_3D_PRINT = 'product_3d_print',
@@ -22,6 +31,8 @@ export enum ModuleType {
   SOCIAL_CONTENT = 'social_content',
   /** —— 联动板块 —— */
   WHATSAPP = 'whatsapp',
+  /** 序列开发信（多封跟进 + 打开追踪） */
+  EMAIL_SEQUENCE = 'email_sequence',
   /** —— 生态板块 —— */
   ECO_PARTS = 'eco_parts',
   ECO_MERCH = 'eco_merch',
@@ -46,6 +57,10 @@ export type PermissionKey =
   | 'module.email_campaign'
   | 'module.image_generator'
   | 'module.product_match'
+  | 'module.buyer_library'
+  | 'module.customs_intel'
+  | 'module.product_catalog'
+  | 'module.product_quote'
   | 'module.product_design_2d'
   | 'module.product_design_3d'
   | 'module.product_3d_print'
@@ -53,6 +68,7 @@ export type PermissionKey =
   | 'module.site_builder'
   | 'module.social_content'
   | 'module.whatsapp'
+  | 'module.email_sequence'
   | 'module.eco_parts'
   | 'module.eco_merch'
   | 'module.eco_cert'
@@ -66,6 +82,10 @@ export type PermissionKey =
   | 'feature.export_report'
   | 'feature.export_ppt'
   | 'feature.crm_manage'
+  | 'feature.crm_pool'
+  | 'feature.crm_dedupe'
+  | 'feature.product_catalog_sync'
+  | 'feature.quote_manage'
   | 'feature.records_center'
   | 'feature.manage_team_users';
 

@@ -107,6 +107,11 @@ import { ModuleProductMatch } from './components/ModuleProductMatch';
 import { ModuleEmailCampaign } from './components/ModuleEmailCampaign'; 
 import { ModuleImageGenerator } from './components/ModuleImageGenerator';
 import { ModuleComingSoon } from './components/ModuleComingSoon';
+import { ModuleProductCatalog } from './components/ModuleProductCatalog';
+import { ModuleProductQuote } from './components/ModuleProductQuote';
+import { ModuleBuyerLibrary } from './components/ModuleBuyerLibrary';
+import { ModuleCustomsIntel } from './components/ModuleCustomsIntel';
+import { ModuleProductDesign2D } from './components/ModuleProductDesign2D';
 import { SphereNav, type SphereNavPhase } from './components/SphereNav';
 import { ClientFinder } from './components/ClientFinder';
 import { RecordsPanel, archiveToDiscoveryState } from './components/RecordsPanel';
@@ -883,7 +888,9 @@ const App: React.FC = () => {
                 try {
                   const ghCrm = await fetchCRMFromCloud();
                   if (ghCrm.length > 0) {
-                    recovered = filterOutCrmTombstones(ghCrm);
+                    // CRM 已空：视为恢复场景，清墓碑后再用云端数据（避免误删墓碑挡恢复）
+                    clearCrmTombstonesForClients(ghCrm);
+                    recovered = ghCrm;
                     source = 'GitHub 云端备份';
                   }
                 } catch (e) {
@@ -893,7 +900,8 @@ const App: React.FC = () => {
                   try {
                     const sbCrm = await getCrmClients();
                     if (sbCrm.length > 0) {
-                      recovered = filterOutCrmTombstones(sbCrm);
+                      clearCrmTombstonesForClients(sbCrm);
+                      recovered = sbCrm;
                       source = 'Supabase 云端';
                     }
                   } catch (e) {
@@ -905,7 +913,8 @@ const App: React.FC = () => {
                   if (histNow.length > 0) {
                     const rebuilt = mergeHistoryItemsIntoCrm([], histNow, stampOwnership);
                     if (rebuilt.clients.length > 0) {
-                      recovered = filterOutCrmTombstones(rebuilt.clients);
+                      clearCrmTombstonesForClients(rebuilt.clients);
+                      recovered = rebuilt.clients;
                       source = '背调历史记录';
                     }
                   }
@@ -917,10 +926,10 @@ const App: React.FC = () => {
               } catch (e) {
                 console.warn('[CRM] auto recovery failed', e);
               }
+            } else {
+              // 已有本地 CRM 时仍挡「用户主动删除」的墓碑复活
+              nextCrm = filterOutCrmTombstones(nextCrm);
             }
-
-            // 最终再滤一次墓碑，防止本地残留被云端冲回
-            nextCrm = filterOutCrmTombstones(nextCrm);
 
             if (!cancelled) {
               // 旧 CRM 回填部门，便于本部门主管按规则看到历史客户
@@ -1033,9 +1042,19 @@ const App: React.FC = () => {
       const nowIds = new Set(crmClients.map((c) => c.id));
       const removedIds = [...prevVisibleIds].filter((id) => !nowIds.has(id));
 
-      if (removedIds.length) {
+      // 安全阀：可见列表一次被清空（或大批量消失）时，不当作「用户删除」写墓碑/云端删，
+      // 否则会挡掉登录自动恢复与从背调重建（曾导致 CRM 显示 0、背调历史仍在）。
+      const massWipe =
+        prevVisibleIds.size >= 20 &&
+        (crmClients.length === 0 || removedIds.length >= Math.max(20, Math.floor(prevVisibleIds.size * 0.8)));
+
+      if (removedIds.length && !massWipe) {
         const removedClients = before.filter((c) => removedIds.includes(c.id));
         markCrmClientsDeleted(removedClients);
+      } else if (massWipe && removedIds.length) {
+        console.warn(
+          `[CRM] skip tombstone/cloud-delete for suspected mass wipe: removed ${removedIds.length}, now ${crmClients.length}`
+        );
       }
 
       if (isSupabaseConfigured()) {
@@ -1043,8 +1062,10 @@ const App: React.FC = () => {
           if (crmClients.length > 0) {
             syncCrmClients(crmClients).catch(e => console.error("Supabase CRM sync failed", e));
           }
-          for (const id of removedIds) {
-            deleteCrmClient(id).catch((e) => console.error('CRM delete sync failed', id, e));
+          if (!massWipe) {
+            for (const id of removedIds) {
+              deleteCrmClient(id).catch((e) => console.error('CRM delete sync failed', id, e));
+            }
           }
       }
       // GitHub 备份也要同步删除（即便已用 Supabase），否则下次登录会从 crm.json 复活
@@ -4280,14 +4301,29 @@ const App: React.FC = () => {
                 {activeModule === ModuleType.IMAGE_GENERATOR && (
                     <ModuleImageGenerator />
                 )}
+                {activeModule === ModuleType.PRODUCT_CATALOG && currentUser && (
+                    <ModuleProductCatalog currentUser={currentUser} />
+                )}
+                {activeModule === ModuleType.PRODUCT_QUOTE && currentUser && (
+                    <ModuleProductQuote currentUser={currentUser} />
+                )}
+                {activeModule === ModuleType.BUYER_LIBRARY && currentUser && (
+                    <ModuleBuyerLibrary currentUser={currentUser} history={history} />
+                )}
+                {activeModule === ModuleType.CUSTOMS_INTEL && currentUser && (
+                    <ModuleCustomsIntel currentUser={currentUser} />
+                )}
+                {activeModule === ModuleType.PRODUCT_DESIGN_2D && currentUser && (
+                    <ModuleProductDesign2D currentUser={currentUser} />
+                )}
                 {(
                   [
-                    ModuleType.PRODUCT_DESIGN_2D,
                     ModuleType.PRODUCT_DESIGN_3D,
                     ModuleType.PRODUCT_3D_PRINT,
                     ModuleType.PRODUCT_AI_VIDEO,
                     ModuleType.SITE_BUILDER,
                     ModuleType.SOCIAL_CONTENT,
+                    ModuleType.EMAIL_SEQUENCE,
                     ModuleType.WHATSAPP,
                     ModuleType.ECO_PARTS,
                     ModuleType.ECO_MERCH,

@@ -26,6 +26,11 @@ import {
   BadgeCheck,
   Factory,
   Truck,
+  Library,
+  Ship,
+  Warehouse,
+  FileSpreadsheet,
+  MailPlus,
   type LucideIcon,
 } from 'lucide-react';
 import { ModuleType } from '../types';
@@ -59,6 +64,18 @@ export const PLATFORM_SECTIONS: PlatformSection[] = [
     icon: Globe,
     items: [
       { id: ModuleType.DISCOVERY, label: '客户搜索', sub: 'Discovery', icon: Globe },
+      {
+        id: ModuleType.BUYER_LIBRARY,
+        label: '自有买家库',
+        sub: 'Buyer DB',
+        icon: Library,
+      },
+      {
+        id: ModuleType.CUSTOMS_INTEL,
+        label: '海关情报',
+        sub: 'Customs',
+        icon: Ship,
+      },
       { id: ModuleType.BACKGROUND, label: '背景调查', sub: 'Background', icon: LayoutDashboard },
       { id: ModuleType.PRODUCTS, label: '产品分析', sub: 'Products', icon: PackageSearch },
       { id: ModuleType.DECISION_MAKERS, label: '决策人挖掘', sub: 'Contacts', icon: Users },
@@ -74,11 +91,22 @@ export const PLATFORM_SECTIONS: PlatformSection[] = [
     icon: Box,
     items: [
       {
+        id: ModuleType.PRODUCT_CATALOG,
+        label: '我方产品库',
+        sub: 'Catalog',
+        icon: Warehouse,
+      },
+      {
+        id: ModuleType.PRODUCT_QUOTE,
+        label: '报价 / 选品单',
+        sub: 'Quote',
+        icon: FileSpreadsheet,
+      },
+      {
         id: ModuleType.PRODUCT_DESIGN_2D,
         label: '产品设计 · 平面图',
         sub: '2D Design',
         icon: Sparkles,
-        comingSoon: true,
       },
       {
         id: ModuleType.PRODUCT_DESIGN_3D,
@@ -118,7 +146,7 @@ export const PLATFORM_SECTIONS: PlatformSection[] = [
     items: [
       {
         id: ModuleType.SITE_BUILDER,
-        label: '独立站生成',
+        label: '独立站 / 货源站',
         sub: 'Vibe Site',
         icon: Code2,
         comingSoon: true,
@@ -142,6 +170,13 @@ export const PLATFORM_SECTIONS: PlatformSection[] = [
       { id: ModuleType.STRATEGY, label: '开发策略', sub: 'Strategy', icon: PenTool },
       { id: ModuleType.CLIENT_CRM, label: '客户管理', sub: 'CRM', icon: Briefcase },
       { id: ModuleType.EMAIL_CAMPAIGN, label: '邮件营销', sub: 'DirectMail', icon: Mail },
+      {
+        id: ModuleType.EMAIL_SEQUENCE,
+        label: '序列开发信',
+        sub: 'Sequences',
+        icon: MailPlus,
+        comingSoon: true,
+      },
       {
         id: ModuleType.WHATSAPP,
         label: 'WhatsApp 联系',

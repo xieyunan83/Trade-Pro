@@ -1,0 +1,219 @@
+import React, { useEffect, useState } from 'react';
+import { Database, ExternalLink, Loader2, Save, CheckCircle2, AlertTriangle } from 'lucide-react';
+import {
+  DATA_PROVIDER_DEFS,
+  type DataProviderId,
+  type DataProviderMeta,
+  loadAllDataProviders,
+  saveDataProvider,
+} from '../services/dataProviders';
+import { CRM_ENHANCEMENT_ROADMAP, PHASE_LABEL } from '../services/upgradeRoadmap';
+
+const blank = (): DataProviderMeta => ({
+  enabled: false,
+  apiKey: '',
+  apiBase: '',
+  note: '',
+  extra: {},
+});
+
+/** 管理后台 · 数据接入：产品库/海关/3D/视频等提供商配置骨架 */
+export const DataProvidersPanel: React.FC = () => {
+  const [map, setMap] = useState<Record<string, DataProviderMeta>>({});
+  const [loading, setLoading] = useState(true);
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      const all = await loadAllDataProviders();
+      if (!cancelled) {
+        setMap(all);
+        setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const patch = (id: DataProviderId, partial: Partial<DataProviderMeta>) => {
+    setMap((prev) => ({
+      ...prev,
+      [id]: { ...(prev[id] || blank()), ...partial },
+    }));
+  };
+
+  const onSave = async (id: DataProviderId) => {
+    setSavingId(id);
+    setMsg(null);
+    const meta = map[id] || blank();
+    const ok = await saveDataProvider(id, meta);
+    setSavingId(null);
+    const label = DATA_PROVIDER_DEFS.find((d) => d.id === id)?.label || id;
+    setMsg({
+      ok: true,
+      text: ok ? `${label} 已保存（本地 + 云端）` : `${label} 已写入本地；云端未同步（检查 Supabase）`,
+    });
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 text-slate-500 font-bold p-8">
+        <Loader2 className="animate-spin" size={18} /> 加载数据源配置…
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6 p-4 sm:p-6">
+      <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-5">
+        <div className="flex items-start gap-3">
+          <div className="h-10 w-10 rounded-xl bg-slate-900 text-cyan-300 flex items-center justify-center shrink-0">
+            <Database size={18} />
+          </div>
+          <div>
+            <h3 className="font-black text-slate-900 text-lg">数据接入（升级骨架）</h3>
+            <p className="text-sm text-slate-500 font-medium mt-1 max-w-3xl leading-relaxed">
+              预填小竹熊、霄鸟云、海关、图生 3D、万相视频等凭证。当前仅持久化配置，业务同步/调用将按 P0→P2
+              逐步接通。已有千问 / 万相图 / Tavily / Hunter 等仍在「API 配置」页管理。
+            </p>
+          </div>
+        </div>
+        {msg && (
+          <div
+            className={`mt-4 flex items-center gap-2 text-sm font-bold rounded-xl px-3 py-2 border ${
+              msg.ok
+                ? 'bg-emerald-50 text-emerald-800 border-emerald-100'
+                : 'bg-amber-50 text-amber-900 border-amber-100'
+            }`}
+          >
+            {msg.ok ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+            {msg.text}
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-2xl border border-violet-100 bg-violet-50/50 p-4 sm:p-5">
+        <div className="text-xs font-black text-violet-800 uppercase tracking-widest mb-1">
+          CRM 增强 · {CRM_ENHANCEMENT_ROADMAP.phase} · {PHASE_LABEL[CRM_ENHANCEMENT_ROADMAP.phase]}
+        </div>
+        <p className="text-sm text-violet-900/80 font-medium">{CRM_ENHANCEMENT_ROADMAP.summary}</p>
+        <ul className="mt-2 grid sm:grid-cols-2 gap-1">
+          {CRM_ENHANCEMENT_ROADMAP.bullets.map((b) => (
+            <li key={b} className="text-xs text-violet-800/90 font-semibold">
+              · {b}
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        {DATA_PROVIDER_DEFS.map((def) => {
+          const meta = map[def.id] || blank();
+          return (
+            <div
+              key={def.id}
+              className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 shadow-sm space-y-3"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="font-black text-slate-900">{def.label}</div>
+                  <p className="text-xs text-slate-500 font-medium mt-1 leading-relaxed">{def.description}</p>
+                  {def.docsHint && (
+                    <a
+                      href={def.docsHint.startsWith('http') ? def.docsHint : undefined}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 text-[11px] font-bold text-cyan-700 mt-1.5"
+                    >
+                      {def.docsHint.startsWith('http') ? (
+                        <>
+                          官网 <ExternalLink size={10} />
+                        </>
+                      ) : (
+                        def.docsHint
+                      )}
+                    </a>
+                  )}
+                </div>
+                <label className="flex items-center gap-2 text-xs font-black text-slate-600 shrink-0 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={!!meta.enabled}
+                    onChange={(e) => patch(def.id, { enabled: e.target.checked })}
+                    className="rounded border-slate-300"
+                  />
+                  启用
+                </label>
+              </div>
+              <div>
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">
+                  API Key / Token
+                </label>
+                <input
+                  type="password"
+                  autoComplete="off"
+                  value={meta.apiKey || ''}
+                  onChange={(e) => patch(def.id, { apiKey: e.target.value })}
+                  placeholder="预留，接通后使用"
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">
+                  API Base / Endpoint
+                </label>
+                <input
+                  value={meta.apiBase || ''}
+                  onChange={(e) => patch(def.id, { apiBase: e.target.value })}
+                  placeholder="https://…"
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">
+                  模型 ID（可选）
+                </label>
+                <input
+                  value={meta.extra?.modelId || ''}
+                  onChange={(e) =>
+                    patch(def.id, {
+                      extra: { ...(meta.extra || {}), modelId: e.target.value },
+                    })
+                  }
+                  placeholder={
+                    def.id === 'design_agent' ? '如 wan2.7-image-pro' : '可选'
+                  }
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">
+                  备注（合同 / 覆盖国家等）
+                </label>
+                <textarea
+                  value={meta.note || ''}
+                  onChange={(e) => patch(def.id, { note: e.target.value })}
+                  rows={2}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm resize-y"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => void onSave(def.id)}
+                disabled={savingId === def.id}
+                className="inline-flex items-center gap-2 rounded-xl bg-slate-900 text-white text-xs font-black px-4 py-2.5 hover:bg-slate-800 disabled:opacity-60"
+              >
+                {savingId === def.id ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                保存
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};

@@ -36,8 +36,9 @@ import {
   convertKnowledgeFileToMdEntry,
   isConvertibleKbFile,
 } from '../services/kbMarkdownConvert';
+import { DataProvidersPanel } from './DataProvidersPanel';
 
-type AdminTab = 'api' | 'users' | 'org' | 'kb';
+type AdminTab = 'api' | 'data' | 'users' | 'org' | 'kb';
 
 const KB_ACCEPT = [
   '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
@@ -1145,9 +1146,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
           <div className="flex border-b bg-slate-50/50 overflow-x-auto scrollbar-hide">
             {([
               { id: 'api' as AdminTab, label: 'API 密钥配置', short: 'API', icon: Key },
+              { id: 'data' as AdminTab, label: '数据接入', short: '数据', icon: Database },
               { id: 'org' as AdminTab, label: '组织权限', short: '组织', icon: Building2 },
               { id: 'users' as AdminTab, label: '用户列表', short: '用户', icon: Users },
-              { id: 'kb' as AdminTab, label: '知识库', short: '知识库', icon: Database },
+              { id: 'kb' as AdminTab, label: '知识库', short: '知识库', icon: FileText },
             ]).map(tab => (
               <button
                 key={tab.id}
@@ -1743,6 +1745,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                 </div>
 
 {/* Recommended Sources + API pool removed: use Gemini official + Qwen sections above */}
+              </div>
+            )}
+
+            {activeTab === 'data' && (
+              <div className="animate-fade-in -m-4 sm:-m-6 md:-m-10">
+                <DataProvidersPanel />
               </div>
             )}
 

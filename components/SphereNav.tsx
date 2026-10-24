@@ -249,7 +249,19 @@ export const SphereNav: React.FC<Props> = ({
                       {item.label}
                     </span>
                     <span className="tp-leaf-sub block text-[8px] font-semibold uppercase tracking-wider mt-0.5">
-                      {item.comingSoon ? 'Soon' : item.sub}
+                      {item.comingSoon
+                        ? 'Soon'
+                        : (
+                            [
+                              ModuleType.BUYER_LIBRARY,
+                              ModuleType.CUSTOMS_INTEL,
+                              ModuleType.PRODUCT_CATALOG,
+                              ModuleType.PRODUCT_QUOTE,
+                              ModuleType.PRODUCT_DESIGN_2D,
+                            ] as ModuleType[]
+                          ).includes(item.id)
+                        ? 'NEW'
+                        : item.sub}
                     </span>
                   </span>
                 </button>

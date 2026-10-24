@@ -9,12 +9,17 @@ export { PLATFORM_SECTIONS, ALL_PLATFORM_NAV_ITEMS };
 /** 无需先做背调即可进入的模块 */
 export const ALWAYS_ACTIVE_MODULES: ModuleType[] = [
   ModuleType.DISCOVERY,
+  ModuleType.BUYER_LIBRARY,
+  ModuleType.CUSTOMS_INTEL,
   ModuleType.PROMO_GENERATOR,
   ModuleType.CLIENT_CRM,
   ModuleType.PRODUCT_MATCH,
   ModuleType.STRATEGY,
   ModuleType.EMAIL_CAMPAIGN,
+  ModuleType.EMAIL_SEQUENCE,
   ModuleType.IMAGE_GENERATOR,
+  ModuleType.PRODUCT_CATALOG,
+  ModuleType.PRODUCT_QUOTE,
   ModuleType.PRODUCT_DESIGN_2D,
   ModuleType.PRODUCT_DESIGN_3D,
   ModuleType.PRODUCT_3D_PRINT,
