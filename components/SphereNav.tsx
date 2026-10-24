@@ -21,7 +21,7 @@ type Props = {
   onOpenTeamManage?: () => void;
   onLogout: () => void;
   historyOpen: boolean;
-  /** 导航展开态变化（用于侧栏变宽） */
+  /** 导航展开态变化（侧栏变宽挤开主区，不遮挡内容） */
   onExpandedChange?: (expanded: boolean) => void;
 };
 
@@ -55,7 +55,6 @@ export const SphereNav: React.FC<Props> = ({
     [visibleSections, sectionId]
   );
 
-  // 当前模块变化时，同步高亮所属板块（不强制展开，避免打断操作）
   useEffect(() => {
     const sec = findSectionByModule(activeModule);
     if (sec && visibleSections.some((s) => s.id === sec.id)) {
@@ -82,18 +81,16 @@ export const SphereNav: React.FC<Props> = ({
     onSelectModule(mod);
   };
 
-  const backToSections = () => {
-    setPhase('sections');
-  };
-
+  const backToSections = () => setPhase('sections');
   const collapseToStart = () => {
     setPhase('start');
     setSectionId(null);
   };
 
+  const SecIcon = activeSection?.icon;
+
   return (
     <div className="tp-sphere-nav flex flex-col h-full min-h-0">
-      {/* 顶区：开始球 / 返回 */}
       <div className="px-3 pt-5 pb-3 flex flex-col items-center gap-3">
         {phase === 'start' ? (
           <button
@@ -114,7 +111,7 @@ export const SphereNav: React.FC<Props> = ({
             <button
               type="button"
               onClick={phase === 'submenu' ? backToSections : collapseToStart}
-              className="inline-flex items-center gap-1 text-[11px] font-black text-cyan-200/80 hover:text-white px-2 py-1.5 rounded-lg hover:bg-white/5"
+              className="tp-sphere-chrome inline-flex items-center gap-1 text-[11px] font-black px-2 py-1.5 rounded-lg"
             >
               <ChevronLeft size={14} />
               {phase === 'submenu' ? '板块' : '收起'}
@@ -122,7 +119,7 @@ export const SphereNav: React.FC<Props> = ({
             <button
               type="button"
               onClick={collapseToStart}
-              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5"
+              className="tp-sphere-chrome p-1.5 rounded-lg"
               title="回到开始"
             >
               <X size={14} />
@@ -131,17 +128,16 @@ export const SphereNav: React.FC<Props> = ({
         )}
         {phase !== 'start' && (
           <div className="text-center">
-            <div className="text-[10px] font-black uppercase tracking-[0.2em] text-cyan-300/70">
+            <div className="text-[10px] font-black uppercase tracking-[0.2em] text-cyan-700/70">
               Trade Pro
             </div>
-            <div className="text-xs font-bold text-slate-300 mt-0.5">
+            <div className="text-xs font-bold text-slate-700 mt-0.5">
               {phase === 'sections' ? '选择板块' : activeSection?.label || '子菜单'}
             </div>
           </div>
         )}
       </div>
 
-      {/* 中区：板块球 / 子菜单 */}
       <div className="flex-1 overflow-y-auto custom-scrollbar px-2 pb-2 min-h-0">
         {phase === 'sections' && (
           <div className="tp-sphere-orbit relative py-4">
@@ -176,11 +172,8 @@ export const SphereNav: React.FC<Props> = ({
           </div>
         )}
 
-        {phase === 'submenu' && activeSection && (
+        {phase === 'submenu' && activeSection && SecIcon && (
           <div className="space-y-1.5 animate-fade-in py-2">
-            {(() => {
-              const SecIcon = activeSection.icon;
-              return (
             <div
               className="mx-auto mb-3 tp-sphere tp-sphere-section is-hot pointer-events-none"
               style={{ '--sphere-accent': activeSection.accent } as React.CSSProperties}
@@ -190,8 +183,6 @@ export const SphereNav: React.FC<Props> = ({
                 <span className="tp-sphere-label-sm">{activeSection.label}</span>
               </span>
             </div>
-              );
-            })()}
             {activeSection.items.map((item) => {
               const Icon = item.icon;
               const active = activeModule === item.id;
@@ -207,7 +198,7 @@ export const SphereNav: React.FC<Props> = ({
                   }`}
                   style={
                     active
-                      ? ({ borderColor: `${activeSection.accent}66` } as React.CSSProperties)
+                      ? ({ borderColor: `${activeSection.accent}88` } as React.CSSProperties)
                       : undefined
                   }
                 >
@@ -218,10 +209,10 @@ export const SphereNav: React.FC<Props> = ({
                     <Icon size={14} />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block text-[12px] font-bold text-slate-100 truncate">
+                    <span className="tp-leaf-title block text-[12px] font-bold truncate">
                       {item.label}
                     </span>
-                    <span className="block text-[9px] font-semibold text-slate-500 uppercase tracking-wider">
+                    <span className="tp-leaf-sub block text-[9px] font-semibold uppercase tracking-wider">
                       {item.sub}
                       {item.comingSoon ? ' · Soon' : ''}
                     </span>
@@ -233,8 +224,8 @@ export const SphereNav: React.FC<Props> = ({
         )}
 
         {phase === 'start' && (
-          <div className="px-2 pt-6 text-center space-y-2 opacity-70">
-            <p className="text-[10px] font-bold text-slate-400 leading-relaxed">
+          <div className="px-2 pt-6 text-center space-y-2">
+            <p className="tp-sphere-nav-hint text-[10px] font-bold leading-relaxed">
               点击「开始」展开
               <br />
               商机 · 产品 · 宣发 · 联动 · 生态
@@ -248,7 +239,7 @@ export const SphereNav: React.FC<Props> = ({
                   setSectionId(sec.id);
                   setPhase('submenu');
                 }}
-                className="text-[10px] font-black text-cyan-300/90 hover:text-cyan-200 underline-offset-2 hover:underline"
+                className="tp-sphere-nav-link text-[10px] font-black underline-offset-2 hover:underline"
               >
                 当前：{findNavLabel(activeModule)}
               </button>
@@ -257,15 +248,14 @@ export const SphereNav: React.FC<Props> = ({
         )}
       </div>
 
-      {/* 底栏：记录 / 系统 / 退出 */}
-      <div className="p-3 border-t border-white/5 space-y-1.5 shrink-0">
+      <div className="p-3 border-t border-cyan-900/5 space-y-1.5 shrink-0">
         {currentUser.role === 'manager' && onOpenTeamManage && (
           <button
             type="button"
             onClick={onOpenTeamManage}
-            className="w-full flex items-center justify-center gap-2 px-2 py-2.5 rounded-xl text-[11px] font-bold text-slate-200 hover:bg-white/5 border border-transparent hover:border-white/5"
+            className="tp-sphere-foot-btn w-full flex items-center justify-center gap-2 px-2 py-2.5 rounded-xl text-[11px] font-bold"
           >
-            <Users size={15} className="text-cyan-400" />
+            <Users size={15} className="text-cyan-600" />
             <span className={phase === 'start' ? 'sr-only' : ''}>系统管理</span>
           </button>
         )}
@@ -278,19 +268,17 @@ export const SphereNav: React.FC<Props> = ({
             }
             onOpenRecords();
           }}
-          className={`w-full flex items-center justify-center gap-2 px-2 py-2.5 rounded-xl text-[11px] font-bold border transition-colors ${
-            historyOpen
-              ? 'bg-cyan-500/15 text-cyan-100 border-cyan-400/30'
-              : 'text-slate-200 hover:bg-white/5 border-transparent hover:border-white/5'
+          className={`tp-sphere-foot-btn w-full flex items-center justify-center gap-2 px-2 py-2.5 rounded-xl text-[11px] font-bold ${
+            historyOpen ? 'is-on' : ''
           }`}
         >
-          <History size={15} className="text-cyan-400" />
+          <History size={15} className="text-cyan-600" />
           <span className={phase === 'start' ? 'sr-only' : ''}>记录中心</span>
         </button>
         <button
           type="button"
           onClick={onLogout}
-          className="w-full flex items-center justify-center gap-2 px-2 py-2.5 rounded-xl text-[11px] font-bold text-rose-300 hover:bg-rose-500/10 border border-transparent"
+          className="tp-sphere-foot-btn w-full flex items-center justify-center gap-2 px-2 py-2.5 rounded-xl text-[11px] font-bold text-rose-600 hover:bg-rose-50"
         >
           <LogOut size={15} />
           <span className={phase === 'start' ? 'sr-only' : ''}>退出</span>

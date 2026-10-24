@@ -3861,30 +3861,35 @@ const App: React.FC = () => {
 
   return (
     <AccessGate user={currentUser} onLogout={handleLogout}>
-    <div className="tp-app flex min-h-screen min-h-[100dvh] overflow-hidden">
+    <div
+      className={`tp-app flex min-h-screen min-h-[100dvh] overflow-hidden ${
+        sphereNavExpanded ? 'is-nav-expanded' : ''
+      }`}
+    >
       {/* Mobile sidebar backdrop */}
       {mobileMenuOpen && (
-        <div className="fixed inset-0 bg-ink-950/60 backdrop-blur-sm z-20 md:hidden" onClick={() => setMobileMenuOpen(false)} />
+        <div className="fixed inset-0 bg-ink-950/40 backdrop-blur-sm z-20 md:hidden" onClick={() => setMobileMenuOpen(false)} />
       )}
       <aside
-        className={`tp-sidebar tp-sphere-rail fixed md:static z-30 h-full border-r transition-all duration-300 ${
+        className={`tp-sidebar tp-sphere-rail fixed md:static z-30 h-full ${
           mobileMenuOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
         } ${
           sphereNavExpanded
             ? 'w-[min(100vw-2rem,20rem)] md:w-[19rem]'
             : 'w-[5.75rem] md:w-[5.75rem]'
         } flex flex-col`}
+        aria-label="平台导航坞"
       >
         <div
-          className={`border-b border-white/5 flex items-center gap-3 ${
+          className={`border-b border-cyan-900/5 flex items-center gap-3 ${
             sphereNavExpanded ? 'p-4' : 'p-3 justify-center'
           }`}
         >
             <div className="tp-brand-mark p-2.5 rounded-xl text-white shrink-0"><Zap size={18} /></div>
             {sphereNavExpanded && (
             <div className="min-w-0">
-                <h1 className="text-base font-extrabold text-white tracking-tight leading-tight truncate">楠哥的小助理 <span className="text-signal-400">Pro</span></h1>
-                <div className="text-[10px] text-slate-400 font-semibold uppercase tracking-[0.14em] mt-1 flex items-center gap-1.5">
+                <h1 className="tp-brand-title text-base font-extrabold tracking-tight leading-tight truncate">楠哥的小助理 <span className="text-cyan-600">Pro</span></h1>
+                <div className="tp-brand-meta text-[10px] font-semibold uppercase tracking-[0.14em] mt-1 flex items-center gap-1.5">
                   <span className="tp-live-dot w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
                   {currentUser.username}
                   {currentUser.role === 'director'
@@ -3898,18 +3903,18 @@ const App: React.FC = () => {
         </div>
         
         {systemNotice && sphereNavExpanded && (
-            <div className="bg-amber-400/10 p-3 mx-3 mt-3 rounded-xl border border-amber-300/25 text-amber-100 text-xs font-semibold flex items-start gap-2">
-                <Info size={14} className="flex-shrink-0 mt-0.5 text-amber-300"/>
+            <div className="bg-amber-50/90 p-3 mx-3 mt-3 rounded-xl border border-amber-200/80 text-amber-900 text-xs font-semibold flex items-start gap-2">
+                <Info size={14} className="flex-shrink-0 mt-0.5 text-amber-600"/>
                 {systemNotice}
             </div>
         )}
 
         {(isAutomating || batchProgress.active || productDigProgress.active > 0) && sphereNavExpanded && (
-            <div className="mx-3 mt-3 p-3 bg-slate-900 rounded-xl border border-slate-800 shadow-lg text-white space-y-3">
+            <div className="mx-3 mt-3 p-3 bg-white/75 rounded-xl border border-cyan-200/50 shadow-sm text-slate-800 space-y-3 backdrop-blur-md">
                 {(isAutomating || batchProgress.active) && (
                   <div>
                     <div className="flex justify-between items-center mb-2">
-                        <span className="text-xs font-bold text-green-400 flex items-center gap-1">
+                        <span className="text-xs font-bold text-emerald-700 flex items-center gap-1">
                           <Loader2 className="animate-spin" size={10}/> 批量背调进行中
                         </span>
                         <span className="text-[10px] text-slate-400">后台运行</span>
@@ -3925,11 +3930,11 @@ const App: React.FC = () => {
                             {done + failed} / {total} 已处理
                             {failed > 0 ? `（失败 ${failed}）` : ''}
                           </div>
-                          <div className="h-1.5 rounded-full bg-slate-700 overflow-hidden mb-2">
-                            <div className="h-full bg-green-500 transition-all" style={{ width: `${pct}%` }} />
+                          <div className="h-1.5 rounded-full bg-slate-200 overflow-hidden mb-2">
+                            <div className="h-full bg-emerald-500 transition-all" style={{ width: `${pct}%` }} />
                           </div>
                           {batchProgress.currentName && (
-                            <div className="text-[10px] text-slate-400 truncate mb-2">
+                            <div className="text-[10px] text-slate-500 truncate mb-2">
                               当前：{batchProgress.currentName}
                             </div>
                           )}
@@ -3941,7 +3946,7 @@ const App: React.FC = () => {
                 {productDigProgress.active > 0 && (
                   <div>
                     <div className="flex justify-between items-center mb-2">
-                        <span className="text-xs font-bold text-emerald-400 flex items-center gap-1">
+                        <span className="text-xs font-bold text-teal-700 flex items-center gap-1">
                           <Loader2 className="animate-spin" size={10}/> 品类补做进行中
                         </span>
                         <span className="text-[10px] text-slate-400">后台运行</span>
@@ -3950,9 +3955,9 @@ const App: React.FC = () => {
                       {productDigProgress.completed + productDigProgress.failed} / {productDigProgress.total} 已处理
                       {productDigProgress.failed > 0 ? `（失败 ${productDigProgress.failed}）` : ''}
                     </div>
-                    <div className="h-1.5 rounded-full bg-slate-700 overflow-hidden mb-2">
+                    <div className="h-1.5 rounded-full bg-slate-200 overflow-hidden mb-2">
                       <div
-                        className="h-full bg-emerald-500 transition-all"
+                        className="h-full bg-teal-500 transition-all"
                         style={{
                           width: `${
                             productDigProgress.total
@@ -3967,13 +3972,13 @@ const App: React.FC = () => {
                       />
                     </div>
                     {productDigProgress.runningName && (
-                      <div className="text-[10px] text-slate-400 truncate mb-2">
+                      <div className="text-[10px] text-slate-500 truncate mb-2">
                         当前：{productDigProgress.runningName}
                       </div>
                     )}
                   </div>
                 )}
-                <button onClick={stopAutomation} className="w-full bg-red-600 hover:bg-red-700 text-white text-xs font-bold py-2 rounded-lg flex items-center justify-center gap-1 transition-colors">
+                <button onClick={stopAutomation} className="w-full bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold py-2 rounded-lg flex items-center justify-center gap-1 transition-colors">
                     <StopCircle size={12} /> 停止后台任务
                 </button>
             </div>
@@ -4003,8 +4008,8 @@ const App: React.FC = () => {
           />
         </div>
         {sphereNavExpanded && (
-          <div className="px-3 pb-3 text-[9px] font-semibold text-slate-600 text-center select-all tracking-wide">
-            v20260914 · 五板块框架
+          <div className="px-3 pb-3 text-[9px] font-semibold text-slate-500 text-center select-all tracking-wide">
+            v20260914 · 一体导航
           </div>
         )}
       </aside>
@@ -4153,7 +4158,8 @@ const App: React.FC = () => {
           </div>
       )}
 
-      {/* Main Content Area */}
+      {/* Main Content Area — 与导航坞共用画布；展开时被挤开，不被覆盖 */}
+      <div className="tp-workspace">
       <main className="flex-1 flex flex-col overflow-hidden relative min-w-0">
         <header className="tp-header px-3 sm:px-6 lg:px-8 py-3 sm:py-4 flex flex-col gap-3 z-10">
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4">
@@ -4733,6 +4739,7 @@ const App: React.FC = () => {
           )}
         </div>
       </main>
+      </div>
       
       {/* Batch Modal */}
       {batchModalOpen && (
@@ -4824,7 +4831,7 @@ const App: React.FC = () => {
         />
       )}
 
-    </div>
+    </div>{/* .tp-app */}
     </AccessGate>
   );
 };
