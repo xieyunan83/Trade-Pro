@@ -2,9 +2,9 @@
 <img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
 </div>
 
-# Trade-Pro — 外贸获客助理
+# 外贸智慧协同
 
-基于千问 / Gemini 的智能外贸客户背调与开发工具。
+企业级外贸获客与协同平台（客户背调、决策人挖掘、开发信与宣发协同）。
 
 ## Cursor 本地开发（推荐）
 

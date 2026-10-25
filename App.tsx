@@ -4043,7 +4043,7 @@ const App: React.FC = () => {
         aria-label="平台导航坞"
       >
         <div className="tp-dock-brand flex items-center justify-center py-2.5 border-b border-cyan-400/15 shrink-0">
-          <div className="tp-brand-mark p-2 rounded-xl text-white" title={`楠哥的小助理 · ${currentUser.username}`}>
+          <div className="tp-brand-mark p-2 rounded-xl text-white" title={`外贸智慧协同 · ${currentUser.username}`}>
             <Zap size={16} />
           </div>
         </div>

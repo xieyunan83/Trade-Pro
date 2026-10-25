@@ -240,7 +240,7 @@ export const exportToPPT = (data: AnalysisResult) => {
     }
     const pptx = new PptxGenJS();
     pptx.layout = 'LAYOUT_16x9';
-    pptx.author = '楠哥的小助理';
+    pptx.author = '外贸智慧协同';
     pptx.title = sanitize(data.companyInfo.name);
 
     generateAnalysisSlides(pptx, data);
@@ -280,7 +280,7 @@ export const exportBatchAnalysisToPPT = async (analyses: AnalysisResult[]) => {
         for (const analysis of analyses) {
             const pptx = new PptxGenJS();
             pptx.layout = 'LAYOUT_16x9';
-            pptx.author = '楠哥的小助理';
+            pptx.author = '外贸智慧协同';
             pptx.title = `${sanitize(analysis.companyInfo.name)} Analysis`;
 
             generateAnalysisSlides(pptx, analysis);
@@ -299,7 +299,7 @@ export const exportBatchAnalysisToPPT = async (analyses: AnalysisResult[]) => {
         // NOTE: This uses the first client's "businessScope" as rudimentary context if available
         const strategyPptx = new PptxGenJS();
         strategyPptx.layout = 'LAYOUT_16x9';
-        strategyPptx.author = '楠哥的小助理';
+        strategyPptx.author = '外贸智慧协同';
         strategyPptx.title = `Master Outreach Strategy`;
 
         const slide = strategyPptx.addSlide();
@@ -351,7 +351,7 @@ export const exportAutomationReportToPPT = (result: AutomationResult) => {
     try {
         const pptx = new PptxGenJS();
         pptx.layout = 'LAYOUT_16x9';
-        pptx.author = '楠哥的小助理';
+        pptx.author = '外贸智慧协同';
         pptx.title = `${sanitize(result.clientName)} - 开发报告`;
 
         addAutomationSlides(pptx, result);
@@ -436,7 +436,7 @@ const createEmailSlide = (pptx: any, title: string, content: string, subject?: s
  */
 const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
     const addFooter = (slide: any) => {
-        slide.addText(`楠哥的小助理 深度报告 | ${sanitize(data.companyInfo.name)} | 机密资料`, { 
+        slide.addText(`外贸智慧协同 深度报告 | ${sanitize(data.companyInfo.name)} | 机密资料`, { 
             x: 0.5, y: 5.3, w: 9, h: 0.3, 
             fontSize: 8, color: "94A3B8", align: "center", valign: "middle" 
         });
@@ -453,7 +453,7 @@ const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
     slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.1, h: 5.6, fill: COLORS.ACCENT_BLUE });
     slide.addShape(pptx.ShapeType.triangle, { x: 8.5, y: 0, w: 1.5, h: 1.5, fill: COLORS.ACCENT_BLUE, flipV: true });
     
-    slide.addText("楠哥的小助理 · TRADE SCOUT PRO", { 
+    slide.addText("外贸智慧协同", { 
         x: 0.5, y: 0.5, h: 0.5, 
         fontSize: 12, bold: true, color: COLORS.ACCENT_BLUE, 
         letterSpacing: 2, align: 'left', valign: 'middle' 

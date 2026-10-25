@@ -308,7 +308,7 @@ const PROXY_LADDER = [
 ];
 
 const SYSTEM_INSTRUCTION = `
-You are "楠哥的小助理" (Nan Ge's Assistant), an elite Foreign Trade Intelligence Agent.
+You are "外贸智慧协同", an elite Foreign Trade Collaboration Agent.
 Your goal is to provide deep, actionable insights for Chinese export suppliers.
 You MUST use 联网搜索 (web search) to find REAL, CURRENT information about companies, websites, and markets.
 
@@ -332,7 +332,7 @@ Do NOT use English for descriptions unless it is a proper noun (like a specific 
 Structure the report professionally in Chinese.
 `;
 
-const QWEN_SYSTEM = '你是外贸客户开发专家「楠哥的小助理」，擅长背景调查、客户搜索和开发信撰写。请使用联网搜索获取真实最新信息。所有输出使用简体中文。';
+const QWEN_SYSTEM = '你是外贸客户开发专家「外贸智慧协同」，擅长背景调查、客户搜索和开发信撰写。请使用联网搜索获取真实最新信息。所有输出使用简体中文。';
 
 /** forced_search 会显著拖慢大任务，仅在明确要求时开启 */
 const qwenSearchPayload = (
@@ -2061,7 +2061,7 @@ const callOpenAICompatible = async (
         // OpenRouter requires these headers to identify the app and prevent blocks
         if (targetUrl.includes('openrouter')) {
             headers['HTTP-Referer'] = window.location.href; // Site URL
-            headers['X-Title'] = 'Trade Scout Pro'; // App Name
+            headers['X-Title'] = '外贸智慧协同';
         }
 
         return fetchWithTimeout(finalUrl, {
@@ -4597,7 +4597,7 @@ export const searchPotentialClients = async (productKeyword: string, country: st
     : `- Also mine B2B directories, yellow pages, trade-show exhibitor lists, and industry association member directories when present in evidence.`;
 
   const buildPrompt = (askLimit: number, stricter = false) => `
-  Act as a high-performance B2B lead discovery engine for Chinese exporters (楠哥的小助理).
+  Act as a high-performance B2B lead discovery engine for Chinese exporters (外贸智慧协同).
   Use web search / provided live evidence to find REAL companies that buy / import / distribute / wholesale / retail the product: "${productKeyword}".
 
   TARGET MARKET (CRITICAL):
