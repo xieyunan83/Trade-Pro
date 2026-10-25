@@ -249,18 +249,17 @@ async function isStillDefaultPasswords(users: User[]): Promise<boolean> {
 
 /**
  * 合并本地与云端用户：以「更新时间更新」的一方为准。
- * 解决手机/电脑各自 localStorage 导致账号密码不一致。
+ * 解决手机/电脑/桌面客户端各自 localStorage 导致账号密码不一致。
+ *
+ * 重要：空本地时先拉云端，禁止「先造默认账号再盖写云端」。
  */
 export async function syncUsersAcrossDevices(): Promise<User[]> {
   let local = loadUsersFromStorage();
   let localAt = getUsersUpdatedAt();
   let localDepts = loadDepartmentsFromStorage();
+  const localWasEmpty = local.length === 0;
 
-  if (local.length === 0) {
-    local = await createDefaultUsers();
-    localAt = Date.now();
-    saveUsersToStorage(local, localAt);
-  } else {
+  if (!localWasEmpty) {
     const migrated = normalizeUsers(await ensureUserPasswords(local));
     if (JSON.stringify(migrated) !== JSON.stringify(local)) {
       local = migrated;
@@ -280,6 +279,15 @@ export async function syncUsersAcrossDevices(): Promise<User[]> {
   if (cloud?.users?.length) {
     const cloudUsers = normalizeUsers(await ensureUserPasswords(cloud.users));
     const cloudDepts = Array.isArray(cloud.departments) ? cloud.departments : [];
+    const cloudAt = cloud.updatedAt || Date.now();
+
+    // 本机无账号（新浏览器 / 桌面客户端）：直接采用云端，绝不造默认户再回写
+    if (localWasEmpty) {
+      saveUsersToStorage(cloudUsers, cloudAt);
+      if (cloudDepts.length) saveDepartmentsToStorage(cloudDepts, cloudAt);
+      return cloudUsers;
+    }
+
     const localDefault = await isStillDefaultPasswords(local);
     const cloudDefault = await isStillDefaultPasswords(cloudUsers);
 
@@ -288,18 +296,31 @@ export async function syncUsersAcrossDevices(): Promise<User[]> {
       return local;
     }
     if (localDefault && !cloudDefault) {
-      saveUsersToStorage(cloudUsers, cloud.updatedAt || Date.now());
-      if (cloudDepts.length) saveDepartmentsToStorage(cloudDepts, cloud.updatedAt || Date.now());
+      saveUsersToStorage(cloudUsers, cloudAt);
+      if (cloudDepts.length) saveDepartmentsToStorage(cloudDepts, cloudAt);
       return cloudUsers;
     }
 
-    if (cloud.updatedAt >= localAt) {
-      saveUsersToStorage(cloudUsers, cloud.updatedAt || Date.now());
-      if (cloudDepts.length || getDepartmentsUpdatedAt() <= (cloud.updatedAt || 0)) {
-        saveDepartmentsToStorage(cloudDepts, cloud.updatedAt || Date.now());
+    if (cloudAt >= localAt) {
+      saveUsersToStorage(cloudUsers, cloudAt);
+      if (cloudDepts.length || getDepartmentsUpdatedAt() <= cloudAt) {
+        saveDepartmentsToStorage(cloudDepts, cloudAt);
       }
       return cloudUsers;
     }
+
+    // 本地更新：回写云端
+    await persistUsers(local, localAt || Date.now(), localDepts);
+    return local;
+  }
+
+  // 无云端数据时，才允许本机默认账号（首次部署）
+  if (localWasEmpty) {
+    local = await createDefaultUsers();
+    localAt = Date.now();
+    saveUsersToStorage(local, localAt);
+    await persistUsers(local, localAt, localDepts);
+    return local;
   }
 
   if (local.length) {

@@ -8,7 +8,7 @@ import {
   Youtube, Music, Video, FileSpreadsheet, FilePieChart, FileCode, Image, Mail, Building2
 } from 'lucide-react';
 import { getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/db';
-import { testApiKey, testQwenApiKey, testAnymailFinderApiKey, testHunterApiKey, testAnysearchApiKey, getTaskAIModels, saveTaskAIModels, describeTaskAIRouting, sanitizeApiKey, type TaskAIModels, type AIEngineChoice } from '../services/geminiService';
+import { testApiKey, testQwenApiKey, testAnymailFinderApiKey, testHunterApiKey, testAnysearchApiKey, getTaskAIModels, saveTaskAIModels, describeTaskAIRouting, sanitizeApiKey, hydrateApiConfigsFromCloud, type TaskAIModels, type AIEngineChoice } from '../services/geminiService';
 import { testTavilyKeyPool, listTavilyKeys, setTavilyKeyPool, mergeTavilyKeyPool, getTavilyKeyStatuses, clearTavilyExhausted } from '../services/tavilyService';
 import { testWanImageApi } from '../services/wanImageService';
 import { saveApiConfig, getApiConfig, isSupabaseConfigured, saveKnowledgeFile, getKnowledgeFiles, deleteKnowledgeFile, resetSupabaseClient, testSupabaseConnection } from '../services/supabase';
@@ -142,184 +142,195 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
   const [isResettingPwd, setIsResettingPwd] = useState(false);
 
   useEffect(() => {
-    const stored = localStorage.getItem('trade_scout_api_configs');
-    if (stored) {
+    let cancelled = false;
+
+    const bootstrap = async () => {
       try {
-        setLocalApiConfigs(JSON.parse(stored));
+        await hydrateApiConfigsFromCloud();
       } catch (e) {
-        console.error("Failed to load API configs", e);
+        console.warn('admin hydrate API configs failed', e);
       }
-    }
+      if (cancelled) return;
 
-    const savedProxy = localStorage.getItem('trade_scout_custom_proxy');
-    if (savedProxy) setProxyUrl(savedProxy);
-    setAliyunProxyModeState(getAliyunProxyMode());
-    setAliyunProxyBaseState(getAliyunProxyBase());
-
-    const savedModel = localStorage.getItem('trade_scout_default_ai_model') as 'qwen' | 'gemini' | 'auto' | null;
-    if (savedModel) setDefaultAIModel(savedModel);
-    else if (env.defaultAIModel) setDefaultAIModel(env.defaultAIModel);
-
-    setTaskAIModels(getTaskAIModels());
-
-    const loadGeminiKey = async () => {
-      const pooled = listPoolKeys('gemini');
-      if (pooled.length) setGeminiKeys(pooled);
-      const localModel = localStorage.getItem('trade_scout_gemini_model_id');
-      if (localModel) setGeminiModelId(localModel);
-      const cloud = await getApiConfig('gemini');
-      if (!pooled.length && cloud?.apiKey) {
-        const meta = parseApiKeyPoolPayload(cloud.apiKey);
-        setGeminiKeys(meta.keys);
-      }
-      if (!localModel && cloud?.modelId) setGeminiModelId(cloud.modelId);
-      if (!pooled.length && !cloud?.apiKey) {
+      const stored = localStorage.getItem('trade_scout_api_configs');
+      if (stored) {
         try {
-          const pool = JSON.parse(localStorage.getItem('trade_scout_api_configs') || '[]') as ApiConfig[];
-          const natives = pool
-            .filter(
-              (c) =>
-                c.apiKey?.trim() &&
-                (c.baseUrl === 'native' || (c.baseUrl || '').includes('generativelanguage.googleapis.com'))
-            )
-            .map((c) => sanitizeApiKey(c.apiKey));
-          if (natives.length) setGeminiKeys(natives);
-          const first = pool.find((c) => natives.includes(sanitizeApiKey(c.apiKey)));
-          if (first?.modelId) setGeminiModelId(first.modelId);
-        } catch {
-          /* ignore */
+          setLocalApiConfigs(JSON.parse(stored));
+        } catch (e) {
+          console.error('Failed to load API configs', e);
         }
       }
-      const legacy = localStorage.getItem('trade_scout_gemini_api_key');
-      if (!pooled.length && legacy?.trim() && !cloud?.apiKey) {
-        setGeminiKeys([sanitizeApiKey(legacy)]);
+
+      const savedProxy = localStorage.getItem('trade_scout_custom_proxy');
+      if (savedProxy) setProxyUrl(savedProxy);
+      setAliyunProxyModeState(getAliyunProxyMode());
+      setAliyunProxyBaseState(getAliyunProxyBase());
+
+      const savedModel = localStorage.getItem('trade_scout_default_ai_model') as
+        | 'qwen'
+        | 'gemini'
+        | 'auto'
+        | null;
+      if (savedModel) setDefaultAIModel(savedModel);
+      else if (env.defaultAIModel) setDefaultAIModel(env.defaultAIModel);
+
+      setTaskAIModels(getTaskAIModels());
+
+      const loadGeminiKey = async () => {
+        const pooled = listPoolKeys('gemini');
+        if (pooled.length) setGeminiKeys(pooled);
+        const localModel = localStorage.getItem('trade_scout_gemini_model_id');
+        if (localModel) setGeminiModelId(localModel);
+        const cloud = await getApiConfig('gemini');
+        if (!pooled.length && cloud?.apiKey) {
+          const meta = parseApiKeyPoolPayload(cloud.apiKey);
+          setGeminiKeys(meta.keys);
+        }
+        if (!localModel && cloud?.modelId) setGeminiModelId(cloud.modelId);
+        if (!pooled.length && !cloud?.apiKey) {
+          try {
+            const pool = JSON.parse(localStorage.getItem('trade_scout_api_configs') || '[]') as ApiConfig[];
+            const natives = pool
+              .filter(
+                (c) =>
+                  c.apiKey?.trim() &&
+                  (c.baseUrl === 'native' || (c.baseUrl || '').includes('generativelanguage.googleapis.com'))
+              )
+              .map((c) => sanitizeApiKey(c.apiKey));
+            if (natives.length) setGeminiKeys(natives);
+            const first = pool.find((c) => natives.includes(sanitizeApiKey(c.apiKey)));
+            if (first?.modelId) setGeminiModelId(first.modelId);
+          } catch {
+            /* ignore */
+          }
+        }
+        const legacy = localStorage.getItem('trade_scout_gemini_api_key');
+        if (!pooled.length && legacy?.trim() && !cloud?.apiKey) {
+          setGeminiKeys([sanitizeApiKey(legacy)]);
+        }
+      };
+
+      const loadQwenKey = async () => {
+        const pooled = listPoolKeys('qwen');
+        if (pooled.length) setQwenKeys(pooled);
+        const localBase = localStorage.getItem('trade_scout_qwen_base_url');
+        const localModel = localStorage.getItem('trade_scout_qwen_model_id');
+        if (localBase) setQwenBaseUrl(localBase);
+        if (localModel) setQwenModelId(localModel);
+
+        const cloudConfig = await getApiConfig('qwen');
+        if (!pooled.length && cloudConfig?.apiKey) {
+          setQwenKeys(parseApiKeyPoolPayload(cloudConfig.apiKey).keys);
+        }
+        if (!localBase && cloudConfig?.baseUrl) setQwenBaseUrl(cloudConfig.baseUrl);
+        if (!localModel && cloudConfig?.modelId) setQwenModelId(cloudConfig.modelId);
+
+        if (!pooled.length && !cloudConfig?.apiKey && env.qwenApiKey) {
+          setQwenKeys([env.qwenApiKey]);
+        }
+        if (!localBase && !cloudConfig?.baseUrl && env.qwenBaseUrl) {
+          setQwenBaseUrl(env.qwenBaseUrl);
+        }
+        if (!localModel && !cloudConfig?.modelId && env.qwenModelId) {
+          setQwenModelId(env.qwenModelId);
+        }
+        const legacy = localStorage.getItem('trade_scout_qwen_api_key');
+        if (!pooled.length && legacy?.trim() && !cloudConfig?.apiKey) {
+          setQwenKeys(parseApiKeyPoolPayload(legacy).keys);
+        }
+      };
+
+      const loadWanKey = async () => {
+        const pooled = listPoolKeys('wan');
+        if (pooled.length) setWanKeys(pooled);
+        const localBase = localStorage.getItem('trade_scout_wan_base_url');
+        const localModel = localStorage.getItem('trade_scout_wan_model_id');
+        if (localBase) setWanBaseUrl(localBase);
+        if (localModel) setWanModelId(localModel);
+
+        const cloud = await getApiConfig('wan');
+        if (!pooled.length && cloud?.apiKey) setWanKeys(parseApiKeyPoolPayload(cloud.apiKey).keys);
+        if (!localBase && cloud?.baseUrl) setWanBaseUrl(cloud.baseUrl);
+        if (!localModel && cloud?.modelId) setWanModelId(cloud.modelId);
+
+        if (!pooled.length && !cloud?.apiKey && env.wanApiKey) setWanKeys([env.wanApiKey]);
+        if (!localBase && !cloud?.baseUrl && env.wanBaseUrl) setWanBaseUrl(env.wanBaseUrl);
+        if (!localModel && !cloud?.modelId && env.wanModelId) setWanModelId(env.wanModelId);
+      };
+
+      await Promise.all([loadGeminiKey(), loadQwenKey(), loadWanKey()]);
+      if (cancelled) return;
+
+      const sb = getSupabaseConfig();
+      setSupabaseUrl(sb.url);
+      setSupabaseAnonKey(sb.key);
+      setSupabaseReady(isSupabaseConfigured());
+
+      setHunterKeys(listPoolKeys('hunter').length ? listPoolKeys('hunter') : [getEmailSearchKeys().hunter].filter(Boolean));
+      setFindymailKeys(
+        listPoolKeys('findymail').length ? listPoolKeys('findymail') : [getEmailSearchKeys().findymail].filter(Boolean)
+      );
+      setAnymailFinderKeys(
+        listPoolKeys('anymailfinder').length
+          ? listPoolKeys('anymailfinder')
+          : [getEmailSearchKeys().anymailFinder].filter(Boolean)
+      );
+      setAnysearchKeys(
+        listPoolKeys('anysearch').length ? listPoolKeys('anysearch') : [getAnysearchApiKey()].filter(Boolean)
+      );
+      setTavilyKeys(listTavilyKeys());
+      try {
+        const flag = 'trade_scout_tavily_exhaust_fix_v2';
+        if (!localStorage.getItem(flag)) {
+          clearTavilyExhausted();
+          localStorage.setItem(flag, '1');
+        }
+      } catch {
+        /* ignore */
       }
-    };
-    void loadGeminiKey();
 
-    const loadQwenKey = async () => {
-      const pooled = listPoolKeys('qwen');
-      if (pooled.length) setQwenKeys(pooled);
-      const localBase = localStorage.getItem('trade_scout_qwen_base_url');
-      const localModel = localStorage.getItem('trade_scout_qwen_model_id');
-      if (localBase) setQwenBaseUrl(localBase);
-      if (localModel) setQwenModelId(localModel);
-
-      const cloudConfig = await getApiConfig('qwen');
-      if (!pooled.length && cloudConfig?.apiKey) {
-        setQwenKeys(parseApiKeyPoolPayload(cloudConfig.apiKey).keys);
-      }
-      if (!localBase && cloudConfig?.baseUrl) setQwenBaseUrl(cloudConfig.baseUrl);
-      if (!localModel && cloudConfig?.modelId) setQwenModelId(cloudConfig.modelId);
-
-      if (!pooled.length && !cloudConfig?.apiKey && env.qwenApiKey) {
-        setQwenKeys([env.qwenApiKey]);
-      }
-      if (!localBase && !cloudConfig?.baseUrl && env.qwenBaseUrl) {
-        setQwenBaseUrl(env.qwenBaseUrl);
-      }
-      if (!localModel && !cloudConfig?.modelId && env.qwenModelId) {
-        setQwenModelId(env.qwenModelId);
-      }
-      const legacy = localStorage.getItem('trade_scout_qwen_api_key');
-      if (!pooled.length && legacy?.trim() && !cloudConfig?.apiKey) {
-        setQwenKeys(parseApiKeyPoolPayload(legacy).keys);
-      }
-    };
-    void loadQwenKey();
-
-    const loadWanKey = async () => {
-      const pooled = listPoolKeys('wan');
-      if (pooled.length) setWanKeys(pooled);
-      const localBase = localStorage.getItem('trade_scout_wan_base_url');
-      const localModel = localStorage.getItem('trade_scout_wan_model_id');
-      if (localBase) setWanBaseUrl(localBase);
-      if (localModel) setWanModelId(localModel);
-
-      const cloud = await getApiConfig('wan');
-      if (!pooled.length && cloud?.apiKey) setWanKeys(parseApiKeyPoolPayload(cloud.apiKey).keys);
-      if (!localBase && cloud?.baseUrl) setWanBaseUrl(cloud.baseUrl);
-      if (!localModel && cloud?.modelId) setWanModelId(cloud.modelId);
-
-      if (!pooled.length && !cloud?.apiKey && env.wanApiKey) setWanKeys([env.wanApiKey]);
-      if (!localBase && !cloud?.baseUrl && env.wanBaseUrl) setWanBaseUrl(env.wanBaseUrl);
-      if (!localModel && !cloud?.modelId && env.wanModelId) setWanModelId(env.wanModelId);
-    };
-    void loadWanKey();
-
-    const sb = getSupabaseConfig();
-    setSupabaseUrl(sb.url);
-    setSupabaseAnonKey(sb.key);
-    setSupabaseReady(isSupabaseConfigured());
-
-    setHunterKeys(listPoolKeys('hunter').length ? listPoolKeys('hunter') : [getEmailSearchKeys().hunter].filter(Boolean));
-    setFindymailKeys(
-      listPoolKeys('findymail').length ? listPoolKeys('findymail') : [getEmailSearchKeys().findymail].filter(Boolean)
-    );
-    setAnymailFinderKeys(
-      listPoolKeys('anymailfinder').length
-        ? listPoolKeys('anymailfinder')
-        : [getEmailSearchKeys().anymailFinder].filter(Boolean)
-    );
-    setAnysearchKeys(
-      listPoolKeys('anysearch').length ? listPoolKeys('anysearch') : [getAnysearchApiKey()].filter(Boolean)
-    );
-    setTavilyKeys(listTavilyKeys());
-    // 旧版把 429 误标「本月耗尽」：升级后清一次错误标记，恢复可用 Key
-    try {
-      const flag = 'trade_scout_tavily_exhaust_fix_v2';
-      if (!localStorage.getItem(flag)) {
-        clearTavilyExhausted();
-        localStorage.setItem(flag, '1');
-      }
-    } catch {
-      /* ignore */
-    }
-
-    const loadEmailKeysFromCloud = async () => {
-      if (!isSupabaseConfigured()) return;
-      const [hunter, findymail, anymail, anysearch, tavily] = await Promise.all([
-        getApiConfig('hunter'),
-        getApiConfig('findymail'),
-        getApiConfig('anymailfinder'),
-        getApiConfig('anysearch'),
-        getApiConfig('tavily'),
-      ]);
-      if (hunter?.apiKey) setHunterKeys(parseApiKeyPoolPayload(hunter.apiKey).keys);
-      if (findymail?.apiKey) setFindymailKeys(parseApiKeyPoolPayload(findymail.apiKey).keys);
-      if (anymail?.apiKey) setAnymailFinderKeys(parseApiKeyPoolPayload(anymail.apiKey).keys);
-      if (anysearch?.apiKey) {
-        const keys = parseApiKeyPoolPayload(anysearch.apiKey).keys;
-        setAnysearchKeys(keys);
-        saveAnysearchApiKey(keys);
-      }
-      if (tavily?.apiKey) {
-        const raw = tavily.apiKey.trim();
-        try {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) {
-            mergeTavilyKeyPool(parsed.map(String));
-          } else if (parsed?.keys) {
-            mergeTavilyKeyPool(parsed.keys.map(String));
-          } else {
+      if (isSupabaseConfigured()) {
+        const [hunter, findymail, anymail, anysearch, tavily] = await Promise.all([
+          getApiConfig('hunter'),
+          getApiConfig('findymail'),
+          getApiConfig('anymailfinder'),
+          getApiConfig('anysearch'),
+          getApiConfig('tavily'),
+        ]);
+        if (cancelled) return;
+        if (hunter?.apiKey) setHunterKeys(parseApiKeyPoolPayload(hunter.apiKey).keys);
+        if (findymail?.apiKey) setFindymailKeys(parseApiKeyPoolPayload(findymail.apiKey).keys);
+        if (anymail?.apiKey) setAnymailFinderKeys(parseApiKeyPoolPayload(anymail.apiKey).keys);
+        if (anysearch?.apiKey) {
+          const keys = parseApiKeyPoolPayload(anysearch.apiKey).keys;
+          setAnysearchKeys(keys);
+          saveAnysearchApiKey(keys);
+        }
+        if (tavily?.apiKey) {
+          const raw = tavily.apiKey.trim();
+          try {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+              mergeTavilyKeyPool(parsed.map(String));
+            } else if (parsed?.keys) {
+              mergeTavilyKeyPool(parsed.keys.map(String));
+            } else {
+              mergeTavilyKeyPool([raw]);
+            }
+          } catch {
             mergeTavilyKeyPool([raw]);
           }
-        } catch {
-          mergeTavilyKeyPool([raw]);
+          setTavilyKeys(listTavilyKeys());
         }
-        setTavilyKeys(listTavilyKeys());
       }
-    };
-    void loadEmailKeysFromCloud();
 
-    const loadKB = async () => {
       setKbCloudError(null);
-      // 先加载本地，保证云端挂了也能看到已有文件
       const localFiles = await getAllFilesFromDB();
-      setKbFiles(localFiles);
+      if (!cancelled) setKbFiles(localFiles);
 
       if (isSupabaseConfigured()) {
         const ping = await testSupabaseConnection();
+        if (cancelled) return;
         setSupabaseLiveOk(ping.ok);
         setSupabaseLiveMsg(ping.message);
         if (!ping.ok) {
@@ -327,6 +338,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
           return;
         }
         const { files: cloudFiles, error } = await getKnowledgeFiles();
+        if (cancelled) return;
         if (error) {
           setKbCloudError(error);
           return;
@@ -335,13 +347,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
           await saveFileToDB(f);
         }
         const merged = await getAllFilesFromDB();
-        setKbFiles(merged);
+        if (!cancelled) setKbFiles(merged);
       } else {
         setSupabaseLiveOk(false);
         setSupabaseLiveMsg('Supabase 未配置');
       }
     };
-    loadKB();
+
+    void bootstrap();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const updateApiConfig = (idx: number, field: keyof ApiConfig, value: string | number) => {

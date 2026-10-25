@@ -666,10 +666,9 @@ const App: React.FC = () => {
             let nextCrm: Client[] = filterOutCrmTombstones(loadAllCrmClients());
 
             if (currentUser && isSupabaseConfigured()) {
-                if (currentUser.role !== 'admin') {
-                    const apiReady = await hydrateApiConfigsFromCloud();
-                    if (!cancelled && apiReady) setHasKey(true);
-                }
+                // 管理员与员工均从云端拉 Key，避免桌面客户端 / 新浏览器看到空配置
+                const apiReady = await hydrateApiConfigsFromCloud();
+                if (!cancelled && currentUser.role !== 'admin' && apiReady) setHasKey(true);
                 // 排除名单：管理员与普通用户都同步，搜索时跳过非目标客户
                 hydrateExcludedCompaniesFromCloud().catch((e) =>
                   console.warn('excluded companies hydrate failed', e)
