@@ -284,16 +284,29 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser }) => {
               </label>
               <select
                 value={skuPick}
-                onChange={(e) => setSkuPick(e.target.value)}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  setSkuPick(id);
+                  const s = skus.find((x) => x.id === id);
+                  if (s?.images?.[0] && mode === 'image') {
+                    setSourceImage(s.images[0]);
+                  }
+                }}
                 className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
               >
                 <option value="">不挂接</option>
                 {skus.slice(0, 80).map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.skuCode} · {s.name}
+                    {s.images?.length ? ' · 有图' : ''}
                   </option>
                 ))}
               </select>
+              {skuPick && skus.find((s) => s.id === skuPick)?.images?.[0] ? (
+                <p className="text-[10px] font-bold text-indigo-700 mt-1">
+                  已带入产品库图片，可直接图生 3D 或换图
+                </p>
+              ) : null}
             </div>
 
             <button

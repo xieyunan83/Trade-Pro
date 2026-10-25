@@ -64,7 +64,7 @@ export const ModuleStrategy: React.FC<Props> = ({
       role: 'model',
       text: data
         ? `**Strategy Context Loaded** ✅\n\n已载入当前背调：**${data.companyInfo?.name || '该公司'}**。\n\n也可在输入框旁选择更多背调客户，或选择搜索关键词/国家，切换为「整市场」策略。`
-        : `**Strategy Assistant Ready** 🚀\n\n我是外贸策略顾问。你可以：\n- 上传附件（产品资料/报价）\n- 选择已背调客户（针对单客户）\n- 选择关键词与国家（针对整个市场）\n\n开发信请用「生成 Mail Group」或说「写一组 Mail Group 开发信」——按毅冰思路：短、多角度、末封带钩子。`,
+        : `**Strategy Assistant Ready** 🚀\n\n我是外贸策略顾问。你可以：\n- 上传附件（产品资料/报价）\n- 选择已背调客户（针对单客户）\n- 选择关键词与国家（针对整个市场）\n\n开发信请点「生成开发信」或说「写一组开发信」——短、多角度、末封带钩子。`,
       timestamp: Date.now(),
     },
   ]);
@@ -493,9 +493,9 @@ export const ModuleStrategy: React.FC<Props> = ({
         <div className="bg-white rounded-2xl border border-indigo-200 p-4 sm:p-5 shadow-sm flex-shrink-0">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <div className="text-sm font-black text-slate-800">Mail Group · 保存到背调报告</div>
+              <div className="text-sm font-black text-slate-800">开发信 · 保存到背调报告</div>
               <p className="text-xs text-slate-500 font-medium mt-1">
-                毅冰思路：针对「{primaryCompany.companyInfo?.name || '当前客户'}」生成 3 封短开发信（匹配破冰 / 实力证明 / 钩子收口），含多变主题；同日连发、末封带钩子。
+                针对「{primaryCompany.companyInfo?.name || '当前客户'}」生成 3 封短开发信（匹配破冰 / 实力证明 / 钩子收口），含多变主题；同日连发、末封带钩子。
               </p>
               {generateMsg && <p className="text-[11px] font-bold text-emerald-700 mt-2">{generateMsg}</p>}
             </div>
@@ -506,7 +506,7 @@ export const ModuleStrategy: React.FC<Props> = ({
               className="inline-flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white px-5 py-3 rounded-xl font-bold text-sm shadow-lg"
             >
               {isGeneratingEmails ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-              生成 Mail Group
+              生成开发信
             </button>
           </div>
           {primaryCompany.generatedEmails && (

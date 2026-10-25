@@ -81,7 +81,7 @@ export const ReportEnrichmentPanel: React.FC<{
       {emails && (
         <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-indigo-200 shadow-sm">
           <h3 className="text-lg sm:text-xl font-black text-slate-800 mb-2 flex items-center gap-2">
-            <PenTool className="text-indigo-600" /> Mail Group 开发信
+            <PenTool className="text-indigo-600" /> 开发信
             {data.generatedEmailsAt && (
               <span className="text-[11px] font-bold text-slate-400 ml-auto">
                 {new Date(data.generatedEmailsAt).toLocaleString('zh-CN')}

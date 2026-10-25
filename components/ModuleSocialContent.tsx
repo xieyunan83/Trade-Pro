@@ -8,6 +8,11 @@ import {
   Check,
   Hash,
   Megaphone,
+  Send,
+  Link2,
+  Unplug,
+  Loader2,
+  ExternalLink,
 } from 'lucide-react';
 import type { User } from '../types';
 import { loadCatalogSkus } from '../services/productCatalogTypes';
@@ -20,11 +25,24 @@ import {
   newCreativeId,
   draftSocialCopy,
 } from '../services/creativeStudioStore';
+import {
+  type PublishablePlatform,
+  PLATFORM_CONNECT_HINT,
+  isPublishablePlatform,
+  getConnection,
+  upsertConnection,
+  disconnectPlatform,
+  openOfficialCompose,
+  publishWithToken,
+  loadSocialConnections,
+} from '../services/socialPublishService';
 
 type Props = { currentUser: User };
 
+const PUBLISH_IDS: PublishablePlatform[] = ['linkedin', 'instagram', 'facebook', 'x'];
+
 /**
- * 发文素材加工：按平台尺寸生成文案 / 话题 / CTA，挂接产品库，素材库沉淀。
+ * 发文素材加工：生成文案 + 四平台官方发帖窗 / Token 直发
  */
 export const ModuleSocialContent: React.FC<Props> = ({ currentUser }) => {
   const [pieces, setPieces] = useState<SocialPiece[]>(() => loadSocialPieces());
@@ -36,9 +54,25 @@ export const ModuleSocialContent: React.FC<Props> = ({ currentUser }) => {
   const [activeId, setActiveId] = useState<string | null>(pieces[0]?.id || null);
   const [copied, setCopied] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [linkUrl, setLinkUrl] = useState('');
+  const [imageUrl, setImageUrl] = useState('');
+  const [showConnect, setShowConnect] = useState(false);
+  const [tokenDraft, setTokenDraft] = useState('');
+  const [accountIdDraft, setAccountIdDraft] = useState('');
+  const [connTick, setConnTick] = useState(0);
   const skus = useMemo(() => loadCatalogSkus(), []);
   const meta = SOCIAL_PLATFORM_META.find((p) => p.id === platform) || SOCIAL_PLATFORM_META[0];
   const active = pieces.find((p) => p.id === activeId) || null;
+
+  const connections = useMemo(() => {
+    void connTick;
+    return loadSocialConnections();
+  }, [connTick]);
+
+  const activePublishPlatform: PublishablePlatform | null =
+    active && isPublishablePlatform(active.platform) ? active.platform : null;
+  const connected = activePublishPlatform ? !!getConnection(activePublishPlatform) : false;
 
   const persist = (next: SocialPiece[]) => {
     setPieces(next);
@@ -51,6 +85,7 @@ export const ModuleSocialContent: React.FC<Props> = ({ currentUser }) => {
     if (s) {
       setProductName(s.nameEn || s.name);
       if (s.specs) setHighlight(s.specs.slice(0, 80));
+      if (s.images?.[0]?.startsWith('http')) setImageUrl(s.images[0]);
     }
   };
 
@@ -113,6 +148,65 @@ export const ModuleSocialContent: React.FC<Props> = ({ currentUser }) => {
     if (activeId === id) setActiveId(next[0]?.id || null);
   };
 
+  const saveConnection = () => {
+    if (!activePublishPlatform) return;
+    if (!tokenDraft.trim()) {
+      setMsg('请填写 Access Token');
+      return;
+    }
+    upsertConnection({
+      platform: activePublishPlatform,
+      accessToken: tokenDraft.trim(),
+      accountId: accountIdDraft.trim() || undefined,
+      connectedAt: Date.now(),
+    });
+    setTokenDraft('');
+    setAccountIdDraft('');
+    setShowConnect(false);
+    setConnTick((n) => n + 1);
+    setMsg(`${SOCIAL_PLATFORM_META.find((p) => p.id === activePublishPlatform)?.label} 已连接`);
+  };
+
+  const handleOfficialPublish = async () => {
+    if (!active || !activePublishPlatform) {
+      setMsg('请先生成 LinkedIn / Instagram / Facebook / X 素材');
+      return;
+    }
+    setBusy(true);
+    try {
+      const tip = await openOfficialCompose({
+        platform: activePublishPlatform,
+        caption: active.caption,
+        hashtags: active.hashtags,
+        cta: active.cta,
+        linkUrl: linkUrl.trim() || undefined,
+        imageUrl: imageUrl.trim() || undefined,
+      });
+      setMsg(tip);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleApiPublish = async () => {
+    if (!active || !activePublishPlatform) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const result = await publishWithToken({
+        platform: activePublishPlatform,
+        caption: active.caption,
+        hashtags: active.hashtags,
+        cta: active.cta,
+        linkUrl: linkUrl.trim() || undefined,
+        imageUrl: imageUrl.trim() || undefined,
+      });
+      setMsg(result.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="max-w-[96rem] mx-auto space-y-4 animate-fade-in px-1">
       <div className="rounded-3xl border border-fuchsia-200/70 bg-gradient-to-br from-fuchsia-50/70 via-white to-violet-50/50 p-5 sm:p-6 shadow-sm">
@@ -121,7 +215,8 @@ export const ModuleSocialContent: React.FC<Props> = ({ currentUser }) => {
         </div>
         <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">发文素材加工</h2>
         <p className="text-sm text-slate-500 font-medium mt-1 max-w-2xl">
-          按渠道尺寸一键生成文案、话题标签与 CTA；可挂产品库，编辑后复制发布。配图可与「产品设计 · 平面图」联动使用。
+          按渠道生成文案后，可一键打开 LinkedIn / Instagram / Facebook / X
+          官方发帖窗；配置 Access Token 后可在本平台直接发布（账号在各平台官方授权）。
         </p>
       </div>
 
@@ -130,21 +225,33 @@ export const ModuleSocialContent: React.FC<Props> = ({ currentUser }) => {
           <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
             <div className="text-xs font-black text-slate-700">选择渠道</div>
             <div className="grid grid-cols-2 gap-1.5">
-              {SOCIAL_PLATFORM_META.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => setPlatform(p.id)}
-                  className={`rounded-xl border px-2.5 py-2 text-left ${
-                    platform === p.id
-                      ? 'border-fuchsia-500 bg-fuchsia-50'
-                      : 'border-slate-200 hover:border-slate-300'
-                  }`}
-                >
-                  <div className="text-[11px] font-black text-slate-800">{p.label}</div>
-                  <div className="text-[9px] text-slate-400 font-bold mt-0.5">{p.size}</div>
-                </button>
-              ))}
+              {SOCIAL_PLATFORM_META.map((p) => {
+                const canPub = isPublishablePlatform(p.id);
+                const isOn = connections.some((c) => c.platform === p.id);
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => setPlatform(p.id)}
+                    className={`rounded-xl border px-2.5 py-2 text-left relative ${
+                      platform === p.id
+                        ? 'border-fuchsia-500 bg-fuchsia-50'
+                        : 'border-slate-200 hover:border-slate-300'
+                    }`}
+                  >
+                    <div className="text-[11px] font-black text-slate-800">{p.label}</div>
+                    <div className="text-[9px] text-slate-400 font-bold mt-0.5">{p.size}</div>
+                    {canPub && (
+                      <span
+                        className={`absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full ${
+                          isOn ? 'bg-emerald-500' : 'bg-slate-300'
+                        }`}
+                        title={isOn ? '已连接' : '可发布'}
+                      />
+                    )}
+                  </button>
+                );
+              })}
             </div>
             <p className="text-[10px] text-slate-500 font-medium">{meta.tip}</p>
 
@@ -216,7 +323,7 @@ export const ModuleSocialContent: React.FC<Props> = ({ currentUser }) => {
 
         <div className="lg:col-span-5 rounded-2xl border border-slate-200 bg-white overflow-hidden flex flex-col min-h-[360px]">
           {!active ? (
-            <p className="m-auto text-sm text-slate-400 font-medium">生成后在此编辑</p>
+            <p className="m-auto text-sm text-slate-400 font-medium">生成后在此编辑并发布</p>
           ) : (
             <>
               <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-2">
@@ -224,6 +331,7 @@ export const ModuleSocialContent: React.FC<Props> = ({ currentUser }) => {
                   <div className="text-sm font-black text-slate-800">{active.title}</div>
                   <div className="text-[10px] font-bold text-slate-400 mt-0.5">
                     {SOCIAL_PLATFORM_META.find((p) => p.id === active.platform)?.label} · {active.size}
+                    {activePublishPlatform && connected ? ' · 已连接可直发' : ''}
                   </div>
                 </div>
                 <button
@@ -276,6 +384,121 @@ export const ModuleSocialContent: React.FC<Props> = ({ currentUser }) => {
                     className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold"
                   />
                 </div>
+
+                {activePublishPlatform && (
+                  <div className="rounded-2xl border border-fuchsia-100 bg-fuchsia-50/40 p-3 space-y-2">
+                    <div className="text-xs font-black text-fuchsia-900">发布到平台</div>
+                    <div>
+                      <label className="text-[10px] font-black text-slate-400 uppercase">
+                        附带链接（可选）
+                      </label>
+                      <input
+                        value={linkUrl}
+                        onChange={(e) => setLinkUrl(e.target.value)}
+                        placeholder="https:// 产品页 / 目录"
+                        className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                      />
+                    </div>
+                    {activePublishPlatform === 'instagram' && (
+                      <div>
+                        <label className="text-[10px] font-black text-slate-400 uppercase">
+                          公开图片 URL（API 直发必填）
+                        </label>
+                        <input
+                          value={imageUrl}
+                          onChange={(e) => setImageUrl(e.target.value)}
+                          placeholder="https://...jpg"
+                          className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                        />
+                      </div>
+                    )}
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void handleOfficialPublish()}
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-black px-3 py-2.5 disabled:opacity-50"
+                      >
+                        {busy ? <Loader2 className="animate-spin" size={14} /> : <ExternalLink size={14} />}
+                        打开官方发帖窗
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy || !connected}
+                        onClick={() => void handleApiPublish()}
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-fuchsia-600 hover:bg-fuchsia-700 text-white text-xs font-black px-3 py-2.5 disabled:opacity-50"
+                        title={connected ? '使用已保存 Token 直发' : '请先连接账号'}
+                      >
+                        <Send size={14} /> 直接发布
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowConnect((v) => !v);
+                          const c = getConnection(activePublishPlatform);
+                          setTokenDraft(c?.accessToken || '');
+                          setAccountIdDraft(c?.accountId || '');
+                        }}
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 text-xs font-black px-3 py-2.5 hover:bg-white"
+                      >
+                        <Link2 size={14} /> {connected ? '管理连接' : '连接账号'}
+                      </button>
+                      {connected && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            disconnectPlatform(activePublishPlatform);
+                            setConnTick((n) => n + 1);
+                            setMsg('已断开连接');
+                          }}
+                          className="inline-flex items-center gap-1.5 rounded-xl border border-rose-100 text-rose-600 text-xs font-black px-3 py-2.5 hover:bg-rose-50"
+                        >
+                          <Unplug size={14} /> 断开
+                        </button>
+                      )}
+                    </div>
+                    {showConnect && (
+                      <div className="space-y-2 pt-1 border-t border-fuchsia-100">
+                        <p className="text-[10px] text-slate-600 font-medium leading-relaxed">
+                          {PLATFORM_CONNECT_HINT[activePublishPlatform]}
+                        </p>
+                        <input
+                          type="password"
+                          autoComplete="off"
+                          value={tokenDraft}
+                          onChange={(e) => setTokenDraft(e.target.value)}
+                          placeholder="Access Token"
+                          className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-mono"
+                        />
+                        <input
+                          value={accountIdDraft}
+                          onChange={(e) => setAccountIdDraft(e.target.value)}
+                          placeholder={
+                            activePublishPlatform === 'linkedin'
+                              ? 'Person ID（必填）'
+                              : activePublishPlatform === 'instagram'
+                                ? 'IG User ID（必填）'
+                                : activePublishPlatform === 'facebook'
+                                  ? 'Page ID（发主页时填写，可选）'
+                                  : 'Account ID（可选）'
+                          }
+                          className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-mono"
+                        />
+                        <button
+                          type="button"
+                          onClick={saveConnection}
+                          className="w-full rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black py-2.5"
+                        >
+                          保存连接
+                        </button>
+                      </div>
+                    )}
+                    <p className="text-[10px] text-slate-500 font-medium">
+                      支持直发的渠道：{PUBLISH_IDS.map((id) => SOCIAL_PLATFORM_META.find((p) => p.id === id)?.label).join(' · ')}
+                      。官方不允许嵌套登录页，Token 请在各平台开发者后台授权后粘贴。
+                    </p>
+                  </div>
+                )}
               </div>
             </>
           )}

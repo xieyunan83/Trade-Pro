@@ -1,11 +1,17 @@
-import React, { useCallback, useMemo, useState } from 'react';
-import { Plus, Trash2, Warehouse, Upload } from 'lucide-react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { Plus, Trash2, Warehouse, Upload, Download, Loader2, Image as ImageIcon } from 'lucide-react';
 import type { User } from '../types';
 import {
   type CatalogSku,
   loadCatalogSkus,
   saveCatalogSkus,
 } from '../services/productCatalogTypes';
+import {
+  compressImageDataUrl,
+  downloadCatalogExcelTemplate,
+  mergeCatalogImports,
+  parseCatalogExcelFile,
+} from '../services/catalogExcelService';
 
 type Props = {
   currentUser: User;
@@ -13,11 +19,14 @@ type Props = {
 
 const newId = () => `sku_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
-/** 产品库：本地 SKU 录入/导入（小竹熊/霄鸟云同步在管理后台） */
+/** 产品库：手工录入 + Excel 导入（含产品图，供设计模块复用） */
 export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
   const [rows, setRows] = useState<CatalogSku[]>(() => loadCatalogSkus());
   const [q, setQ] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const imgRef = useRef<HTMLInputElement>(null);
   const [form, setForm] = useState({
     skuCode: '',
     name: '',
@@ -28,6 +37,7 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
     currency: 'USD',
     specs: '',
     supplierName: '',
+    imageDataUrl: '' as string,
   });
 
   const persist = useCallback((next: CatalogSku[]) => {
@@ -44,7 +54,8 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
         r.name.toLowerCase().includes(s) ||
         (r.nameEn || '').toLowerCase().includes(s) ||
         (r.category || '').toLowerCase().includes(s) ||
-        (r.supplierName || '').toLowerCase().includes(s)
+        (r.supplierName || '').toLowerCase().includes(s) ||
+        (r.colors || '').toLowerCase().includes(s)
     );
   }, [rows, q]);
 
@@ -60,7 +71,7 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
       name: form.name.trim(),
       nameEn: form.nameEn.trim() || undefined,
       category: form.category.trim() || undefined,
-      images: [],
+      images: form.imageDataUrl ? [form.imageDataUrl] : [],
       specs: form.specs.trim() || undefined,
       moq: form.moq ? Number(form.moq) : undefined,
       currency: form.currency || 'USD',
@@ -72,7 +83,7 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
       createdAt: now,
       updatedAt: now,
     };
-    persist([sku, ...rows]);
+    persist(mergeCatalogImports(rows, [sku]));
     setForm({
       skuCode: '',
       name: '',
@@ -83,8 +94,9 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
       currency: 'USD',
       specs: '',
       supplierName: '',
+      imageDataUrl: '',
     });
-    setMsg(`已添加 ${sku.skuCode}（仅写入产品库，不影响 CRM）`);
+    setMsg(`已添加 ${sku.skuCode}（图片可在设计模块选用）`);
   };
 
   const removeSku = (id: string) => {
@@ -92,46 +104,58 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
     persist(rows.filter((r) => r.id !== id));
   };
 
-  const importJson = (file: File) => {
+  const onManualImage = async (file: File | null) => {
+    if (!file || !file.type.startsWith('image/')) return;
     const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const parsed = JSON.parse(String(reader.result || '[]'));
-        const list = Array.isArray(parsed) ? parsed : parsed?.items;
-        if (!Array.isArray(list) || !list.length) {
-          setMsg('JSON 需为 SKU 数组或 { items: [] }');
-          return;
-        }
-        const now = Date.now();
-        const incoming: CatalogSku[] = list.map((raw: any, i: number) => ({
-          id: String(raw.id || newId() + i),
-          skuCode: String(raw.skuCode || raw.sku || `IMPORT-${i + 1}`),
-          name: String(raw.name || raw.title || '未命名'),
-          nameEn: raw.nameEn ? String(raw.nameEn) : undefined,
-          category: raw.category ? String(raw.category) : undefined,
-          images: Array.isArray(raw.images) ? raw.images.map(String) : [],
-          specs: raw.specs ? String(raw.specs) : undefined,
-          moq: raw.moq != null ? Number(raw.moq) : undefined,
-          currency: String(raw.currency || 'USD'),
-          factoryPrice: raw.factoryPrice != null ? Number(raw.factoryPrice) : undefined,
-          packing: raw.packing ? String(raw.packing) : undefined,
-          supplierName: raw.supplierName ? String(raw.supplierName) : undefined,
-          source: 'import' as const,
-          externalId: raw.externalId ? String(raw.externalId) : undefined,
-          ownerUsername: currentUser.username,
-          departmentId: currentUser.departmentId,
-          createdAt: now,
-          updatedAt: now,
-        }));
-        const byCode = new Map(rows.map((r) => [r.skuCode.toLowerCase(), r]));
-        for (const s of incoming) byCode.set(s.skuCode.toLowerCase(), s);
-        persist([...byCode.values()]);
-        setMsg(`已导入/合并 ${incoming.length} 条到产品库（独立存储）`);
-      } catch (e: any) {
-        setMsg(`导入失败：${e?.message || e}`);
-      }
+    reader.onload = async () => {
+      const raw = String(reader.result || '');
+      const compressed = await compressImageDataUrl(raw);
+      setForm((f) => ({ ...f, imageDataUrl: compressed }));
     };
-    reader.readAsText(file);
+    reader.readAsDataURL(file);
+  };
+
+  const importExcel = async (file: File) => {
+    setBusy(true);
+    setMsg('正在解析 Excel 与产品图…');
+    try {
+      const { skus, imageCount, skipped } = await parseCatalogExcelFile(file);
+      const now = Date.now();
+      const incoming: CatalogSku[] = skus.map((raw, i) => ({
+        id: newId() + i,
+        skuCode: raw.skuCode,
+        name: raw.name,
+        nameEn: raw.nameEn,
+        category: raw.category,
+        images: raw.images || [],
+        specs: raw.specs,
+        moq: raw.moq,
+        currency: raw.currency || 'USD',
+        factoryPrice: raw.factoryPrice,
+        packing: raw.packing,
+        certificates: raw.certificates,
+        colors: raw.colors,
+        cartonQty: raw.cartonQty,
+        innerBox: raw.innerBox,
+        cartonSpec: raw.cartonSpec,
+        grossNetKg: raw.grossNetKg,
+        supplierName: raw.supplierName,
+        source: 'import',
+        externalId: raw.externalId,
+        ownerUsername: currentUser.username,
+        departmentId: currentUser.departmentId,
+        createdAt: now,
+        updatedAt: now,
+      }));
+      persist(mergeCatalogImports(rows, incoming));
+      setMsg(
+        `已导入/合并 ${incoming.length} 款（含图 ${imageCount} 张${skipped ? `，跳过空行 ${skipped}` : ''}）。可在设计模块选用产品图二次创作。`
+      );
+    } catch (e: any) {
+      setMsg(`导入失败：${e?.message || e}`);
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -144,27 +168,51 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
             </div>
             <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">产品库</h2>
             <p className="text-sm text-slate-500 font-medium mt-1 max-w-2xl">
-              管理本司 SKU：货号、品名、规格、价格与供应商。支持手工录入与 JSON 导入。
+              管理本司 SKU：货号、品名、规格、价格与产品图。支持 Excel 模板下载/上传；图片可供平面/3D/视频设计二次创作。
             </p>
           </div>
           <div className="text-right text-sm font-black text-slate-700">{rows.length} 款</div>
         </div>
         <div className="flex flex-wrap gap-2 mt-4">
-          <label className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white text-slate-800 text-xs font-black px-3 py-2.5 cursor-pointer">
-            <Upload size={14} /> 导入 JSON
-            <input
-              type="file"
-              accept="application/json,.json"
-              className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) importJson(f);
-                e.target.value = '';
-              }}
-            />
-          </label>
+          <button
+            type="button"
+            onClick={() => {
+              try {
+                downloadCatalogExcelTemplate();
+              } catch (e: any) {
+                setMsg(e?.message || '下载失败');
+              }
+            }}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white text-slate-800 text-xs font-black px-3 py-2.5"
+          >
+            <Download size={14} /> 下载 Excel 模板
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => fileRef.current?.click()}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-xs font-black px-3 py-2.5 disabled:opacity-50"
+          >
+            {busy ? <Loader2 className="animate-spin" size={14} /> : <Upload size={14} />}
+            {busy ? '导入中…' : '导入 Excel'}
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void importExcel(f);
+              e.target.value = '';
+            }}
+          />
         </div>
-        {msg && <p className="mt-3 text-xs font-bold text-violet-800 bg-violet-50 border border-violet-100 rounded-xl px-3 py-2">{msg}</p>}
+        {msg && (
+          <p className="mt-3 text-xs font-bold text-violet-800 bg-violet-50 border border-violet-100 rounded-xl px-3 py-2">
+            {msg}
+          </p>
+        )}
       </div>
 
       <div className="grid lg:grid-cols-3 gap-4">
@@ -196,6 +244,34 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
               />
             </div>
           ))}
+          <div>
+            <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-0.5">
+              产品图（可选）
+            </label>
+            <button
+              type="button"
+              onClick={() => imgRef.current?.click()}
+              className="w-full min-h-[72px] rounded-xl border-2 border-dashed border-violet-200 bg-violet-50/40 flex flex-col items-center justify-center gap-1 text-violet-800 text-xs font-black"
+            >
+              {form.imageDataUrl ? (
+                <img src={form.imageDataUrl} alt="" className="max-h-20 object-contain rounded-lg" />
+              ) : (
+                <>
+                  <ImageIcon size={16} /> 上传产品图
+                </>
+              )}
+            </button>
+            <input
+              ref={imgRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                void onManualImage(e.target.files?.[0] || null);
+                e.target.value = '';
+              }}
+            />
+          </div>
           <button
             type="button"
             onClick={addSku}
@@ -213,12 +289,15 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
               placeholder="搜索货号 / 品名 / 品类…"
               className="flex-1 min-w-[160px] rounded-xl border border-slate-200 px-3 py-2 text-sm"
             />
-            <span className="text-[10px] font-bold text-slate-400">{filtered.length} / {rows.length}</span>
+            <span className="text-[10px] font-bold text-slate-400">
+              {filtered.length} / {rows.length}
+            </span>
           </div>
-          <div className="overflow-x-auto max-h-[28rem]">
+          <div className="overflow-x-auto max-h-[32rem]">
             <table className="w-full text-left text-sm">
               <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-wider text-slate-500 sticky top-0">
                 <tr>
+                  <th className="px-3 py-2 w-14">图</th>
                   <th className="px-3 py-2">货号</th>
                   <th className="px-3 py-2">品名</th>
                   <th className="px-3 py-2">品类</th>
@@ -230,17 +309,41 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
               <tbody>
                 {filtered.map((r) => (
                   <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50/80">
+                    <td className="px-3 py-2">
+                      {r.images?.[0] ? (
+                        <img
+                          src={r.images[0]}
+                          alt=""
+                          className="w-11 h-11 rounded-lg object-cover border border-slate-200 bg-white"
+                        />
+                      ) : (
+                        <div className="w-11 h-11 rounded-lg bg-slate-100 flex items-center justify-center text-slate-300">
+                          <ImageIcon size={14} />
+                        </div>
+                      )}
+                    </td>
                     <td className="px-3 py-2 font-mono text-xs font-bold">{r.skuCode}</td>
                     <td className="px-3 py-2 font-medium">
                       {r.name}
-                      {r.nameEn ? <span className="block text-[10px] text-slate-400">{r.nameEn}</span> : null}
+                      {r.nameEn ? (
+                        <span className="block text-[10px] text-slate-400">{r.nameEn}</span>
+                      ) : null}
+                      {r.colors ? (
+                        <span className="block text-[10px] text-slate-400 truncate max-w-[14rem]">
+                          {r.colors}
+                        </span>
+                      ) : null}
                     </td>
                     <td className="px-3 py-2 text-slate-500 text-xs">{r.category || '—'}</td>
                     <td className="px-3 py-2 text-xs font-bold text-slate-700">
                       {r.factoryPrice != null ? `${r.currency || ''} ${r.factoryPrice}` : '—'}
-                      {r.moq != null ? <span className="text-slate-400 font-medium"> / MOQ {r.moq}</span> : null}
+                      {r.moq != null ? (
+                        <span className="text-slate-400 font-medium"> / MOQ {r.moq}</span>
+                      ) : null}
                     </td>
-                    <td className="px-3 py-2 text-[10px] font-black uppercase text-slate-400">{r.source}</td>
+                    <td className="px-3 py-2 text-[10px] font-black uppercase text-slate-400">
+                      {r.source === 'import' ? 'Excel' : r.source}
+                    </td>
                     <td className="px-3 py-2">
                       <button
                         type="button"
@@ -255,8 +358,8 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
                 ))}
                 {!filtered.length && (
                   <tr>
-                    <td colSpan={6} className="px-3 py-10 text-center text-slate-400 text-sm font-medium">
-                      暂无 SKU，请手工录入或导入 JSON
+                    <td colSpan={7} className="px-3 py-10 text-center text-slate-400 text-sm font-medium">
+                      暂无 SKU，请下载模板填写后导入，或手工录入
                     </td>
                   </tr>
                 )}

@@ -30,8 +30,9 @@ export enum ModuleType {
   SITE_BUILDER = 'site_builder',
   SOCIAL_CONTENT = 'social_content',
   /** —— 联动板块 —— */
+  /** 联系工具（WhatsApp / Skype / 微信等官方登录） */
   WHATSAPP = 'whatsapp',
-  /** 序列开发信（多封跟进 + 打开追踪） */
+  /** @deprecated 已并入开发策略，导航已移除 */
   EMAIL_SEQUENCE = 'email_sequence',
   /** —— 生态板块 —— */
   ECO_PARTS = 'eco_parts',
@@ -206,7 +207,7 @@ export interface MailGroup {
   email1: string;
   email2: string;
   email3: string;
-  /** 毅冰 Mail Group：多变主题 */
+  /** 开发信组：多变主题 */
   subject1?: string;
   subject2?: string;
   subject3?: string;

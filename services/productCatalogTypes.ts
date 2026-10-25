@@ -9,6 +9,7 @@ export type CatalogSku = {
   name: string;
   nameEn?: string;
   category?: string;
+  /** dataURL / https，供设计·平面/3D/视频等模块二次创作 */
   images: string[];
   specs?: string;
   moq?: number;
@@ -16,6 +17,12 @@ export type CatalogSku = {
   factoryPrice?: number;
   packing?: string;
   certificates?: string[];
+  /** 工厂报价扩展 */
+  colors?: string;
+  cartonQty?: string;
+  innerBox?: string;
+  cartonSpec?: string;
+  grossNetKg?: string;
   supplierName?: string;
   supplierId?: string;
   source: ProductSource;
@@ -60,7 +67,7 @@ export const syncCatalogFromProvider = async (
     // 官方开放 API 文档齐备后在此请求 meta.apiBase；当前不伪造数据，避免脏库。
     return {
       ok: false,
-      message: `${label} 凭证已保存。官方同步接口接通后将自动拉取 SKU；现可先用「导入 JSON / 手工录入」。`,
+      message: `${label} 凭证已保存。官方同步接口接通后将自动拉取 SKU；现可先用「Excel 导入 / 手工录入」。`,
       count: 0,
     };
   } catch (e: any) {

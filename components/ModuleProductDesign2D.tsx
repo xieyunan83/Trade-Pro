@@ -163,6 +163,10 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser }) => {
     setConfirmOpen(false);
     const proj = ensureProject();
     const finalPrompt = buildFinalPrompt();
+    const boundSku =
+      skus.find((s) => s.id === skuPick || s.skuCode === skuPick) ||
+      skus.find((s) => s.skuCode === proj.skuCode);
+    const refImages = (boundSku?.images || []).filter(Boolean).slice(0, 2);
     const userMsg = {
       id: newDesignId('m'),
       role: 'user' as const,
@@ -178,6 +182,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser }) => {
         size,
         n: count,
         thinkingMode: true,
+        referenceImages: refImages.length ? refImages : undefined,
       });
       const now = Date.now();
       const newAssets: DesignAsset[] = result.images.map((url) => ({
@@ -435,9 +440,26 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser }) => {
               {skus.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.skuCode} · {s.name}
+                  {s.images?.length ? ' · 有图' : ''}
                 </option>
               ))}
             </select>
+            {(() => {
+              const s = skus.find((x) => x.id === skuPick);
+              if (!s?.images?.[0]) return null;
+              return (
+                <div className="mt-2 flex items-center gap-2">
+                  <img
+                    src={s.images[0]}
+                    alt=""
+                    className="w-12 h-12 rounded-lg object-cover border border-violet-100"
+                  />
+                  <span className="text-[10px] font-bold text-violet-700">
+                    生成时将用此产品图作参考二次创作
+                  </span>
+                </div>
+              );
+            })()}
           </div>
           <div>
             <label className="text-[10px] font-black text-slate-400 uppercase">当前 Skill</label>

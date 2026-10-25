@@ -16,6 +16,10 @@ backups/
 file_list.txt
 fetch_search.txt
 
+# Desktop client build artifacts (installers are large; keep source under desktop/)
+desktop/release/
+desktop/*.log
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

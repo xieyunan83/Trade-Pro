@@ -28,7 +28,6 @@ import {
   Truck,
   Warehouse,
   FileSpreadsheet,
-  MailPlus,
   type LucideIcon,
 } from 'lucide-react';
 import { ModuleType } from '../types';
@@ -130,8 +129,8 @@ export const PLATFORM_SECTIONS: PlatformSection[] = [
     items: [
       {
         id: ModuleType.SITE_BUILDER,
-        label: '独立站 / 货源站',
-        sub: 'Site',
+        label: '网站设计开发',
+        sub: 'Web Studio',
         icon: Code2,
       },
       {
@@ -153,18 +152,10 @@ export const PLATFORM_SECTIONS: PlatformSection[] = [
       { id: ModuleType.CLIENT_CRM, label: '客户管理', sub: 'CRM', icon: Briefcase },
       { id: ModuleType.EMAIL_CAMPAIGN, label: '邮件营销', sub: 'DirectMail', icon: Mail },
       {
-        id: ModuleType.EMAIL_SEQUENCE,
-        label: '序列开发信',
-        sub: 'Sequences',
-        icon: MailPlus,
-        comingSoon: true,
-      },
-      {
         id: ModuleType.WHATSAPP,
-        label: 'WhatsApp 联系',
-        sub: 'WhatsApp',
+        label: '联系工具',
+        sub: 'IM',
         icon: MessageCircle,
-        comingSoon: true,
       },
       { id: ModuleType.PROMO_GENERATOR, label: '营销工具', sub: 'Tools', icon: Ruler },
     ],

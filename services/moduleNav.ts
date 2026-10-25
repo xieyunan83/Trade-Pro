@@ -14,7 +14,6 @@ export const ALWAYS_ACTIVE_MODULES: ModuleType[] = [
   ModuleType.PRODUCT_MATCH,
   ModuleType.STRATEGY,
   ModuleType.EMAIL_CAMPAIGN,
-  ModuleType.EMAIL_SEQUENCE,
   ModuleType.IMAGE_GENERATOR,
   ModuleType.PRODUCT_CATALOG,
   ModuleType.PRODUCT_QUOTE,

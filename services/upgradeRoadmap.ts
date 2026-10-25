@@ -101,8 +101,8 @@ export const MODULE_ROADMAP: Partial<Record<ModuleType, ModuleRoadmap>> = {
   },
   [ModuleType.SITE_BUILDER]: {
     phase: 'P0',
-    summary: '对话描述即构建货源落地页；实时预览、多语、挂 SKU、导出 HTML。',
-    bullets: ['对话驱动改版', '右侧实时预览', '多语与产品库', '询盘回灌 CRM（后续）'],
+    summary: '网站设计开发：对话描述即构建；内置模板；实时预览与导出 HTML。',
+    bullets: ['对话描述即构建', '内置外贸/品牌模板', '桌面/手机预览', '挂产品库 · 导出 HTML'],
     providers: ['qwen'],
   },
   [ModuleType.SOCIAL_CONTENT]: {
@@ -113,16 +113,13 @@ export const MODULE_ROADMAP: Partial<Record<ModuleType, ModuleRoadmap>> = {
   },
   [ModuleType.EMAIL_SEQUENCE]: {
     phase: 'P1',
-    summary: '多封序列开发信：打开/回复追踪、退订、时区定时。',
-    bullets: ['3～5 封序列模板', '与 CRM / 策略模块联动', '额度与退订合规'],
-    inspiredBy: ['网易外贸通 · 邮件', '苏维 · EDM'],
-    providers: ['directmail'],
+    summary: '已并入「开发策略」生成开发信，本入口已下线。',
+    bullets: ['请使用开发策略 · 生成开发信'],
   },
   [ModuleType.WHATSAPP]: {
-    phase: 'P1',
-    summary: 'WhatsApp 深链 / Business API 会话与询盘回灌。',
-    bullets: ['点击唤起', '会话记录进 CRM 时间线'],
-    inspiredBy: ['网易 · WhatsApp', '全球搜'],
+    phase: 'P0',
+    summary: '联系工具：登录本人 WhatsApp / Skype / 微信等官方网页端。',
+    bullets: ['官方窗口真实登录', 'CRM 电话一键发起会话', '不代持账号密码'],
   },
   [ModuleType.ECO_PARTS]: {
     phase: 'P2',

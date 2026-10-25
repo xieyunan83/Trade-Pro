@@ -1,17 +1,17 @@
 /**
- * 毅冰式 Mail Group 方法论（方法论蒸馏，非米课原文照搬）
- * 目标：提高回复率 + 压缩提示词 Token
+ * 开发信组（3 封短序列）方法论蒸馏：提高回复率 + 压缩提示词 Token。
+ * 前台文案勿暴露第三方课程/品牌名。
  */
 import type { AnalysisResult, MailGroup } from '../types';
 
 /** 极短规则：嵌入 system / user prompt，避免长文烧 Token */
-export const YIBING_MAIL_GROUP_RULES = `Mail Group（毅冰思路蒸馏）:
-- 目的=敲门曝光，不是一次成交；多封短信、多角度证明专业。
-- 先调研客户在卖什么/市场痛点，再匹配我方产品；禁止空泛自我介绍。
-- 每封只讲一个点；口语化英文；无废话（勿写美丽城市/悠久历史）。
-- 主题具体、多变、非推销腔；勿全大写/虚假夸张。
-- 同日连发一组；末封必须有「钩子」引导回复（样品/报价单/视频链接/方案等）。
-- 禁止：长篇、堆认证清单、催促式 follow-up、编造未提供的价格/客户名。`;
+export const YIBING_MAIL_GROUP_RULES = `Cold email sequence (3 short mails):
+- Goal = door-knocking exposure, not one-shot close; multi-angle proof of fit.
+- Research what they sell / pain points, then match our SKU; no empty self-intro.
+- One point per mail; spoken English; no fluff (no "beautiful city / long history").
+- Specific, varied subjects; no ALL CAPS / fake hype.
+- Same-day sequence; last mail must include a reply hook (sample / quote / video / plan).
+- Ban: long essays, cert dumps, pushy follow-ups, inventing prices/customer names.`;
 
 export const YIBING_MAIL_GROUP_ANGLES = [
   {
@@ -62,7 +62,7 @@ export const buildCompactOurOfferBrief = (kbSnippet: string, productContext?: st
   return parts.join('\n') || 'Offer: (use only generic factory advantages; do NOT invent prices/certs)';
 };
 
-/** 单客户 Mail Group 生成 prompt（短） */
+/** 单客户开发信组生成 prompt（短） */
 export const buildYibingMailGroupPrompt = (opts: {
   clientBrief: string;
   offerBrief: string;
@@ -74,7 +74,8 @@ export const buildYibingMailGroupPrompt = (opts: {
     (a, i) => `${i + 1}) ${a.label}: ${a.focus}`
   ).join('\n');
 
-  return `Task: Write a 3-email Mail Group (${mode === 'batch' ? 'batch template' : 'for one buyer'}).
+  return `Task: Write a 3-email cold outreach sequence (${mode === 'batch' ? 'batch template' : 'for one buyer'}).
+Do NOT mention any course brand, trainer name, or "Mail Group" in the output.
 Each email body: English, 70-110 words, 3 short paragraphs max. Sign as "Best regards," + [Your Name].
 
 Angles:
@@ -94,10 +95,10 @@ JSON only:
 };
 
 /** 策略对话：用户要写开发信时注入的短指引 */
-export const YIBING_STRATEGY_CHAT_HINT = `写开发信/Mail Group时：用毅冰思路——短、具体、多角度、末封带钩子；主题多变；英文口语；不要长篇自我介绍。优先输出可直接复制的 Subject + Body。`;
+export const YIBING_STRATEGY_CHAT_HINT = `写开发信时：短、具体、多角度、末封带钩子；主题多变；英文口语；不要长篇自我介绍。优先输出可直接复制的 Subject + Body。勿提及任何课程/个人品牌名。`;
 
 export const normalizeMailGroupResult = (res: Record<string, any>): MailGroup => ({
-  analysis: String(res.analysis || 'Mail Group 已生成').trim(),
+  analysis: String(res.analysis || '开发信已生成').trim(),
   email1: String(res.email1 || '').trim() || 'Draft 1',
   email2: String(res.email2 || '').trim() || 'Draft 2',
   email3: String(res.email3 || '').trim() || 'Draft 3',

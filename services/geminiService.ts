@@ -5008,7 +5008,7 @@ export const streamStrategyChat = async function* (
             {
               role: 'user',
               content:
-                (newMessage || '请按 Mail Group 写三封英文开发信（含 Subject）').slice(0, 6_000) +
+                (newMessage || '请写三封英文开发信（含 Subject）').slice(0, 6_000) +
                 '\n\n（说明：因请求体积限制，附件/知识库全文未上传；请基于文字描述作答。）',
             },
           ];
@@ -5059,7 +5059,7 @@ export const extractKeywordsFromMedia = async (file: KnowledgeFile): Promise<Key
 export const generateColdEmail = async (companyName: string, request: EmailTemplateRequest): Promise<string> => {
   const prompt = `${YIBING_MAIL_GROUP_RULES}
 
-Write ONE cold email (Mail Group style) for ${companyName}.
+Write ONE short cold outreach email for ${companyName}.
 Style hint: ${request.style || 'professional conversational'}
 Source: ${(request.sourceContext || '').slice(0, 200)}
 Our products: ${(request.ourProducts || '').slice(0, 300)}

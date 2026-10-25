@@ -33,8 +33,11 @@ const MODULE_ALIASES: Record<string, ModuleType> = {
   site_builder: ModuleType.SITE_BUILDER,
   social_content: ModuleType.SOCIAL_CONTENT,
   whatsapp: ModuleType.WHATSAPP,
-  email_sequence: ModuleType.EMAIL_SEQUENCE,
-  sequences: ModuleType.EMAIL_SEQUENCE,
+  contact_tools: ModuleType.WHATSAPP,
+  contacts_im: ModuleType.WHATSAPP,
+  /** 序列开发信已下线，深链转到开发策略 */
+  email_sequence: ModuleType.STRATEGY,
+  sequences: ModuleType.STRATEGY,
   eco_parts: ModuleType.ECO_PARTS,
   eco_merch: ModuleType.ECO_MERCH,
   eco_cert: ModuleType.ECO_CERT,

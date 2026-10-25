@@ -76,6 +76,8 @@ export type SiteProject = {
   title: string;
   brief: string;
   locale: 'zh' | 'en' | 'es' | 'ar';
+  /** 内置模板 id，见 siteBuilderTemplates */
+  templateId?: string;
   skuCodes: string[];
   sections: SiteSection[];
   messages: Array<{ id: string; role: 'user' | 'agent'; text: string; at: number }>;

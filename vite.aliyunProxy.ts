@@ -231,6 +231,10 @@ export function aliyunDevProxyPlugin(
       mountOriginProxy(server, '/tavily-api', () => 'https://api.tavily.com');
       // 图生 3D OpenAPI（Authorization: Bearer tsk_***）
       mountOriginProxy(server, '/tripo-api', () => 'https://api.tripo3d.ai');
+      // 发文发布：LinkedIn / Meta Graph / X
+      mountOriginProxy(server, '/linkedin-api', () => 'https://api.linkedin.com');
+      mountOriginProxy(server, '/meta-api', () => 'https://graph.facebook.com');
+      mountOriginProxy(server, '/x-api', () => 'https://api.x.com');
 
       // 本地 DirectMail：与生产 /api/directmail 同路径，便于 npm run dev 真发信
       server.middlewares.use('/api/directmail', (req, res) => {

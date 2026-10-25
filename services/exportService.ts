@@ -397,7 +397,7 @@ const addEmailStrategySlidesFromGroup = (pptx: any, mailGroup: any) => {
         const slide = pptx.addSlide();
         slide.background = { color: "FFFFFF" };
         slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 10, h: 1.0, fill: COLORS.DARK_BG });
-        slide.addText("Mail Group 策略 (毅冰思路)", { x: 0.5, y: 0.3, fontSize: 20, bold: true, color: "FFFFFF", valign: 'middle' });
+        slide.addText("开发信策略", { x: 0.5, y: 0.3, fontSize: 20, bold: true, color: "FFFFFF", valign: 'middle' });
         
         slide.addText("策略逻辑:", { x: 0.5, y: 1.3, fontSize: 12, bold: true, color: COLORS.ACCENT_BLUE });
         slide.addShape(pptx.ShapeType.rect, { x: 0.5, y: 1.6, w: 9, h: 3.5, fill: "F8FAFC", line: { color: "E2E8F0" } });

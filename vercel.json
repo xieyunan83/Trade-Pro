@@ -50,6 +50,10 @@
     "api/tripo.ts": {
       "maxDuration": 300,
       "memory": 1024
+    },
+    "api/social.ts": {
+      "maxDuration": 60,
+      "memory": 512
     }
   },
   "rewrites": [
@@ -60,6 +64,9 @@
     { "source": "/tavily-api/:path*", "destination": "/api/tavily?__upstream=/:path*" },
     { "source": "/gemini-api/:path*", "destination": "/api/qwen?__upstream=/:path*" },
     { "source": "/tripo-api/:path*", "destination": "/api/tripo?__upstream=/:path*" },
+    { "source": "/linkedin-api/:path*", "destination": "/api/social?__origin=https://api.linkedin.com&__upstream=/:path*" },
+    { "source": "/meta-api/:path*", "destination": "/api/social?__origin=https://graph.facebook.com&__upstream=/:path*" },
+    { "source": "/x-api/:path*", "destination": "/api/social?__origin=https://api.x.com&__upstream=/:path*" },
     { "source": "/api/qwen-api/:path*", "destination": "/api/qwen?__upstream=/:path*" },
     { "source": "/api/anymail-api/:path*", "destination": "/api/anymail?__upstream=/:path*" },
     { "source": "/api/hunter-api/:path*", "destination": "/api/hunter?__upstream=/:path*" },

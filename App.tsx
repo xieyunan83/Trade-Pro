@@ -107,6 +107,7 @@ import { ModuleProductMatch } from './components/ModuleProductMatch';
 import { ModuleEmailCampaign } from './components/ModuleEmailCampaign'; 
 import { ModuleImageGenerator } from './components/ModuleImageGenerator';
 import { ModuleComingSoon } from './components/ModuleComingSoon';
+import { ModuleContactTools } from './components/ModuleContactTools';
 import { ModuleProductCatalog } from './components/ModuleProductCatalog';
 import { ModuleProductQuote } from './components/ModuleProductQuote';
 import { ModuleProductDesign2D } from './components/ModuleProductDesign2D';
@@ -4465,11 +4466,12 @@ const App: React.FC = () => {
                 {activeModule === ModuleType.SOCIAL_CONTENT && currentUser && (
                     <ModuleSocialContent currentUser={currentUser} />
                 )}
+                {activeModule === ModuleType.WHATSAPP && currentUser && (
+                    <ModuleContactTools currentUser={currentUser} crmClients={crmClients} />
+                )}
                 {(
                   [
                     ModuleType.PRODUCT_3D_PRINT,
-                    ModuleType.EMAIL_SEQUENCE,
-                    ModuleType.WHATSAPP,
                     ModuleType.ECO_PARTS,
                     ModuleType.ECO_MERCH,
                     ModuleType.ECO_CERT,
@@ -4549,7 +4551,7 @@ const App: React.FC = () => {
                                 if (!hit) return c;
                                 return appendClientActivity(c, {
                                   kind: 'mail_group',
-                                  summary: '已生成 Mail Group 开发信（尚未发送）',
+                                  summary: '已生成开发信（尚未发送）',
                                   detail: emails.sendTip || emails.analysis?.slice(0, 120),
                                   by: currentUser.username,
                                 });
