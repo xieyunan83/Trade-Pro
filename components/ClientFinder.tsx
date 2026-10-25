@@ -305,7 +305,7 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
           <div className="min-w-0">
             <h2 className="text-xl sm:text-2xl font-black text-slate-800 tracking-tight">全球客户精准搜索</h2>
             <p className="text-sm text-slate-500 font-medium mt-0.5">
-              按产品关键词检索：优先调用自有买家库与海关缓存中的相关公司；不足部分再联网补搜。
+              按产品关键词、国家与客户类型精准匹配潜在买家。
             </p>
           </div>
         </div>
@@ -740,12 +740,12 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
                 <div className="flex flex-wrap gap-1.5 mb-3">
                   {res.leadSource === 'buyer_library' && (
                     <span className="inline-flex items-center gap-1 bg-teal-50 text-teal-800 px-2 py-0.5 rounded-lg text-[10px] font-black border border-teal-100">
-                      自有买家库 · 未联网
+                      优选线索
                     </span>
                   )}
                   {res.leadSource === 'customs' && (
                     <span className="inline-flex items-center gap-1 bg-sky-50 text-sky-800 px-2 py-0.5 rounded-lg text-[10px] font-black border border-sky-100">
-                      海关缓存 · 未联网
+                      贸易相关
                     </span>
                   )}
                   {res.previouslySearched && (

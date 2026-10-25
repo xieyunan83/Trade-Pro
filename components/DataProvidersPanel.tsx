@@ -104,10 +104,7 @@ export const DataProvidersPanel: React.FC<Props> = ({ currentUser }) => {
           <div>
             <h3 className="font-black text-slate-900 text-lg">数据接入（升级骨架）</h3>
             <p className="text-sm text-slate-500 font-medium mt-1 max-w-3xl leading-relaxed">
-              预填小竹熊、霄鸟云、海关、图生 3D、万相视频等凭证。自有买家库与海关情报为
-              <strong className="text-slate-700">后台数据库</strong>
-              （前台导航已隐藏）：仅在员工「客户搜索」命中相关公司时优先调用，不足再联网。
-              已有千问 / 万相图 / Tavily / Hunter 等仍在「API 配置」页管理。
+              在此配置外部数据与创作服务凭证。员工端前台不展示供应商名称与调用细节；密钥与路由请在「API 配置」页管理。
             </p>
           </div>
         </div>
@@ -145,8 +142,7 @@ export const DataProvidersPanel: React.FC<Props> = ({ currentUser }) => {
             后台数据库 · 客户搜索优先源
           </div>
           <p className="text-sm text-teal-900/80 font-medium mt-1 max-w-3xl leading-relaxed">
-            在此维护自有买家库与海关缓存。前台用户看不到独立菜单；只有搜索产品关键词时，
-            与目标相关的公司才会出现在搜索结果里，并标注「未联网」。
+            维护企业内部买家与贸易档案。前台无独立入口，由客户搜索等模块按需使用。
           </p>
         </div>
         <ModuleBuyerLibrary currentUser={currentUser} history={[]} />
@@ -228,7 +224,7 @@ export const DataProvidersPanel: React.FC<Props> = ({ currentUser }) => {
                     })
                   }
                   placeholder={
-                    def.id === 'design_agent' ? '如 wan2.7-image-pro' : '可选'
+                    def.id === 'design_agent' ? '模型 ID（可选）' : '可选'
                   }
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-mono"
                 />

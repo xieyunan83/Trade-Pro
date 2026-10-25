@@ -3885,7 +3885,7 @@ const App: React.FC = () => {
           <div className="min-h-screen min-h-[100dvh] flex flex-col items-center justify-center bg-slate-50 p-6 text-center">
               <div className="bg-red-100 p-4 rounded-full text-red-600 mb-4"><AlertTriangle size={32}/></div>
               <h2 className="text-xl font-bold text-slate-800">系统尚未配置 API 密钥</h2>
-              <p className="text-slate-500 mt-2 max-w-md text-sm sm:text-base">请联系管理员在控制台保存千问 API 配置（将同步至云端），然后重新登录。</p>
+              <p className="text-slate-500 mt-2 max-w-md text-sm sm:text-base">请联系管理员在控制台完成服务配置（将同步至云端），然后重新登录。</p>
               <button onClick={handleLogout} className="mt-6 text-blue-600 hover:underline touch-manipulation">返回登录</button>
           </div>
       );
@@ -4158,7 +4158,7 @@ const App: React.FC = () => {
               <div className="absolute inset-0 bg-mist-50/85 z-50 flex flex-col items-center justify-center backdrop-blur-md animate-fade-in cursor-wait">
                   <div className="relative"><Hourglass size={64} className="text-signal-500 animate-pulse" /><div className="absolute -top-2 -right-2 bg-rose-500 text-white w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs">{cooldownTime}</div></div>
                   <h3 className="text-2xl font-extrabold text-ink-900 mt-6 tracking-tight">API 冷却中</h3>
-                  <p className="text-slate-500 mt-2 font-medium max-w-md text-center">千问配额恢复中，倒计时结束后会自动继续当前任务（无需反复点击）。可点左侧 STOP 暂停。</p>
+                  <p className="text-slate-500 mt-2 font-medium max-w-md text-center">服务额度恢复中，倒计时结束后会自动继续当前任务（无需反复点击）。可点左侧 STOP 暂停。</p>
               </div>
           )}
 

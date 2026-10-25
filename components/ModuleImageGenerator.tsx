@@ -82,7 +82,7 @@ export const ModuleImageGenerator: React.FC = () => {
               <Image className="text-pink-600 flex-shrink-0" /> AI 图片生成
             </h2>
             <p className="text-sm text-slate-500 font-medium mb-4 sm:mb-6">
-              使用阿里云万相 <span className="font-bold text-slate-700">wan2.7-image-pro</span>
+              输入提示词，一键生成产品与营销配图。
             </p>
 
             <div className="space-y-4">

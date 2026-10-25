@@ -189,9 +189,9 @@ export const ModuleProducts: React.FC<ModuleProductsProps> = ({ data, onUpdatePr
         <div className="flex items-start gap-2 min-w-0">
           <Layers size={16} className="text-emerald-700 mt-0.5 shrink-0" />
           <div className="text-sm text-emerald-900">
-            <span className="font-black">全站品类采集</span>
+            <span className="font-black">产品品类</span>
             <span className="font-medium text-emerald-800/90">
-              ：先爬取客户官网及其它平台的全部品类与价格区间，再标注与搜索关键词的匹配。
+              ：展示客户经营品类与价格区间，并标出与当前搜索关键词的相关项。
             </span>
             {keyword ? (
               <span className="block mt-1 text-xs font-bold text-violet-700">

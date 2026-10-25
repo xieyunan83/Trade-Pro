@@ -144,8 +144,7 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
             </div>
             <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">产品库</h2>
             <p className="text-sm text-slate-500 font-medium mt-1 max-w-2xl">
-              SKU 存在独立键 <code className="text-xs bg-slate-100 px-1 rounded">trade_scout_product_catalog_v1</code>
-              ，与 CRM / 背调历史隔离。小竹熊、霄鸟云同步由管理员在「系统管理 → 数据接入」配置与触发。
+              管理本司 SKU：货号、品名、规格、价格与供应商。支持手工录入与 JSON 导入。
             </p>
           </div>
           <div className="text-right text-sm font-black text-slate-700">{rows.length} 款</div>

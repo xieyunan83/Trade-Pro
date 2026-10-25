@@ -103,17 +103,13 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser }) => {
       ...job,
       status: providerReady ? 'ready' : 'ready',
       previewHint: providerReady
-        ? '任务已排队完成（预览占位）。导出将在 API 接通后返回真实网格。'
-        : '已生成预览任务。请在「数据接入」配置图生 3D API 后拉取真实模型；当前可先整理提示词与参考图。',
+        ? '预览已就绪。服务开通后可导出网格文件。'
+        : '任务已保存。服务开通后可生成并导出模型；当前可先完善描述与参考图。',
       updatedAt: Date.now(),
     };
     persist([done, ...jobs.filter((j) => j.id !== job.id)]);
     setBusy(false);
-    setMsg(
-      providerReady
-        ? '3D 任务完成（占位预览）。接通供应商后可下载网格。'
-        : '已记录任务。管理员配置图生 3D 密钥后可出真实模型。'
-    );
+    setMsg(providerReady ? '3D 预览已就绪' : '任务已保存，开通服务后可导出模型');
   };
 
   const removeJob = (id: string) => {
@@ -137,7 +133,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser }) => {
             </p>
           </div>
           <div className="text-[10px] font-bold text-slate-500 bg-white border border-slate-200 rounded-xl px-3 py-2">
-            图生 3D API：{providerReady ? '已配置' : '未配置（可先建任务）'}
+            服务状态：{providerReady ? '已就绪' : '可先建任务'}
           </div>
         </div>
       </div>
@@ -295,7 +291,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser }) => {
                   className="relative max-h-64 rounded-2xl shadow-2xl shadow-indigo-500/20 object-contain opacity-90"
                 />
                 <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 text-[10px] font-black bg-indigo-500/90 px-2 py-1 rounded-lg whitespace-nowrap">
-                  3D 旋转预览位 · API 接通后替换为网格
+                  3D 预览区
                 </div>
               </div>
             ) : active ? (
@@ -317,8 +313,8 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser }) => {
                   onClick={() =>
                     setMsg(
                       providerReady
-                        ? `${f} 导出将在 API 返回文件后可用`
-                        : `请先配置图生 3D API，再导出 ${f}`
+                        ? `${f} 导出将在文件就绪后可用`
+                        : `服务开通后可导出 ${f}`
                     )
                   }
                   className="inline-flex items-center gap-1 rounded-lg bg-white/10 hover:bg-white/15 text-[11px] font-black px-2.5 py-1.5"

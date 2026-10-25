@@ -222,7 +222,7 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
           </span>
           <span className="inline-flex items-center gap-1.5 text-slate-400">
             <Sparkles size={12} />
-            背调时会自动采集全站品类与价格并入库；「补做产品品类」只用于旧背调缺数据的客户。
+            已背调客户的产品品类可用于新品匹配；旧记录若缺品类，可用「补做产品品类」补全。
           </span>
         </div>
       </div>

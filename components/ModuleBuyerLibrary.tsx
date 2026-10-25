@@ -37,12 +37,10 @@ export const ModuleBuyerLibrary: React.FC<Props> = ({ currentUser, history }) =>
     const hits = searchBuyerLibrary(q, rows);
     if (hits.length > 0) {
       setOnlineHint(null);
-      setMsg(`库内命中 ${hits.length} 条（未调用在线搜索，不产生 API 费用）`);
+      setMsg(`库内命中 ${hits.length} 条`);
       return;
     }
-    setOnlineHint(
-      '库内无命中。后续将自动走 Tavily/AnySearch 补搜并写回本库；当前请先用「从背调导入」充实库，或在客户搜索模块继续在线找客。'
-    );
+    setOnlineHint('库内暂无匹配。可先从背调导入或手工添加，也可在客户搜索中继续找客。');
     setMsg('库内 0 条 · 建议先导入背调或手工添加');
   };
 
@@ -133,13 +131,8 @@ export const ModuleBuyerLibrary: React.FC<Props> = ({ currentUser, history }) =>
           <Library size={14} /> Buyer Library
         </div>
         <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">自有买家库（后台）</h2>
-        <p className="text-xs text-teal-800/80 font-bold mt-1">
-          前台已隐藏 · 仅在「客户搜索」命中相关公司时注入结果
-        </p>
         <p className="text-sm text-slate-500 font-medium mt-1 max-w-3xl">
-          检索顺序：先搜本库 → 未命中再在线补搜（在线补搜接通后启用）。存储键{' '}
-          <code className="text-xs bg-slate-100 px-1 rounded">trade_scout_buyer_library_v1</code>
-          。从背调导入只是复制，<strong className="text-slate-700">不会动你的 1200+ 背调与 CRM</strong>。
+          维护企业内部买家档案。可从背调历史复制入库，不会修改原有背调与 CRM 记录。
         </p>
         <div className="flex flex-wrap gap-2 mt-4">
           <div className="relative flex-1 min-w-[200px]">

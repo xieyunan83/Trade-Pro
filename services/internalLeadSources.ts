@@ -94,8 +94,8 @@ const buyerToLead = (r: BuyerRecord, productKeyword: string): ClientSearchResult
     name: r.companyName,
     website: r.domain || '',
     description: r.industry
-      ? `自有买家库命中 · 行业/品类：${r.industry}`
-      : '自有买家库命中 · 无需联网补搜',
+      ? `优选线索 · 行业/品类：${r.industry}`
+      : '优选线索 · 已匹配产品关键词',
     country: r.country || '',
     clientType: '',
     mainProducts: r.industry || productKeyword,
@@ -103,7 +103,7 @@ const buyerToLead = (r: BuyerRecord, productKeyword: string): ClientSearchResult
     city: '',
     contactHint: contactBits.join(' · ') || undefined,
     fitScore: 5,
-    fitReason: `库内已有档案（来源 ${r.source}），优先直接调用，未走互联网搜索`,
+    fitReason: '与搜索目标匹配的优选线索',
     searchKeyword: productKeyword,
     searchCountry: r.country || undefined,
     leadSource: 'buyer_library',
@@ -122,8 +122,8 @@ const customsToLead = (r: CustomsShipment, productKeyword: string): ClientSearch
     name,
     website: '',
     description: r.productDesc
-      ? `海关记录命中 · ${r.productDesc.slice(0, 120)}`
-      : `海关记录命中${r.hsCode ? ` · HS ${r.hsCode}` : ''}`,
+      ? `贸易相关 · ${r.productDesc.slice(0, 120)}`
+      : `贸易相关${r.hsCode ? ` · HS ${r.hsCode}` : ''}`,
     country: market,
     clientType: r.consignee ? 'Importer' : 'Exporter',
     mainProducts: r.productDesc || productKeyword,
@@ -131,7 +131,7 @@ const customsToLead = (r: CustomsShipment, productKeyword: string): ClientSearch
     city: '',
     contactHint: contactBits.join(' · ') || undefined,
     fitScore: 5,
-    fitReason: `海关/提单缓存命中${r.date ? `（${r.date}）` : ''}，优先直接调用，未走互联网搜索`,
+    fitReason: `贸易相关线索${r.date ? `（${r.date}）` : ''}`,
     searchKeyword: productKeyword,
     searchCountry: market || undefined,
     leadSource: 'customs',
@@ -216,9 +216,7 @@ export const mergeInternalOverOnline = (
         mainProducts: existing.mainProducts || r.mainProducts,
         fitScore: Math.max(existing.fitScore || 0, r.fitScore || 0) || existing.fitScore,
         leadSource: existing.leadSource,
-        fitReason:
-          existing.fitReason ||
-          `库内已有档案，已跳过对该公司的互联网重复取证`,
+        fitReason: existing.fitReason || '与搜索目标匹配的优选线索',
       });
       continue;
     }

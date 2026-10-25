@@ -141,9 +141,9 @@ export const ManagerSystemPanel: React.FC<ManagerSystemPanelProps> = ({
                 </div>
               )}
               <div className="rounded-2xl border border-cyan-100 bg-cyan-50/70 p-4 text-xs font-bold text-cyan-900 leading-relaxed">
-                本部门员工执行背调（Qwen）、客户搜索（Tavily）、决策人挖掘（Anymail）时，会
-                <strong>优先调用你在此添加的 Key</strong>
-                ；耗尽后再回退到系统全局 Key / 环境变量。
+                本部门员工执行背调、客户搜索、决策人挖掘时，会
+                <strong>优先使用你在此添加的 Key</strong>
+                ；用尽后再使用系统全局配置。
               </div>
               {msg && <p className="text-xs font-bold text-emerald-700">{msg}</p>}
 

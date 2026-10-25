@@ -29,8 +29,8 @@ export const getDesignAgentConfigStatus = (): {
   if (design.enabled && (design.apiKey || '').trim()) {
     return {
       configured: true,
-      label: '设计 Agent API',
-      detail: design.extra?.modelId || design.apiBase || '已配置专属 Key',
+      label: '生图服务已就绪',
+      detail: '可开始创作',
     };
   }
   const wan = listPoolKeys('wan');
@@ -38,14 +38,14 @@ export const getDesignAgentConfigStatus = (): {
   if (wan.length || qwen.length || env.wanApiKey || env.qwenApiKey) {
     return {
       configured: true,
-      label: '万相 / 千问（回退）',
-      detail: '未配专属设计 Agent 时使用现有万相生图',
+      label: '生图服务已就绪',
+      detail: '可开始创作',
     };
   }
   return {
     configured: false,
-    label: '未配置',
-    detail: '请到管理后台「数据接入」填写设计 Agent，或配置万相 Key',
+    label: '待配置',
+    detail: '请联系管理员开通生图服务',
   };
 };
 

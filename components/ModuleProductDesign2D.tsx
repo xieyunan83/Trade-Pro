@@ -84,7 +84,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser }) => {
         {
           id: newDesignId('m'),
           role: 'agent',
-          text: `你好，我是产品设计 Agent（理念参考 Lovart：描述目标 → 选 Skill → 确认后出图 → 资产留在画布）。当前 Skill「${sk.label}」：${sk.hint}`,
+          text: `你好，我是产品设计助手。请选择 Skill、描述需求，确认后生成平面图。当前 Skill「${sk.label}」：${sk.hint}`,
           at: now,
         },
       ],
@@ -242,16 +242,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser }) => {
           </div>
           <h2 className="text-xl font-extrabold text-slate-900 mt-1.5">产品设计 · 平面图</h2>
           <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1 max-w-2xl leading-relaxed">
-            参考{' '}
-            <a
-              href="https://www.lovart.ai/"
-              target="_blank"
-              rel="noreferrer"
-              className="text-violet-700 font-bold underline-offset-2 hover:underline"
-            >
-              Lovart
-            </a>
-            ：用 Agent 对话出片，Skills 一键工作流，结果落在画布资产区。存储独立（design_projects / design_assets），不改 CRM。
+            选择 Skill、描述需求并确认后生成平面图，结果保存在本项目画布中，可下载复用。
           </p>
         </div>
         <div className="text-right shrink-0">
@@ -497,7 +488,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser }) => {
             {loading ? 'Agent 生成中…' : '确认生成'}
           </button>
           <p className="text-[10px] text-slate-400 font-medium leading-relaxed">
-            高消耗需确认卡。API 在管理后台「数据接入 → 设计 Agent」配置；未配时回退万相。
+            生成前需确认，避免误消耗额度。
           </p>
         </aside>
       </div>

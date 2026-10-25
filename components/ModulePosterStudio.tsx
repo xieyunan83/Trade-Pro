@@ -263,9 +263,8 @@ export const ModulePosterStudio: React.FC = () => {
           <Sparkles className="text-pink-600" /> 产品海报工作室
         </h2>
         <p className="text-sm text-slate-500 font-medium mb-4">
-          {isMobile ? '手机可拍照或上传' : '电脑端请上传产品图'} → 填资料 → 选 LOGO →{' '}
-          <span className="font-bold text-slate-700">wan2.7-image-pro</span> 生成单列实景长图。
-          规则：大字少字、≥5 段不同使用场景、不画虚拟包装、不做乱细节。装箱量/外箱等字段仅作后台记录，默认不上图。
+          {isMobile ? '手机可拍照或上传' : '电脑端请上传产品图'} → 填资料 → 选 LOGO → 生成单列实景长图。
+          建议：大字少字、多段使用场景、避免虚拟包装与杂乱细节。装箱量等字段默认不上图。
         </p>
 
         <div className="flex gap-2 mb-4">

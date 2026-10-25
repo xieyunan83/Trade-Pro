@@ -66,15 +66,10 @@ export const ModuleCustomsIntel: React.FC<Props> = ({ currentUser }) => {
           <Ship size={14} /> Customs
         </div>
         <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">海关情报（后台）</h2>
-        <p className="text-xs text-sky-800/80 font-bold mt-1">
-          前台已隐藏 · 仅在「客户搜索」命中相关贸易记录时注入结果
-        </p>
         <p className="text-sm text-slate-500 font-medium mt-1 max-w-3xl">
-          查询结果缓存在{' '}
-          <code className="text-xs bg-slate-100 px-1 rounded">trade_scout_customs_cache_v1</code>
-          ，与 CRM / 背调完全隔离。配置状态：
+          查询与维护贸易相关记录。配置状态：
           <span className={`ml-1 font-black ${meta.enabled ? 'text-emerald-600' : 'text-amber-600'}`}>
-            {meta.enabled ? '已启用数据源' : '未配置（仅本地缓存）'}
+            {meta.enabled ? '已启用' : '未启用外采（可用本地数据）'}
           </span>
         </p>
         <div className="flex flex-wrap gap-2 mt-4">

@@ -98,8 +98,8 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser }) => {
       ...job,
       status: 'draft',
       previewHint: providerReady
-        ? '样片已就绪（占位）。确认后进入正片渲染队列。'
-        : '样片任务已创建。请在「数据接入」配置视频 API 后出真实样片；当前可先打磨分镜与提示词。',
+        ? '样片已就绪。确认后进入正片。'
+        : '样片任务已创建。服务开通后可出片；当前可先完善分镜与描述。',
       updatedAt: Date.now(),
     };
     persist([done, ...jobs.filter((j) => j.id !== job.id)]);
@@ -118,8 +118,8 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser }) => {
       status: 'ready',
       draftConfirmed: true,
       previewHint: providerReady
-        ? '正片任务完成（占位）。API 接通后可下载成片。'
-        : '正片标记完成。配置视频 API 后可拉取成片文件。',
+        ? '正片已完成。可下载成片。'
+        : '正片已确认。服务开通后可下载成片。',
       updatedAt: Date.now(),
     };
     persist(jobs.map((j) => (j.id === active.id ? ready : j)));
@@ -148,7 +148,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser }) => {
             </p>
           </div>
           <div className="text-[10px] font-bold text-slate-500 bg-white border border-slate-200 rounded-xl px-3 py-2">
-            视频 API：{providerReady ? '已配置' : '未配置（可先建任务）'}
+            服务状态：{providerReady ? '已就绪' : '可先建任务'}
           </div>
         </div>
       </div>
