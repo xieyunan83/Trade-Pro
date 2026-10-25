@@ -59,9 +59,8 @@ export const DATA_PROVIDER_DEFS: DataProviderDef[] = [
   },
   {
     id: 'tripo',
-    label: 'Tripo 图生 3D',
-    description: '产品 3D 生成 API（credits）',
-    docsHint: 'https://www.tripo3d.ai/',
+    label: '图生 3D API',
+    description: '产品图/文 → 3D 网格（GLB 等），按供应商 credits 计费',
   },
   {
     id: 'hunyuan3d',

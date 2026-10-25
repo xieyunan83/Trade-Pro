@@ -110,6 +110,10 @@ import { ModuleComingSoon } from './components/ModuleComingSoon';
 import { ModuleProductCatalog } from './components/ModuleProductCatalog';
 import { ModuleProductQuote } from './components/ModuleProductQuote';
 import { ModuleProductDesign2D } from './components/ModuleProductDesign2D';
+import { ModuleProductDesign3D } from './components/ModuleProductDesign3D';
+import { ModuleProductAiVideo } from './components/ModuleProductAiVideo';
+import { ModuleSiteBuilder } from './components/ModuleSiteBuilder';
+import { ModuleSocialContent } from './components/ModuleSocialContent';
 import { SphereNav, type SphereNavPhase } from './components/SphereNav';
 import { ClientFinder } from './components/ClientFinder';
 import { RecordsPanel, archiveToDiscoveryState } from './components/RecordsPanel';
@@ -4308,13 +4312,21 @@ const App: React.FC = () => {
                 {activeModule === ModuleType.PRODUCT_DESIGN_2D && currentUser && (
                     <ModuleProductDesign2D currentUser={currentUser} />
                 )}
+                {activeModule === ModuleType.PRODUCT_DESIGN_3D && currentUser && (
+                    <ModuleProductDesign3D currentUser={currentUser} />
+                )}
+                {activeModule === ModuleType.PRODUCT_AI_VIDEO && currentUser && (
+                    <ModuleProductAiVideo currentUser={currentUser} />
+                )}
+                {activeModule === ModuleType.SITE_BUILDER && currentUser && (
+                    <ModuleSiteBuilder currentUser={currentUser} />
+                )}
+                {activeModule === ModuleType.SOCIAL_CONTENT && currentUser && (
+                    <ModuleSocialContent currentUser={currentUser} />
+                )}
                 {(
                   [
-                    ModuleType.PRODUCT_DESIGN_3D,
                     ModuleType.PRODUCT_3D_PRINT,
-                    ModuleType.PRODUCT_AI_VIDEO,
-                    ModuleType.SITE_BUILDER,
-                    ModuleType.SOCIAL_CONTENT,
                     ModuleType.EMAIL_SEQUENCE,
                     ModuleType.WHATSAPP,
                     ModuleType.ECO_PARTS,

@@ -387,7 +387,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser }) => {
                 </div>
                 <p className="text-sm font-black text-slate-700">空画布</p>
                 <p className="text-xs text-slate-500 font-medium mt-1 max-w-sm leading-relaxed">
-                  选左侧 Skill → 下方描述需求 → 确认生成。也可挂接「我方产品库」SKU，让 Agent 围绕真实货号出图。
+                  选左侧 Skill → 下方描述需求 → 确认生成。也可挂接「产品库」SKU，让 Agent 围绕真实货号出图。
                 </p>
               </div>
             ) : (

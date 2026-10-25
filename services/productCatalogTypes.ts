@@ -1,5 +1,5 @@
 /**
- * 我方产品库 · 类型与本地存根（功能实现前可手工/导入占位）
+ * 产品库 · 类型与本地存根（小竹熊/霄鸟云同步在管理后台接通）
  */
 export type ProductSource = 'manual' | 'toysbear' | 'skybird' | 'ai_redesign' | 'import';
 

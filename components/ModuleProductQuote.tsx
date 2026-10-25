@@ -116,7 +116,7 @@ export const ModuleProductQuote: React.FC<Props> = ({ currentUser }) => {
         </div>
         <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">报价 / 选品单</h2>
         <p className="text-sm text-slate-500 font-medium mt-1">
-          从「我方产品库」挑款生成报价草稿。存储键{' '}
+          从「产品库」挑款生成报价草稿。存储键{' '}
           <code className="text-xs bg-slate-100 px-1 rounded">trade_scout_quotes_v1</code>
           ，与客户 CRM 隔离。
         </p>

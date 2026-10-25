@@ -1,13 +1,11 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { Plus, RefreshCw, Trash2, Warehouse, Upload } from 'lucide-react';
+import { Plus, Trash2, Warehouse, Upload } from 'lucide-react';
 import type { User } from '../types';
 import {
   type CatalogSku,
   loadCatalogSkus,
   saveCatalogSkus,
-  syncCatalogFromProvider,
 } from '../services/productCatalogTypes';
-import { loadDataProviderLocal } from '../services/dataProviders';
 
 type Props = {
   currentUser: User;
@@ -15,12 +13,11 @@ type Props = {
 
 const newId = () => `sku_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
-/** 我方产品库：本地 SKU + 小竹熊/霄鸟云同步入口（独立存储，不碰 CRM） */
+/** 产品库：本地 SKU 录入/导入（小竹熊/霄鸟云同步在管理后台） */
 export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
   const [rows, setRows] = useState<CatalogSku[]>(() => loadCatalogSkus());
   const [q, setQ] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
     skuCode: '',
     name: '',
@@ -50,9 +47,6 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
         (r.supplierName || '').toLowerCase().includes(s)
     );
   }, [rows, q]);
-
-  const toysbear = loadDataProviderLocal('toysbear');
-  const skybird = loadDataProviderLocal('skybird');
 
   const addSku = () => {
     if (!form.skuCode.trim() || !form.name.trim()) {
@@ -96,23 +90,6 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
   const removeSku = (id: string) => {
     if (!confirm('从产品库删除该 SKU？不会删除 CRM 或背调记录。')) return;
     persist(rows.filter((r) => r.id !== id));
-  };
-
-  const runSync = async (provider: 'toysbear' | 'skybird') => {
-    const meta = loadDataProviderLocal(provider);
-    if (!meta.enabled || !meta.apiKey) {
-      setMsg(`${provider === 'toysbear' ? '小竹熊' : '霄鸟云'} 未在「管理后台 → 数据接入」启用/填写 Key`);
-      return;
-    }
-    setBusy(true);
-    setMsg(null);
-    const res = await syncCatalogFromProvider(provider);
-    setBusy(false);
-    setMsg(res.message);
-    // API 接通后会返回 SKU；当前仅提示配置状态
-    if (res.ok && res.count > 0) {
-      // reserved for merge
-    }
   };
 
   const importJson = (file: File) => {
@@ -165,34 +142,15 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
             <div className="inline-flex items-center gap-2 text-violet-700 font-black text-xs uppercase tracking-widest">
               <Warehouse size={14} /> Product Catalog
             </div>
-            <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">我方产品库</h2>
+            <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">产品库</h2>
             <p className="text-sm text-slate-500 font-medium mt-1 max-w-2xl">
               SKU 存在独立键 <code className="text-xs bg-slate-100 px-1 rounded">trade_scout_product_catalog_v1</code>
-              ，与 CRM / 背调历史隔离。可对接小竹熊、霄鸟云（需管理员在「数据接入」配置）。
+              ，与 CRM / 背调历史隔离。小竹熊、霄鸟云同步由管理员在「系统管理 → 数据接入」配置与触发。
             </p>
           </div>
-          <div className="text-right text-sm font-black text-slate-700">
-            {rows.length} 款
-            <div className="text-[10px] font-bold text-slate-400 mt-0.5">小竹熊 {toysbear.enabled ? '已启用' : '未配'} · 霄鸟 {skybird.enabled ? '已启用' : '未配'}</div>
-          </div>
+          <div className="text-right text-sm font-black text-slate-700">{rows.length} 款</div>
         </div>
         <div className="flex flex-wrap gap-2 mt-4">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void runSync('toysbear')}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 text-white text-xs font-black px-3 py-2.5 disabled:opacity-50"
-          >
-            <RefreshCw size={14} className={busy ? 'animate-spin' : ''} /> 同步小竹熊
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void runSync('skybird')}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white text-slate-800 text-xs font-black px-3 py-2.5"
-          >
-            <RefreshCw size={14} /> 同步霄鸟云
-          </button>
           <label className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white text-slate-800 text-xs font-black px-3 py-2.5 cursor-pointer">
             <Upload size={14} /> 导入 JSON
             <input
@@ -224,86 +182,84 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
               ['factoryPrice', '出厂价'],
               ['moq', 'MOQ'],
               ['currency', '币种'],
-              ['supplierName', '厂家'],
+              ['specs', '规格'],
+              ['supplierName', '供应商'],
             ] as const
-          ).map(([k, label]) => (
-            <div key={k}>
-              <label className="text-[10px] font-black text-slate-400 uppercase">{label}</label>
+          ).map(([key, label]) => (
+            <div key={key}>
+              <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-0.5">
+                {label}
+              </label>
               <input
-                className="w-full mt-0.5 rounded-lg border border-slate-200 px-2.5 py-2 text-sm"
-                value={(form as any)[k]}
-                onChange={(e) => setForm((f) => ({ ...f, [k]: e.target.value }))}
+                value={form[key]}
+                onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
               />
             </div>
           ))}
-          <div>
-            <label className="text-[10px] font-black text-slate-400 uppercase">规格</label>
-            <textarea
-              className="w-full mt-0.5 rounded-lg border border-slate-200 px-2.5 py-2 text-sm"
-              rows={2}
-              value={form.specs}
-              onChange={(e) => setForm((f) => ({ ...f, specs: e.target.value }))}
-            />
-          </div>
           <button
             type="button"
             onClick={addSku}
-            className="w-full rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-sm font-black py-2.5"
+            className="w-full rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-xs font-black py-2.5 mt-1"
           >
-            加入产品库
+            添加到产品库
           </button>
         </div>
 
-        <div className="lg:col-span-2 rounded-2xl border border-slate-200 bg-white p-4">
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="搜索货号 / 品名 / 厂家…"
-            className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-medium mb-3"
-          />
+        <div className="lg:col-span-2 rounded-2xl border border-slate-200 bg-white overflow-hidden">
+          <div className="p-3 border-b border-slate-100 flex flex-wrap gap-2 items-center">
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="搜索货号 / 品名 / 品类…"
+              className="flex-1 min-w-[160px] rounded-xl border border-slate-200 px-3 py-2 text-sm"
+            />
+            <span className="text-[10px] font-bold text-slate-400">{filtered.length} / {rows.length}</span>
+          </div>
           <div className="overflow-x-auto max-h-[28rem]">
-            <table className="w-full text-left text-sm min-w-[640px]">
-              <thead className="text-[10px] uppercase tracking-wider text-slate-400 font-black border-b">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-wider text-slate-500 sticky top-0">
                 <tr>
-                  <th className="py-2 pr-2">货号</th>
-                  <th className="py-2 pr-2">品名</th>
-                  <th className="py-2 pr-2">价/MOQ</th>
-                  <th className="py-2 pr-2">来源</th>
-                  <th className="py-2" />
+                  <th className="px-3 py-2">货号</th>
+                  <th className="px-3 py-2">品名</th>
+                  <th className="px-3 py-2">品类</th>
+                  <th className="px-3 py-2">价 / MOQ</th>
+                  <th className="px-3 py-2">来源</th>
+                  <th className="px-3 py-2 w-10" />
                 </tr>
               </thead>
               <tbody>
-                {filtered.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="py-8 text-center text-slate-400 font-bold">
-                      暂无 SKU，请手工添加、导入 JSON，或配置同步
+                {filtered.map((r) => (
+                  <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50/80">
+                    <td className="px-3 py-2 font-mono text-xs font-bold">{r.skuCode}</td>
+                    <td className="px-3 py-2 font-medium">
+                      {r.name}
+                      {r.nameEn ? <span className="block text-[10px] text-slate-400">{r.nameEn}</span> : null}
+                    </td>
+                    <td className="px-3 py-2 text-slate-500 text-xs">{r.category || '—'}</td>
+                    <td className="px-3 py-2 text-xs font-bold text-slate-700">
+                      {r.factoryPrice != null ? `${r.currency || ''} ${r.factoryPrice}` : '—'}
+                      {r.moq != null ? <span className="text-slate-400 font-medium"> / MOQ {r.moq}</span> : null}
+                    </td>
+                    <td className="px-3 py-2 text-[10px] font-black uppercase text-slate-400">{r.source}</td>
+                    <td className="px-3 py-2">
+                      <button
+                        type="button"
+                        onClick={() => removeSku(r.id)}
+                        className="text-slate-300 hover:text-rose-500"
+                        title="删除"
+                      >
+                        <Trash2 size={14} />
+                      </button>
                     </td>
                   </tr>
-                ) : (
-                  filtered.map((r) => (
-                    <tr key={r.id} className="border-b border-slate-50">
-                      <td className="py-2.5 pr-2 font-mono text-xs font-bold">{r.skuCode}</td>
-                      <td className="py-2.5 pr-2">
-                        <div className="font-bold text-slate-800">{r.name}</div>
-                        {r.nameEn && <div className="text-[11px] text-slate-400">{r.nameEn}</div>}
-                      </td>
-                      <td className="py-2.5 pr-2 text-xs font-semibold text-slate-600">
-                        {r.factoryPrice != null ? `${r.currency || ''} ${r.factoryPrice}` : '—'}
-                        {r.moq != null ? ` / MOQ ${r.moq}` : ''}
-                      </td>
-                      <td className="py-2.5 pr-2 text-[11px] font-bold text-slate-400">{r.source}</td>
-                      <td className="py-2.5">
-                        <button
-                          type="button"
-                          onClick={() => removeSku(r.id)}
-                          className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50"
-                          title="删除"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))
+                ))}
+                {!filtered.length && (
+                  <tr>
+                    <td colSpan={6} className="px-3 py-10 text-center text-slate-400 text-sm font-medium">
+                      暂无 SKU，请手工录入或导入 JSON
+                    </td>
+                  </tr>
                 )}
               </tbody>
             </table>

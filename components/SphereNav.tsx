@@ -256,6 +256,10 @@ export const SphereNav: React.FC<Props> = ({
                               ModuleType.PRODUCT_CATALOG,
                               ModuleType.PRODUCT_QUOTE,
                               ModuleType.PRODUCT_DESIGN_2D,
+                              ModuleType.PRODUCT_DESIGN_3D,
+                              ModuleType.PRODUCT_AI_VIDEO,
+                              ModuleType.SITE_BUILDER,
+                              ModuleType.SOCIAL_CONTENT,
                             ] as ModuleType[]
                           ).includes(item.id)
                         ? 'NEW'

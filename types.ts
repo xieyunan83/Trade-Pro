@@ -18,7 +18,7 @@ export enum ModuleType {
   /** 海关情报：提单/贸易伙伴关联公司档案 */
   CUSTOMS_INTEL = 'customs_intel',
   /** —— 产品板块 —— */
-  /** 我方产品库（可同步小竹熊 / 霄鸟云） */
+  /** 产品库（小竹熊 / 霄鸟云同步在管理后台） */
   PRODUCT_CATALOG = 'product_catalog',
   /** 报价 / 选品单 / PI 草稿 */
   PRODUCT_QUOTE = 'product_quote',

@@ -78,7 +78,7 @@ export const PLATFORM_SECTIONS: PlatformSection[] = [
     items: [
       {
         id: ModuleType.PRODUCT_CATALOG,
-        label: '我方产品库',
+        label: '产品库',
         sub: 'Catalog',
         icon: Warehouse,
       },
@@ -99,7 +99,6 @@ export const PLATFORM_SECTIONS: PlatformSection[] = [
         label: '产品设计 · 3D 图',
         sub: '3D Model',
         icon: Box,
-        comingSoon: true,
       },
       {
         id: ModuleType.IMAGE_GENERATOR,
@@ -117,9 +116,8 @@ export const PLATFORM_SECTIONS: PlatformSection[] = [
       {
         id: ModuleType.PRODUCT_AI_VIDEO,
         label: '产品 AI 视频',
-        sub: 'Short Drama',
+        sub: 'AI Video',
         icon: Clapperboard,
-        comingSoon: true,
       },
     ],
   },
@@ -133,16 +131,14 @@ export const PLATFORM_SECTIONS: PlatformSection[] = [
       {
         id: ModuleType.SITE_BUILDER,
         label: '独立站 / 货源站',
-        sub: 'Vibe Site',
+        sub: 'Site',
         icon: Code2,
-        comingSoon: true,
       },
       {
         id: ModuleType.SOCIAL_CONTENT,
         label: '发文素材加工',
         sub: 'Social',
         icon: Share2,
-        comingSoon: true,
       },
     ],
   },

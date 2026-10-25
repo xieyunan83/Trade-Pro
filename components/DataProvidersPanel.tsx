@@ -1,5 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import { Database, ExternalLink, Loader2, Save, CheckCircle2, AlertTriangle } from 'lucide-react';
+import {
+  Database,
+  ExternalLink,
+  Loader2,
+  Save,
+  CheckCircle2,
+  AlertTriangle,
+  RefreshCw,
+} from 'lucide-react';
 import type { User } from '../types';
 import {
   DATA_PROVIDER_DEFS,
@@ -8,6 +16,7 @@ import {
   loadAllDataProviders,
   saveDataProvider,
 } from '../services/dataProviders';
+import { syncCatalogFromProvider } from '../services/productCatalogTypes';
 import { CRM_ENHANCEMENT_ROADMAP, PHASE_LABEL } from '../services/upgradeRoadmap';
 import { ModuleBuyerLibrary } from './ModuleBuyerLibrary';
 import { ModuleCustomsIntel } from './ModuleCustomsIntel';
@@ -29,6 +38,7 @@ export const DataProvidersPanel: React.FC<Props> = ({ currentUser }) => {
   const [map, setMap] = useState<Record<string, DataProviderMeta>>({});
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [syncingId, setSyncingId] = useState<'toysbear' | 'skybird' | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => {
@@ -64,6 +74,16 @@ export const DataProvidersPanel: React.FC<Props> = ({ currentUser }) => {
       ok: true,
       text: ok ? `${label} 已保存（本地 + 云端）` : `${label} 已写入本地；云端未同步（检查 Supabase）`,
     });
+  };
+
+  const onSyncCatalog = async (provider: 'toysbear' | 'skybird') => {
+    setSyncingId(provider);
+    setMsg(null);
+    // 先落盘当前表单，避免未点保存就点同步
+    await saveDataProvider(provider, map[provider] || blank());
+    const res = await syncCatalogFromProvider(provider);
+    setSyncingId(null);
+    setMsg({ ok: res.ok, text: res.message });
   };
 
   if (loading) {
@@ -224,15 +244,33 @@ export const DataProvidersPanel: React.FC<Props> = ({ currentUser }) => {
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm resize-y"
                 />
               </div>
-              <button
-                type="button"
-                onClick={() => void onSave(def.id)}
-                disabled={savingId === def.id}
-                className="inline-flex items-center gap-2 rounded-xl bg-slate-900 text-white text-xs font-black px-4 py-2.5 hover:bg-slate-800 disabled:opacity-60"
-              >
-                {savingId === def.id ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                保存
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void onSave(def.id)}
+                  disabled={savingId === def.id}
+                  className="inline-flex items-center gap-2 rounded-xl bg-slate-900 text-white text-xs font-black px-4 py-2.5 hover:bg-slate-800 disabled:opacity-60"
+                >
+                  {savingId === def.id ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                  保存
+                </button>
+                {(def.id === 'toysbear' || def.id === 'skybird') && (
+                  <button
+                    type="button"
+                    onClick={() => void onSyncCatalog(def.id as 'toysbear' | 'skybird')}
+                    disabled={syncingId === def.id}
+                    className="inline-flex items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 text-violet-900 text-xs font-black px-4 py-2.5 hover:bg-violet-100 disabled:opacity-60"
+                    title="同步到前台「产品库」；官方 API 接通后再拉取"
+                  >
+                    {syncingId === def.id ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : (
+                      <RefreshCw size={14} />
+                    )}
+                    {def.id === 'toysbear' ? '同步小竹熊 → 产品库' : '同步霄鸟云 → 产品库'}
+                  </button>
+                )}
+              </div>
             </div>
           );
         })}
