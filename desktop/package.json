@@ -9,10 +9,12 @@
   "private": true,
   "scripts": {
     "start": "electron .",
-    "pack": "electron-builder --dir",
-    "dist": "electron-builder --mac --win",
-    "dist:mac": "electron-builder --mac",
-    "dist:win": "electron-builder --win"
+    "pack:seed": "node scripts/pack-seed.mjs",
+    "ensure-seed": "node -e \"const fs=require('fs');const {encryptSeed}=require('./lib/seedCrypto');fs.mkdirSync('resources',{recursive:true});if(!fs.existsSync('resources/seed.bin')){fs.writeFileSync('resources/seed.bin',encryptSeed({version:1,createdAt:Date.now(),note:'placeholder',localStorage:{}}));console.log('wrote placeholder seed');}else console.log('seed.bin ok');\"",
+    "pack": "npm run ensure-seed && electron-builder --dir",
+    "dist": "npm run ensure-seed && electron-builder --mac --win",
+    "dist:mac": "npm run ensure-seed && electron-builder --mac",
+    "dist:win": "npm run ensure-seed && electron-builder --win"
   },
   "build": {
     "appId": "ltd.babyworld.app",
@@ -25,7 +27,14 @@
     "files": [
       "main.js",
       "preload.js",
-      "package.json"
+      "package.json",
+      "lib/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/seed.bin",
+        "to": "seed.bin"
+      }
     ],
     "asar": true,
     "mac": {

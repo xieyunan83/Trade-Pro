@@ -4,7 +4,7 @@ import { GlobalConfig, ApiConfig, TaskType, User, KnowledgeFile, Department } fr
 import { 
   Settings, Shield, Key, Bell, Save, Plus, Trash2, Globe, Server, 
   CheckCircle2, AlertTriangle, LogOut, Users, Database, 
-  RefreshCw, X, FileText, Upload, Play, Loader2,
+  RefreshCw, X, FileText, Upload, Play, Loader2, Download,
   Youtube, Music, Video, FileSpreadsheet, FilePieChart, FileCode, Image, Mail, Building2
 } from 'lucide-react';
 import { getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/db';
@@ -37,6 +37,7 @@ import {
   isConvertibleKbFile,
 } from '../services/kbMarkdownConvert';
 import { DataProvidersPanel } from './DataProvidersPanel';
+import { downloadDesktopSeedJson } from '../services/desktopSeedExport';
 
 type AdminTab = 'api' | 'data' | 'users' | 'org' | 'kb';
 
@@ -1192,6 +1193,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     </p>
                   </div>
                   <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      try {
+                        const seed = downloadDesktopSeedJson('seed.private.json');
+                        const n = Object.keys(seed.localStorage).length;
+                        setSaveConfigMsg({
+                          ok: true,
+                          text: `已下载桌面种子（${n} 项）。放到工程 desktop/seed.private.json 后执行 npm run pack:seed 并重新打包安装包。`,
+                        });
+                      } catch (e: any) {
+                        setSaveConfigMsg({
+                          ok: false,
+                          text: `导出种子失败：${e?.message || String(e)}`,
+                        });
+                      }
+                    }}
+                    className="bg-teal-700 hover:bg-teal-600 text-white px-4 sm:px-6 py-3 rounded-xl font-black flex items-center justify-center gap-2 shadow-lg touch-manipulation"
+                    title="把本机账号与 API 配置打进桌面安装包"
+                  >
+                    <Download size={20} />
+                    导出桌面客户端种子
+                  </button>
                   <button
                     onClick={handleSaveApiConfigs}
                     disabled={isSavingConfigs}

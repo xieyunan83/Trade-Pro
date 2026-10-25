@@ -19,6 +19,8 @@ fetch_search.txt
 # Desktop client build artifacts (installers are large; keep source under desktop/)
 desktop/release/
 desktop/*.log
+desktop/seed.private.json
+desktop/resources/seed.bin
 
 # Editor directories and files
 .vscode/*

@@ -1,14 +1,14 @@
 /**
  * BabyWorld 桌面壳：无地址栏，加载 https://babyworld.ltd
- * 外链在系统浏览器打开；平台内导航仍在窗口内。
+ * 安装包内加密种子在首次打开时写入 localStorage（换电脑也能登录/带配置）。
  */
 const { app, BrowserWindow, shell, Menu, session } = require('electron');
 const path = require('path');
+const { injectSeedIntoPage } = require('./lib/injectSeed');
 
 const APP_ORIGIN = 'https://babyworld.ltd';
 const START_URL = `${APP_ORIGIN}/`;
 
-/** 允许在应用内打开的源（含子域） */
 const isAppUrl = (url) => {
   try {
     const u = new URL(url);
@@ -38,12 +38,10 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: true,
       spellcheck: false,
-      // 不暴露开发者工具入口（仍可用快捷键时生产可关掉）
       devTools: !app.isPackaged,
     },
   });
 
-  // 无菜单栏（Windows/Linux）；macOS 保留极简应用菜单以便 Cmd+Q
   if (process.platform === 'darwin') {
     Menu.setApplicationMenu(
       Menu.buildFromTemplate([
@@ -87,9 +85,7 @@ function createWindow() {
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (isAppUrl(url)) {
-      return { action: 'allow' };
-    }
+    if (isAppUrl(url)) return { action: 'allow' };
     shell.openExternal(url).catch(() => {});
     return { action: 'deny' };
   });
@@ -101,24 +97,35 @@ function createWindow() {
     }
   });
 
-  // 标题固定为产品名，避免把页面 title 里可能出现的域名露出来
   mainWindow.on('page-title-updated', (e) => {
     e.preventDefault();
     mainWindow.setTitle('BabyWorld');
   });
 
+  // 尽早注入种子，赶在业务脚本读 localStorage 之前
+  mainWindow.webContents.on('dom-ready', () => {
+    void injectSeedIntoPage(mainWindow.webContents).catch((e) =>
+      console.error('[seed] inject failed', e)
+    );
+  });
+
+  const baseUa = mainWindow.webContents.getUserAgent().replace(/Electron\/\S+\s*/i, '');
   mainWindow.loadURL(START_URL, {
-    userAgent: mainWindow.webContents.getUserAgent().replace(/Electron\/\S+\s*/i, ''),
+    userAgent: `${baseUa} BabyWorldClient/1.0`,
   });
 }
 
 app.whenReady().then(() => {
-  // 略微伪装：去掉 Electron 标识，减少部分站点对内嵌壳的拦截
   const ses = session.defaultSession;
   ses.webRequest.onBeforeSendHeaders((details, callback) => {
     const headers = { ...details.requestHeaders };
     if (headers['User-Agent']) {
-      headers['User-Agent'] = String(headers['User-Agent']).replace(/\s*Electron\/\S+/gi, '');
+      headers['User-Agent'] = String(headers['User-Agent'])
+        .replace(/\s*Electron\/\S+/gi, '')
+        .replace(/\s*BabyWorldClient\/\S+/gi, '');
+      if (!/BabyWorldClient\//.test(headers['User-Agent'])) {
+        headers['User-Agent'] = `${headers['User-Agent']} BabyWorldClient/1.0`;
+      }
     }
     callback({ requestHeaders: headers });
   });
