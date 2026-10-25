@@ -46,6 +46,10 @@
     "api/directmail.ts": {
       "maxDuration": 30,
       "memory": 256
+    },
+    "api/tripo.ts": {
+      "maxDuration": 300,
+      "memory": 1024
     }
   },
   "rewrites": [
@@ -55,10 +59,12 @@
     { "source": "/anysearch-api/:path*", "destination": "/api/anysearch" },
     { "source": "/tavily-api/:path*", "destination": "/api/tavily?__upstream=/:path*" },
     { "source": "/gemini-api/:path*", "destination": "/api/qwen?__upstream=/:path*" },
+    { "source": "/tripo-api/:path*", "destination": "/api/tripo?__upstream=/:path*" },
     { "source": "/api/qwen-api/:path*", "destination": "/api/qwen?__upstream=/:path*" },
     { "source": "/api/anymail-api/:path*", "destination": "/api/anymail?__upstream=/:path*" },
     { "source": "/api/hunter-api/:path*", "destination": "/api/hunter?__upstream=/:path*" },
     { "source": "/api/anysearch-api/:path*", "destination": "/api/anysearch" },
-    { "source": "/api/tavily-api/:path*", "destination": "/api/tavily?__upstream=/:path*" }
+    { "source": "/api/tavily-api/:path*", "destination": "/api/tavily?__upstream=/:path*" },
+    { "source": "/api/tripo-api/:path*", "destination": "/api/tripo?__upstream=/:path*" }
   ]
 }

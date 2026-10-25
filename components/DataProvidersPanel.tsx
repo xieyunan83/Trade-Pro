@@ -197,7 +197,15 @@ export const DataProvidersPanel: React.FC<Props> = ({ currentUser }) => {
                   autoComplete="off"
                   value={meta.apiKey || ''}
                   onChange={(e) => patch(def.id, { apiKey: e.target.value })}
-                  placeholder="预留，接通后使用"
+                  placeholder={
+                    def.id === 'tripo'
+                      ? 'tsk_…（图生 3D 控制台 API Key）'
+                      : def.id === 'wan_video'
+                        ? 'sk-… / sk-sp-…（可与万相同账号）'
+                        : def.id === 'design_agent'
+                          ? '图像 API Key'
+                          : 'API Key / Token'
+                  }
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-mono"
                 />
               </div>
@@ -208,7 +216,13 @@ export const DataProvidersPanel: React.FC<Props> = ({ currentUser }) => {
                 <input
                   value={meta.apiBase || ''}
                   onChange={(e) => patch(def.id, { apiBase: e.target.value })}
-                  placeholder="https://…"
+                  placeholder={
+                    def.id === 'wan_video'
+                      ? 'https://token-plan.cn-beijing.maas.aliyuncs.com（可选）'
+                      : def.id === 'tripo'
+                        ? '默认即可，无需填写'
+                        : 'https://…'
+                  }
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
                 />
               </div>
@@ -224,7 +238,11 @@ export const DataProvidersPanel: React.FC<Props> = ({ currentUser }) => {
                     })
                   }
                   placeholder={
-                    def.id === 'design_agent' ? '模型 ID（可选）' : '可选'
+                    def.id === 'design_agent'
+                      ? '模型 ID（可选）'
+                      : def.id === 'wan_video'
+                        ? '默认 wan2.6-i2v / t2v'
+                        : '可选'
                   }
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-mono"
                 />

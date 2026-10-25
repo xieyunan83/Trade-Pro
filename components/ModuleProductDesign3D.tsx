@@ -9,10 +9,10 @@ import {
   Package,
   Layers,
   Sparkles,
+  ExternalLink,
 } from 'lucide-react';
 import type { User } from '../types';
 import { loadCatalogSkus } from '../services/productCatalogTypes';
-import { loadDataProviderLocal } from '../services/dataProviders';
 import {
   type Model3dJob,
   type Model3dMode,
@@ -21,12 +21,12 @@ import {
   saveModel3dJobs,
   newCreativeId,
 } from '../services/creativeStudioStore';
+import { generateModel3d, getModel3dProviderStatus } from '../services/model3dService';
 
 type Props = { currentUser: User };
 
 /**
- * 产品设计 · 3D：图/文生 3D、品质档、导出格式、项目库。
- * 工作流对齐主流图生 3D 工具（界面与文案不含第三方平台名）。
+ * 产品设计 · 3D：图/文生 3D、品质档、真实 GLB 导出。
  */
 export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser }) => {
   const [jobs, setJobs] = useState<Model3dJob[]>(() => loadModel3dJobs());
@@ -40,11 +40,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser }) => {
   const [activeId, setActiveId] = useState<string | null>(jobs[0]?.id || null);
   const fileRef = useRef<HTMLInputElement>(null);
   const skus = useMemo(() => loadCatalogSkus(), []);
-  const meshA = loadDataProviderLocal('tripo');
-  const meshB = loadDataProviderLocal('hunyuan3d');
-  const providerReady =
-    (meshA.enabled && !!meshA.apiKey) || (meshB.enabled && !!meshB.apiKey);
-
+  const provider = getModel3dProviderStatus();
   const active = jobs.find((j) => j.id === activeId) || null;
 
   const persist = (next: Model3dJob[]) => {
@@ -52,9 +48,21 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser }) => {
     saveModel3dJobs(next);
   };
 
+  const patchJob = (id: string, patch: Partial<Model3dJob>) => {
+    setJobs((prev) => {
+      const next = prev.map((j) => (j.id === id ? { ...j, ...patch, updatedAt: Date.now() } : j));
+      saveModel3dJobs(next);
+      return next;
+    });
+  };
+
   const onPickImage = (file: File) => {
     if (!file.type.startsWith('image/')) {
       setMsg('请上传图片文件');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setMsg('图片请小于 10MB');
       return;
     }
     const reader = new FileReader();
@@ -63,6 +71,10 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser }) => {
   };
 
   const runGenerate = async () => {
+    if (!provider.ready) {
+      setMsg(provider.detail);
+      return;
+    }
     if (mode === 'image' && !sourceImage) {
       setMsg('请先上传产品图 / 草图');
       return;
@@ -87,7 +99,8 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser }) => {
       skuCode: sku?.skuCode,
       skuName: sku?.name,
       status: 'running',
-      exportFormats: ['GLB', 'OBJ', 'STL', 'FBX'],
+      progress: 0,
+      exportFormats: ['GLB'],
       ownerUsername: currentUser.username,
       createdAt: now,
       updatedAt: now,
@@ -95,21 +108,44 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser }) => {
     persist([job, ...jobs]);
     setActiveId(job.id);
     setBusy(true);
-    setMsg(null);
+    setMsg('正在提交 3D 任务…');
 
-    // 官方图生 3D API 接通前：本地完成任务占位，避免伪造模型文件
-    await new Promise((r) => setTimeout(r, 900));
-    const done: Model3dJob = {
-      ...job,
-      status: providerReady ? 'ready' : 'ready',
-      previewHint: providerReady
-        ? '预览已就绪。服务开通后可导出网格文件。'
-        : '任务已保存。服务开通后可生成并导出模型；当前可先完善描述与参考图。',
-      updatedAt: Date.now(),
-    };
-    persist([done, ...jobs.filter((j) => j.id !== job.id)]);
-    setBusy(false);
-    setMsg(providerReady ? '3D 预览已就绪' : '任务已保存，开通服务后可导出模型');
+    try {
+      const result = await generateModel3d({
+        mode,
+        prompt: prompt.trim(),
+        sourceImage,
+        quality,
+        onProgress: (pct, status) => {
+          patchJob(job.id, {
+            progress: Math.round(pct),
+            previewHint: `生成中 ${Math.round(pct)}% · ${status}`,
+          });
+          setMsg(`生成中 ${Math.round(pct)}%`);
+        },
+      });
+      patchJob(job.id, {
+        status: 'ready',
+        progress: 100,
+        providerTaskId: result.taskId,
+        modelUrl: result.modelUrl,
+        pbrModelUrl: result.pbrModelUrl,
+        baseModelUrl: result.baseModelUrl,
+        previewImageUrl: result.previewImageUrl,
+        previewHint: '模型已就绪，可下载 GLB',
+        error: undefined,
+      });
+      setMsg('3D 模型已生成');
+    } catch (e: any) {
+      patchJob(job.id, {
+        status: 'failed',
+        error: e?.message || String(e),
+        previewHint: e?.message || '生成失败',
+      });
+      setMsg(e?.message || '生成失败');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const removeJob = (id: string) => {
@@ -118,6 +154,8 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser }) => {
     persist(next);
     if (activeId === id) setActiveId(next[0]?.id || null);
   };
+
+  const downloadUrl = active?.pbrModelUrl || active?.modelUrl || active?.baseModelUrl;
 
   return (
     <div className="max-w-[96rem] mx-auto space-y-4 animate-fade-in px-1">
@@ -129,17 +167,22 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser }) => {
             </div>
             <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">产品设计 · 3D 图</h2>
             <p className="text-sm text-slate-500 font-medium mt-1 max-w-2xl">
-              上传产品图或输入描述，生成可预览的 3D 资产；支持高细节与引擎就绪网格两档，导出 GLB / OBJ / STL。
+              上传产品图或输入描述，真实生成可下载的 3D 网格（GLB）。高细节适合渲染展示，引擎就绪适合低面数实时预览。
             </p>
           </div>
-          <div className="text-[10px] font-bold text-slate-500 bg-white border border-slate-200 rounded-xl px-3 py-2">
-            服务状态：{providerReady ? '已就绪' : '可先建任务'}
+          <div
+            className={`text-[10px] font-bold rounded-xl px-3 py-2 border ${
+              provider.ready
+                ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+                : 'text-amber-800 bg-amber-50 border-amber-200'
+            }`}
+          >
+            {provider.ready ? '服务已就绪' : '需配置 API Key'}
           </div>
         </div>
       </div>
 
       <div className="grid lg:grid-cols-12 gap-4">
-        {/* 左：创建 */}
         <div className="lg:col-span-4 space-y-3">
           <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
             <div className="flex gap-2">
@@ -181,7 +224,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser }) => {
                 <input
                   ref={fileRef}
                   type="file"
-                  accept="image/*"
+                  accept="image/png,image/jpeg,image/webp"
                   className="hidden"
                   onChange={(e) => {
                     const f = e.target.files?.[0];
@@ -193,7 +236,9 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser }) => {
             ) : null}
 
             <div>
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">描述 / 补充提示</label>
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                描述 / 补充提示
+              </label>
               <textarea
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
@@ -216,7 +261,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser }) => {
                   <div className="text-xs font-black text-slate-800 flex items-center gap-1">
                     <Sparkles size={12} /> 高细节
                   </div>
-                  <p className="text-[10px] text-slate-500 mt-1 font-medium">渲染 / 电商可视化 / 打印前雕</p>
+                  <p className="text-[10px] text-slate-500 mt-1 font-medium">高面数 · PBR 纹理</p>
                 </button>
                 <button
                   type="button"
@@ -228,7 +273,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser }) => {
                   <div className="text-xs font-black text-slate-800 flex items-center gap-1">
                     <Layers size={12} /> 引擎就绪
                   </div>
-                  <p className="text-[10px] text-slate-500 mt-1 font-medium">四边面 · 低面数 · 实时预览</p>
+                  <p className="text-[10px] text-slate-500 mt-1 font-medium">智能减面 · 实时预览</p>
                 </button>
               </div>
             </div>
@@ -258,75 +303,97 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser }) => {
               className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-black py-3 disabled:opacity-50 inline-flex items-center justify-center gap-2"
             >
               {busy ? <Loader2 className="animate-spin" size={16} /> : <Box size={16} />}
-              {busy ? '生成中…' : '生成 3D 模型'}
+              {busy ? `生成中… ${active?.progress ?? 0}%` : '生成 3D 模型'}
             </button>
             {msg && (
               <p className="text-xs font-bold text-indigo-900 bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-2">
                 {msg}
               </p>
             )}
+            {!provider.ready && (
+              <p className="text-[11px] text-amber-800 font-medium">
+                管理员请到「系统管理 → 数据接入 → 图生 3D API」启用并填写 Key。
+              </p>
+            )}
           </div>
         </div>
 
-        {/* 中：预览 */}
         <div className="lg:col-span-5 rounded-2xl border border-slate-200 bg-slate-950 text-white overflow-hidden min-h-[360px] flex flex-col">
           <div className="px-4 py-2.5 border-b border-white/10 flex items-center justify-between text-xs font-bold text-slate-300">
             <span>视口预览</span>
             {active && (
               <span className="uppercase tracking-wider text-[10px] text-indigo-300">
-                {active.status} · {active.quality === 'high_detail' ? '高细节' : '引擎就绪'}
+                {active.status}
+                {typeof active.progress === 'number' && active.status === 'running'
+                  ? ` · ${active.progress}%`
+                  : ''}{' '}
+                · {active.quality === 'high_detail' ? '高细节' : '引擎就绪'}
               </span>
             )}
           </div>
           <div className="flex-1 relative flex items-center justify-center p-6">
-            {active?.sourceImage ? (
+            {active?.status === 'running' ? (
+              <div className="text-center space-y-3">
+                <Loader2 className="mx-auto animate-spin text-indigo-400" size={36} />
+                <p className="text-sm font-bold text-slate-300">正在重建网格…</p>
+                <div className="w-48 h-1.5 rounded-full bg-white/10 mx-auto overflow-hidden">
+                  <div
+                    className="h-full bg-indigo-500 transition-all"
+                    style={{ width: `${active.progress ?? 5}%` }}
+                  />
+                </div>
+              </div>
+            ) : active?.previewImageUrl ? (
+              <img
+                src={active.previewImageUrl}
+                alt=""
+                className="max-h-72 rounded-2xl shadow-2xl shadow-indigo-500/20 object-contain"
+              />
+            ) : active?.sourceImage ? (
               <div className="relative">
-                <div
-                  className="absolute inset-0 blur-3xl opacity-40"
-                  style={{ background: 'radial-gradient(circle, #6366f1, transparent 70%)' }}
-                />
                 <img
                   src={active.sourceImage}
                   alt=""
-                  className="relative max-h-64 rounded-2xl shadow-2xl shadow-indigo-500/20 object-contain opacity-90"
+                  className="relative max-h-64 rounded-2xl object-contain opacity-80"
                 />
                 <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 text-[10px] font-black bg-indigo-500/90 px-2 py-1 rounded-lg whitespace-nowrap">
-                  3D 预览区
+                  {active.status === 'ready' ? '模型已就绪' : '参考图'}
                 </div>
               </div>
             ) : active ? (
-              <div className="text-center space-y-3">
-                <div className="mx-auto w-28 h-28 rounded-3xl bg-gradient-to-br from-indigo-500 to-violet-700 shadow-lg shadow-indigo-500/40 rotate-6" />
+              <div className="text-center space-y-2 px-4">
                 <p className="text-sm font-bold text-slate-300">{active.title}</p>
-                <p className="text-xs text-slate-500 max-w-xs mx-auto">{active.previewHint}</p>
+                <p className="text-xs text-slate-500">{active.error || active.previewHint}</p>
               </div>
             ) : (
               <p className="text-sm text-slate-500 font-medium">从左侧创建任务后在此预览</p>
             )}
           </div>
-          {active && (
+          {active?.status === 'ready' && downloadUrl && (
             <div className="px-4 py-3 border-t border-white/10 flex flex-wrap gap-2">
-              {active.exportFormats.map((f) => (
-                <button
-                  key={f}
-                  type="button"
-                  onClick={() =>
-                    setMsg(
-                      providerReady
-                        ? `${f} 导出将在文件就绪后可用`
-                        : `服务开通后可导出 ${f}`
-                    )
-                  }
-                  className="inline-flex items-center gap-1 rounded-lg bg-white/10 hover:bg-white/15 text-[11px] font-black px-2.5 py-1.5"
+              <a
+                href={downloadUrl}
+                target="_blank"
+                rel="noreferrer"
+                download
+                className="inline-flex items-center gap-1 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-[11px] font-black px-3 py-2 text-white"
+              >
+                <Download size={12} /> 下载 GLB
+              </a>
+              {active.previewImageUrl && (
+                <a
+                  href={active.previewImageUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 rounded-lg bg-white/10 hover:bg-white/15 text-[11px] font-black px-3 py-2"
                 >
-                  <Download size={12} /> {f}
-                </button>
-              ))}
+                  <ExternalLink size={12} /> 预览图
+                </a>
+              )}
             </div>
           )}
         </div>
 
-        {/* 右：历史 */}
         <div className="lg:col-span-3 rounded-2xl border border-slate-200 bg-white overflow-hidden flex flex-col max-h-[32rem]">
           <div className="px-3 py-2.5 border-b border-slate-100 text-xs font-black text-slate-700">
             项目库 ({jobs.length})
@@ -346,6 +413,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser }) => {
                     <div className="text-xs font-black text-slate-800 truncate">{j.title}</div>
                     <div className="text-[10px] text-slate-400 font-bold mt-0.5">
                       {j.mode === 'image' ? '图生' : '文生'} · {j.status}
+                      {j.modelUrl ? ' · GLB' : ''}
                     </div>
                   </div>
                   <span

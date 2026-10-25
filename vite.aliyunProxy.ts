@@ -229,6 +229,8 @@ export function aliyunDevProxyPlugin(
         stripAuthorization: true,
       });
       mountOriginProxy(server, '/tavily-api', () => 'https://api.tavily.com');
+      // 图生 3D OpenAPI（Authorization: Bearer tsk_***）
+      mountOriginProxy(server, '/tripo-api', () => 'https://api.tripo3d.ai');
 
       // 本地 DirectMail：与生产 /api/directmail 同路径，便于 npm run dev 真发信
       server.middlewares.use('/api/directmail', (req, res) => {

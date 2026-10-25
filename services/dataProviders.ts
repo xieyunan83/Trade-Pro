@@ -60,17 +60,21 @@ export const DATA_PROVIDER_DEFS: DataProviderDef[] = [
   {
     id: 'tripo',
     label: '图生 3D API',
-    description: '产品图/文 → 3D 网格（GLB 等），按供应商 credits 计费',
+    description:
+      '产品图/文 → 真实 GLB 网格。在供应商控制台创建 API Key（Bearer），启用后「产品设计 · 3D」即可生成并下载模型。',
+    docsHint: 'https://platform.tripo3d.ai/docs',
   },
   {
     id: 'hunyuan3d',
-    label: '混元 3D',
-    description: '腾讯混元图生 3D（备选 / 可本地）',
+    label: '图生 3D（备选）',
+    description: '备选图生 3D Key；当前主路径走「图生 3D API」。',
   },
   {
     id: 'wan_video',
-    label: '万相视频',
-    description: '图生视频 i2v / flash（样片→正片）',
+    label: '视频生成 API',
+    description:
+      '图生/文生视频（样片→正片）。可填通义视频 Key；未单独配置时回退「万相图片」或「千问」同账号 Key。',
+    docsHint: 'https://help.aliyun.com/zh/model-studio/image-to-video-guide',
   },
   {
     id: 'design_agent',

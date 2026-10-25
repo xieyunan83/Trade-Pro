@@ -19,7 +19,7 @@ const applyCors = (res: { setHeader: (k: string, v: string) => void }) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader(
     'Access-Control-Allow-Headers',
-    'authorization, content-type, x-qwen-origin, x-upstream-authorization, x-upstream-path, apikey, x-goog-api-key'
+    'authorization, content-type, x-qwen-origin, x-upstream-authorization, x-upstream-path, apikey, x-goog-api-key, x-dashscope-async'
   );
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
 };
@@ -135,6 +135,12 @@ export default async function handler(req: any, res: any) {
       } else {
         const auth = req.headers.authorization || req.headers['x-upstream-authorization'];
         if (auth) headers.Authorization = String(auth);
+        // 万相视频等异步任务必须透传，否则上游报不支持同步调用
+        const dashAsync =
+          req.headers['x-dashscope-async'] || req.headers['X-DashScope-Async'];
+        if (typeof dashAsync === 'string' && dashAsync.trim()) {
+          headers['X-DashScope-Async'] = dashAsync.trim();
+        }
       }
 
       const upstream = await fetch(target.toString(), {

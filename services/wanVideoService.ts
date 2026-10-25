@@ -1,0 +1,290 @@
+/**
+ * 产品 AI 视频：DashScope 异步 video-synthesis（图生/文生视频）。
+ * Key 优先「数据接入 · 视频生成 API」，否则回退万相图片 / 千问同账号 Key。
+ */
+import { env } from './env';
+import { getActivePoolKey } from './apiKeyPool';
+import {
+  buildAliyunFetchHeaders,
+  DEFAULT_TOKEN_PLAN_ORIGIN,
+  isLocalDevHost,
+  qwenCorsHint,
+  resolveQwenRequestTarget,
+} from './qwenProxy';
+import { loadDataProviderLocal } from './dataProviders';
+import { extractAliyunOrigin } from './wanImageService';
+
+export type VideoGenerateMode = 'text' | 'image' | 'reference';
+
+export type VideoGenerateInput = {
+  mode: VideoGenerateMode;
+  prompt: string;
+  sourceImage?: string;
+  referenceImages?: string[];
+  durationSec: 4 | 5 | 8 | 10 | 15;
+  aspect: '16:9' | '9:16' | '1:1';
+  resolution: '720P' | '1080P';
+  tier: 'draft' | 'full';
+  negativePrompt?: string;
+  onProgress?: (pct: number, status: string) => void;
+};
+
+export type VideoGenerateResult = {
+  taskId: string;
+  videoUrl: string;
+  raw?: unknown;
+};
+
+const VIDEO_PATH = '/api/v1/services/aigc/video-generation/video-synthesis';
+const TASK_PATH = (id: string) => `/api/v1/tasks/${encodeURIComponent(id)}`;
+
+const sanitizeKey = (k: string) =>
+  (k || '')
+    .replace(/^\uFEFF/, '')
+    .replace(/^Bearer\s+/i, '')
+    .replace(/\s+/g, '')
+    .trim();
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+const normalizeOrigin = (apiKey: string, rawBase: string): string => {
+  let origin = extractAliyunOrigin(rawBase);
+  if (apiKey.startsWith('sk-sp-') && !/token-plan/i.test(origin)) {
+    origin = DEFAULT_TOKEN_PLAN_ORIGIN;
+  }
+  return origin;
+};
+
+const readLs = (key: string) =>
+  typeof localStorage !== 'undefined' ? localStorage.getItem(key)?.trim() || '' : '';
+
+export const getVideoProviderStatus = (): { ready: boolean; detail: string } => {
+  const videoMeta = loadDataProviderLocal('wan_video');
+  const pool =
+    sanitizeKey((videoMeta.enabled && videoMeta.apiKey) || '') ||
+    sanitizeKey(getActivePoolKey('wan') || '') ||
+    sanitizeKey(getActivePoolKey('qwen') || '') ||
+    sanitizeKey(readLs('trade_scout_wan_api_key')) ||
+    sanitizeKey(readLs('trade_scout_qwen_api_key')) ||
+    sanitizeKey(env.qwenApiKey || '') ||
+    sanitizeKey(env.wanApiKey || '');
+  if (pool) {
+    return { ready: true, detail: '视频生成服务已就绪' };
+  }
+  return { ready: false, detail: '请联系管理员在「数据接入」配置视频生成 API Key' };
+};
+
+type ResolvedVideoConfig = { apiKey: string; origin: string };
+
+const resolveVideoConfig = (): ResolvedVideoConfig => {
+  const videoMeta = loadDataProviderLocal('wan_video');
+
+  const apiKey = sanitizeKey(
+    (videoMeta.enabled && videoMeta.apiKey) ||
+      getActivePoolKey('wan') ||
+      getActivePoolKey('qwen') ||
+      readLs('trade_scout_wan_api_key') ||
+      readLs('trade_scout_qwen_api_key') ||
+      env.wanApiKey ||
+      env.qwenApiKey ||
+      ''
+  );
+
+  if (!apiKey) {
+    throw new Error(
+      '未配置视频生成 API。请管理员在「系统管理 → 数据接入」启用「视频生成 API」并填写 Key（可与通义图像同一账号）。'
+    );
+  }
+
+  const rawBase =
+    (videoMeta.enabled && videoMeta.apiBase) ||
+    readLs('trade_scout_wan_base_url') ||
+    readLs('trade_scout_qwen_base_url') ||
+    env.wanBaseUrl ||
+    env.qwenBaseUrl ||
+    DEFAULT_TOKEN_PLAN_ORIGIN;
+
+  return { apiKey, origin: normalizeOrigin(apiKey, rawBase) };
+};
+
+const buildUrl = (origin: string, path: string): { url: string; proxyOrigin?: string } => {
+  const absolute = `${origin.replace(/\/$/, '')}${path}`;
+  if (isLocalDevHost()) {
+    return { url: `/qwen-api${path}`, proxyOrigin: origin };
+  }
+  const resolved = resolveQwenRequestTarget(absolute);
+  return { url: resolved.url, proxyOrigin: resolved.proxyOrigin || origin };
+};
+
+const parseJson = async (res: Response): Promise<any> => {
+  const text = await res.text();
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(`视频接口返回非 JSON（HTTP ${res.status}）：${text.slice(0, 200)}`);
+  }
+};
+
+const mapDuration = (sec: number): 5 | 10 => (sec <= 5 ? 5 : 10);
+
+const aspectToSize = (aspect: VideoGenerateInput['aspect']): string => {
+  if (aspect === '9:16') return '720*1280';
+  if (aspect === '1:1') return '960*960';
+  return '1280*720';
+};
+
+const pickModel = (mode: VideoGenerateMode, tier: 'draft' | 'full'): string => {
+  if (mode === 'text') return 'wan2.6-t2v';
+  return tier === 'draft' ? 'wan2.6-i2v-flash' : 'wan2.6-i2v';
+};
+
+const createAsyncTask = async (
+  cfg: ResolvedVideoConfig,
+  model: string,
+  input: Record<string, unknown>,
+  parameters: Record<string, unknown>
+): Promise<string> => {
+  const { url, proxyOrigin } = buildUrl(cfg.origin, VIDEO_PATH);
+  const headers = buildAliyunFetchHeaders({
+    targetUrl: url,
+    apiKey: cfg.apiKey,
+    proxyOrigin: proxyOrigin || cfg.origin,
+    extra: {
+      'X-DashScope-Async': 'enable',
+      'X-Upstream-Path': VIDEO_PATH,
+    },
+  });
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ model, input, parameters }),
+    });
+  } catch (e: any) {
+    throw new Error(`视频任务创建失败：${e?.message || e}${qwenCorsHint(e?.message)}`);
+  }
+
+  const json = await parseJson(res);
+  if (!res.ok) {
+    const msg =
+      json.message ||
+      json.code ||
+      json.error?.message ||
+      `创建视频任务失败 HTTP ${res.status}`;
+    throw new Error(String(msg));
+  }
+  const taskId = json.output?.task_id || json.task_id;
+  if (!taskId) throw new Error('创建成功但未返回 task_id');
+  return String(taskId);
+};
+
+const pollTask = async (
+  cfg: ResolvedVideoConfig,
+  taskId: string,
+  onProgress?: (pct: number, status: string) => void
+): Promise<any> => {
+  const path = TASK_PATH(taskId);
+  const { url, proxyOrigin } = buildUrl(cfg.origin, path);
+  const headers = buildAliyunFetchHeaders({
+    targetUrl: url,
+    apiKey: cfg.apiKey,
+    proxyOrigin: proxyOrigin || cfg.origin,
+    extra: { 'X-Upstream-Path': path },
+  });
+
+  const maxAttempts = 180;
+  for (let i = 0; i < maxAttempts; i++) {
+    let res: Response;
+    try {
+      res = await fetch(url, { method: 'GET', headers });
+    } catch (e: any) {
+      throw new Error(`查询视频任务失败：${e?.message || e}${qwenCorsHint(e?.message)}`);
+    }
+    const json = await parseJson(res);
+    if (!res.ok && !json.output) {
+      throw new Error(json.message || `查询视频任务失败 HTTP ${res.status}`);
+    }
+    const out = json.output || json;
+    const status = String(out.task_status || out.status || '').toUpperCase();
+    const pct =
+      status === 'SUCCEEDED' || status === 'SUCCESS'
+        ? 100
+        : status === 'RUNNING'
+          ? Math.min(92, 15 + i * 1.2)
+          : Math.min(20, 5 + i);
+    onProgress?.(pct, status.toLowerCase());
+
+    if (status === 'SUCCEEDED' || status === 'SUCCESS') return out;
+    if (status === 'FAILED' || status === 'CANCELED' || status === 'CANCELLED') {
+      throw new Error(out.message || out.code || `视频生成失败（${status}）`);
+    }
+    await sleep(3000);
+  }
+  throw new Error('视频生成超时。可缩短时长后重试，或稍后到供应商控制台查询任务。');
+};
+
+const pickVideoUrl = (out: any): string => {
+  const url = out.video_url || out.results?.[0]?.url || out.result?.video_url || '';
+  if (!url) throw new Error('任务完成但未返回视频地址');
+  return String(url);
+};
+
+/**
+ * 真实异步生成产品视频。
+ * - draft：更快 flash / 720P
+ * - full：更高质量 1080P
+ */
+export const generateProductVideo = async (input: VideoGenerateInput): Promise<VideoGenerateResult> => {
+  const cfg = resolveVideoConfig();
+  let prompt = (input.prompt || '').trim();
+  if (!prompt) throw new Error('请填写画面与运镜描述');
+
+  const model = pickModel(input.mode, input.tier);
+  const duration = mapDuration(input.durationSec);
+  const resolution = input.tier === 'draft' ? '720P' : input.resolution;
+
+  input.onProgress?.(3, 'queued');
+
+  let taskInput: Record<string, unknown>;
+  let parameters: Record<string, unknown>;
+
+  if (input.mode === 'text') {
+    taskInput = { prompt };
+    if (input.negativePrompt?.trim()) {
+      taskInput.negative_prompt = input.negativePrompt.trim();
+    }
+    parameters = {
+      size: aspectToSize(input.aspect),
+      prompt_extend: true,
+      duration,
+      watermark: false,
+    };
+  } else {
+    const imgs = [input.sourceImage, ...(input.referenceImages || [])].filter(Boolean) as string[];
+    if (!imgs.length) throw new Error('请至少上传一张参考图');
+    const imgUrl = imgs[0].trim();
+    if (!/^https?:\/\//i.test(imgUrl) && !/^data:image\//i.test(imgUrl)) {
+      throw new Error('参考图格式无效');
+    }
+    if (imgs.length > 1) {
+      prompt = `${prompt}\nKeep product identity consistent across ${imgs.length} reference frames.`;
+    }
+    taskInput = { prompt, img_url: imgUrl };
+    if (input.negativePrompt?.trim()) {
+      taskInput.negative_prompt = input.negativePrompt.trim();
+    }
+    parameters = {
+      resolution,
+      prompt_extend: true,
+      duration,
+      watermark: false,
+    };
+  }
+
+  const taskId = await createAsyncTask(cfg, model, taskInput, parameters);
+  input.onProgress?.(8, 'running');
+  const out = await pollTask(cfg, taskId, input.onProgress);
+  return { taskId, videoUrl: pickVideoUrl(out), raw: out };
+};

@@ -116,6 +116,8 @@ import { ModuleSiteBuilder } from './components/ModuleSiteBuilder';
 import { ModuleSocialContent } from './components/ModuleSocialContent';
 import { SphereNav, type SphereNavPhase } from './components/SphereNav';
 import { ClientFinder } from './components/ClientFinder';
+import { BatchBackgroundExcelPanel } from './components/BatchBackgroundExcelPanel';
+import { batchBgQueueTarget, type ClassifiedBatchBgRow } from './services/batchBackgroundExcel';
 import { RecordsPanel, archiveToDiscoveryState } from './components/RecordsPanel';
 import { Login } from './components/Login';
 import { AccessGate } from './components/AccessGate';
@@ -197,6 +199,8 @@ const App: React.FC = () => {
   const [pendingBatchContext, setPendingBatchContext] = useState<string>('');
   /** Per-domain country hints for batch 背调 (avoids hardcoding Global) */
   const [pendingBatchCountries, setPendingBatchCountries] = useState<Record<string, string>>({});
+  /** Excel 批量背调面板 */
+  const [excelBatchOpen, setExcelBatchOpen] = useState(false);
   /** 背调页排除/删除：用应用内确认，避免 window.confirm 被环境拦截 */
   const [reportConfirm, setReportConfirm] = useState<null | {
     type: 'exclude' | 'delete';
@@ -2015,34 +2019,70 @@ const App: React.FC = () => {
     return 0;
   };
 
-  // RESTORED: Update CRM status if re-analyzed
-  const updateCrmStatus = (analysis: AnalysisResult) => { 
+  /** 背调完成后：已有则更新，没有则自动入库 CRM（批量/单次共用） */
+  const updateCrmStatus = (analysis: AnalysisResult) => {
       const now = Date.now();
       const kw = (analysis.searchKeyword || '').trim();
-      setCrmClients(prev => prev.map(c => {
-          if (c.website?.toLowerCase() === analysis.companyInfo.website?.toLowerCase() || c.name === analysis.companyInfo.name) {
+      const website = analysis.companyInfo?.website || '';
+      const websiteKey = (website || '').toLowerCase();
+      const nameKey = (analysis.companyInfo?.name || '').trim().toLowerCase();
+      const patch = clientPatchFromAnalysis(analysis, website, now);
+      clearCrmTombstonesForClients([{ id: '', website, name: analysis.companyInfo?.name || '' }]);
+
+      setCrmClients((prev) => {
+          const idx = prev.findIndex(
+            (c) =>
+              (websiteKey && (c.website || '').toLowerCase() === websiteKey) ||
+              (nameKey && (c.name || '').trim().toLowerCase() === nameKey) ||
+              (normalizeCrmHost(website) &&
+                normalizeCrmHost(c.website) === normalizeCrmHost(website))
+          );
+          if (idx >= 0) {
               const searchedKeywords = Array.from(
-                new Set([...(c.searchedKeywords || []), c.searchKeyword, kw].filter(Boolean) as string[])
+                new Set(
+                  [...(prev[idx].searchedKeywords || []), prev[idx].searchKeyword, kw].filter(
+                    Boolean
+                  ) as string[]
+                )
               );
-              return { 
-                  ...c, 
+              const updated = [...prev];
+              updated[idx] = {
+                  ...updated[idx],
+                  ...patch,
                   hasAnalyzed: true,
                   hasBackgroundCheck: true,
                   lastBackgroundCheckAt: now,
-                  ownerUsername: c.ownerUsername || currentUser?.username,
-                  departmentId: c.departmentId || currentUser?.departmentId,
-                  industry: analysis.companyInfo?.nature || c.industry,
+                  ownerUsername: updated[idx].ownerUsername || currentUser?.username,
+                  departmentId: updated[idx].departmentId || currentUser?.departmentId,
                   contacts: (analysis.decisionMakers?.length
                     ? analysis.decisionMakers
-                    : c.contacts) || [],
-                  searchKeyword: kw || c.searchKeyword,
+                    : updated[idx].contacts) || [],
+                  searchKeyword: kw || updated[idx].searchKeyword,
                   searchedKeywords,
-                  tags: analysis.searchTags || c.tags,
-                  activityLog: c.activityLog + ` [Analyzed ${new Date().toLocaleDateString()}]`,
+                  tags: analysis.searchTags || updated[idx].tags,
+                  activityLog:
+                      (updated[idx].activityLog || '') +
+                      ` [Analyzed ${new Date().toLocaleDateString()}]`,
               };
+              return updated;
           }
-          return c;
-      }));
+          const newClient: Client = stampOwnership({
+              id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+              type: '进口商',
+              status: '新建/潜在',
+              isSampleNeeded: false,
+              lastOrderDate: '',
+              lastContactSent: '',
+              lastContactReceived: '',
+              nextFollowUpDate: new Date().toISOString().split('T')[0],
+              activityLog: `Auto-added after background check ${new Date().toLocaleDateString()}.`,
+              ...patch,
+              name: analysis.companyInfo?.name || website || '未命名客户',
+              website,
+              searchKeyword: kw || patch.searchKeyword,
+          } as Client);
+          return [newClient, ...prev];
+      });
   };
 
   /** 批量/单次分析完成后写入历史（IndexedDB + Supabase） */
@@ -2854,6 +2894,95 @@ const App: React.FC = () => {
         addCustomKeyword(kw);
       }
       setBatchModalOpen(true);
+  };
+
+  /** Excel 批量背调：跳过已有 → 历史补 CRM → 新客户入队 */
+  const handleExcelBatchStart = (payload: {
+    toAnalyze: ClassifiedBatchBgRow[];
+    toCrmFromHistory: ClassifiedBatchBgRow[];
+    stats: { needAnalyze: number; skipCrm: number; skipHistory: number; invalid: number; total: number };
+    mode: 'economy' | 'detailed';
+  }) => {
+    if (!hasPermission(currentUser, 'feature.batch_analyze')) {
+      alert('你没有「批量背调」权限，请联系管理员或部门主管开通。');
+      return;
+    }
+
+    let crmAdded = 0;
+    let crmUpdated = 0;
+    if (payload.toCrmFromHistory.length) {
+      const items = payload.toCrmFromHistory
+        .map((r) => r.historyItem)
+        .filter((h): h is HistoryItem => !!h?.data);
+      if (items.length) {
+        setCrmClients((prev) => {
+          const { clients, stats } = mergeHistoryItemsIntoCrm(prev, items, stampOwnership);
+          crmAdded = stats.added;
+          crmUpdated = stats.updated;
+          return clients;
+        });
+      }
+    }
+
+    if (!payload.toAnalyze.length) {
+      alert(
+        `Excel 批量完成：无需新背调。\n已跳过（CRM 已有） ${payload.stats.skipCrm} 家；` +
+          `从历史补入 CRM ${crmAdded + crmUpdated} 家（新增 ${crmAdded} / 更新 ${crmUpdated}）。`
+      );
+      return;
+    }
+
+    const limit = checkLimit('analysis');
+    if (!limit.allowed) {
+      alert(`今日背调次数已达上限（${limit.current}/${limit.max}）。请联系管理员提高限额，或明日再试。`);
+      return;
+    }
+
+    const newTasks: AutomationResult[] = payload.toAnalyze.map((row) => {
+      const target = batchBgQueueTarget(row);
+      const kw = (row.keyword || '').trim();
+      if (kw) addCustomKeyword(kw);
+      const country = (row.country || '').trim();
+      const specificCountry = /^(global|worldwide|international|国际|全球|不限)$/i.test(country)
+        ? ''
+        : country;
+      return stampOwnership({
+        id: newAutomationTaskId(),
+        clientName: row.companyName || target,
+        website: target,
+        country: specificCountry,
+        status: 'pending' as const,
+        productContext: kw || 'Excel Batch',
+        productImages: [],
+        mode: payload.mode,
+        keyword: kw || undefined,
+        createdAt: Date.now(),
+      });
+    });
+
+    for (const t of newTasks) {
+      batchSeedByIdRef.current.set(t.id, t);
+    }
+    syncAutomationResults((prev) => {
+      const ids = new Set(newTasks.map((t) => t.id));
+      return [...newTasks, ...prev.filter((t) => !ids.has(t.id))];
+    });
+    void (async () => {
+      for (const task of newTasks) {
+        try {
+          await saveAutomationTask(task);
+        } catch (e) {
+          console.warn('[excel-batch] saveAutomationTask failed', e);
+        }
+      }
+      void processBatchQueue(newTasks);
+    })();
+
+    alert(
+      `已启动 Excel 批量背调 ${newTasks.length} 家（${payload.mode === 'detailed' ? '详细' : '经济'}模式）。\n` +
+        `跳过：CRM ${payload.stats.skipCrm} · 历史 ${payload.stats.skipHistory}（补 CRM ${crmAdded + crmUpdated}）· 无效 ${payload.stats.invalid}。\n` +
+        `完成后自动写入 CRM；可在任务队列查看进度。`
+    );
   };
 
   const confirmBatchStart = async (mode: 'detailed' | 'economy') => { 
@@ -4134,9 +4263,21 @@ const App: React.FC = () => {
               />
             </div>
           </div>
-          <button onClick={() => handleAnalyzeInput()} disabled={loading || !domainInput.trim()} className="tp-btn-primary text-white px-6 sm:px-8 py-3 rounded-2xl font-extrabold disabled:opacity-50 w-full sm:w-auto sm:min-w-[140px] flex justify-center items-center touch-manipulation flex-shrink-0">
-            {loading ? <Loader2 className="animate-spin" size={20} /> : '深度调查'}
-          </button>
+          <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto flex-shrink-0">
+            {hasPermission(currentUser, 'feature.batch_analyze') && (
+              <button
+                type="button"
+                onClick={() => setExcelBatchOpen(true)}
+                className="inline-flex items-center justify-center gap-1.5 rounded-2xl border border-cyan-200 bg-cyan-50 hover:bg-cyan-100 text-cyan-900 px-4 sm:px-5 py-3 text-sm font-extrabold touch-manipulation"
+                title="下载模板并上传 Excel，批量背调与产品分析"
+              >
+                <FileSpreadsheet size={18} /> Excel 批量
+              </button>
+            )}
+            <button onClick={() => handleAnalyzeInput()} disabled={loading || !domainInput.trim()} className="tp-btn-primary text-white px-6 sm:px-8 py-3 rounded-2xl font-extrabold disabled:opacity-50 w-full sm:w-auto sm:min-w-[140px] flex justify-center items-center touch-manipulation">
+              {loading ? <Loader2 className="animate-spin" size={20} /> : '深度调查'}
+            </button>
+          </div>
           </div>
           {(activeSectionMeta || activeNavItem) && (
             <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold text-slate-500">
@@ -4716,6 +4857,14 @@ const App: React.FC = () => {
       </main>
       </div>
       
+      <BatchBackgroundExcelPanel
+        open={excelBatchOpen}
+        onClose={() => setExcelBatchOpen(false)}
+        history={history}
+        crmClients={crmClients}
+        onStart={handleExcelBatchStart}
+      />
+
       {/* Batch Modal */}
       {batchModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">

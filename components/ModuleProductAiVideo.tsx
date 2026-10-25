@@ -9,10 +9,10 @@ import {
   CheckCircle2,
   Trash2,
   Package,
+  Download,
 } from 'lucide-react';
 import type { User } from '../types';
 import { loadCatalogSkus } from '../services/productCatalogTypes';
-import { loadDataProviderLocal } from '../services/dataProviders';
 import {
   type VideoJob,
   type VideoMode,
@@ -20,12 +20,12 @@ import {
   saveVideoJobs,
   newCreativeId,
 } from '../services/creativeStudioStore';
+import { generateProductVideo, getVideoProviderStatus } from '../services/wanVideoService';
 
 type Props = { currentUser: User };
 
 /**
- * 产品 AI 视频：文/图/多参考生视频，样片确认后正片。
- * 工作流对齐主流 AI 视频工具（界面不含第三方平台名）。
+ * 产品 AI 视频：文/图/多参考真实生视频；样片确认后正片。
  */
 export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser }) => {
   const [jobs, setJobs] = useState<VideoJob[]>(() => loadVideoJobs());
@@ -41,8 +41,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser }) => {
   const [activeId, setActiveId] = useState<string | null>(jobs[0]?.id || null);
   const fileRef = useRef<HTMLInputElement>(null);
   const skus = useMemo(() => loadCatalogSkus(), []);
-  const wan = loadDataProviderLocal('wan_video');
-  const providerReady = wan.enabled && !!(wan.apiKey || '').trim();
+  const provider = getVideoProviderStatus();
   const active = jobs.find((j) => j.id === activeId) || null;
 
   const persist = (next: VideoJob[]) => {
@@ -50,18 +49,41 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser }) => {
     saveVideoJobs(next);
   };
 
+  const patchJob = (id: string, patch: Partial<VideoJob>) => {
+    setJobs((prev) => {
+      const next = prev.map((j) => (j.id === id ? { ...j, ...patch, updatedAt: Date.now() } : j));
+      saveVideoJobs(next);
+      return next;
+    });
+  };
+
   const addImages = (files: FileList | null) => {
     if (!files?.length) return;
     const list = Array.from(files).slice(0, 6);
     list.forEach((file) => {
       if (!file.type.startsWith('image/')) return;
+      if (file.size > 18 * 1024 * 1024) {
+        setMsg('单张图片请小于 18MB');
+        return;
+      }
       const reader = new FileReader();
       reader.onload = () => setImages((prev) => [...prev, String(reader.result || '')].slice(0, 6));
       reader.readAsDataURL(file);
     });
   };
 
+  const buildFullPrompt = () => {
+    const base = prompt.trim();
+    const board = storyboard.trim();
+    if (!board) return base;
+    return `${base}\n分镜：${board}`;
+  };
+
   const createDraft = async () => {
+    if (!provider.ready) {
+      setMsg(provider.detail);
+      return;
+    }
     if (!prompt.trim() && mode === 'text') {
       setMsg('请填写镜头描述');
       return;
@@ -84,6 +106,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser }) => {
       skuCode: sku?.skuCode,
       skuName: sku?.name,
       status: 'rendering',
+      progress: 0,
       draftConfirmed: false,
       ownerUsername: currentUser.username,
       createdAt: now,
@@ -92,39 +115,100 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser }) => {
     persist([job, ...jobs]);
     setActiveId(job.id);
     setBusy(true);
-    setMsg(null);
-    await new Promise((r) => setTimeout(r, 1000));
-    const done: VideoJob = {
-      ...job,
-      status: 'draft',
-      previewHint: providerReady
-        ? '样片已就绪。确认后进入正片。'
-        : '样片任务已创建。服务开通后可出片；当前可先完善分镜与描述。',
-      updatedAt: Date.now(),
-    };
-    persist([done, ...jobs.filter((j) => j.id !== job.id)]);
-    setBusy(false);
-    setMsg('样片阶段完成 — 请确认后再出正片，以控制成本');
+    setMsg('正在提交样片任务…');
+
+    try {
+      const result = await generateProductVideo({
+        mode,
+        prompt: buildFullPrompt() || 'Product showcase, smooth camera orbit, studio lighting',
+        sourceImage: images[0],
+        referenceImages: images.slice(1),
+        durationSec,
+        aspect,
+        resolution: '720P',
+        tier: 'draft',
+        negativePrompt: 'blurry, low quality, distorted product, watermark, text overlay',
+        onProgress: (pct, status) => {
+          patchJob(job.id, {
+            progress: Math.round(pct),
+            previewHint: `样片生成中 ${Math.round(pct)}% · ${status}`,
+          });
+          setMsg(`样片生成中 ${Math.round(pct)}%`);
+        },
+      });
+      patchJob(job.id, {
+        status: 'draft',
+        progress: 100,
+        providerTaskId: result.taskId,
+        draftVideoUrl: result.videoUrl,
+        previewHint: '样片已就绪。确认后进入正片。',
+        error: undefined,
+      });
+      setMsg('样片已完成 — 确认后再出正片以控制成本');
+    } catch (e: any) {
+      patchJob(job.id, {
+        status: 'failed',
+        error: e?.message || String(e),
+        previewHint: e?.message || '样片失败',
+      });
+      setMsg(e?.message || '样片失败');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const confirmFull = async () => {
     if (!active || active.status !== 'draft') return;
+    if (!provider.ready) {
+      setMsg(provider.detail);
+      return;
+    }
     setBusy(true);
-    const rendering: VideoJob = { ...active, status: 'rendering', updatedAt: Date.now() };
-    persist(jobs.map((j) => (j.id === active.id ? rendering : j)));
-    await new Promise((r) => setTimeout(r, 800));
-    const ready: VideoJob = {
-      ...rendering,
-      status: 'ready',
-      draftConfirmed: true,
-      previewHint: providerReady
-        ? '正片已完成。可下载成片。'
-        : '正片已确认。服务开通后可下载成片。',
-      updatedAt: Date.now(),
-    };
-    persist(jobs.map((j) => (j.id === active.id ? ready : j)));
-    setBusy(false);
-    setMsg('正片已确认');
+    patchJob(active.id, { status: 'rendering', progress: 0, previewHint: '正片渲染中…' });
+    setMsg('正在提交正片任务…');
+
+    try {
+      const result = await generateProductVideo({
+        mode: active.mode,
+        prompt:
+          [active.prompt, active.storyboard ? `分镜：${active.storyboard}` : '']
+            .filter(Boolean)
+            .join('\n') || 'Product hero video, cinematic lighting',
+        sourceImage: active.sourceImages[0],
+        referenceImages: active.sourceImages.slice(1),
+        durationSec: active.durationSec,
+        aspect: active.aspect,
+        resolution: '1080P',
+        tier: 'full',
+        negativePrompt: 'blurry, low quality, distorted product, watermark, text overlay',
+        onProgress: (pct, status) => {
+          patchJob(active.id, {
+            progress: Math.round(pct),
+            previewHint: `正片生成中 ${Math.round(pct)}% · ${status}`,
+          });
+          setMsg(`正片生成中 ${Math.round(pct)}%`);
+        },
+      });
+      patchJob(active.id, {
+        status: 'ready',
+        progress: 100,
+        draftConfirmed: true,
+        providerTaskId: result.taskId,
+        videoUrl: result.videoUrl,
+        previewHint: '正片已完成，可下载成片',
+        error: undefined,
+      });
+      setMsg('正片已完成');
+    } catch (e: any) {
+      patchJob(active.id, {
+        status: 'draft',
+        error: e?.message || String(e),
+        previewHint: e?.message || '正片失败，可重试',
+      });
+      setMsg(e?.message || '正片失败');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const removeJob = (id: string) => {
@@ -133,6 +217,8 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser }) => {
     persist(next);
     if (activeId === id) setActiveId(next[0]?.id || null);
   };
+
+  const playUrl = active?.videoUrl || active?.draftVideoUrl;
 
   return (
     <div className="max-w-[96rem] mx-auto space-y-4 animate-fade-in px-1">
@@ -144,11 +230,17 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser }) => {
             </div>
             <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">产品 AI 视频</h2>
             <p className="text-sm text-slate-500 font-medium mt-1 max-w-2xl">
-              文生 / 图生 / 多参考生视频；支持分镜与画幅。先出样片，确认后再渲正片。
+              文生 / 图生 / 多参考真实出片；先出样片确认，再渲更高清正片。
             </p>
           </div>
-          <div className="text-[10px] font-bold text-slate-500 bg-white border border-slate-200 rounded-xl px-3 py-2">
-            服务状态：{providerReady ? '已就绪' : '可先建任务'}
+          <div
+            className={`text-[10px] font-bold rounded-xl px-3 py-2 border ${
+              provider.ready
+                ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+                : 'text-amber-800 bg-amber-50 border-amber-200'
+            }`}
+          >
+            {provider.ready ? '服务已就绪' : '需配置 API Key'}
           </div>
         </div>
       </div>
@@ -191,7 +283,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser }) => {
                 <input
                   ref={fileRef}
                   type="file"
-                  accept="image/*"
+                  accept="image/png,image/jpeg,image/webp,image/bmp"
                   multiple={mode === 'reference'}
                   className="hidden"
                   onChange={(e) => {
@@ -202,7 +294,12 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser }) => {
                 {images.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {images.map((src, i) => (
-                      <img key={i} src={src} alt="" className="w-14 h-14 rounded-lg object-cover border border-slate-200" />
+                      <img
+                        key={i}
+                        src={src}
+                        alt=""
+                        className="w-14 h-14 rounded-lg object-cover border border-slate-200"
+                      />
                     ))}
                     <button
                       type="button"
@@ -290,11 +387,24 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser }) => {
               onClick={() => void createDraft()}
               className="w-full rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-sm font-black py-3 disabled:opacity-50 inline-flex items-center justify-center gap-2"
             >
-              {busy ? <Loader2 className="animate-spin" size={16} /> : <Play size={16} />}
-              生成样片
+              {busy && active?.status === 'rendering' && !active.draftConfirmed ? (
+                <Loader2 className="animate-spin" size={16} />
+              ) : (
+                <Play size={16} />
+              )}
+              {busy && active?.status === 'rendering' && !active.draftVideoUrl
+                ? `样片中… ${active?.progress ?? 0}%`
+                : '生成样片'}
             </button>
             {msg && (
-              <p className="text-xs font-bold text-rose-900 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2">{msg}</p>
+              <p className="text-xs font-bold text-rose-900 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2">
+                {msg}
+              </p>
+            )}
+            {!provider.ready && (
+              <p className="text-[11px] text-amber-800 font-medium">
+                管理员请到「系统管理 → 数据接入 → 视频生成 API」填写 Key（也可复用已配置的通义图像/千问 Key）。
+              </p>
             )}
           </div>
         </div>
@@ -305,23 +415,60 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser }) => {
             {active && (
               <span className="text-rose-300 text-[10px] uppercase tracking-wider">
                 {active.aspect} · {active.durationSec}s · {active.status}
+                {typeof active.progress === 'number' && active.status === 'rendering'
+                  ? ` · ${active.progress}%`
+                  : ''}
               </span>
             )}
           </div>
           <div className="flex-1 flex items-center justify-center p-6">
-            {active ? (
+            {active?.status === 'rendering' ? (
+              <div className="text-center space-y-3">
+                <Loader2 className="mx-auto animate-spin text-rose-400" size={36} />
+                <p className="text-sm font-bold text-slate-300">正在渲染视频…</p>
+                <div className="w-48 h-1.5 rounded-full bg-white/10 mx-auto overflow-hidden">
+                  <div
+                    className="h-full bg-rose-500 transition-all"
+                    style={{ width: `${active.progress ?? 5}%` }}
+                  />
+                </div>
+              </div>
+            ) : playUrl ? (
+              <video
+                key={playUrl}
+                src={playUrl}
+                controls
+                playsInline
+                className={`rounded-2xl bg-black max-h-72 ${
+                  active?.aspect === '9:16'
+                    ? 'w-40'
+                    : active?.aspect === '1:1'
+                      ? 'w-56'
+                      : 'w-full max-w-lg'
+                }`}
+              />
+            ) : active ? (
               <div
                 className={`relative bg-gradient-to-br from-rose-600/30 to-amber-500/20 border border-white/10 rounded-2xl flex items-center justify-center ${
-                  active.aspect === '9:16' ? 'w-40 h-72' : active.aspect === '1:1' ? 'w-56 h-56' : 'w-full max-w-lg aspect-video'
+                  active.aspect === '9:16'
+                    ? 'w-40 h-72'
+                    : active.aspect === '1:1'
+                      ? 'w-56 h-56'
+                      : 'w-full max-w-lg aspect-video'
                 }`}
               >
                 {active.sourceImages[0] ? (
-                  <img src={active.sourceImages[0]} alt="" className="absolute inset-0 w-full h-full object-cover rounded-2xl opacity-50" />
+                  <img
+                    src={active.sourceImages[0]}
+                    alt=""
+                    className="absolute inset-0 w-full h-full object-cover rounded-2xl opacity-50"
+                  />
                 ) : null}
                 <div className="relative z-10 text-center px-4">
-                  <Play className="mx-auto text-white/90 mb-2" size={36} />
                   <p className="text-xs font-black text-white">{active.title}</p>
-                  <p className="text-[10px] text-slate-300 mt-2 max-w-xs mx-auto">{active.previewHint}</p>
+                  <p className="text-[10px] text-slate-300 mt-2 max-w-xs mx-auto">
+                    {active.error || active.previewHint}
+                  </p>
                 </div>
               </div>
             ) : (
@@ -329,35 +476,64 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser }) => {
             )}
           </div>
           {active?.status === 'draft' && (
-            <div className="px-4 py-3 border-t border-white/10">
+            <div className="px-4 py-3 border-t border-white/10 space-y-2">
+              {active.draftVideoUrl && (
+                <a
+                  href={active.draftVideoUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  download
+                  className="w-full rounded-xl bg-white/10 hover:bg-white/15 text-white text-sm font-black py-2.5 inline-flex items-center justify-center gap-2"
+                >
+                  <Download size={16} /> 下载样片
+                </a>
+              )}
               <button
                 type="button"
                 disabled={busy}
                 onClick={() => void confirmFull()}
-                className="w-full rounded-xl bg-emerald-500 hover:bg-emerald-600 text-slate-950 text-sm font-black py-2.5 inline-flex items-center justify-center gap-2"
+                className="w-full rounded-xl bg-emerald-500 hover:bg-emerald-600 text-slate-950 text-sm font-black py-2.5 inline-flex items-center justify-center gap-2 disabled:opacity-50"
               >
-                <CheckCircle2 size={16} /> 确认样片 · 渲正片
+                {busy ? <Loader2 className="animate-spin" size={16} /> : <CheckCircle2 size={16} />}
+                确认样片 · 渲正片（1080P）
               </button>
+            </div>
+          )}
+          {active?.status === 'ready' && active.videoUrl && (
+            <div className="px-4 py-3 border-t border-white/10">
+              <a
+                href={active.videoUrl}
+                target="_blank"
+                rel="noreferrer"
+                download
+                className="w-full rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white text-sm font-black py-2.5 inline-flex items-center justify-center gap-2"
+              >
+                <Download size={16} /> 下载正片
+              </a>
             </div>
           )}
         </div>
 
         <div className="lg:col-span-3 rounded-2xl border border-slate-200 bg-white overflow-hidden max-h-[32rem] flex flex-col">
-          <div className="px-3 py-2.5 border-b border-slate-100 text-xs font-black text-slate-700">成片库 ({jobs.length})</div>
+          <div className="px-3 py-2.5 border-b border-slate-100 text-xs font-black text-slate-700">
+            成片库 ({jobs.length})
+          </div>
           <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
             {jobs.map((j) => (
               <button
                 key={j.id}
                 type="button"
                 onClick={() => setActiveId(j.id)}
-                className={`w-full text-left px-3 py-2.5 hover:bg-slate-50 ${activeId === j.id ? 'bg-rose-50' : ''}`}
+                className={`w-full text-left px-3 py-2.5 hover:bg-slate-50 ${
+                  activeId === j.id ? 'bg-rose-50' : ''
+                }`}
               >
                 <div className="flex justify-between gap-2">
                   <div className="min-w-0">
                     <div className="text-xs font-black text-slate-800 truncate">{j.title}</div>
                     <div className="text-[10px] text-slate-400 font-bold mt-0.5">
                       {j.mode} · {j.status}
-                      {j.draftConfirmed ? ' · 正片' : ''}
+                      {j.draftConfirmed ? ' · 正片' : j.draftVideoUrl ? ' · 样片' : ''}
                     </div>
                   </div>
                   <span

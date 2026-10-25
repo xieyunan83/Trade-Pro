@@ -17,8 +17,16 @@ export type Model3dJob = {
   skuCode?: string;
   skuName?: string;
   status: Model3dJobStatus;
-  /** 占位预览：用渐变 + 提示；接通 API 后换真实预览图/模型 */
+  progress?: number;
   previewHint?: string;
+  /** 上游任务 ID */
+  providerTaskId?: string;
+  /** GLB / 网格下载地址 */
+  modelUrl?: string;
+  pbrModelUrl?: string;
+  baseModelUrl?: string;
+  /** 渲染预览图 */
+  previewImageUrl?: string;
   exportFormats: string[];
   error?: string;
   ownerUsername?: string;
@@ -41,9 +49,15 @@ export type VideoJob = {
   skuCode?: string;
   skuName?: string;
   status: VideoJobStatus;
+  progress?: number;
   /** 样片确认后才进入正片 */
   draftConfirmed?: boolean;
   previewHint?: string;
+  providerTaskId?: string;
+  /** 样片视频 URL */
+  draftVideoUrl?: string;
+  /** 正片视频 URL */
+  videoUrl?: string;
   error?: string;
   ownerUsername?: string;
   createdAt: number;

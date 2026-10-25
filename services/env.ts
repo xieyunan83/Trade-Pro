@@ -155,6 +155,8 @@ export const env = {
   wanApiKey: read('REACT_APP_WAN_API_KEY'),
   wanBaseUrl: read('REACT_APP_WAN_BASE_URL'),
   wanModelId: read('REACT_APP_WAN_MODEL') || 'wan2.7-image-pro',
+  /** 图生 3D（优先管理后台「数据接入 · 图生 3D API」） */
+  tripoApiKey: read('REACT_APP_TRIPO_API_KEY'),
   defaultAIModel: (read('REACT_APP_DEFAULT_AI_MODEL') || bakedAppConfig.defaultAIModel || 'qwen') as DefaultAIModel,
   hunterApiKey: read('HUNTER_API_KEY') || read('REACT_APP_HUNTER_API_KEY'),
   findymailApiKey: read('FINDYMAIL_API_KEY'),
