@@ -6,7 +6,6 @@ import {
   RefreshCw,
   Loader2,
   ExternalLink,
-  CloudDownload,
   Radio,
 } from 'lucide-react';
 import type { User } from '../types';
@@ -15,16 +14,25 @@ import {
   loadLandingCache,
   type LandingPayload,
 } from '../services/landingHub';
+import { withShowcaseProducts } from '../services/landingShowcase';
 
 type Props = {
   currentUser: User;
-  /** 登录后资料同步状态文案 */
+  /** @deprecated 前台不再展示同步条数 */
   syncStatus?: string | null;
   syncing?: boolean;
   onEnterWorkspace?: () => void;
-  /** 管理员：打开数据接入说明（可选） */
+  /** 管理员：打开数据接入说明（可选，前台看板不展示接入文案） */
   onOpenDataSetup?: () => void;
 };
+
+const SHOWCASE_ACCENTS = [
+  'from-cyan-100 to-sky-50',
+  'from-amber-100 to-orange-50',
+  'from-emerald-100 to-teal-50',
+  'from-violet-100 to-fuchsia-50',
+  'from-rose-100 to-pink-50',
+];
 
 const fmtTime = (ms?: number) => {
   if (!ms) return '';
@@ -43,10 +51,7 @@ const fmtTime = (ms?: number) => {
 
 export const ModuleLandingHub: React.FC<Props> = ({
   currentUser,
-  syncStatus,
-  syncing,
   onEnterWorkspace,
-  onOpenDataSetup,
 }) => {
   const [data, setData] = useState<LandingPayload | null>(() => loadLandingCache());
   const [loading, setLoading] = useState(!loadLandingCache());
@@ -71,7 +76,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
 
   const fx = data?.fx?.quotes || [];
   const news = data?.news?.items || [];
-  const products = data?.products?.items || [];
+  const products = withShowcaseProducts(data?.products?.items);
 
   return (
     <div className="tp-landing relative min-h-[70vh] -mx-1 sm:mx-0">
@@ -105,24 +110,11 @@ export const ModuleLandingHub: React.FC<Props> = ({
             <p className="mt-2 text-sm sm:text-base text-slate-300 font-medium max-w-xl leading-relaxed">
               你好，{currentUser.username}。行业脉搏 · 优选新品 · 即时汇率，登录即可掌握今日作战面。
             </p>
-            <div className="mt-4 flex flex-wrap items-center gap-2 text-[11px] font-bold">
-              {syncing ? (
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-cyan-400/15 border border-cyan-300/30 px-3 py-1 text-cyan-100">
-                  <Loader2 size={12} className="animate-spin" /> 正在同步业务资料…
-                </span>
-              ) : syncStatus ? (
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-400/15 border border-emerald-300/30 px-3 py-1 text-emerald-100">
-                  <CloudDownload size={12} /> {syncStatus}
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-white/10 border border-white/15 px-3 py-1 text-slate-200">
-                  资料已在后台自动同步
-                </span>
-              )}
-              {data?.fetchedAt ? (
-                <span className="text-slate-400">情报刷新 {fmtTime(data.fetchedAt)}</span>
-              ) : null}
-            </div>
+            {data?.fetchedAt ? (
+              <p className="mt-3 text-[11px] font-bold text-slate-400">
+                情报刷新 {fmtTime(data.fetchedAt)}
+              </p>
+            ) : null}
           </div>
           <div className="flex flex-wrap gap-2">
             <button
@@ -148,20 +140,8 @@ export const ModuleLandingHub: React.FC<Props> = ({
       </section>
 
       {err && (
-        <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 text-amber-950 px-4 py-3 text-sm font-bold space-y-2">
-          <p>情报源暂时不可用（{err}）。业务资料同步不受影响，可先点「进入客户搜索」开工。</p>
-          <p className="text-xs font-medium text-amber-800/90 leading-relaxed">
-            汇率与公开资讯由服务端拉取。管理员请到后台「数据接入」配置优选货源令牌；配置后回到本页点「刷新情报」。
-          </p>
-          {onOpenDataSetup && (
-            <button
-              type="button"
-              onClick={onOpenDataSetup}
-              className="text-xs font-black text-amber-900 underline underline-offset-2"
-            >
-              打开配置说明
-            </button>
-          )}
+        <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 text-amber-950 px-4 py-3 text-sm font-bold">
+          部分情报暂未刷新，可稍后点「刷新情报」；亦可直接「进入客户搜索」开始工作。
         </div>
       )}
 
@@ -185,12 +165,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
                 <Loader2 className="animate-spin" size={16} /> 拉取中…
               </div>
             ) : news.length === 0 ? (
-              <div className="p-5 text-center space-y-2">
-                <p className="text-sm text-slate-600 font-bold">暂无新闻</p>
-                <p className="text-xs text-slate-500 font-medium leading-relaxed">
-                  公开资讯由服务端聚合。若刚部署完成，请等 1～2 分钟后点右上角「刷新情报」。
-                </p>
-              </div>
+              <p className="text-sm text-slate-500 font-medium p-6 text-center">资讯更新中，请稍后刷新</p>
             ) : (
               news.map((n) => (
                 <a
@@ -238,40 +213,16 @@ export const ModuleLandingHub: React.FC<Props> = ({
             </div>
           </header>
           <div className="flex-1 overflow-y-auto custom-scrollbar p-3 sm:p-4">
-            {data?.products?.needsCredential && !products.length ? (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-5 text-center space-y-2">
-                <p className="text-sm font-bold text-slate-700">行业新品源待接入</p>
-                <p className="text-xs text-slate-500 font-medium leading-relaxed">
-                  由<strong className="text-slate-700">系统管理员</strong>在后台 →「数据接入」启用优选货源，
-                  将浏览器登录后的访问令牌粘贴到 API Key，保存并启用。员工端无需操作。
-                </p>
-                {onOpenDataSetup && currentUser.role === 'admin' && (
-                  <button
-                    type="button"
-                    onClick={onOpenDataSetup}
-                    className="text-xs font-black text-cyan-800 underline"
-                  >
-                    前往数据接入
-                  </button>
-                )}
-              </div>
-            ) : null}
-            {loading && !products.length && !data?.products?.needsCredential ? (
+            {loading && products.length === 0 ? (
               <div className="flex items-center gap-2 text-slate-400 text-sm font-bold p-6 justify-center">
                 <Loader2 className="animate-spin" size={16} /> 拉取中…
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-2.5">
-                {products.map((p) => (
-                  <a
+                {products.slice(0, 10).map((p, idx) => (
+                  <div
                     key={p.id}
-                    href={p.url || '#'}
-                    target={p.url ? '_blank' : undefined}
-                    rel="noopener noreferrer"
                     className="rounded-2xl border border-slate-100 bg-gradient-to-b from-white to-slate-50 p-3 hover:border-cyan-200 hover:shadow-md transition-all"
-                    onClick={(e) => {
-                      if (!p.url) e.preventDefault();
-                    }}
                   >
                     {p.image ? (
                       <img
@@ -281,18 +232,17 @@ export const ModuleLandingHub: React.FC<Props> = ({
                         loading="lazy"
                       />
                     ) : (
-                      <div className="w-full h-16 rounded-xl mb-2 bg-gradient-to-br from-cyan-50 to-slate-100 flex items-center justify-center text-cyan-700/40">
+                      <div
+                        className={`w-full h-16 rounded-xl mb-2 bg-gradient-to-br ${SHOWCASE_ACCENTS[idx % SHOWCASE_ACCENTS.length]} flex items-center justify-center text-slate-500/50`}
+                      >
                         <Sparkles size={22} />
                       </div>
                     )}
                     <p className="text-xs font-bold text-slate-800 leading-snug line-clamp-3">{p.title}</p>
-                    <p className="text-[10px] text-slate-400 font-bold mt-1">{p.source}</p>
-                  </a>
+                    <p className="text-[10px] text-slate-400 font-bold mt-1">{p.source || '优选展区'}</p>
+                  </div>
                 ))}
               </div>
-            )}
-            {data?.products?.error && (
-              <p className="mt-3 text-[11px] text-amber-700 font-medium">{data.products.error}</p>
             )}
           </div>
         </section>
