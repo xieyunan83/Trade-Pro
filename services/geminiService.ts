@@ -49,6 +49,10 @@ import {
   promotePoolKey,
 } from './apiKeyPool';
 import {
+  describeQwenChatSchedule,
+  resolveScheduledQwenChatModel,
+} from './qwenModelSchedule';
+import {
   anysearchBatchSearch,
   gatherIdentityEvidence,
   gatherAnysearchLeadEvidence,
@@ -5081,7 +5085,8 @@ interface QwenRuntimeConfig {
 }
 
 const DEFAULT_QWEN_BASE = 'https://dashscope.aliyuncs.com/compatible-mode/v1';
-const DEFAULT_QWEN_MODEL = 'qwen-max';
+/** 默认走优惠时段调度：日间 qwen3.7-plus / 夜间 qwen3.8-max */
+const DEFAULT_QWEN_MODEL = 'qwen3.7-plus';
 
 const normalizeQwenBaseUrl = (raw: string): string => {
   let url = raw.trim().replace(/\/$/, '');
@@ -5177,8 +5182,15 @@ const resolveQwenConfig = async (override?: Partial<QwenRuntimeConfig>): Promise
     override?.baseUrl || localBase || cloudConfig?.baseUrl || env.qwenBaseUrl || DEFAULT_QWEN_BASE;
   const normalized = normalizeQwenBaseUrl(rawBase);
   const proxied = toProxiedQwenEndpoint(normalized);
-  const modelId =
-    (override?.modelId || localModel || cloudConfig?.modelId || env.qwenModelId || DEFAULT_QWEN_MODEL).trim();
+  const configuredModel = (
+    override?.modelId ||
+    localModel ||
+    cloudConfig?.modelId ||
+    env.qwenModelId ||
+    DEFAULT_QWEN_MODEL
+  ).trim();
+  // 日间 qwen3.7-plus / 夜间 22:00–08:00（上海时区）qwen3.8-max
+  const modelId = resolveScheduledQwenChatModel(configuredModel);
 
   if (!apiKey) {
     throw new Error('未配置 Qwen API Key（请在管理后台 Key 池、.env.local 或 Supabase 中配置）');
@@ -5196,6 +5208,8 @@ const resolveQwenConfig = async (override?: Partial<QwenRuntimeConfig>): Promise
     baseUrl: proxied.url,
     proxyOrigin: proxied.proxyOrigin,
     modelId,
+    configuredModel,
+    schedule: describeQwenChatSchedule(),
     keyInfo: describeKey(apiKey),
     poolSize: listPoolKeys('qwen').length,
   });

@@ -99,7 +99,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [proxyUrl, setProxyUrl] = useState('https://corshub.org/api/proxy?');
   const [qwenKeys, setQwenKeys] = useState<string[]>([]);
   const [qwenBaseUrl, setQwenBaseUrl] = useState('');
-  const [qwenModelId, setQwenModelId] = useState('qwen-max');
+  const [qwenModelId, setQwenModelId] = useState('qwen3.7-plus');
   const [geminiKeys, setGeminiKeys] = useState<string[]>([]);
   const [geminiModelId, setGeminiModelId] = useState('gemini-2.0-flash');
   const [taskAIModels, setTaskAIModels] = useState<TaskAIModels>(() => getTaskAIModels());
@@ -477,10 +477,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               apiKey: serializeApiKeyPoolPayload({
                 keys: qwenKeys,
                 baseUrl: qwenBaseUrl.trim() || undefined,
-                modelId: qwenModelId.trim() || 'qwen-max',
+                modelId: qwenModelId.trim() || 'qwen3.7-plus',
               }),
               baseUrl: qwenBaseUrl.trim() || undefined,
-              modelId: qwenModelId.trim() || 'qwen-max',
+              modelId: qwenModelId.trim() || 'qwen3.7-plus',
             })
           );
           cloudParts.push(`${r.label}${r.ok ? '✓' : '✗'}`);
@@ -1469,12 +1469,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         type="text"
                         value={qwenModelId}
                         onChange={e => setQwenModelId(e.target.value)}
-                        placeholder="qwen-max / qwen-plus / qwen-turbo"
+                        placeholder="qwen3.7-plus（推荐；夜间自动切 qwen3.8-max）"
                         className="w-full bg-white border border-emerald-100 rounded-xl px-4 py-3 font-bold text-sm"
                       />
                     </div>
-                    <div className="flex items-end text-[10px] font-bold text-slate-400 pb-2">
-                      引擎选择请到上方「任务模型路由」设置
+                    <div className="flex items-end text-[10px] font-bold text-slate-400 pb-2 leading-relaxed">
+                      填 qwen3.7-plus 或 qwen3.8-max 时：上海时区 22:00–08:00 自动用 qwen3.8-max，其余时间 qwen3.7-plus。其它型号不改。
                     </div>
                     <div className="md:col-span-2">
                       <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Supabase Project URL</label>
