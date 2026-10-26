@@ -110,8 +110,9 @@ function createWindow() {
   });
 
   const baseUa = mainWindow.webContents.getUserAgent().replace(/Electron\/\S+\s*/i, '');
+  // UA 标记供网页等待种子注入；保留兼容名以免旧版线上脚本漏等
   mainWindow.loadURL(START_URL, {
-    userAgent: `${baseUa} TradeCollabClient/1.0`,
+    userAgent: `${baseUa} TradeCollabClient/1.0 BabyWorldClient/1.0`,
   });
 }
 
@@ -120,13 +121,12 @@ app.whenReady().then(() => {
   ses.webRequest.onBeforeSendHeaders((details, callback) => {
     const headers = { ...details.requestHeaders };
     if (headers['User-Agent']) {
-      headers['User-Agent'] = String(headers['User-Agent'])
+      let ua = String(headers['User-Agent'])
         .replace(/\s*Electron\/\S+/gi, '')
         .replace(/\s*BabyWorldClient\/\S+/gi, '')
         .replace(/\s*TradeCollabClient\/\S+/gi, '');
-      if (!/TradeCollabClient\//.test(headers['User-Agent'])) {
-        headers['User-Agent'] = `${headers['User-Agent']} TradeCollabClient/1.0`;
-      }
+      ua = `${ua} TradeCollabClient/1.0 BabyWorldClient/1.0`;
+      headers['User-Agent'] = ua;
     }
     callback({ requestHeaders: headers });
   });
