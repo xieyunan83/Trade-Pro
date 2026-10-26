@@ -346,7 +346,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                   multiple={false}
                   max={1}
                   accent="indigo"
-                  title="从平面设计 / 产品库选用"
+                  title="从平面设计 / 产品库选用（可点 × 移除推送图）"
                   onSkuMeta={(meta) => {
                     if (meta?.skuCode) setSkuPick(meta.skuCode);
                     setSkuName(meta?.skuName);
@@ -355,16 +355,10 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                 <button
                   type="button"
                   onClick={() => fileRef.current?.click()}
-                  className="w-full min-h-[120px] rounded-2xl border-2 border-dashed border-indigo-200 bg-indigo-50/40 hover:bg-indigo-50 flex flex-col items-center justify-center gap-2 text-indigo-800"
+                  className="w-full min-h-[100px] rounded-2xl border-2 border-dashed border-indigo-200 bg-indigo-50/40 hover:bg-indigo-50 flex flex-col items-center justify-center gap-2 text-indigo-800"
                 >
-                  {sourceImage ? (
-                    <img src={sourceImage} alt="" className="max-h-32 rounded-xl object-contain" />
-                  ) : (
-                    <>
-                      <Upload size={22} />
-                      <span className="text-xs font-black">或本地上传产品图 / 草图</span>
-                    </>
-                  )}
+                  <Upload size={22} />
+                  <span className="text-xs font-black">或本地上传产品图 / 草图</span>
                   <input
                     ref={fileRef}
                     type="file"

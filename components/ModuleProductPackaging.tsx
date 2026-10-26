@@ -13,6 +13,7 @@ import {
   ImagePlus,
   X,
   Sparkles,
+  Trash2,
 } from 'lucide-react';
 import type { User } from '../types';
 import { ModuleType } from '../types';
@@ -312,6 +313,20 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
     }
   };
 
+  const deleteAssetIds = (ids: string[]) => {
+    if (!ids.length) return;
+    if (!window.confirm(`确定删除 ${ids.length} 张包装图？`)) return;
+    const ban = new Set(ids);
+    persistAssets(assets.filter((a) => !ban.has(a.id)));
+    persistProjects(
+      projects.map((p) => ({
+        ...p,
+        assetIds: (p.assetIds || []).filter((id) => !ban.has(id)),
+        updatedAt: Date.now(),
+      }))
+    );
+  };
+
   return (
     <div className="max-w-[96rem] mx-auto animate-fade-in px-1 space-y-3">
       <div className="rounded-2xl border border-amber-200/70 bg-gradient-to-br from-amber-50/80 via-white to-orange-50/40 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
@@ -483,6 +498,14 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
                       >
                         <Download size={12} />
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => deleteAssetIds([a.id])}
+                        className="rounded-lg bg-rose-600/95 text-white p-1.5"
+                        title="删除"
+                      >
+                        <Trash2 size={12} />
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -543,7 +566,7 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
             multiple
             max={3}
             accent="violet"
-            title="选用平面主图 / 产品库图"
+            title="选用平面主图 / 产品库图（可点 × 移除推送图）"
             onSkuMeta={(meta) => {
               if (!meta?.skuCode) return;
               const hit = skus.find((s) => s.skuCode === meta.skuCode);

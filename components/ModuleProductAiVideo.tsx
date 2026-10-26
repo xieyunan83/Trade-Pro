@@ -312,10 +312,10 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
                 <CreativeRefPicker
                   value={images}
                   onChange={setImages}
-                  multiple={mode === 'reference'}
-                  max={mode === 'reference' ? 6 : 1}
+                  multiple={mode === 'reference' || images.length > 1}
+                  max={6}
                   accent="rose"
-                  title="从平面设计 / 产品库选用"
+                  title="从平面设计 / 产品库选用（可点 × 去掉多余推送图）"
                   onSkuMeta={(meta) => {
                     if (meta?.skuCode) setSkuPick(meta.skuCode);
                     setSkuName(meta?.skuName);
@@ -339,25 +339,6 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
                     e.target.value = '';
                   }}
                 />
-                {images.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5">
-                    {images.map((src, i) => (
-                      <img
-                        key={i}
-                        src={src}
-                        alt=""
-                        className="w-14 h-14 rounded-lg object-contain bg-white border border-slate-200"
-                      />
-                    ))}
-                    <button
-                      type="button"
-                      className="text-[10px] font-black text-slate-400 underline"
-                      onClick={() => setImages([])}
-                    >
-                      清空
-                    </button>
-                  </div>
-                )}
               </div>
             )}
 

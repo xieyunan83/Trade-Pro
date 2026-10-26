@@ -143,20 +143,58 @@ export const CreativeRefPicker: React.FC<Props> = ({
       )}
 
       {value.length > 0 && (
-        <div className="flex items-center justify-between gap-2 pt-0.5">
-          <span className="text-[10px] font-bold text-slate-500">已选 {value.length} 张</span>
-          <button
-            type="button"
-            onClick={() => {
-              onChange([]);
-              onSkuMeta?.(null);
-            }}
-            className="text-[10px] font-black text-slate-400 hover:text-rose-600 inline-flex items-center gap-0.5"
-          >
-            <X size={10} /> 清空选用
-          </button>
-        </div>
+        <SelectedRefsStrip
+          urls={value}
+          onChange={(urls) => {
+            onChange(urls);
+            if (!urls.length) onSkuMeta?.(null);
+          }}
+          label={`已选参考 ${value.length} 张（可单张移除）`}
+        />
       )}
+    </div>
+  );
+};
+
+/** 已选参考图条：每张可单独删除，避免误用系统推送的多余图 */
+export const SelectedRefsStrip: React.FC<{
+  urls: string[];
+  onChange: (urls: string[]) => void;
+  label?: string;
+  className?: string;
+}> = ({ urls, onChange, label = '当前参考图', className = '' }) => {
+  if (!urls.length) return null;
+  return (
+    <div className={`rounded-xl border border-slate-200 bg-white p-2 space-y-1.5 ${className}`}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[10px] font-black text-slate-500">{label}</span>
+        <button
+          type="button"
+          onClick={() => onChange([])}
+          className="text-[10px] font-black text-slate-400 hover:text-rose-600 inline-flex items-center gap-0.5"
+        >
+          <X size={10} /> 全部清除
+        </button>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {urls.map((src, i) => (
+          <div
+            key={`${i}-${src.slice(-32)}`}
+            className="relative w-14 h-14 rounded-lg overflow-hidden border border-slate-200 bg-slate-50 group"
+          >
+            <img src={src} alt="" className="w-full h-full object-contain" />
+            <button
+              type="button"
+              aria-label="移除此图"
+              title="移除此图"
+              onClick={() => onChange(urls.filter((_, j) => j !== i))}
+              className="absolute top-0.5 right-0.5 rounded-full bg-slate-900/85 text-white p-0.5 opacity-90 hover:opacity-100"
+            >
+              <X size={10} />
+            </button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 };

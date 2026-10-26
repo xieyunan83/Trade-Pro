@@ -21,8 +21,10 @@ const MODULE_ALIASES: Record<string, ModuleType> = {
   client_crm: ModuleType.CLIENT_CRM,
   email: ModuleType.EMAIL_CAMPAIGN,
   email_campaign: ModuleType.EMAIL_CAMPAIGN,
-  image: ModuleType.IMAGE_GENERATOR,
-  image_generator: ModuleType.IMAGE_GENERATOR,
+  /** 详情图/海报已并入平面设计，深链转到平面图 */
+  image: ModuleType.PRODUCT_DESIGN_2D,
+  image_generator: ModuleType.PRODUCT_DESIGN_2D,
+  poster: ModuleType.PRODUCT_DESIGN_2D,
   product_match: ModuleType.PRODUCT_MATCH,
   match: ModuleType.PRODUCT_MATCH,
   product_catalog: ModuleType.PRODUCT_CATALOG,

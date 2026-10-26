@@ -12,6 +12,8 @@ import {
   Package,
   ImagePlus,
   X,
+  Trash2,
+  Check,
 } from 'lucide-react';
 import type { User } from '../types';
 import { ModuleType } from '../types';
@@ -63,6 +65,8 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
   /** 用户上传的参考图（data URL），可与文字描述组合图生图 */
   const [refUploads, setRefUploads] = useState<string[]>([]);
   const [refBusy, setRefBusy] = useState(false);
+  /** 画布多选：用于删除 / 推送到下游模块 */
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const refInputRef = useRef<HTMLInputElement>(null);
   const skus = useMemo(() => loadCatalogSkus(), []);
   const status = getDesignAgentConfigStatus();
@@ -72,6 +76,14 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     () => assets.filter((a) => a.projectId === activeId),
     [assets, activeId]
   );
+  const selectedAssets = useMemo(
+    () => canvasAssets.filter((a) => selectedIds.includes(a.id)),
+    [canvasAssets, selectedIds]
+  );
+
+  React.useEffect(() => {
+    setSelectedIds([]);
+  }, [activeId]);
 
   const persistProjects = (next: DesignProject[]) => {
     setProjects(next);
@@ -311,13 +323,41 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     }
   };
 
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+
+  const selectAllCanvas = () => {
+    setSelectedIds(canvasAssets.map((a) => a.id));
+  };
+
+  const clearSelection = () => setSelectedIds([]);
+
+  const deleteAssetIds = (ids: string[]) => {
+    if (!ids.length) return;
+    if (!window.confirm(`确定删除 ${ids.length} 张图片？删除后不可恢复。`)) return;
+    const ban = new Set(ids);
+    persistAssets(assets.filter((a) => !ban.has(a.id)));
+    persistProjects(
+      projects.map((p) => ({
+        ...p,
+        assetIds: (p.assetIds || []).filter((id) => !ban.has(id)),
+        updatedAt: Date.now(),
+      }))
+    );
+    setSelectedIds((prev) => prev.filter((id) => !ban.has(id)));
+    setError(null);
+  };
+
   const sendAssetsTo = (
     target: 'design_3d' | 'ai_video' | 'packaging',
     urls: string[],
     note?: string
   ) => {
     if (!urls.length) {
-      setError('请先生成或选中图片');
+      setError('请先勾选要推送的图片（可多选）');
       return;
     }
     const sku =
@@ -326,8 +366,9 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
         ? { skuCode: active.skuCode, name: active.skuName || active.skuCode }
         : null);
     const maxImgs = target === 'design_3d' ? 1 : target === 'packaging' ? 3 : 6;
+    const sliced = urls.slice(0, maxImgs);
     setCreativeHandoff({
-      images: urls.slice(0, maxImgs),
+      images: sliced,
       skuCode: sku?.skuCode || active?.skuCode,
       skuName: (sku as any)?.name || active?.skuName,
       note: note || active?.title,
@@ -341,6 +382,17 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
           ? ModuleType.PRODUCT_PACKAGING
           : ModuleType.PRODUCT_AI_VIDEO
     );
+  };
+
+  const sendSelectedTo = (target: 'design_3d' | 'ai_video' | 'packaging') => {
+    const urls = selectedAssets.map((a) => a.url);
+    if (!urls.length) {
+      setError('请先勾选图片，再推送到下游模块');
+      return;
+    }
+    const label =
+      target === 'design_3d' ? '3D' : target === 'packaging' ? '包装' : '视频';
+    sendAssetsTo(target, urls, `已选 ${urls.length} 张 → ${label}`);
   };
 
   return (
@@ -462,14 +514,29 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
               ) : (
                 <div className="grid grid-cols-2 gap-1.5 p-1">
                   {assets.slice(0, 40).map((a) => (
-                    <button
+                    <div
                       key={a.id}
-                      type="button"
-                      onClick={() => setActiveId(a.projectId)}
-                      className="aspect-square rounded-lg overflow-hidden border border-slate-100"
+                      className="relative aspect-square rounded-lg overflow-hidden border border-slate-100 group"
                     >
-                      <img src={a.url} alt="" className="w-full h-full object-cover" />
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() => setActiveId(a.projectId)}
+                        className="w-full h-full"
+                      >
+                        <img src={a.url} alt="" className="w-full h-full object-cover" />
+                      </button>
+                      <button
+                        type="button"
+                        title="删除"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteAssetIds([a.id]);
+                        }}
+                        className="absolute top-1 right-1 rounded-md bg-rose-600 text-white p-1 opacity-0 group-hover:opacity-100"
+                      >
+                        <Trash2 size={10} />
+                      </button>
+                    </div>
                   ))}
                 </div>
               ))}
@@ -482,7 +549,10 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             <div className="text-xs font-black text-slate-700 truncate">
               {active ? `画布 · ${active.title}` : '画布 · 新建或选择项目'}
             </div>
-            <div className="text-[10px] font-bold text-slate-400">{canvasAssets.length} 张</div>
+            <div className="text-[10px] font-bold text-slate-400">
+              {canvasAssets.length} 张
+              {selectedIds.length ? ` · 已选 ${selectedIds.length}` : ''}
+            </div>
           </div>
           <div className="flex-1 overflow-y-auto p-3 custom-scrollbar">
             {canvasAssets.length === 0 ? (
@@ -497,98 +567,152 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
               </div>
             ) : (
               <div className="space-y-2">
-                {canvasAssets.length > 0 && onNavigateModule ? (
-                  <div className="flex flex-wrap gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        sendAssetsTo(
-                          'design_3d',
-                          [canvasAssets[0].url],
-                          '平面主图 → 3D'
-                        )
-                      }
-                      className="text-[10px] font-black rounded-lg bg-indigo-600 text-white px-2.5 py-1.5"
-                    >
-                      整套送去 3D（用首图）
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        sendAssetsTo(
-                          'ai_video',
-                          canvasAssets.map((x) => x.url),
-                          '多角度 → 视频'
-                        )
-                      }
-                      className="text-[10px] font-black rounded-lg bg-rose-600 text-white px-2.5 py-1.5"
-                    >
-                      全部送去视频
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        sendAssetsTo(
-                          'packaging',
-                          [canvasAssets[0].url],
-                          '平面主图 → 包装'
-                        )
-                      }
-                      className="text-[10px] font-black rounded-lg bg-amber-600 text-white px-2.5 py-1.5"
-                    >
-                      送去包装设计
-                    </button>
-                  </div>
-                ) : null}
+                <div className="flex flex-wrap gap-1.5 items-center">
+                  <button
+                    type="button"
+                    onClick={selectAllCanvas}
+                    className="text-[10px] font-black rounded-lg border border-slate-200 bg-white text-slate-600 px-2.5 py-1.5"
+                  >
+                    全选
+                  </button>
+                  <button
+                    type="button"
+                    onClick={clearSelection}
+                    disabled={!selectedIds.length}
+                    className="text-[10px] font-black rounded-lg border border-slate-200 bg-white text-slate-600 px-2.5 py-1.5 disabled:opacity-40"
+                  >
+                    取消选择
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => deleteAssetIds(selectedIds)}
+                    disabled={!selectedIds.length}
+                    className="text-[10px] font-black rounded-lg bg-rose-600 text-white px-2.5 py-1.5 inline-flex items-center gap-1 disabled:opacity-40"
+                  >
+                    <Trash2 size={11} /> 删除选中
+                  </button>
+                  {onNavigateModule ? (
+                    <>
+                      <span className="text-[10px] text-slate-300 px-0.5">|</span>
+                      <button
+                        type="button"
+                        onClick={() => sendSelectedTo('design_3d')}
+                        disabled={!selectedIds.length}
+                        className="text-[10px] font-black rounded-lg bg-indigo-600 text-white px-2.5 py-1.5 disabled:opacity-40"
+                      >
+                        选中 → 3D
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => sendSelectedTo('ai_video')}
+                        disabled={!selectedIds.length}
+                        className="text-[10px] font-black rounded-lg bg-rose-600 text-white px-2.5 py-1.5 disabled:opacity-40"
+                      >
+                        选中 → 视频
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => sendSelectedTo('packaging')}
+                        disabled={!selectedIds.length}
+                        className="text-[10px] font-black rounded-lg bg-amber-600 text-white px-2.5 py-1.5 disabled:opacity-40"
+                      >
+                        选中 → 包装
+                      </button>
+                    </>
+                  ) : null}
+                </div>
+                <p className="text-[10px] text-slate-400 font-medium">
+                  点击图片勾选；可多选后推送。3D 取选中首张，视频最多 6 张，包装最多 3 张。
+                </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {canvasAssets.map((a, i) => (
-                    <div
-                      key={a.id}
-                      className="rounded-xl overflow-hidden border border-white shadow-sm bg-white group relative"
-                    >
-                      <img src={a.url} alt="" className="w-full aspect-square object-contain bg-slate-50" />
-                      {a.angle ? (
-                        <span className="absolute top-2 left-2 rounded-md bg-slate-900/80 text-white text-[10px] font-black px-2 py-0.5">
-                          {a.angle}
-                        </span>
-                      ) : null}
-                      <div className="absolute bottom-2 left-2 right-2 flex flex-wrap gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button
-                          type="button"
-                          onClick={() => void downloadUrl(a.url, i)}
-                          className="rounded-lg bg-slate-900/80 text-white p-1.5"
-                          title="下载"
+                  {canvasAssets.map((a, i) => {
+                    const selected = selectedIds.includes(a.id);
+                    return (
+                      <div
+                        key={a.id}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => toggleSelect(a.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            toggleSelect(a.id);
+                          }
+                        }}
+                        className={`rounded-xl overflow-hidden border shadow-sm bg-white group relative cursor-pointer ${
+                          selected
+                            ? 'border-violet-500 ring-2 ring-violet-200'
+                            : 'border-white hover:border-violet-200'
+                        }`}
+                      >
+                        <img
+                          src={a.url}
+                          alt=""
+                          className="w-full aspect-square object-contain bg-slate-50 pointer-events-none"
+                        />
+                        <span
+                          className={`absolute top-2 right-2 h-6 w-6 rounded-full border-2 flex items-center justify-center ${
+                            selected
+                              ? 'bg-violet-600 border-violet-600 text-white'
+                              : 'bg-white/90 border-slate-300 text-transparent'
+                          }`}
                         >
-                          <Download size={12} />
-                        </button>
-                        {onNavigateModule ? (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => sendAssetsTo('design_3d', [a.url], a.angle)}
-                              className="rounded-lg bg-indigo-600/95 text-white text-[9px] font-black px-2 py-1.5"
-                            >
-                              → 3D
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => sendAssetsTo('ai_video', [a.url], a.angle)}
-                              className="rounded-lg bg-rose-600/95 text-white text-[9px] font-black px-2 py-1.5"
-                            >
-                              → 视频
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => sendAssetsTo('packaging', [a.url], a.angle)}
-                              className="rounded-lg bg-amber-600/95 text-white text-[9px] font-black px-2 py-1.5"
-                            >
-                              → 包装
-                            </button>
-                          </>
+                          <Check size={12} strokeWidth={3} />
+                        </span>
+                        {a.angle ? (
+                          <span className="absolute top-2 left-2 rounded-md bg-slate-900/80 text-white text-[10px] font-black px-2 py-0.5">
+                            {a.angle}
+                          </span>
                         ) : null}
+                        <div
+                          className="absolute bottom-2 left-2 right-2 flex flex-wrap gap-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => void downloadUrl(a.url, i)}
+                            className="rounded-lg bg-slate-900/80 text-white p-1.5"
+                            title="下载"
+                          >
+                            <Download size={12} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => deleteAssetIds([a.id])}
+                            className="rounded-lg bg-rose-600/95 text-white p-1.5"
+                            title="删除"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                          {onNavigateModule ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => sendAssetsTo('design_3d', [a.url], a.angle)}
+                                className="rounded-lg bg-indigo-600/95 text-white text-[9px] font-black px-2 py-1.5"
+                              >
+                                → 3D
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => sendAssetsTo('ai_video', [a.url], a.angle)}
+                                className="rounded-lg bg-rose-600/95 text-white text-[9px] font-black px-2 py-1.5"
+                              >
+                                → 视频
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => sendAssetsTo('packaging', [a.url], a.angle)}
+                                className="rounded-lg bg-amber-600/95 text-white text-[9px] font-black px-2 py-1.5"
+                              >
+                                → 包装
+                              </button>
+                            </>
+                          ) : null}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}
