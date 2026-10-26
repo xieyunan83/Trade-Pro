@@ -131,6 +131,13 @@ export const mergeSaveCrmClients = (
   departments: Department[]
 ): Client[] => {
   const existing = loadAllCrmClients();
+  // 防误清空：可见列表为空时，若本机仍有该用户可见数据，不覆盖
+  if (!scopedClients.length) {
+    const viewable = existing.filter((c) =>
+      canViewOwnedRecord(viewer, c, allUsers, departments)
+    );
+    if (viewable.length > 0) return existing;
+  }
   const kept = existing.filter((c) => !canViewOwnedRecord(viewer, c, allUsers, departments));
   const merged = [...scopedClients, ...kept];
   try {

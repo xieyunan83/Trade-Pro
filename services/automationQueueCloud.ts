@@ -7,6 +7,7 @@ import {
   deleteAutomationTask,
   getAutomationQueue,
   saveAutomationTask,
+  saveAutomationTasksBulk,
 } from './db';
 import { getCloudWorkspaceId } from './workspaceId';
 import { getSupabaseClient, isSupabaseConfigured } from './supabase';
@@ -36,7 +37,6 @@ export const mergeAutomationQueues = (
       map.set(id, t);
       continue;
     }
-    // 进行中优先保留；否则取时间戳更新的
     const rank = (s: AutomationResult['status']) =>
       s === 'analyzing' ? 3 : s === 'pending' ? 2 : s === 'completed' ? 1 : 0;
     if (rank(t.status) > rank(prev.status)) {
@@ -44,7 +44,6 @@ export const mergeAutomationQueues = (
       continue;
     }
     if (rank(t.status) === rank(prev.status) && taskStamp(t) >= taskStamp(prev)) {
-      // 合并时保留更完整的 analysis
       const analysis = t.analysis || prev.analysis;
       map.set(id, { ...prev, ...t, analysis });
     }
@@ -91,28 +90,23 @@ export const deleteAutomationTaskFromCloud = async (localId: string): Promise<bo
 
 export const fetchAutomationQueueFromCloud = async (): Promise<AutomationResult[]> => {
   if (!isSupabaseConfigured()) return [];
-  try {
-    const { rows, error } = await selectAllRows<{ task_data: AutomationResult }>(
-      getSupabaseClient(),
-      'automation_queue',
-      'task_data, updated_at',
-      { orderCol: 'updated_at', ascending: false, eq: { user_id: cloudUid() } }
-    );
-    if (error) {
-      if (/automation_queue|schema cache|does not exist/i.test(error)) {
-        console.warn(
-          '[automation-cloud] 缺少表 automation_queue，请在 SQL Editor 执行 scripts/supabase-automation-queue.sql'
-        );
-      }
-      throw new Error(error);
+  const { rows, error } = await selectAllRows<{ task_data: AutomationResult }>(
+    getSupabaseClient(),
+    'automation_queue',
+    'task_data, updated_at',
+    { orderCol: 'updated_at', ascending: false, eq: { user_id: cloudUid() } }
+  );
+  if (error) {
+    if (/automation_queue|schema cache|does not exist/i.test(error)) {
+      console.warn(
+        '[automation-cloud] 缺少表 automation_queue，请在 SQL Editor 执行 scripts/supabase-automation-queue.sql'
+      );
     }
-    return rows
-      .map((row) => row.task_data)
-      .filter((t) => t && (t.id || '').trim());
-  } catch (e) {
-    console.warn('[automation-cloud] fetch failed', e);
-    return [];
+    throw new Error(error);
   }
+  return rows
+    .map((row) => row.task_data)
+    .filter((t) => t && (t.id || '').trim());
 };
 
 /** 分批上传本地队列到云端 */
@@ -150,10 +144,12 @@ export const syncAutomationQueueToCloud = async (
 };
 
 /**
- * 拉取云端 ∪ 合并本机 → 写回本机；再把合并结果推上云端。
- * 登录/打开营销工具时调用，保证 Windows 客户端与浏览器条数一致。
+ * 拉取云端 ∪ 合并本机 → 写回本机；再按需推上云端。
+ * 云端拉取失败时保留本机，绝不把空结果写爆本地库。
  */
-export const pullMergePushAutomationQueue = async (): Promise<{
+export const pullMergePushAutomationQueue = async (opts?: {
+  upload?: boolean;
+}): Promise<{
   tasks: AutomationResult[];
   local: number;
   cloud: number;
@@ -161,23 +157,46 @@ export const pullMergePushAutomationQueue = async (): Promise<{
   uploaded: number;
   error?: string;
 }> => {
+  const doUpload = opts?.upload !== false;
   const local = await getAutomationQueue();
-  const cloud = await fetchAutomationQueueFromCloud();
+  let cloud: AutomationResult[] = [];
+  let cloudError: string | undefined;
+  try {
+    cloud = await fetchAutomationQueueFromCloud();
+  } catch (e: any) {
+    cloudError = e?.message || String(e);
+    console.warn('[automation-cloud] fetch failed', e);
+  }
   const merged = mergeAutomationQueues(local, cloud);
 
-  for (const t of merged) {
-    await saveAutomationTask(t, { skipCloud: true });
+  if (merged.length > 0) {
+    await saveAutomationTasksBulk(merged);
+  } else if (local.length > 0) {
+    return {
+      tasks: local,
+      local: local.length,
+      cloud: cloud.length,
+      merged: local.length,
+      uploaded: 0,
+      error: cloudError || '合并结果为空，已保留本机队列',
+    };
   }
 
-  // 本机有、合并后仍在的都推上去（含首次从 Mac 灌云端）
-  const push = await syncAutomationQueueToCloud(merged);
+  let uploaded = 0;
+  let pushError = cloudError;
+  if (doUpload && merged.length > 0) {
+    const push = await syncAutomationQueueToCloud(merged);
+    uploaded = push.uploaded;
+    if (push.error) pushError = push.error;
+  }
+
   return {
-    tasks: merged,
+    tasks: merged.length ? merged : local,
     local: local.length,
     cloud: cloud.length,
-    merged: merged.length,
-    uploaded: push.uploaded,
-    error: push.error,
+    merged: merged.length || local.length,
+    uploaded,
+    error: pushError,
   };
 };
 

@@ -44,6 +44,20 @@ export const saveHistory = async (item: HistoryItem): Promise<void> => {
   });
 };
 
+/** 单事务批量写入背调历史，避免上千条逐条 await 卡死登录 */
+export const saveHistoryBulk = async (items: HistoryItem[]): Promise<void> => {
+  if (!items.length) return;
+  const db = await initDB();
+  await new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction('history', 'readwrite');
+    const store = transaction.objectStore('history');
+    for (const item of items) store.put(item);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error || new Error('history bulk aborted'));
+  });
+};
+
 export const getHistory = async (): Promise<HistoryItem[]> => {
   const db = await initDB();
   return new Promise((resolve, reject) => {
@@ -94,6 +108,20 @@ export const saveAutomationTask = async (
       .then((m) => m.pushAutomationTaskToCloud(task))
       .catch(() => undefined);
   }
+};
+
+/** 单事务批量写入作业队列（跳过逐条云推送） */
+export const saveAutomationTasksBulk = async (tasks: AutomationResult[]): Promise<void> => {
+  if (!tasks.length) return;
+  const db = await initDB();
+  await new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction('automation', 'readwrite');
+    const store = transaction.objectStore('automation');
+    for (const task of tasks) store.put(task);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error || new Error('automation bulk aborted'));
+  });
 };
 
 export const getAutomationQueue = async (): Promise<AutomationResult[]> => {

@@ -510,19 +510,17 @@ export const saveInvestigationHistory = async (item: HistoryItem): Promise<boole
 
 export const getInvestigationHistory = async (): Promise<HistoryItem[]> => {
   if (!isSupabaseConfigured()) return []
-  try {
-    const { rows, error } = await selectAllRows<{ report_data: HistoryItem }>(
-      getSupabaseClient(),
-      'investigation_history',
-      'report_data, created_at',
-      { orderCol: 'created_at', ascending: false }
-    )
-    if (error) throw new Error(error)
-    return rows.map((row) => row.report_data).filter(Boolean)
-  } catch (error) {
+  const { rows, error } = await selectAllRows<{ report_data: HistoryItem }>(
+    getSupabaseClient(),
+    'investigation_history',
+    'report_data, created_at',
+    { orderCol: 'created_at', ascending: false }
+  )
+  if (error) {
     console.error('获取背调历史失败:', error)
-    return []
+    throw new Error(error)
   }
+  return rows.map((row) => row.report_data).filter(Boolean)
 }
 
 export const deleteInvestigationHistory = async (localId: string): Promise<boolean> => {
@@ -709,19 +707,17 @@ export const syncCrmClients = async (clients: Client[]): Promise<boolean> => {
 
 export const getCrmClients = async (): Promise<Client[]> => {
   if (!isSupabaseConfigured()) return []
-  try {
-    const { rows, error } = await selectAllRows<{ client_data: Client }>(
-      getSupabaseClient(),
-      'crm_clients',
-      'client_data, updated_at',
-      { orderCol: 'updated_at', ascending: false }
-    )
-    if (error) throw new Error(error)
-    return rows.map((row) => row.client_data).filter(Boolean)
-  } catch (error) {
+  const { rows, error } = await selectAllRows<{ client_data: Client }>(
+    getSupabaseClient(),
+    'crm_clients',
+    'client_data, updated_at',
+    { orderCol: 'updated_at', ascending: false }
+  )
+  if (error) {
     console.error('获取 CRM 失败:', error)
-    return []
+    throw new Error(error)
   }
+  return rows.map((row) => row.client_data).filter(Boolean)
 }
 
 export const deleteCrmClient = async (localId: string): Promise<boolean> => {
@@ -785,19 +781,17 @@ export const syncProductProfilesCloud = async (profiles: CustomerProductProfile[
 
 export const getProductProfilesCloud = async (): Promise<CustomerProductProfile[]> => {
   if (!isSupabaseConfigured()) return []
-  try {
-    const { rows, error } = await selectAllRows<{ profile_data: CustomerProductProfile }>(
-      getSupabaseClient(),
-      'product_profiles',
-      'profile_data, updated_at',
-      { orderCol: 'updated_at', ascending: false }
-    )
-    if (error) throw new Error(error)
-    return rows.map((row) => row.profile_data).filter(Boolean)
-  } catch (error) {
+  const { rows, error } = await selectAllRows<{ profile_data: CustomerProductProfile }>(
+    getSupabaseClient(),
+    'product_profiles',
+    'profile_data, updated_at',
+    { orderCol: 'updated_at', ascending: false }
+  )
+  if (error) {
     console.error('获取产品画像失败:', error)
-    return []
+    throw new Error(error)
   }
+  return rows.map((row) => row.profile_data).filter(Boolean)
 }
 
 export const deleteProductProfileCloud = async (localId: string): Promise<boolean> => {

@@ -1,9 +1,9 @@
 /**
  * 工作区全量云同步：CRM / 背调历史 / 产品画像 / 背调作业队列
- * 登录与「同步全部资料」时调用：本机 ∪ 云端合并 → 写回本机 → 再推上云端。
+ * 登录与「同步全部资料」时：先拉取合并写本机（尽快出界面），再推上云端。
  */
 import type { Client, CustomerProductProfile, HistoryItem } from '../types';
-import { getHistory, saveHistory, saveProductProfilesBulk } from './db';
+import { getHistory, saveHistoryBulk, saveProductProfilesBulk } from './db';
 import { loadProductCatalog } from './productCatalog';
 import {
   getCrmClients,
@@ -28,6 +28,11 @@ export type WorkspaceSyncReport = {
   errors: string[];
 };
 
+export type WorkspaceSyncOptions = {
+  /** 默认 true。登录时可 false：只拉云端写本机，上传放到后台，避免界面卡在 0 */
+  upload?: boolean;
+};
+
 const chunk = <T,>(arr: T[], size: number): T[][] => {
   const out: T[][] = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
@@ -50,7 +55,6 @@ export const mergeClientsById = (local: Client[], cloud: Client[]): Client[] => 
       map.set(c.id, c);
       continue;
     }
-    // 保留联系人/标签更全、时间戳更新的一方，字段做并集
     const preferLocal = clientStamp(c) >= clientStamp(prev);
     const a = preferLocal ? c : prev;
     const b = preferLocal ? prev : c;
@@ -130,19 +134,23 @@ export const uploadHistoryChunked = async (items: HistoryItem[]): Promise<number
   return n;
 };
 
+const emptyBucket = () => ({ local: 0, cloud: 0, merged: 0, uploaded: 0 });
+
 /**
- * 全量同步：合并本机与云端，写回本机，再推上云端。
- * 解决「网页有数据、客户端没有」——只要在资料最全的一端先跑一次。
+ * 全量同步：合并本机与云端，先写回本机，再按需推上云端。
+ * 禁止用「空合并结果」覆盖本机已有数据（云端拉取失败时尤甚）。
  */
-export const syncAllWorkspaceData = async (): Promise<WorkspaceSyncReport> => {
+export const syncAllWorkspaceData = async (
+  opts?: WorkspaceSyncOptions
+): Promise<WorkspaceSyncReport> => {
+  const doUpload = opts?.upload !== false;
   const errors: string[] = [];
-  const empty = { local: 0, cloud: 0, merged: 0, uploaded: 0 };
   const report: WorkspaceSyncReport = {
     ok: true,
-    crm: { ...empty },
-    history: { ...empty },
-    profiles: { ...empty },
-    automation: { ...empty },
+    crm: emptyBucket(),
+    history: emptyBucket(),
+    profiles: emptyBucket(),
+    automation: emptyBucket(),
     errors,
   };
 
@@ -155,14 +163,30 @@ export const syncAllWorkspaceData = async (): Promise<WorkspaceSyncReport> => {
   // —— CRM ——
   try {
     const localCrm = filterOutCrmTombstones(loadAllCrmClients());
-    const cloudCrm = filterOutCrmTombstones(await getCrmClients());
+    let cloudCrm: Client[] = [];
+    let cloudOk = false;
+    try {
+      cloudCrm = filterOutCrmTombstones(await getCrmClients());
+      cloudOk = true;
+    } catch (e: any) {
+      errors.push(`CRM 云端拉取：${e?.message || String(e)}`);
+    }
     const mergedCrm = mergeClientsById(localCrm, cloudCrm);
-    saveAllCrmClients(mergedCrm);
-    const uploaded = await uploadCrmChunked(mergedCrm);
+    if (mergedCrm.length > 0) {
+      saveAllCrmClients(mergedCrm);
+    } else if (localCrm.length > 0) {
+      errors.push('CRM：合并结果为空，已保留本机数据');
+    } else if (!cloudOk) {
+      errors.push('CRM：云端不可用且本机为空');
+    }
+    let uploaded = 0;
+    if (doUpload && mergedCrm.length > 0) {
+      uploaded = await uploadCrmChunked(mergedCrm);
+    }
     report.crm = {
       local: localCrm.length,
       cloud: cloudCrm.length,
-      merged: mergedCrm.length,
+      merged: mergedCrm.length || localCrm.length,
       uploaded,
     };
   } catch (e: any) {
@@ -172,20 +196,26 @@ export const syncAllWorkspaceData = async (): Promise<WorkspaceSyncReport> => {
   // —— 背调历史 ——
   try {
     const localHist = await getHistory();
-    const cloudHist = await getInvestigationHistory();
-    const mergedHist = mergeHistoryById(localHist, cloudHist);
-    for (const item of mergedHist) {
-      try {
-        await saveHistory(item);
-      } catch {
-        /* quota */
-      }
+    let cloudHist: HistoryItem[] = [];
+    try {
+      cloudHist = await getInvestigationHistory();
+    } catch (e: any) {
+      errors.push(`背调历史云端拉取：${e?.message || String(e)}`);
     }
-    const uploaded = await uploadHistoryChunked(mergedHist);
+    const mergedHist = mergeHistoryById(localHist, cloudHist);
+    if (mergedHist.length > 0) {
+      await saveHistoryBulk(mergedHist);
+    } else if (localHist.length > 0) {
+      errors.push('背调历史：合并结果为空，已保留本机数据');
+    }
+    let uploaded = 0;
+    if (doUpload && mergedHist.length > 0) {
+      uploaded = await uploadHistoryChunked(mergedHist);
+    }
     report.history = {
       local: localHist.length,
       cloud: cloudHist.length,
-      merged: mergedHist.length,
+      merged: mergedHist.length || localHist.length,
       uploaded,
     };
   } catch (e: any) {
@@ -195,11 +225,16 @@ export const syncAllWorkspaceData = async (): Promise<WorkspaceSyncReport> => {
   // —— 产品画像 ——
   try {
     const localProfiles = await loadProductCatalog();
-    const cloudProfiles = await getProductProfilesCloud();
+    let cloudProfiles: CustomerProductProfile[] = [];
+    try {
+      cloudProfiles = await getProductProfilesCloud();
+    } catch (e: any) {
+      errors.push(`产品画像云端拉取：${e?.message || String(e)}`);
+    }
     const mergedProfiles = mergeProfilesById(localProfiles, cloudProfiles);
     if (mergedProfiles.length) await saveProductProfilesBulk(mergedProfiles);
     let uploaded = 0;
-    if (mergedProfiles.length) {
+    if (doUpload && mergedProfiles.length) {
       uploaded = await syncProductProfilesCloud(mergedProfiles);
       if (!uploaded) {
         for (const p of mergedProfiles) {
@@ -210,7 +245,7 @@ export const syncAllWorkspaceData = async (): Promise<WorkspaceSyncReport> => {
     report.profiles = {
       local: localProfiles.length,
       cloud: cloudProfiles.length,
-      merged: mergedProfiles.length,
+      merged: mergedProfiles.length || localProfiles.length,
       uploaded,
     };
   } catch (e: any) {
@@ -219,7 +254,7 @@ export const syncAllWorkspaceData = async (): Promise<WorkspaceSyncReport> => {
 
   // —— 背调作业队列 ——
   try {
-    const synced = await pullMergePushAutomationQueue();
+    const synced = await pullMergePushAutomationQueue({ upload: doUpload });
     report.automation = {
       local: synced.local,
       cloud: synced.cloud,

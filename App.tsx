@@ -514,18 +514,21 @@ const App: React.FC = () => {
                 `[automation] repaired ids=${repaired.repaired}, claimed orphans=${repaired.claimed}, total=${repaired.tasks.length}`
               );
             }
-            // 全量云同步（CRM / 背调历史 / 产品画像 / 作业队列）：本机∪云端→写回→上传
+            // 全量云同步：先拉云端写本机（尽快出界面），上传放到后台，避免卡在全 0
             let queueTasks = repaired.tasks;
             if (isSupabaseConfigured()) {
               try {
-                const ws = await syncAllWorkspaceData();
-                console.info('[workspace-sync]\n' + formatWorkspaceSyncReport(ws));
+                const ws = await syncAllWorkspaceData({ upload: false });
+                console.info('[workspace-sync pull]\n' + formatWorkspaceSyncReport(ws));
                 const qAfter = await getAutomationQueue();
                 if (qAfter.length) queueTasks = qAfter;
+                void syncAllWorkspaceData({ upload: true })
+                  .then((up) => console.info('[workspace-sync upload]\n' + formatWorkspaceSyncReport(up)))
+                  .catch((e) => console.warn('[workspace-sync upload] failed', e));
               } catch (e) {
                 console.warn('[workspace-sync] failed, fallback automation-only', e);
                 try {
-                  const synced = await pullMergePushAutomationQueue();
+                  const synced = await pullMergePushAutomationQueue({ upload: false });
                   queueTasks = synced.tasks;
                 } catch (e2) {
                   console.warn('[automation-cloud] sync failed', e2);
@@ -534,6 +537,18 @@ const App: React.FC = () => {
             }
             const scopedQueue = scope(queueTasks);
             if (!cancelled) setAutomationResults(scopedQueue);
+            // 尽快把云端已写入本机的 CRM 刷上界面，后面再做 KB/GitHub 等慢步骤
+            if (!cancelled) {
+              try {
+                const earlyCrm = filterOutCrmTombstones(loadAllCrmClients());
+                if (earlyCrm.length > 0) {
+                  const migratedEarly = migrateLegacyCrmOwnership(earlyCrm, users, depts());
+                  setCrmClients(scope(migratedEarly.clients));
+                }
+              } catch (e) {
+                console.warn('[CRM] early paint failed', e);
+              }
+            }
             const files = await getAllFilesFromDB();
             if (!cancelled) setKbCount(files.length);
 
@@ -965,9 +980,15 @@ const App: React.FC = () => {
               // 旧 CRM 回填部门，便于本部门主管按规则看到历史客户
               const migrated = migrateLegacyCrmOwnership(nextCrm, users, depts());
               nextCrm = migrated.clients;
+              // 全库写入；禁止用「可见切片为空」的 mergeSave 把管理员本机清空
+              if (nextCrm.length > 0) {
+                saveAllCrmClients(nextCrm);
+              }
               const filteredCrm = scope(nextCrm);
               setCrmClients(filteredCrm);
-              mergeSaveCrmClients(currentUser, filteredCrm, users, depts());
+              if (filteredCrm.length > 0) {
+                mergeSaveCrmClients(currentUser, filteredCrm, users, depts());
+              }
               userDataReadyRef.current = true;
             }
         } catch (e) {
