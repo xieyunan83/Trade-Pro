@@ -1,10 +1,10 @@
 {
-  "name": "babyworld-desktop",
-  "productName": "BabyWorld",
+  "name": "waimao-zhihui-xietong-desktop",
+  "productName": "外贸智慧协同",
   "version": "1.0.0",
-  "description": "BabyWorld Desktop Client",
+  "description": "外贸智慧协同桌面客户端",
   "main": "main.js",
-  "author": "BabyWorld",
+  "author": "外贸智慧协同",
   "license": "UNLICENSED",
   "private": true,
   "scripts": {
@@ -18,8 +18,9 @@
   },
   "build": {
     "appId": "ltd.babyworld.app",
-    "productName": "BabyWorld",
-    "copyright": "Copyright © BabyWorld",
+    "productName": "外贸智慧协同",
+    "copyright": "Copyright © 外贸智慧协同",
+    "artifactName": "外贸智慧协同-${version}-${arch}.${ext}",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -43,10 +44,6 @@
         {
           "target": "dmg",
           "arch": ["arm64", "x64"]
-        },
-        {
-          "target": "zip",
-          "arch": ["arm64", "x64"]
         }
       ],
       "hardenedRuntime": false,
@@ -54,7 +51,7 @@
       "identity": null
     },
     "dmg": {
-      "title": "BabyWorld"
+      "title": "外贸智慧协同"
     },
     "win": {
       "signAndEditExecutable": false,

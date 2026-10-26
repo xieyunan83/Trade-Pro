@@ -1,5 +1,5 @@
 /**
- * BabyWorld 桌面壳：无地址栏，加载 https://babyworld.ltd
+ * 外贸智慧协同桌面壳：无地址栏，加载 https://babyworld.ltd
  * 安装包内加密种子在首次打开时写入 localStorage（换电脑也能登录/带配置）。
  */
 const { app, BrowserWindow, shell, Menu, session } = require('electron');
@@ -28,7 +28,7 @@ function createWindow() {
     height: 900,
     minWidth: 1024,
     minHeight: 680,
-    title: 'BabyWorld',
+    title: '外贸智慧协同',
     backgroundColor: '#0f172a',
     show: false,
     autoHideMenuBar: true,
@@ -99,7 +99,7 @@ function createWindow() {
 
   mainWindow.on('page-title-updated', (e) => {
     e.preventDefault();
-    mainWindow.setTitle('BabyWorld');
+    mainWindow.setTitle('外贸智慧协同');
   });
 
   // 尽早注入种子，赶在业务脚本读 localStorage 之前
@@ -111,7 +111,7 @@ function createWindow() {
 
   const baseUa = mainWindow.webContents.getUserAgent().replace(/Electron\/\S+\s*/i, '');
   mainWindow.loadURL(START_URL, {
-    userAgent: `${baseUa} BabyWorldClient/1.0`,
+    userAgent: `${baseUa} TradeCollabClient/1.0`,
   });
 }
 
@@ -122,9 +122,10 @@ app.whenReady().then(() => {
     if (headers['User-Agent']) {
       headers['User-Agent'] = String(headers['User-Agent'])
         .replace(/\s*Electron\/\S+/gi, '')
-        .replace(/\s*BabyWorldClient\/\S+/gi, '');
-      if (!/BabyWorldClient\//.test(headers['User-Agent'])) {
-        headers['User-Agent'] = `${headers['User-Agent']} BabyWorldClient/1.0`;
+        .replace(/\s*BabyWorldClient\/\S+/gi, '')
+        .replace(/\s*TradeCollabClient\/\S+/gi, '');
+      if (!/TradeCollabClient\//.test(headers['User-Agent'])) {
+        headers['User-Agent'] = `${headers['User-Agent']} TradeCollabClient/1.0`;
       }
     }
     callback({ requestHeaders: headers });

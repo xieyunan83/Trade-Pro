@@ -10,7 +10,7 @@ if (!rootElement) {
 /** 桌面客户端：等安装包种子写入 localStorage 后再挂载，避免空账号抢先登录 */
 const waitDesktopSeed = (): Promise<void> => {
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
-  if (!/BabyWorldClient\//i.test(ua)) return Promise.resolve();
+  if (!/TradeCollabClient\/|BabyWorldClient\//i.test(ua)) return Promise.resolve();
   if ((window as any).__BW_SEED_DONE) return Promise.resolve();
   return new Promise((resolve) => {
     const done = () => resolve();
