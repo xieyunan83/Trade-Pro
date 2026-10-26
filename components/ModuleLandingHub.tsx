@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Newspaper,
   Sparkles,
@@ -10,8 +10,10 @@ import {
 } from 'lucide-react';
 import type { User } from '../types';
 import {
+  buildLandingSeed,
   fetchLandingHub,
   loadLandingCache,
+  loadLandingCacheAllowStale,
   type LandingPayload,
 } from '../services/landingHub';
 import { withShowcaseProducts } from '../services/landingShowcase';
@@ -34,6 +36,9 @@ const SHOWCASE_ACCENTS = [
   'from-rose-100 to-pink-50',
 ];
 
+const initialLanding = (): LandingPayload =>
+  loadLandingCache() || loadLandingCacheAllowStale() || buildLandingSeed();
+
 const fmtTime = (ms?: number) => {
   if (!ms) return '';
   try {
@@ -53,12 +58,20 @@ export const ModuleLandingHub: React.FC<Props> = ({
   currentUser,
   onEnterWorkspace,
 }) => {
-  const [data, setData] = useState<LandingPayload | null>(() => loadLandingCache());
-  const [loading, setLoading] = useState(!loadLandingCache());
+  const [data, setData] = useState<LandingPayload>(initialLanding);
+  const [loading, setLoading] = useState(() => !loadLandingCache());
   const [err, setErr] = useState<string | null>(null);
+  const dataRef = useRef(data);
+  dataRef.current = data;
 
   const load = useCallback(async (force = false) => {
-    setLoading(true);
+    const cur = dataRef.current;
+    const hasPaint =
+      (cur.fx?.quotes?.length || 0) > 0 ||
+      (cur.news?.items?.length || 0) > 0 ||
+      (cur.products?.items?.length || 0) > 0;
+    // 已有内容时静默刷新，避免整页转圈
+    if (!hasPaint || force) setLoading(true);
     setErr(null);
     try {
       const payload = await fetchLandingHub({ force });
@@ -72,6 +85,22 @@ export const ModuleLandingHub: React.FC<Props> = ({
 
   useEffect(() => {
     void load(false);
+    const imgs = withShowcaseProducts(dataRef.current.products?.items)
+      .slice(0, 2)
+      .map((p) => p.image)
+      .filter(Boolean) as string[];
+    const links: HTMLLinkElement[] = [];
+    for (const src of imgs) {
+      const link = document.createElement('link');
+      link.rel = 'preload';
+      link.as = 'image';
+      link.href = src;
+      document.head.appendChild(link);
+      links.push(link);
+    }
+    return () => {
+      for (const link of links) link.remove();
+    };
   }, [load]);
 
   const fx = data?.fx?.quotes || [];
@@ -228,8 +257,12 @@ export const ModuleLandingHub: React.FC<Props> = ({
                       <img
                         src={p.image}
                         alt=""
-                        className="w-full h-24 object-cover rounded-xl mb-2 bg-slate-100"
-                        loading="lazy"
+                        width={320}
+                        height={112}
+                        className="w-full h-28 object-cover rounded-xl mb-2 bg-slate-100"
+                        loading={idx < 4 ? 'eager' : 'lazy'}
+                        decoding="async"
+                        fetchPriority={idx < 2 ? 'high' : 'auto'}
                       />
                     ) : (
                       <div
@@ -238,7 +271,20 @@ export const ModuleLandingHub: React.FC<Props> = ({
                         <Sparkles size={22} />
                       </div>
                     )}
-                    <p className="text-xs font-bold text-slate-800 leading-snug line-clamp-3">{p.title}</p>
+                    <p className="text-xs font-bold text-slate-800 leading-snug line-clamp-2">{p.title}</p>
+                    {p.specs && p.specs.length > 0 ? (
+                      <ul className="mt-1.5 space-y-0.5">
+                        {p.specs.slice(0, 3).map((s) => (
+                          <li
+                            key={`${p.id}-${s.label}`}
+                            className="text-[10px] text-slate-500 font-medium flex gap-1 leading-tight"
+                          >
+                            <span className="text-slate-400 shrink-0">{s.label}</span>
+                            <span className="font-bold text-slate-700 truncate">{s.value}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
                     <p className="text-[10px] text-slate-400 font-bold mt-1">{p.source || '优选展区'}</p>
                   </div>
                 ))}

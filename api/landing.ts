@@ -28,12 +28,15 @@ type NewsItem = {
   region: 'cn' | 'intl' | 'industry';
 };
 
+type ProductSpec = { label: string; value: string };
+
 type ProductItem = {
   id: string;
   title: string;
   image?: string;
   url?: string;
   source: string;
+  specs?: ProductSpec[];
 };
 
 const BOC_URL = 'https://www.bank-of-china.com/sourcedb/whpj/index.html';
@@ -62,7 +65,7 @@ const applyCors = (res: any) => {
     'content-type, x-industry-token, authorization'
   );
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
-  res.setHeader('Cache-Control', 'public, s-maxage=120, stale-while-revalidate=300');
+  res.setHeader('Cache-Control', 'public, s-maxage=180, stale-while-revalidate=600');
 };
 
 const stripHtml = (s: string) =>
@@ -77,9 +80,11 @@ const stripHtml = (s: string) =>
     .replace(/&nbsp;/g, ' ')
     .trim();
 
+const FETCH_MS = 8_000;
+
 const fetchText = async (url: string, accept?: string): Promise<string> => {
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 22_000);
+  const t = setTimeout(() => ctrl.abort(), FETCH_MS);
   try {
     const res = await fetch(url, {
       headers: { 'User-Agent': UA, Accept: accept || 'text/html,*/*' },
@@ -91,6 +96,126 @@ const fetchText = async (url: string, accept?: string): Promise<string> => {
     clearTimeout(t);
   }
 };
+
+/** 带图展示样本：无令牌时直接返回，避免慢速公开页爬取拖慢首屏 */
+const SHOWCASE_PRODUCTS: ProductItem[] = [
+  {
+    id: 'showcase-01',
+    title: '6.5CM 益智磁力片积木块 139PCS 百变拼搭',
+    image:
+      'https://imgs.toysbear.net/PIM/TS177241421253549/HS0000002/P17724521600211348_17724521606217078648.jpg',
+    source: '优选展区',
+    specs: [
+      { label: '片规', value: '6.5 CM' },
+      { label: '件数', value: '139 PCS' },
+      { label: '品类', value: '磁力积木' },
+    ],
+  },
+  {
+    id: 'showcase-02',
+    title: '恐龙沙滩车 · 三角龙套装',
+    image:
+      'https://imgs.toysbear.net/PIM/HS0016434/HS0000003/P17775471387195420_YX18228370_1777546466861.jpg',
+    source: '优选展区',
+    specs: [
+      { label: '件数', value: '7 PCS' },
+      { label: '品类', value: '沙滩车 / 恐龙' },
+    ],
+  },
+  {
+    id: 'showcase-03',
+    title: '窗盒 9 关节 11.5 寸晚装芭比娃娃套装',
+    image:
+      'https://imgs.toysbear.net/PIM/HS159989662501368/HS0000005/P17145339579475943_542177741815878.jpg',
+    source: '优选展区',
+    specs: [
+      { label: '尺寸', value: '11.5 寸' },
+      { label: '关节', value: '9 关节实身' },
+      { label: '配件', value: '服装 / 梳妆 / 包袋' },
+    ],
+  },
+  {
+    id: 'showcase-04',
+    title: '超级飞侠 60cm 游泳圈',
+    image: 'https://imgs.toysbear.net/PIM/a97d8914f6ed3354/G874_1792983185217438512.jpg',
+    source: '优选展区',
+    specs: [
+      { label: '直径', value: '60 CM' },
+      { label: '品类', value: '水上玩具' },
+    ],
+  },
+  {
+    id: 'showcase-05',
+    title: '我的世界积木小号桶装 200 颗 + 10 人仔',
+    image:
+      'https://imgs.toysbear.net/PIM/HS176579240584318/HS0000002/P17658839968159955_17658839974462440460.jpg',
+    source: '优选展区',
+    specs: [
+      { label: '件数', value: '210 PCS' },
+      { label: '组成', value: '200 颗 + 10 人仔' },
+      { label: '品类', value: '磁力积木方块' },
+    ],
+  },
+  {
+    id: 'showcase-06',
+    title: '电动透明太空枪泡泡枪（带灯）',
+    image:
+      'https://imgs.toysbear.net/PIM/HS168301368615915/HS0000005/P17109367668961343_527441388294213.jpg',
+    source: '优选展区',
+    specs: [
+      { label: '件数', value: '12 PCS / 箱' },
+      { label: '功能', value: '电动 / 灯光' },
+      { label: '品类', value: '泡泡枪' },
+    ],
+  },
+  {
+    id: 'showcase-07',
+    title: '惊喜娃娃泡泡棒（4 色混装）',
+    image:
+      'https://imgs.toysbear.net/PIM/HS168007782044923/HS0000002/P17750147234029559_17750147241031993426.jpg',
+    source: '优选展区',
+    specs: [
+      { label: '长度', value: '36 CM' },
+      { label: '配色', value: '4 色混装' },
+      { label: '品类', value: '泡泡棒' },
+    ],
+  },
+  {
+    id: 'showcase-08',
+    title: '1:16 四通遥控车带灯光（敞篷款）',
+    image:
+      'https://imgs.toysbear.net/PIM/HS168310862356946/HS0000003/P17521405372312555_696214923726917.jpg',
+    source: '优选展区',
+    specs: [
+      { label: '比例', value: '1:16' },
+      { label: '通道', value: '四通遥控' },
+      { label: '功能', value: '灯光' },
+    ],
+  },
+  {
+    id: 'showcase-09',
+    title: '桌游摇摆叠叠乐 · 卡通鲨鱼平衡积木',
+    image:
+      'https://imgs.toysbear.net/PIM/HS160810544934535/HS0000003/P17148952959545773_543662067609670.jpg',
+    source: '优选展区',
+    specs: [
+      { label: '块数', value: '48 块' },
+      { label: '玩法', value: '摇摆叠叠 / 平衡' },
+      { label: '品类', value: '桌游积木' },
+    ],
+  },
+  {
+    id: 'showcase-10',
+    title: '120 毫升光棒萝卜兔泡泡棒',
+    image:
+      'https://imgs.toysbear.net/PIM/HS171775405706656/HS0000002/P17793417591565068_17793417608886878559.jpg',
+    source: '优选展区',
+    specs: [
+      { label: '容量', value: '120 ML' },
+      { label: '品类', value: '泡泡棒 / 光棒' },
+    ],
+  },
+];
 
 const parseBoc = (html: string): FxQuote[] => {
   const pat =
@@ -146,17 +271,19 @@ const parseRss = (
   return items;
 };
 
-async function buildPayload(industryToken?: string) {
-  const fxErr: string[] = [];
-  let quotes: FxQuote[] = [];
+const fetchFxQuotes = async (): Promise<{ quotes: FxQuote[]; error?: string }> => {
   try {
     const html = await fetchText(BOC_URL, 'text/html');
-    quotes = parseBoc(html);
-    if (!quotes.length) fxErr.push('未能解析中行牌价');
+    const quotes = parseBoc(html);
+    if (!quotes.length) return { quotes: [], error: '未能解析中行牌价' };
+    return { quotes };
   } catch (e: any) {
-    fxErr.push(e?.message || String(e));
+    return { quotes: [], error: e?.message || String(e) };
   }
+};
 
+const fetchNewsFeeds = async (): Promise<{ items: NewsItem[]; error?: string }> => {
+  // 仅拉 2 路 RSS，缩短冷启动；与汇率并行
   const feeds: { url: string; region: 'cn' | 'intl'; label: string }[] = [
     {
       url: 'https://news.google.com/rss/search?q=%E7%8E%A9%E5%85%B7%E4%BA%A7%E4%B8%9A+OR+%E7%8E%A9%E5%85%B7%E5%87%BA%E5%8F%A3&hl=zh-CN&gl=CN&ceid=CN:zh-Hans',
@@ -164,61 +291,68 @@ async function buildPayload(industryToken?: string) {
       label: '国内产业资讯',
     },
     {
-      url: 'https://news.google.com/rss/search?q=%E6%BE%84%E6%B5%B7%E7%8E%A9%E5%85%B7&hl=zh-CN&gl=CN&ceid=CN:zh-Hans',
-      region: 'cn',
-      label: '产地动态',
-    },
-    {
       url: 'https://news.google.com/rss/search?q=toy+industry+OR+%22toy+fair%22+OR+toys+wholesale&hl=en-US&gl=US&ceid=US:en',
       region: 'intl',
       label: '国际玩具资讯',
     },
-    {
-      url: 'https://news.google.com/rss/search?q=Mattel+OR+Hasbro+OR+LEGO+toys+OR+tariff&hl=en-US&gl=US&ceid=US:en',
-      region: 'intl',
-      label: '品牌与贸易',
-    },
   ];
-
   const news: NewsItem[] = [];
   const newsErr: string[] = [];
   await Promise.all(
     feeds.map(async (f) => {
       try {
         const xml = await fetchText(f.url, 'application/rss+xml, application/xml, text/xml,*/*');
-        news.push(...parseRss(xml, f.region, f.label, 8));
+        news.push(...parseRss(xml, f.region, f.label, 10));
       } catch (e: any) {
         newsErr.push(`${f.label}: ${e?.message || e}`);
       }
     })
   );
   const seen = new Set<string>();
-  const newsDedup = news.filter((n) => {
+  const items = news.filter((n) => {
     const k = n.title.toLowerCase();
     if (seen.has(k)) return false;
     seen.add(k);
     return true;
   }).slice(0, 24);
+  return {
+    items,
+    error: newsErr.length && !items.length ? newsErr.join('; ') : undefined,
+  };
+};
 
-  let products: ProductItem[] = [];
-  let productsError: string | undefined;
-  let needsCredential = !industryToken;
-
-  if (industryToken) {
+const fetchIndustryBundle = async (
+  token: string
+): Promise<{ products: ProductItem[]; industryNews: NewsItem[]; error?: string }> => {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), FETCH_MS);
+  try {
+    const [prodRes, newsRes] = await Promise.all([
+      fetch('https://mapi.toysbear.net/product/TsbProductNew/NewProductList', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          'User-Agent': UA,
+        },
+        body: JSON.stringify({ SkipCount: 0, MaxResultCount: 16, pageIndex: 1, pageSize: 16 }),
+        signal: ctrl.signal,
+      }),
+      fetch('https://mapi.toysbear.net/synthesis/RealTimeInfo/RealTimeInfoPage', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          'User-Agent': UA,
+        },
+        body: JSON.stringify({ SkipCount: 0, MaxResultCount: 12, pageIndex: 1, pageSize: 12 }),
+        signal: ctrl.signal,
+      }),
+    ]);
+    let products: ProductItem[] = [];
+    let error: string | undefined;
     try {
-      const res = await fetch(
-        'https://mapi.toysbear.net/product/TsbProductNew/NewProductList',
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${industryToken}`,
-            'User-Agent': UA,
-          },
-          body: JSON.stringify({ SkipCount: 0, MaxResultCount: 16, pageIndex: 1, pageSize: 16 }),
-        }
-      );
-      const data = await res.json();
+      const data = await prodRes.json();
       const list =
         data?.result?.items || data?.result?.item?.items || data?.result?.list || data?.items || [];
       if (Array.isArray(list) && list.length) {
@@ -229,36 +363,21 @@ async function buildPayload(industryToken?: string) {
           url: row.url || undefined,
           source: '优选行业新品',
         }));
-        needsCredential = false;
       } else {
-        productsError = data?.result?.msg || '行业新品暂无数据或令牌无效';
-        needsCredential = true;
+        error = data?.result?.msg || '行业新品暂无数据或令牌无效';
       }
     } catch (e: any) {
-      productsError = e?.message || String(e);
-      needsCredential = true;
+      error = e?.message || String(e);
     }
-
+    const industryNews: NewsItem[] = [];
     try {
-      const res = await fetch(
-        'https://mapi.toysbear.net/synthesis/RealTimeInfo/RealTimeInfoPage',
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${industryToken}`,
-            'User-Agent': UA,
-          },
-          body: JSON.stringify({ SkipCount: 0, MaxResultCount: 12, pageIndex: 1, pageSize: 12 }),
-        }
-      );
-      const data = await res.json();
+      const data = await newsRes.json();
       const list =
         data?.result?.items || data?.result?.item?.items || data?.result?.list || data?.items || [];
       if (Array.isArray(list)) {
         for (const row of list.slice(0, 12)) {
-          newsDedup.unshift({
-            id: `ind-${row.id || Math.random()}`,
+          industryNews.push({
+            id: `ind-${row.id || industryNews.length}`,
             title: String(row.title || row.Title || '资讯'),
             url:
               row.url ||
@@ -271,45 +390,32 @@ async function buildPayload(industryToken?: string) {
         }
       }
     } catch {
-      /* ignore industry news failure */
+      /* ignore */
     }
-  } else {
-    // 公开页尽力解析；失败则用展示样本（投资人演示）
-    try {
-      const html = await fetchText('https://www.toysaas.com/new_arrivals', 'text/html');
-      const alts = [...html.matchAll(/alt="([^"]{6,80})"/g)].map((x) => stripHtml(x[1]));
-      const seenT = new Set<string>();
-      for (const title of alts) {
-        if (seenT.has(title) || /登录|注册|首页|Copyright/.test(title)) continue;
-        seenT.add(title);
-        products.push({
-          id: `pub-${products.length}`,
-          title,
-          url: undefined,
-          source: '优选展区',
-        });
-        if (products.length >= 12) break;
-      }
-    } catch (e: any) {
-      productsError = e?.message || String(e);
-    }
+    return { products, industryNews, error };
+  } catch (e: any) {
+    return { products: [], industryNews: [], error: e?.message || String(e) };
+  } finally {
+    clearTimeout(t);
   }
+};
+
+async function buildPayload(industryToken?: string) {
+  const [fxResult, newsResult, industryResult] = await Promise.all([
+    fetchFxQuotes(),
+    fetchNewsFeeds(),
+    industryToken
+      ? fetchIndustryBundle(industryToken)
+      : Promise.resolve({ products: [] as ProductItem[], industryNews: [] as NewsItem[] }),
+  ]);
+
+  let products = industryResult.products;
+  let productsError = industryResult.error;
+  let needsCredential = !industryToken || products.length === 0;
 
   if (products.length < 6) {
-    const showcase: ProductItem[] = [
-      { id: 'showcase-01', title: '世界杯微颗粒积木 · 足球场景拼装', source: '优选展区' },
-      { id: 'showcase-02', title: '138PCS 动物滑道积木益智套装', source: '优选展区' },
-      { id: 'showcase-03', title: '飞盘软弹枪（飞盘 / 软弹双用）', source: '优选展区' },
-      { id: 'showcase-04', title: 'DIY 串珠手链过家家饰品套装', source: '优选展区' },
-      { id: 'showcase-05', title: '解压海洋冰块捏捏乐 · 麦芽糖款', source: '优选展区' },
-      { id: 'showcase-06', title: 'PVC 牧场家禽动物场景套装', source: '优选展区' },
-      { id: 'showcase-07', title: '磁力积木电动轨道车 · 早教桌游', source: '优选展区' },
-      { id: 'showcase-08', title: '恐龙变形折叠弹射轨道车套装', source: '优选展区' },
-      { id: 'showcase-09', title: '婴儿声光多功能校巴 · 早教玩具', source: '优选展区' },
-      { id: 'showcase-10', title: 'DIY 独角兽涂鸦水瓶（配水彩笔）', source: '优选展区' },
-    ];
     const seen = new Set(products.map((p) => p.title.toLowerCase()));
-    for (const p of showcase) {
+    for (const p of SHOWCASE_PRODUCTS) {
       if (seen.has(p.title.toLowerCase())) continue;
       products.push(p);
       if (products.length >= 10) break;
@@ -318,18 +424,20 @@ async function buildPayload(industryToken?: string) {
     productsError = undefined;
   }
 
+  const newsItems = [...industryResult.industryNews, ...newsResult.items].slice(0, 28);
+
   return {
     ok: true,
     fetchedAt: Date.now(),
     fx: {
-      quotes,
+      quotes: fxResult.quotes,
       source: '中国银行外汇牌价',
       note: '买入/卖出为中行现汇价；中间价列为中行折算价。单位：人民币 / 100 外币。仅供参考。',
-      error: fxErr.length ? fxErr.join('; ') : undefined,
+      error: fxResult.error,
     },
     news: {
-      items: newsDedup.slice(0, 28),
-      error: newsErr.length && !newsDedup.length ? newsErr.join('; ') : undefined,
+      items: newsItems,
+      error: newsResult.error,
     },
     products: { items: products, error: productsError, needsCredential },
   };

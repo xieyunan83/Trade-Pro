@@ -1,26 +1,65 @@
 /**
- * 着陆页客户端：拉取聚合接口并短缓存
+ * 着陆页客户端：拉取聚合接口 + stale-while-revalidate 缓存
  */
-import { loadDataProvider } from './dataProviders';
 import type { LandingPayload } from './landingDataCore';
+import { LANDING_SHOWCASE_PRODUCTS } from './landingShowcase';
 
-const CACHE_KEY = 'trade_scout_landing_hub_v1';
-const CACHE_TTL_MS = 3 * 60 * 1000;
+const CACHE_KEY = 'trade_scout_landing_hub_v2';
+/** 新鲜期内直接用缓存，不打接口 */
+const FRESH_TTL_MS = 5 * 60 * 1000;
+/** 过期但仍可立刻展示，后台静默刷新 */
+const STALE_TTL_MS = 6 * 60 * 60 * 1000;
 
 export type { LandingPayload };
 
-export const loadLandingCache = (): LandingPayload | null => {
+type CachedPayload = LandingPayload & { _cachedAt?: number };
+
+const readRawCache = (): CachedPayload | null => {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as LandingPayload & { _cachedAt?: number };
-    if (!parsed?.fetchedAt) return null;
-    if (Date.now() - (parsed._cachedAt || parsed.fetchedAt) > CACHE_TTL_MS) return null;
-    return parsed;
+    if (!raw) {
+      // 兼容旧键
+      const legacy = localStorage.getItem('trade_scout_landing_hub_v1');
+      if (!legacy) return null;
+      return JSON.parse(legacy) as CachedPayload;
+    }
+    return JSON.parse(raw) as CachedPayload;
   } catch {
     return null;
   }
 };
+
+const cacheAge = (parsed: CachedPayload) =>
+  Date.now() - (parsed._cachedAt || parsed.fetchedAt || 0);
+
+/** 新鲜缓存（未过 FRESH_TTL） */
+export const loadLandingCache = (): LandingPayload | null => {
+  const parsed = readRawCache();
+  if (!parsed?.fetchedAt) return null;
+  if (cacheAge(parsed) > FRESH_TTL_MS) return null;
+  return parsed;
+};
+
+/** 含过期缓存，供首屏立刻渲染 */
+export const loadLandingCacheAllowStale = (): LandingPayload | null => {
+  const parsed = readRawCache();
+  if (!parsed?.fetchedAt) return null;
+  if (cacheAge(parsed) > STALE_TTL_MS) return null;
+  return parsed;
+};
+
+/** 无缓存时的瞬时骨架：带图新品先上屏，汇率/新闻后台补齐 */
+export const buildLandingSeed = (): LandingPayload => ({
+  ok: true,
+  fetchedAt: 0,
+  fx: {
+    quotes: [],
+    source: '中国银行外汇牌价',
+    note: '买入/卖出为中行现汇价；中间价列为中行折算价。单位：人民币 / 100 外币。仅供参考。',
+  },
+  news: { items: [] },
+  products: { items: LANDING_SHOWCASE_PRODUCTS },
+});
 
 const saveLandingCache = (payload: LandingPayload) => {
   try {
@@ -33,30 +72,17 @@ const saveLandingCache = (payload: LandingPayload) => {
   }
 };
 
-/** 行业源令牌：优先 toysbear.apiKey，其次 skybird.apiKey */
-export const resolveIndustryToken = async (): Promise<string> => {
-  try {
-    const a = await loadDataProvider('toysbear');
-    if (a.enabled && (a.apiKey || '').trim()) return a.apiKey!.trim();
-    const b = await loadDataProvider('skybird');
-    if (b.enabled && (b.apiKey || '').trim()) return b.apiKey!.trim();
-  } catch {
-    /* ignore */
-  }
-  return '';
-};
-
 export const fetchLandingHub = async (opts?: {
   force?: boolean;
 }): Promise<LandingPayload> => {
   if (!opts?.force) {
-    const cached = loadLandingCache();
-    if (cached) return cached;
+    const fresh = loadLandingCache();
+    if (fresh) return fresh;
   }
-  const token = await resolveIndustryToken();
-  const headers: Record<string, string> = { Accept: 'application/json' };
-  if (token) headers['x-industry-token'] = token;
-  const res = await fetch('/api/landing', { headers });
+  // 不阻塞等行业令牌（本地库读取会拖慢首请求）；有令牌时用户可点刷新
+  const res = await fetch('/api/landing', {
+    headers: { Accept: 'application/json' },
+  });
   if (!res.ok) {
     throw new Error(`着陆页数据 ${res.status}`);
   }

@@ -30,12 +30,19 @@ export type LandingNewsItem = {
   region: 'cn' | 'intl' | 'industry';
 };
 
+export type LandingProductSpec = {
+  label: string;
+  value: string;
+};
+
 export type LandingProductItem = {
   id: string;
   title: string;
   image?: string;
   url?: string;
   source: string;
+  /** 展区可见参数（规格 / 件数等），前台中性展示 */
+  specs?: LandingProductSpec[];
 };
 
 export type LandingPayload = {
@@ -66,11 +73,16 @@ const MAJOR_FX: { name: string; code: string }[] = [
 const UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
+const FETCH_MS = 8_000;
+
 /** 带 curl 回退（本机走系统代理时 Node fetch 常超时；Vercel 上直连即可） */
 const fetchText = async (url: string, accept?: string): Promise<string> => {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), FETCH_MS);
   try {
     const res = await fetch(url, {
       headers: { 'User-Agent': UA, Accept: accept || 'text/html,*/*' },
+      signal: ctrl.signal,
     });
     if (res.ok) return await res.text();
     throw new Error(`HTTP ${res.status}`);
@@ -90,13 +102,15 @@ const fetchText = async (url: string, accept?: string): Promise<string> => {
       const execFileAsync = promisify(execFile);
       const { stdout } = await execFileAsync(
         'curl',
-        ['-sL', '-A', UA, '--max-time', '28', '-H', `Accept: ${accept || '*/*'}`, url],
+        ['-sL', '-A', UA, '--max-time', '8', '-H', `Accept: ${accept || '*/*'}`, url],
         { env: process.env, maxBuffer: 8_000_000 }
       );
       return Buffer.isBuffer(stdout) ? stdout.toString('utf8') : String(stdout);
     } catch {
       throw first;
     }
+  } finally {
+    clearTimeout(timer);
   }
 };
 
@@ -186,6 +200,7 @@ export const fetchPublicNews = async (): Promise<{
   items: LandingNewsItem[];
   error?: string;
 }> => {
+  // 2 路 RSS 即可铺满看板，减少冷启动等待
   const feeds: { url: string; region: 'cn' | 'intl'; label: string }[] = [
     {
       url: 'https://news.google.com/rss/search?q=%E7%8E%A9%E5%85%B7%E4%BA%A7%E4%B8%9A+OR+%E7%8E%A9%E5%85%B7%E5%87%BA%E5%8F%A3&hl=zh-CN&gl=CN&ceid=CN:zh-Hans',
@@ -193,24 +208,9 @@ export const fetchPublicNews = async (): Promise<{
       label: '国内产业资讯',
     },
     {
-      url: 'https://news.google.com/rss/search?q=%E6%BE%84%E6%B5%B7%E7%8E%A9%E5%85%B7+OR+%E4%B9%8B%E5%89%8D%E7%8E%A9%E5%85%B7%E5%B1%95&hl=zh-CN&gl=CN&ceid=CN:zh-Hans',
-      region: 'cn',
-      label: '产地动态',
-    },
-    {
       url: 'https://news.google.com/rss/search?q=toy+industry+OR+%22toy+fair%22+OR+toys+wholesale&hl=en-US&gl=US&ceid=US:en',
       region: 'intl',
       label: '国际玩具资讯',
-    },
-    {
-      url: 'https://news.google.com/rss/search?q=Mattel+OR+Hasbro+OR+%22toy+recall%22+OR+LEGO+toys&hl=en-US&gl=US&ceid=US:en',
-      region: 'intl',
-      label: '品牌与合规',
-    },
-    {
-      url: 'https://news.google.com/rss/search?q=global+trade+OR+export+OR+tariff+toys+OR+consumer+goods&hl=en-US&gl=US&ceid=US:en',
-      region: 'intl',
-      label: '国际贸易',
     },
   ];
   const errors: string[] = [];
@@ -372,34 +372,48 @@ export type LandingFetchOptions = {
 export const buildLandingPayload = async (
   opts?: LandingFetchOptions
 ): Promise<LandingPayload> => {
-  const [fx, news] = await Promise.all([fetchBocFx(), fetchPublicNews()]);
-  let products: LandingProductItem[] = [];
-  let productsError: string | undefined;
-  let needsCredential = false;
-  let industryNews: LandingNewsItem[] = [];
+  // 动态引入展示样本，避免无令牌时慢速公开页爬取
+  const { LANDING_SHOWCASE_PRODUCTS } = await import('./landingShowcase');
 
-  if (opts?.industryToken?.trim()) {
-    try {
-      const [n, p] = await Promise.all([
-        fetchIndustryNewsWithToken(opts.industryToken.trim()),
-        fetchIndustryProductsWithToken(opts.industryToken.trim()),
-      ]);
-      industryNews = n;
-      products = p;
-    } catch (e: any) {
-      productsError = e?.message || String(e);
-      needsCredential = /令牌|401|Token/i.test(productsError);
+  const industryToken = opts?.industryToken?.trim();
+  const [fx, news, industry] = await Promise.all([
+    fetchBocFx(),
+    fetchPublicNews(),
+    industryToken
+      ? Promise.all([
+          fetchIndustryNewsWithToken(industryToken).catch(() => [] as LandingNewsItem[]),
+          fetchIndustryProductsWithToken(industryToken).catch((e: any) => {
+            throw e;
+          }),
+        ])
+          .then(([n, p]) => ({ news: n, products: p as LandingProductItem[], error: undefined as string | undefined }))
+          .catch((e: any) => ({
+            news: [] as LandingNewsItem[],
+            products: [] as LandingProductItem[],
+            error: e?.message || String(e),
+          }))
+      : Promise.resolve({
+          news: [] as LandingNewsItem[],
+          products: [] as LandingProductItem[],
+          error: undefined as string | undefined,
+        }),
+  ]);
+
+  let products = industry.products;
+  let productsError = industry.error;
+  const needsCredential = !industryToken || products.length === 0;
+
+  if (products.length < 6) {
+    const seen = new Set(products.map((p) => p.title.toLowerCase()));
+    for (const p of LANDING_SHOWCASE_PRODUCTS) {
+      if (seen.has(p.title.toLowerCase())) continue;
+      products.push(p);
+      if (products.length >= 10) break;
     }
-  } else {
-    needsCredential = true;
-    try {
-      products = await scrapePublicNewArrivals();
-    } catch (e: any) {
-      productsError = e?.message || String(e);
-    }
+    productsError = undefined;
   }
 
-  const newsItems = [...industryNews, ...news.items].slice(0, 28);
+  const newsItems = [...industry.news, ...news.items].slice(0, 28);
 
   return {
     ok: true,
@@ -414,7 +428,7 @@ export const buildLandingPayload = async (
     products: {
       items: products,
       error: productsError,
-      needsCredential: needsCredential && products.length === 0,
+      needsCredential: needsCredential && products.filter((p) => p.image).length === 0,
     },
   };
 };
