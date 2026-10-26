@@ -21,7 +21,12 @@ import {
   saveVideoJobs,
   newCreativeId,
 } from '../services/creativeStudioStore';
-import { generateProductVideo, getVideoProviderStatus } from '../services/wanVideoService';
+import {
+  generateProductVideo,
+  getVideoProviderStatus,
+  hydrateVideoProvider,
+} from '../services/wanVideoService';
+import { humanizeCreativeProviderError } from '../services/providerErrorMessage';
 import { consumeCreativeHandoff } from '../services/creativeAssetBridge';
 import { CreativePipelineBar, CreativeRefPicker } from './CreativeRefPicker';
 
@@ -46,10 +51,21 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(jobs[0]?.id || null);
+  const [provider, setProvider] = useState(() => getVideoProviderStatus());
   const fileRef = useRef<HTMLInputElement>(null);
   const skus = useMemo(() => loadCatalogSkus(), []);
-  const provider = getVideoProviderStatus();
   const active = jobs.find((j) => j.id === activeId) || null;
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const st = await hydrateVideoProvider();
+      if (!cancelled) setProvider(st);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const handoff = consumeCreativeHandoff('ai_video');
@@ -192,12 +208,17 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
       });
       setMsg('样片已完成 — 确认后再出正片以控制成本');
     } catch (e: any) {
+      const errText = humanizeCreativeProviderError(e?.message || e);
       patchJob(job.id, {
         status: 'failed',
-        error: e?.message || String(e),
-        previewHint: e?.message || '样片失败',
+        progress: 0,
+        error: errText,
+        previewHint: errText,
       });
-      setMsg(e?.message || '样片失败');
+      setBusy(false);
+      setMsg(errText);
+      window.alert(`视频生成失败：${errText}`);
+      return;
     } finally {
       setBusy(false);
     }
@@ -246,12 +267,14 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
       });
       setMsg('正片已完成');
     } catch (e: any) {
+      const errText = humanizeCreativeProviderError(e?.message || e);
       patchJob(active.id, {
         status: 'draft',
-        error: e?.message || String(e),
-        previewHint: e?.message || '正片失败，可重试',
+        error: errText,
+        previewHint: `${errText}（可重试正片）`,
       });
-      setMsg(e?.message || '正片失败');
+      setMsg(errText);
+      window.alert(`正片生成失败：${errText}`);
     } finally {
       setBusy(false);
     }

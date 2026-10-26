@@ -240,15 +240,20 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
       setMsgTone('ok');
       setMsg('3D 模型已生成，可在下方下载 GLB');
     } catch (e: any) {
-      const errText = e?.message || String(e);
+      const { humanizeCreativeProviderError } = await import('../services/providerErrorMessage');
+      const errText = humanizeCreativeProviderError(e?.message || e);
+      // 先落失败态再弹窗，避免界面卡在「生成中 8%」
       patchJob(job.id, {
         status: 'failed',
+        progress: 0,
         error: errText,
         previewHint: errText,
       });
+      setBusy(false);
       setMsgTone('error');
       setMsg(errText);
       window.alert(`3D 生成失败：${errText}`);
+      return;
     } finally {
       setBusy(false);
     }

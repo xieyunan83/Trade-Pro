@@ -11,6 +11,7 @@ import {
   type DataProviderMeta,
 } from './dataProviders';
 import { compressImageDataUrl } from './catalogExcelService';
+import { humanizeCreativeProviderError } from './providerErrorMessage';
 
 export type Model3dGenerateInput = {
   mode: 'image' | 'text';
@@ -123,7 +124,7 @@ const throwIfApiError = (res: Response, json: any, fallback: string) => {
     json?.data?.message ||
     (typeof json?.error === 'string' ? json.error : '') ||
     fallback;
-  throw new Error(String(msg));
+  throw new Error(humanizeCreativeProviderError(String(msg)));
 };
 
 /** dataURL → Blob */
@@ -246,7 +247,9 @@ const pollTask = async (
       return data;
     }
     if (status === 'failed' || status === 'error' || status === 'cancelled') {
-      throw new Error(data.error_msg || data.message || `3D 生成失败（${status}）`);
+      throw new Error(
+        humanizeCreativeProviderError(data.error_msg || data.message || `3D 生成失败（${status}）`)
+      );
     }
     await sleep(2500);
   }
@@ -283,6 +286,14 @@ const pickUrls = (data: any): Model3dGenerateResult => {
  * high_detail → 更高面数/纹理；engine_ready → 较低面数智能减面。
  */
 export const generateModel3d = async (input: Model3dGenerateInput): Promise<Model3dGenerateResult> => {
+  try {
+    return await generateModel3dInner(input);
+  } catch (e: any) {
+    throw new Error(humanizeCreativeProviderError(e?.message || e));
+  }
+};
+
+const generateModel3dInner = async (input: Model3dGenerateInput): Promise<Model3dGenerateResult> => {
   const { apiKey } = resolveMeta();
   const quality = input.quality;
 

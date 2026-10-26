@@ -9,10 +9,11 @@ import {
   DEFAULT_TOKEN_PLAN_ORIGIN,
   isLocalDevHost,
   qwenCorsHint,
-  resolveQwenRequestTarget,
 } from './qwenProxy';
-import { loadDataProviderLocal } from './dataProviders';
+import { loadDataProvider, loadDataProviderLocal } from './dataProviders';
 import { extractAliyunOrigin } from './wanImageService';
+import { compressImageDataUrl } from './catalogExcelService';
+import { humanizeCreativeProviderError } from './providerErrorMessage';
 
 export type VideoGenerateMode = 'text' | 'image' | 'reference';
 
@@ -107,13 +108,33 @@ const resolveVideoConfig = (): ResolvedVideoConfig => {
   return { apiKey, origin: normalizeOrigin(apiKey, rawBase) };
 };
 
-const buildUrl = (origin: string, path: string): { url: string; proxyOrigin?: string } => {
-  const absolute = `${origin.replace(/\/$/, '')}${path}`;
+/** 与万相生图一致：强制同域代理，避免错误代理模式导致 Failed to fetch */
+const buildUrl = (origin: string, path: string): { url: string; proxyOrigin: string } => {
   if (isLocalDevHost()) {
     return { url: `/qwen-api${path}`, proxyOrigin: origin };
   }
-  const resolved = resolveQwenRequestTarget(absolute);
-  return { url: resolved.url, proxyOrigin: resolved.proxyOrigin || origin };
+  return {
+    url: `/api/qwen?__upstream=${encodeURIComponent(path)}`,
+    proxyOrigin: origin || DEFAULT_TOKEN_PLAN_ORIGIN,
+  };
+};
+
+/** 进入视频模块时拉取云端「视频生成」配置 */
+export const hydrateVideoProvider = async (): Promise<ReturnType<typeof getVideoProviderStatus>> => {
+  try {
+    await loadDataProvider('wan_video');
+  } catch {
+    /* 本地即可 */
+  }
+  return getVideoProviderStatus();
+};
+
+const prepareVideoImage = async (img: string): Promise<string> => {
+  if (!img.startsWith('data:image/')) return img;
+  // 视频创建体会经同域代理，过大极易 Failed to fetch；压到可控体积
+  if (img.length > 500_000) return compressImageDataUrl(img, 1024, 0.72);
+  if (img.length > 280_000) return compressImageDataUrl(img, 1280, 0.78);
+  return img;
 };
 
 const parseJson = async (res: Response): Promise<any> => {
@@ -155,15 +176,20 @@ const createAsyncTask = async (
     },
   });
 
+  const bodyStr = JSON.stringify({ model, input, parameters });
+  if (bodyStr.length > 3_800_000) {
+    throw new Error('参考图过大导致请求超限，请改用更小的主图或先压缩后再试');
+  }
+
   let res: Response;
   try {
     res = await fetch(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ model, input, parameters }),
+      body: bodyStr,
     });
   } catch (e: any) {
-    throw new Error(`视频任务创建失败：${e?.message || e}${qwenCorsHint(e?.message)}`);
+    throw new Error(humanizeCreativeProviderError(`视频任务创建失败：${e?.message || e}${qwenCorsHint(e?.message)}`));
   }
 
   const json = await parseJson(res);
@@ -172,8 +198,9 @@ const createAsyncTask = async (
       json.message ||
       json.code ||
       json.error?.message ||
+      json.error ||
       `创建视频任务失败 HTTP ${res.status}`;
-    throw new Error(String(msg));
+    throw new Error(humanizeCreativeProviderError(String(msg)));
   }
   const taskId = json.output?.task_id || json.task_id;
   if (!taskId) throw new Error('创建成功但未返回 task_id');
@@ -264,10 +291,12 @@ export const generateProductVideo = async (input: VideoGenerateInput): Promise<V
   } else {
     const imgs = [input.sourceImage, ...(input.referenceImages || [])].filter(Boolean) as string[];
     if (!imgs.length) throw new Error('请至少上传一张参考图');
-    const imgUrl = imgs[0].trim();
+    let imgUrl = imgs[0].trim();
     if (!/^https?:\/\//i.test(imgUrl) && !/^data:image\//i.test(imgUrl)) {
       throw new Error('参考图格式无效');
     }
+    input.onProgress?.(4, 'preparing');
+    imgUrl = await prepareVideoImage(imgUrl);
     if (imgs.length > 1) {
       prompt = `${prompt}\nKeep product identity consistent across ${imgs.length} reference frames.`;
     }
@@ -283,8 +312,12 @@ export const generateProductVideo = async (input: VideoGenerateInput): Promise<V
     };
   }
 
-  const taskId = await createAsyncTask(cfg, model, taskInput, parameters);
-  input.onProgress?.(8, 'running');
-  const out = await pollTask(cfg, taskId, input.onProgress);
-  return { taskId, videoUrl: pickVideoUrl(out), raw: out };
+  try {
+    const taskId = await createAsyncTask(cfg, model, taskInput, parameters);
+    input.onProgress?.(8, 'running');
+    const out = await pollTask(cfg, taskId, input.onProgress);
+    return { taskId, videoUrl: pickVideoUrl(out), raw: out };
+  } catch (e: any) {
+    throw new Error(humanizeCreativeProviderError(e?.message || e));
+  }
 };
