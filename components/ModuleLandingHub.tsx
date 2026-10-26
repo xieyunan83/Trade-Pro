@@ -9,6 +9,7 @@ import {
   Radio,
 } from 'lucide-react';
 import type { User } from '../types';
+import { ModuleType } from '../types';
 import {
   buildLandingSeed,
   fetchLandingHub,
@@ -17,6 +18,8 @@ import {
   type LandingPayload,
 } from '../services/landingHub';
 import { withShowcaseProducts } from '../services/landingShowcase';
+import { TradeJourneyPanel } from './TradeJourneyPanel';
+import type { JourneyProgressHint } from '../services/tradeJourney';
 
 type Props = {
   currentUser: User;
@@ -26,6 +29,11 @@ type Props = {
   onEnterWorkspace?: () => void;
   /** 管理员：打开数据接入说明（可选，前台看板不展示接入文案） */
   onOpenDataSetup?: () => void;
+  /** 任务流模块跳转 */
+  onNavigateModule?: (mod: ModuleType) => void;
+  /** 一键启动获客剧本 */
+  onStartPlaybook?: (playbookId: string) => void;
+  journeyProgress?: JourneyProgressHint;
 };
 
 const SHOWCASE_ACCENTS = [
@@ -57,6 +65,9 @@ const fmtTime = (ms?: number) => {
 export const ModuleLandingHub: React.FC<Props> = ({
   currentUser,
   onEnterWorkspace,
+  onNavigateModule,
+  onStartPlaybook,
+  journeyProgress,
 }) => {
   const [data, setData] = useState<LandingPayload>(initialLanding);
   const [loading, setLoading] = useState(() => !loadLandingCache());
@@ -137,7 +148,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
               外贸智慧协同
             </h1>
             <p className="mt-2 text-sm sm:text-base text-slate-300 font-medium max-w-xl leading-relaxed">
-              你好，{currentUser.username}。行业脉搏 · 优选新品 · 即时汇率，登录即可掌握今日作战面。
+              你好，{currentUser.username}。用任务流跑通澄海玩具出口：选品适市 → 获客背调 → 开发成交。
             </p>
             {data?.fetchedAt ? (
               <p className="mt-3 text-[11px] font-bold text-slate-400">
@@ -164,9 +175,34 @@ export const ModuleLandingHub: React.FC<Props> = ({
                 进入客户搜索
               </button>
             )}
+            {onNavigateModule && (
+              <button
+                type="button"
+                onClick={() => onNavigateModule(ModuleType.PROMO_GENERATOR)}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-white/10 hover:bg-white/15 border border-white/20 px-4 py-2.5 text-sm font-extrabold"
+              >
+                自动化获客
+              </button>
+            )}
           </div>
         </div>
       </section>
+
+      {onNavigateModule ? (
+        <TradeJourneyPanel
+          progressHint={
+            journeyProgress || {
+              skuCount: 0,
+              pendingTasks: 0,
+              failedTasks: 0,
+              completedBg: 0,
+              crmCount: 0,
+            }
+          }
+          onNavigate={onNavigateModule}
+          onStartPlaybook={onStartPlaybook}
+        />
+      ) : null}
 
       {err && (
         <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 text-amber-950 px-4 py-3 text-sm font-bold">

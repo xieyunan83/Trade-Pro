@@ -16,6 +16,19 @@ export type ModuleRoadmap = {
   providers?: string[];
 };
 
+/** 指挥舱任务流与适市闭环（跨模块，非独立 ModuleType） */
+export const JOURNEY_ROADMAP_NOTE = {
+  phase: 'P0' as const,
+  summary:
+    '澄海玩具出口任务流：选品适市 → 报价 → 设计 → 获客剧本 → 背调 → 开发 → CRM；指挥舱一站推进。',
+  bullets: [
+    '新手定盘：我有什么 / 目标市场 / 主推品类',
+    '适市顾问：包装 · 功能 · 合规提示（欧盟/北美/中东/拉美）',
+    '获客剧本：欧盟批发、北美派对电商、中东进口、拉美零售、英国精品',
+    '与产品库、自动化流水线、CRM 计数联动「下一步」',
+  ],
+};
+
 export const MODULE_ROADMAP: Partial<Record<ModuleType, ModuleRoadmap>> = {
   [ModuleType.BUYER_LIBRARY]: {
     phase: 'P0',

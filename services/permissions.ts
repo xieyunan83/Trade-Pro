@@ -9,7 +9,7 @@ export const PERMISSION_CATALOG: Array<{
   group: '模块' | '功能';
   description: string;
 }> = [
-  { key: 'module.home', label: '今日看板', group: '模块', description: '登录落地：行业新闻 / 新品 / 汇率' },
+  { key: 'module.home', label: '今日看板', group: '模块', description: '登录落地：任务流 + 行业新闻 / 新品 / 汇率' },
   { key: 'module.discovery', label: '客户搜索', group: '模块', description: '发现潜在客户列表' },
   { key: 'module.background', label: '背景调查', group: '模块', description: '查看公司背调报告' },
   { key: 'module.products', label: '产品分析', group: '模块', description: '查看产品分析页' },

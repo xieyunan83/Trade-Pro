@@ -36,9 +36,17 @@ import { PaginationBar } from './PaginationBar';
 import { maskEmailAddress } from '../services/permissions';
 import { DmStatusChip } from './DmStatusChip';
 import { buildPromoListRows, type PromoListRow } from '../utils/promoListRows';
+import {
+  ACQUISITION_PLAYBOOKS,
+  applyPlaybook,
+} from '../services/acquisitionPlaybooks';
+import { loadTradeJourney, patchTradeJourney } from '../services/tradeJourney';
 
 interface ModulePromoGeneratorProps {
   onStartAutomation: (config: AutomationPipelineConfig) => void;
+  /** 指挥舱传入的剧本 id：打开后自动填入并弹配置窗 */
+  initialPlaybookId?: string | null;
+  onInitialPlaybookConsumed?: () => void;
   automationResults: AutomationResult[];
   /** 与客户管理同步：合并 CRM 客户并统一状态 */
   crmClients?: Client[];
@@ -108,6 +116,8 @@ const StatusMini: React.FC<{ done: boolean; yes: string; no: string; tone: 'emer
 
 export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   onStartAutomation,
+  initialPlaybookId = null,
+  onInitialPlaybookConsumed,
   automationResults,
   crmClients = [],
   history = [],
@@ -136,6 +146,34 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   const [dialogOpen, setDialogOpen] = useState(false);
   const [draft, setDraft] = useState<AutomationPipelineConfig>(emptyDraft);
   const [confirming, setConfirming] = useState(false);
+  const [activePlaybookId, setActivePlaybookId] = useState<string | null>(null);
+
+  const applyPlaybookToDraft = (playbookId: string) => {
+    const pb = ACQUISITION_PLAYBOOKS.find((p) => p.id === playbookId);
+    if (!pb) return;
+    const journey = loadTradeJourney();
+    const next = applyPlaybook(pb, {
+      keyword: (journey.productFocus || pb.config.keyword).trim(),
+      doDmMine: canDmMine ? pb.config.doDmMine : false,
+      doCrmImport: canCrmImport ? pb.config.doCrmImport : false,
+    });
+    setDraft(next);
+    setActivePlaybookId(pb.id);
+    setConfirming(false);
+    setDialogOpen(true);
+    patchTradeJourney({
+      productFocus: journey.productFocus || pb.config.keyword,
+      targetMarket: journey.targetMarket || pb.marketTag,
+      asset: journey.asset || 'factory',
+    });
+  };
+
+  useEffect(() => {
+    if (!initialPlaybookId) return;
+    applyPlaybookToDraft(initialPlaybookId);
+    onInitialPlaybookConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅响应外部剧本注入
+  }, [initialPlaybookId]);
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [filterQuery, setFilterQuery] = useState('');
@@ -496,14 +534,46 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
         <h2 className="text-xl sm:text-2xl font-black text-slate-800 mb-2 flex items-center gap-2">
           <Ruler className="text-blue-600" /> 自动化获客工作流
         </h2>
-        <p className="text-sm text-slate-500 font-medium mb-6 leading-relaxed">
-          同一关键词按国家逐个搜索；一国搜完即并行背调 / 决策人挖掘 / 导入 CRM，无需等全部国家搜完。
+        <p className="text-sm text-slate-500 font-medium mb-4 leading-relaxed">
+          澄海玩具出口剧本一键开跑：按国家搜索 → 并行背调 / 决策人 / 入 CRM。也可自定义全部选项。
         </p>
+
+        <div className="mb-5">
+          <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-2">
+            推荐剧本
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+            {ACQUISITION_PLAYBOOKS.map((pb) => {
+              const on = activePlaybookId === pb.id;
+              return (
+                <button
+                  key={pb.id}
+                  type="button"
+                  disabled={isAutomating}
+                  onClick={() => applyPlaybookToDraft(pb.id)}
+                  className={`text-left rounded-xl border px-3 py-2.5 transition-all disabled:opacity-50 ${
+                    on
+                      ? 'border-blue-400 bg-blue-50 shadow-sm'
+                      : 'border-slate-200 bg-slate-50/70 hover:border-blue-300 hover:bg-white'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-black text-slate-800">{pb.title}</span>
+                    <span className="text-[9px] font-bold text-slate-400 shrink-0">{pb.marketTag}</span>
+                  </div>
+                  <p className="text-[10px] text-slate-500 font-medium mt-1 line-clamp-2 leading-snug">
+                    {pb.blurb}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+        </div>
 
         <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-4 sm:p-5 mb-6 space-y-2 text-sm text-slate-600 font-medium">
           <div className="flex items-start gap-2">
             <ListChecks size={16} className="text-blue-600 mt-0.5 flex-shrink-0" />
-            <span>配置：关键词 · 行业词 · 客户类型 · 国家 · 每国数量 · 背调 / 决策人 / CRM 选项</span>
+            <span>配置：关键词 · 行业词 · 客户类型 · 国家 · 每国数量 · 背调 / 决策人 / CRM</span>
           </div>
           <div className="flex items-start gap-2">
             <Search size={16} className="text-cyan-600 mt-0.5 flex-shrink-0" />
@@ -518,7 +588,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
           className="w-full bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-xl font-black shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50"
         >
           {isAutomating ? <Loader2 className="animate-spin" size={20} /> : <PlayCircle size={20} />}
-          {isAutomating ? '自动化执行中…' : '配置并启动自动化流程'}
+          {isAutomating ? '自动化执行中…' : '自定义配置并启动'}
         </button>
       </div>
 

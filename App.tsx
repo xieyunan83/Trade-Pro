@@ -123,6 +123,7 @@ import { ModuleProductAiVideo } from './components/ModuleProductAiVideo';
 import { ModuleSiteBuilder } from './components/ModuleSiteBuilder';
 import { ModuleSocialContent } from './components/ModuleSocialContent';
 import { ModuleLandingHub } from './components/ModuleLandingHub';
+import { loadCatalogSkus } from './services/productCatalogTypes';
 import { SphereNav, type SphereNavPhase } from './components/SphereNav';
 import { ClientFinder } from './components/ClientFinder';
 import { BatchBackgroundExcelPanel } from './components/BatchBackgroundExcelPanel';
@@ -167,6 +168,8 @@ const App: React.FC = () => {
   const [workspaceSyncing, setWorkspaceSyncing] = useState(false);
   /** 管理员进入与业务员相同的工作台（含今日看板） */
   const [adminInWorkspace, setAdminInWorkspace] = useState(false);
+  /** 指挥舱任务流 → 营销工具剧本注入 */
+  const [pendingPlaybookId, setPendingPlaybookId] = useState<string | null>(null);
   useModuleHashRoute(activeModule, setActiveModule);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -4596,6 +4599,20 @@ const App: React.FC = () => {
                     syncStatus={workspaceSyncStatus}
                     syncing={workspaceSyncing}
                     onEnterWorkspace={() => setActiveModule(ModuleType.DISCOVERY)}
+                    onNavigateModule={(mod) => setActiveModule(mod)}
+                    onStartPlaybook={(playbookId) => {
+                      setPendingPlaybookId(playbookId);
+                      setActiveModule(ModuleType.PROMO_GENERATOR);
+                    }}
+                    journeyProgress={{
+                      skuCount: loadCatalogSkus().length,
+                      pendingTasks: automationResults.filter((t) => t.status === 'pending').length,
+                      failedTasks: automationResults.filter((t) => t.status === 'failed').length,
+                      completedBg: automationResults.filter(
+                        (t) => t.status === 'completed' && t.analysis
+                      ).length,
+                      crmCount: crmClients.length,
+                    }}
                   />
                 )}
                 {activeModule === ModuleType.DISCOVERY && (
@@ -4751,7 +4768,9 @@ const App: React.FC = () => {
                 ).includes(activeModule) && <ModuleComingSoon module={activeModule} />}
                 {activeModule === ModuleType.PROMO_GENERATOR && (
                     <ModulePromoGenerator 
-                        onStartAutomation={handleStartQueueGeneration} 
+                        onStartAutomation={handleStartQueueGeneration}
+                        initialPlaybookId={pendingPlaybookId}
+                        onInitialPlaybookConsumed={() => setPendingPlaybookId(null)}
                         automationResults={automationResults}
                         crmClients={crmClients}
                         history={history}

@@ -61,7 +61,7 @@ export const PLATFORM_SECTIONS: PlatformSection[] = [
     accent: '#67e8f9',
     icon: Radio,
     items: [
-      { id: ModuleType.HOME, label: '今日看板', sub: 'Home', icon: Radio },
+      { id: ModuleType.HOME, label: '今日看板', sub: '任务流', icon: Radio },
     ],
   },
   {

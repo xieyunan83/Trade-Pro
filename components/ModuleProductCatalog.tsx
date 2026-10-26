@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { Plus, Trash2, Warehouse, Upload, Download, Loader2, Image as ImageIcon } from 'lucide-react';
+import { Plus, Trash2, Warehouse, Upload, Download, Loader2, Image as ImageIcon, Sparkles } from 'lucide-react';
 import type { User } from '../types';
 import {
   type CatalogSku,
@@ -12,6 +12,8 @@ import {
   mergeCatalogImports,
   parseCatalogExcelFile,
 } from '../services/catalogExcelService';
+import { buildMarketFitAdvice, MARKET_PICK_OPTIONS } from '../services/marketFitAdvice';
+import { loadTradeJourney, patchTradeJourney, toggleJourneyStage } from '../services/tradeJourney';
 
 type Props = {
   currentUser: User;
@@ -27,6 +29,13 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const imgRef = useRef<HTMLInputElement>(null);
+  const journey0 = loadTradeJourney();
+  const [fitMarket, setFitMarket] = useState(
+    () => journey0.targetMarket || MARKET_PICK_OPTIONS[0].label
+  );
+  const [fitCategory, setFitCategory] = useState(
+    () => journey0.productFocus || ''
+  );
   const [form, setForm] = useState({
     skuCode: '',
     name: '',
@@ -40,9 +49,19 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
     imageDataUrl: '' as string,
   });
 
+  const fitAdvice = useMemo(
+    () =>
+      buildMarketFitAdvice({
+        categoryOrName: fitCategory || form.category || form.name || '玩具',
+        targetMarket: fitMarket,
+      }),
+    [fitCategory, fitMarket, form.category, form.name]
+  );
+
   const persist = useCallback((next: CatalogSku[]) => {
     setRows(next);
     saveCatalogSkus(next);
+    if (next.length > 0) toggleJourneyStage('select', true);
   }, []);
 
   const filtered = useMemo(() => {
@@ -168,11 +187,90 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
             </div>
             <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">产品库</h2>
             <p className="text-sm text-slate-500 font-medium mt-1 max-w-2xl">
-              管理本司 SKU：货号、品名、规格、价格与产品图。支持 Excel 模板下载/上传；图片可供平面/3D/视频设计二次创作。
+              管理本司 SKU：货号、品名、规格、价格与产品图。先看适市建议，再导入/录入产品包，供报价与获客使用。
             </p>
           </div>
           <div className="text-right text-sm font-black text-slate-700">{rows.length} 款</div>
         </div>
+
+        <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50/80 p-4 space-y-3">
+          <div className="flex items-center gap-2 text-xs font-black text-slate-800">
+            <Sparkles size={14} className="text-cyan-600" /> 适市顾问（包装 / 功能 / 合规提示）
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div>
+              <label className="text-[10px] font-bold text-slate-400">目标市场</label>
+              <div className="flex flex-wrap gap-1 mt-1 mb-1.5">
+                {MARKET_PICK_OPTIONS.map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => {
+                      setFitMarket(m.label);
+                      patchTradeJourney({ targetMarket: m.label });
+                    }}
+                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                      fitMarket === m.label
+                        ? 'bg-slate-900 text-white border-slate-900'
+                        : 'bg-white border-slate-200 text-slate-600'
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+              <input
+                value={fitMarket}
+                onChange={(e) => {
+                  setFitMarket(e.target.value);
+                  patchTradeJourney({ targetMarket: e.target.value });
+                }}
+                className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm font-medium"
+                placeholder="市场或国家"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] font-bold text-slate-400">品类 / 关键词</label>
+              <input
+                value={fitCategory}
+                onChange={(e) => {
+                  setFitCategory(e.target.value);
+                  patchTradeJourney({ productFocus: e.target.value });
+                }}
+                className="w-full mt-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm font-medium"
+                placeholder="磁力片、泡泡枪、遥控车…"
+              />
+            </div>
+          </div>
+          <div
+            className={`rounded-xl border px-3 py-2.5 text-[11px] font-medium ${
+              fitAdvice.scoreTone === 'emerald'
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                : fitAdvice.scoreTone === 'rose'
+                  ? 'border-rose-200 bg-rose-50 text-rose-900'
+                  : 'border-amber-200 bg-amber-50 text-amber-950'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <span className="font-black">{fitAdvice.market}</span>
+              <span className="font-black">{fitAdvice.scoreLabel}</span>
+            </div>
+            <p className="leading-snug mb-1.5">{fitAdvice.highlights[0]}</p>
+            <p className="text-slate-700 leading-snug">
+              <span className="font-black">包装：</span>
+              {fitAdvice.packaging[0]}
+            </p>
+            <p className="text-slate-700 leading-snug mt-1">
+              <span className="font-black">功能：</span>
+              {fitAdvice.features[0]}
+            </p>
+            <p className="text-slate-700 leading-snug mt-1">
+              <span className="font-black">合规：</span>
+              {fitAdvice.compliance[0]}
+            </p>
+          </div>
+        </div>
+
         <div className="flex flex-wrap gap-2 mt-4">
           <button
             type="button"
