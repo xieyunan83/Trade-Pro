@@ -2630,6 +2630,14 @@ const App: React.FC = () => {
 
   // RESTORED: Process Automation Queue（后台 drain，可与产品深挖并行）
   const processBatchQueue = async (tasksToRun?: AutomationResult[]) => {
+      if (!hasApiKeyConfigured()) {
+        setSystemNotice(
+          '尚未检测到可用的 AI 密钥。请先在管理后台完成配置并等待同步，任务将保持待处理，不会标为失败。'
+        );
+        setIsAutomating(false);
+        setBatchProgress((p) => ({ ...p, active: false }));
+        return;
+      }
       if (tasksToRun?.length) {
         if (!batchRunnerActiveRef.current) {
           // 新一轮后台波次：进度只统计本波任务，避免旧 session 把进度算乱

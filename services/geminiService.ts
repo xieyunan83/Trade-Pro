@@ -5392,13 +5392,20 @@ export const testQwenApiKey = async (
 const callGeminiNative = async (
   prompt: string,
   config: ApiConfig,
-  options: { jsonMode?: boolean; enableSearch?: boolean; systemInstruction?: string } = {}
+  options: {
+    jsonMode?: boolean;
+    enableSearch?: boolean;
+    systemInstruction?: string;
+    timeoutMs?: number;
+  } = {}
 ): Promise<string> => {
   return callGeminiGenerateContent(config.apiKey, config.modelId || NATIVE_MODEL, {
     prompt,
     systemInstruction: options.systemInstruction,
     jsonMode: options.jsonMode,
     enableSearch: options.enableSearch,
+    // 批量背调默认给足时间，避免 Windows 弱网下 180s 误杀
+    timeoutMs: options.timeoutMs ?? TASK_TIMEOUT_MS.analysis ?? 360_000,
   });
 };
 

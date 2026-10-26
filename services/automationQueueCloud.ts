@@ -15,10 +15,16 @@ import { selectAllRows } from './supabasePaginate';
 
 const cloudUid = () => getCloudWorkspaceId();
 
-/** 去掉过大字段，降低云端体积（完整报告仍在背调历史 / 本机） */
+/** 去掉过大字段，降低云端体积（完整报告仍在背调历史 / 本机 IndexedDB） */
 export const slimAutomationTaskForCloud = (task: AutomationResult): AutomationResult => {
-  const { productImages: _imgs, mailGroup: _mail, ...rest } = task;
-  return { ...rest, productImages: undefined, mailGroup: undefined };
+  const { productImages: _imgs, mailGroup: _mail, analysis: _analysis, ...rest } = task;
+  return {
+    ...rest,
+    productImages: undefined,
+    mailGroup: undefined,
+    // 队列云端只同步状态与元数据；analysis 体积过大易拖垮 upsert / 配额
+    analysis: undefined,
+  };
 };
 
 const taskStamp = (t: AutomationResult): number =>
