@@ -4,7 +4,7 @@ import { GlobalConfig, ApiConfig, TaskType, User, KnowledgeFile, Department } fr
 import { 
   Settings, Shield, Key, Bell, Save, Plus, Trash2, Globe, Server, 
   CheckCircle2, AlertTriangle, LogOut, Users, Database, 
-  RefreshCw, X, FileText, Upload, Play, Loader2, Download,
+  RefreshCw, X, FileText, Upload, Play, Loader2, Download, Cloud,
   Youtube, Music, Video, FileSpreadsheet, FilePieChart, FileCode, Image, Mail, Building2
 } from 'lucide-react';
 import { getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/db';
@@ -38,6 +38,10 @@ import {
 } from '../services/kbMarkdownConvert';
 import { DataProvidersPanel } from './DataProvidersPanel';
 import { downloadDesktopSeedJson } from '../services/desktopSeedExport';
+import {
+  formatWorkspaceSyncReport,
+  syncAllWorkspaceData,
+} from '../services/workspaceCloudSync';
 
 type AdminTab = 'api' | 'data' | 'users' | 'org' | 'kb';
 
@@ -1193,6 +1197,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                     </p>
                   </div>
                   <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!isSupabaseConfigured()) {
+                        setSaveConfigMsg({ ok: false, text: '云端未配置，无法同步业务资料' });
+                        return;
+                      }
+                      setSaveConfigMsg({ ok: true, text: '正在同步 CRM / 背调历史 / 产品画像 / 作业队列…' });
+                      try {
+                        const r = await syncAllWorkspaceData();
+                        setSaveConfigMsg({
+                          ok: r.ok,
+                          text: formatWorkspaceSyncReport(r).replace(/\n/g, ' · '),
+                        });
+                      } catch (e: any) {
+                        setSaveConfigMsg({
+                          ok: false,
+                          text: `全量同步失败：${e?.message || String(e)}`,
+                        });
+                      }
+                    }}
+                    className="bg-emerald-700 hover:bg-emerald-600 text-white px-4 sm:px-6 py-3 rounded-xl font-black flex items-center justify-center gap-2 shadow-lg touch-manipulation"
+                    title="把本机 CRM、背调历史、产品画像、作业队列与云端合并并上传"
+                  >
+                    <Cloud size={20} />
+                    同步全部业务资料
+                  </button>
                   <button
                     type="button"
                     onClick={() => {

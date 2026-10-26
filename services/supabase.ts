@@ -675,18 +675,18 @@ export const saveCrmClientsBulk = async (clients: Client[]): Promise<boolean> =>
       return true
     }
 
-    const rows = clients.map(c => ({
-      user_id: cloudUid(),
-      local_id: c.id,
-      client_data: c,
-      updated_at: new Date().toISOString(),
-    }))
-
-    const { error } = await supabase
-      .from('crm_clients')
-      .upsert(rows, { onConflict: 'user_id,local_id' })
-
-    if (error) throw error
+    const chunkSize = 100
+    for (let i = 0; i < clients.length; i += chunkSize) {
+      const slice = clients.slice(i, i + chunkSize)
+      const rows = slice.map((c) => ({
+        user_id: cloudUid(),
+        local_id: c.id,
+        client_data: c,
+        updated_at: new Date().toISOString(),
+      }))
+      const { error } = await supabase.from('crm_clients').upsert(rows, { onConflict: 'user_id,local_id' })
+      if (error) throw error
+    }
     console.log(`✅ CRM 已同步到 Supabase (${clients.length} 条)`)
     return true
   } catch (error) {

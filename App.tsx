@@ -16,6 +16,10 @@ import {
   newAutomationTaskId,
 } from './services/automationQueueRepair';
 import { pullMergePushAutomationQueue } from './services/automationQueueCloud';
+import {
+  formatWorkspaceSyncReport,
+  syncAllWorkspaceData,
+} from './services/workspaceCloudSync';
 import { fetchGlobalConfig, fetchDocumentsFromRepo, backupUserHistory, fetchCRMFromCloud, saveCRMToCloud, fetchUserHistoryFromCloud, checkGitHubStatus, fetchApiConfigsFromCloud, setManualGitHubConfig } from './services/githubService';
 import { isSupabaseConfigured, getKnowledgeFiles, getInvestigationHistory, saveInvestigationHistory, saveDiscoverySearch, getCrmClients, syncCrmClients, saveCrmClientsBulk, deleteCrmClient, deleteCrmClientsBulk, getDiscoverySearchArchives, deleteInvestigationHistory, deleteDiscoverySearchFromCloud, deleteDiscoverySearchesByMeta, getProductProfilesCloud } from './services/supabase';
 import {
@@ -510,18 +514,22 @@ const App: React.FC = () => {
                 `[automation] repaired ids=${repaired.repaired}, claimed orphans=${repaired.claimed}, total=${repaired.tasks.length}`
               );
             }
-            // 背调作业队列：本机 ∪ 云端合并后再写回，保证浏览器与 Windows 客户端条数一致
+            // 全量云同步（CRM / 背调历史 / 产品画像 / 作业队列）：本机∪云端→写回→上传
             let queueTasks = repaired.tasks;
             if (isSupabaseConfigured()) {
               try {
-                const synced = await pullMergePushAutomationQueue();
-                queueTasks = synced.tasks;
-                console.info(
-                  `[automation-cloud] local=${synced.local} cloud=${synced.cloud} merged=${synced.merged} uploaded=${synced.uploaded}` +
-                    (synced.error ? ` err=${synced.error}` : '')
-                );
+                const ws = await syncAllWorkspaceData();
+                console.info('[workspace-sync]\n' + formatWorkspaceSyncReport(ws));
+                const qAfter = await getAutomationQueue();
+                if (qAfter.length) queueTasks = qAfter;
               } catch (e) {
-                console.warn('[automation-cloud] sync failed, using local queue', e);
+                console.warn('[workspace-sync] failed, fallback automation-only', e);
+                try {
+                  const synced = await pullMergePushAutomationQueue();
+                  queueTasks = synced.tasks;
+                } catch (e2) {
+                  console.warn('[automation-cloud] sync failed', e2);
+                }
               }
             }
             const scopedQueue = scope(queueTasks);
@@ -3225,10 +3233,22 @@ const App: React.FC = () => {
       let tasks = repaired.tasks;
       let cloudNote = '';
       if (isSupabaseConfigured()) {
-        const synced = await pullMergePushAutomationQueue();
-        tasks = synced.tasks;
-        cloudNote = `\n云端同步：本机 ${synced.local} → 云端原有 ${synced.cloud} → 合并 ${synced.merged}（已上传 ${synced.uploaded}）`;
-        if (synced.error) cloudNote += `\n云端提示：${synced.error}`;
+        const ws = await syncAllWorkspaceData();
+        cloudNote = '\n' + formatWorkspaceSyncReport(ws);
+        tasks = await getAutomationQueue();
+        // 同步后刷新 CRM / 历史到界面
+        const deptsNow = departments.length ? departments : loadDepartmentsFromStorage();
+        setCrmClients(
+          filterOwnedRecords(
+            currentUser,
+            filterOutCrmTombstones(loadAllCrmClients()),
+            users,
+            deptsNow
+          )
+        );
+        setHistory(
+          filterOwnedRecords(currentUser, await getHistory(), users, deptsNow)
+        );
       }
       const scoped = filterOwnedRecords(
         currentUser,
@@ -3238,15 +3258,15 @@ const App: React.FC = () => {
       );
       setAutomationResults(scoped);
       alert(
-        `已同步任务队列：本机可见 ${scoped.length} 条` +
+        `已同步全部业务资料（CRM / 背调历史 / 产品画像 / 作业队列）` +
           (repaired.repaired || repaired.claimed
-            ? `（修复短ID ${repaired.repaired}，认领无归属 ${repaired.claimed}）`
+            ? `\n队列修复：短ID ${repaired.repaired}，认领 ${repaired.claimed}`
             : '') +
           cloudNote +
-          `\n提示：请先在资料最全的电脑点一次本按钮，再在 Windows 客户端登录 kevin 点「重新加载队列」。`
+          `\n\n请先在「资料最全」的网页点一次，再在 Windows 客户端用 kevin 点一次。`
       );
     } catch (e: any) {
-      alert(`重新加载/同步失败：${e?.message || String(e)}`);
+      alert(`同步失败：${e?.message || String(e)}`);
     }
   };
 

@@ -914,9 +914,9 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                   onClick={() => onReloadQueue()}
                   disabled={isAutomating}
                   className="inline-flex items-center gap-1.5 bg-teal-50 border border-teal-200 text-teal-800 px-4 py-2 rounded-xl text-xs font-bold hover:bg-teal-100 disabled:opacity-50"
-                  title="本机与云端合并同步；请先在资料最全的电脑点一次，再在 Windows 客户端点一次"
+                  title="同步 CRM、背调历史、产品画像、作业队列到云端；资料最全的电脑先点，其它端再点"
                 >
-                  <RefreshCw size={14} /> 同步队列（本机+云端）
+                  <RefreshCw size={14} /> 同步全部资料
                 </button>
               )}
               <button
