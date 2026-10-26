@@ -83,12 +83,12 @@ export const MODULE_ROADMAP: Partial<Record<ModuleType, ModuleRoadmap>> = {
   [ModuleType.PRODUCT_DESIGN_2D]: {
     phase: 'P0',
     summary:
-      '设计 Agent：Skills 工作流 + 项目画布资产 + 确认卡生图；可挂产品库 SKU。',
+      '设计 Agent：Skills + 结构化 Brief + 确认卡；大脑/画笔可插拔，不绑死单一模型。',
     bullets: [
-      'Agent 对话下指令',
-      'Skills：主图 / Listing / 详情 / 社媒 / 展会封面 / 多角度',
-      '画布资产沉淀与下载',
-      '后台「设计 Agent」独立 API，未配则回退图片服务',
+      'Skill 定义专业度（主图 / Listing / 详情 / 社媒 / 展会 / 多角度）',
+      '编排层输出确认 Brief + 质检清单，再调用生图工具',
+      '对话模型可换成开源/自研；生图工具可换供应商',
+      '画布资产沉淀，可交接 3D / 视频',
     ],
     providers: ['design_agent', 'wan'],
   },

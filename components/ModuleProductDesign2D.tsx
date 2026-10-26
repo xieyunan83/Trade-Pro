@@ -33,6 +33,8 @@ import {
   generateMultiAngleDesignImages,
   getDesignAgentConfigStatus,
 } from '../services/designAgentService';
+import { planCreativeBrief } from '../services/creativeAgent/runtime';
+import type { CreativeBrief } from '../services/creativeAgent/types';
 import { loadCatalogSkus } from '../services/productCatalogTypes';
 import { compressImageDataUrl } from '../services/catalogExcelService';
 import { setCreativeHandoff } from '../services/creativeAssetBridge';
@@ -47,7 +49,7 @@ type LeftTab = 'projects' | 'skills' | 'assets';
 
 /**
  * 产品设计 · 平面图：
- * Design Agent + Skills 工作流 + Canvas 资产沉淀 + 确认后生成
+ * Skills + 结构化 Brief（可插拔大脑）+ 确认后生图 + 画布资产
  */
 export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigateModule }) => {
   const [projects, setProjects] = useState<DesignProject[]>(() => loadDesignProjects());
@@ -59,6 +61,8 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
   const [size, setSize] = useState<'1K' | '2K' | '4K'>('1K');
   const [count, setCount] = useState(1);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [pendingBrief, setPendingBrief] = useState<CreativeBrief | null>(null);
+  const [planning, setPlanning] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [skuPick, setSkuPick] = useState('');
@@ -127,21 +131,27 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     if (sk.defaultPrompt) setPrompt(sk.defaultPrompt);
   };
 
+  const resolveSkuMeta = () => {
+    const fromActive = active?.skuCode
+      ? { code: active.skuCode, name: active.skuName }
+      : null;
+    if (fromActive?.code) return fromActive;
+    const s = skus.find((x) => x.id === skuPick || x.skuCode === skuPick);
+    return s ? { code: s.skuCode, name: s.name } : { code: undefined, name: undefined };
+  };
+
   const buildFinalPrompt = () => {
+    if (pendingBrief?.toolPrompt) return pendingBrief.toolPrompt;
     const userBit = prompt.trim();
-    const sku = active?.skuName
-      ? `Product: ${active.skuName}${active.skuCode ? ` (${active.skuCode})` : ''}. `
-      : skuPick
-        ? (() => {
-            const s = skus.find((x) => x.id === skuPick);
-            return s ? `Product: ${s.name} (${s.skuCode}). ` : '';
-          })()
-        : '';
+    const skuMeta = resolveSkuMeta();
+    const sku = skuMeta.name
+      ? `Product: ${skuMeta.name}${skuMeta.code ? ` (${skuMeta.code})` : ''}. `
+      : '';
     const skillBit = skill.defaultPrompt ? `${skill.defaultPrompt}. ` : '';
     return `${sku}${skillBit}${userBit || 'Create a polished commercial product design visual.'}`.trim();
   };
 
-  const requestGenerate = () => {
+  const requestGenerate = async () => {
     if (!status.configured) {
       setError(status.detail);
       return;
@@ -149,8 +159,31 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     if (!active) {
       createProject(skillId);
     }
-    setConfirmOpen(true);
     setError(null);
+    setPlanning(true);
+    try {
+      const skuMeta = resolveSkuMeta();
+      const hasRefs =
+        refUploads.length > 0 ||
+        !!(skus.find((s) => s.id === skuPick || s.skuCode === skuPick)?.images?.length);
+      const brief = await planCreativeBrief({
+        domain: 'design_2d',
+        skillId,
+        skillLabel: skill.label,
+        skillHint: skill.hint,
+        skillDefaultPrompt: skill.defaultPrompt,
+        userBrief: prompt.trim(),
+        skuCode: skuMeta.code,
+        skuName: skuMeta.name,
+        hasReferenceImages: hasRefs,
+      });
+      setPendingBrief(brief);
+      setConfirmOpen(true);
+    } catch (e: any) {
+      setError(e?.message || '方案编排失败，请重试');
+    } finally {
+      setPlanning(false);
+    }
   };
 
   const ensureProject = (): DesignProject => {
@@ -230,7 +263,10 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
   const runGenerate = async () => {
     setConfirmOpen(false);
     const proj = ensureProject();
-    const finalPrompt = buildFinalPrompt();
+    const finalPrompt = pendingBrief?.toolPrompt || buildFinalPrompt();
+    const qaLine = pendingBrief?.qaChecklist?.length
+      ? `\n质检关注：${pendingBrief.qaChecklist.slice(0, 3).join('；')}`
+      : '';
     const refImages = collectRefImages(proj);
     const modeHint = refImages.length
       ? `参考图 ${refImages.length} 张 + 文字`
@@ -245,7 +281,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     setLoading(true);
     setError(null);
     try {
-      const isMulti = skillId === 'multi_angle';
+      const isMulti = skillId === 'multi_angle' || !!pendingBrief?.multiAngle;
       const result = isMulti
         ? await generateMultiAngleDesignImages({
             prompt: finalPrompt,
@@ -254,7 +290,6 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             referenceImages: refImages.length ? refImages : undefined,
             onProgress: (done, total, label) => {
               setError(null);
-              // 复用 error 区上方 loading 文案：通过 button 文案体现
               void done;
               void total;
               void label;
@@ -281,8 +316,8 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
         id: newDesignId('m'),
         role: 'agent' as const,
         text: isMulti
-          ? `已生成 ${newAssets.length} 张多角度套图（${(result.angles || []).join(' / ')}）。可点画布上「送去 3D / 视频」继续流水线。`
-          : `已用「${modeHint}」生成 ${newAssets.length} 张并放到画布。可继续改稿，或送去 3D / 视频。`,
+          ? `已生成 ${newAssets.length} 张多角度套图（${(result.angles || []).join(' / ')}）。可点画布上「送去 3D / 视频」继续流水线。${qaLine}`
+          : `已按确认方案生成 ${newAssets.length} 张并放到画布（${modeHint}）。可继续改稿，或送去 3D / 视频。${qaLine}`,
         at: now,
         assetIds: newAssets.map((a) => a.id),
       };
@@ -855,18 +890,20 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
           )}
           <button
             type="button"
-            disabled={loading}
-            onClick={requestGenerate}
+            disabled={loading || planning || !status.configured}
+            onClick={() => void requestGenerate()}
             className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 hover:bg-violet-700 disabled:opacity-60 text-white text-sm font-black py-3"
           >
-            {loading ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
-            {loading
-              ? skillId === 'multi_angle'
-                ? '多角度生成中（约需数分钟）…'
-                : '生图中，约 1–2 分钟…'
-              : skillId === 'multi_angle'
-                ? '确认生成多角度套图'
-                : '确认生成'}
+            {loading || planning ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+            {planning
+              ? '正在编排方案…'
+              : loading
+                ? skillId === 'multi_angle'
+                  ? '多角度生成中（约需数分钟）…'
+                  : '生图中，约 1–2 分钟…'
+                : skillId === 'multi_angle'
+                  ? '确认生成多角度套图'
+                  : '确认生成'}
           </button>
           <p className="text-[10px] text-slate-400 font-medium leading-relaxed">
             {skillId === 'multi_angle'
@@ -877,20 +914,22 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
       </div>
 
       {/* 确认卡 */}
-      {confirmOpen && (
+      {confirmOpen && pendingBrief && (
         <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/40 p-4">
           <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-5 space-y-3 border border-violet-100">
-            <div className="font-extrabold text-slate-900 text-lg">确认生成</div>
+            <div className="font-extrabold text-slate-900 text-lg">
+              {pendingBrief.titleZh || '确认生成'}
+            </div>
             <p className="text-sm text-slate-600 font-medium leading-relaxed">
-              Skill「{skill.label}」·{' '}
-              {skillId === 'multi_angle' ? '4 视角套图' : `${count} 张`} · {size}
+              {pendingBrief.summaryZh}
               <br />
-              模式：
-              {skillId === 'multi_angle'
-                ? '多角度（正面 / 45° / 侧面 / 背面）'
-                : refUploads.length || skuPick
-                  ? `参考图 + 文字`
-                  : '纯文字'}
+              <span className="text-slate-400 text-xs">
+                Skill「{skill.label}」·{' '}
+                {skillId === 'multi_angle' || pendingBrief.multiAngle
+                  ? '4 视角套图'
+                  : `${count} 张`}{' '}
+                · {size}
+              </span>
             </p>
             {refUploads.length > 0 && (
               <div className="flex gap-2 flex-wrap">
@@ -904,13 +943,26 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                 ))}
               </div>
             )}
+            {pendingBrief.qaChecklist?.length > 0 && (
+              <ul className="text-[11px] text-slate-600 bg-violet-50/80 rounded-xl px-3 py-2 space-y-1 font-medium">
+                {pendingBrief.qaChecklist.slice(0, 4).map((q) => (
+                  <li key={q} className="flex gap-1.5">
+                    <CheckCircle2 size={12} className="text-violet-500 shrink-0 mt-0.5" />
+                    <span>{q}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
             <p className="text-[11px] text-slate-500 bg-slate-50 rounded-xl px-3 py-2 font-medium max-h-24 overflow-y-auto">
-              {buildFinalPrompt()}
+              {pendingBrief.toolPrompt || buildFinalPrompt()}
             </p>
             <div className="flex gap-2 justify-end pt-1">
               <button
                 type="button"
-                onClick={() => setConfirmOpen(false)}
+                onClick={() => {
+                  setConfirmOpen(false);
+                  setPendingBrief(null);
+                }}
                 className="px-4 py-2 rounded-xl text-sm font-bold text-slate-600 border border-slate-200"
               >
                 取消
