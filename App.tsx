@@ -120,6 +120,7 @@ import { ModuleProductDesign3D } from './components/ModuleProductDesign3D';
 import { ModuleProductAiVideo } from './components/ModuleProductAiVideo';
 import { ModuleSiteBuilder } from './components/ModuleSiteBuilder';
 import { ModuleSocialContent } from './components/ModuleSocialContent';
+import { ModuleLandingHub } from './components/ModuleLandingHub';
 import { SphereNav, type SphereNavPhase } from './components/SphereNav';
 import { ClientFinder } from './components/ClientFinder';
 import { BatchBackgroundExcelPanel } from './components/BatchBackgroundExcelPanel';
@@ -159,7 +160,9 @@ const App: React.FC = () => {
   const [hasKey, setHasKey] = useState<boolean | null>(null);
   
   const [domainInput, setDomainInput] = useState('');
-  const [activeModule, setActiveModule] = useState<ModuleType>(ModuleType.DISCOVERY);
+  const [activeModule, setActiveModule] = useState<ModuleType>(ModuleType.HOME);
+  const [workspaceSyncStatus, setWorkspaceSyncStatus] = useState<string | null>(null);
+  const [workspaceSyncing, setWorkspaceSyncing] = useState(false);
   useModuleHashRoute(activeModule, setActiveModule);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -388,7 +391,9 @@ const App: React.FC = () => {
     setHistory([]);
     setAutomationResults([]);
     setCrmClients([]);
-    setActiveModule(ModuleType.DISCOVERY);
+    setActiveModule(ModuleType.HOME);
+    setWorkspaceSyncStatus(null);
+    setWorkspaceSyncing(false);
     setHistoryOpen(false);
     setErrorMsg(null);
   };
@@ -514,27 +519,45 @@ const App: React.FC = () => {
                 `[automation] repaired ids=${repaired.repaired}, claimed orphans=${repaired.claimed}, total=${repaired.tasks.length}`
               );
             }
-            // 全量云同步：先拉云端写本机（尽快出界面），上传放到后台，避免卡在全 0
+            // 登录即自动全量云同步（无需用户点「同步全部资料」）
             let queueTasks = repaired.tasks;
+            if (!cancelled) setWorkspaceSyncing(true);
             if (isSupabaseConfigured()) {
               try {
                 const ws = await syncAllWorkspaceData({ upload: false });
                 console.info('[workspace-sync pull]\n' + formatWorkspaceSyncReport(ws));
+                if (!cancelled) {
+                  setWorkspaceSyncStatus(
+                    `已同步 CRM ${ws.crm.merged} · 作业 ${ws.automation.merged} · 历史 ${ws.history.merged}`
+                  );
+                }
                 const qAfter = await getAutomationQueue();
                 if (qAfter.length) queueTasks = qAfter;
                 void syncAllWorkspaceData({ upload: true })
-                  .then((up) => console.info('[workspace-sync upload]\n' + formatWorkspaceSyncReport(up)))
+                  .then((up) => {
+                    console.info('[workspace-sync upload]\n' + formatWorkspaceSyncReport(up));
+                    if (!cancelled) {
+                      setWorkspaceSyncStatus(
+                        `资料已就绪 · CRM ${up.crm.merged} · 作业 ${up.automation.merged}`
+                      );
+                    }
+                  })
                   .catch((e) => console.warn('[workspace-sync upload] failed', e));
               } catch (e) {
                 console.warn('[workspace-sync] failed, fallback automation-only', e);
                 try {
                   const synced = await pullMergePushAutomationQueue({ upload: false });
                   queueTasks = synced.tasks;
+                  if (!cancelled) setWorkspaceSyncStatus(`作业队列已同步 ${synced.merged} 条`);
                 } catch (e2) {
                   console.warn('[automation-cloud] sync failed', e2);
+                  if (!cancelled) setWorkspaceSyncStatus('云端同步稍后重试');
                 }
               }
+            } else if (!cancelled) {
+              setWorkspaceSyncStatus('本机模式（未配置云端）');
             }
+            if (!cancelled) setWorkspaceSyncing(false);
             const scopedQueue = scope(queueTasks);
             if (!cancelled) setAutomationResults(scopedQueue);
             // 尽快把云端已写入本机的 CRM 刷上界面，后面再做 KB/GitHub 等慢步骤
@@ -4365,6 +4388,17 @@ const App: React.FC = () => {
       <div className={`tp-workspace ${dockPadClass} transition-[padding] duration-300 ease-out w-full`}>
       <main className="flex-1 flex flex-col overflow-hidden relative min-w-0">
         <header className="tp-header px-3 sm:px-6 lg:px-8 py-3 sm:py-4 flex flex-col gap-3 z-10">
+          {activeModule === ModuleType.HOME ? (
+            <div className="flex items-center gap-3">
+              <button onClick={() => setMobileMenuOpen(true)} className="md:hidden p-2 text-slate-500 flex-shrink-0 touch-manipulation" aria-label="打开菜单"><Menu size={24} /></button>
+              <div className="text-[11px] font-bold text-slate-500">
+                <span className="uppercase tracking-[0.16em] text-cyan-700/80">指挥舱</span>
+                <span className="text-slate-300 mx-2">/</span>
+                <span className="text-slate-800">今日看板</span>
+              </div>
+            </div>
+          ) : (
+            <>
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4">
           <div className="flex items-center gap-3 sm:contents">
             <button onClick={() => setMobileMenuOpen(true)} className="md:hidden p-2 text-slate-500 flex-shrink-0 touch-manipulation" aria-label="打开菜单"><Menu size={24} /></button>
@@ -4408,6 +4442,8 @@ const App: React.FC = () => {
               )}
             </div>
           )}
+            </>
+          )}
         </header>
 
         <div className="tp-main-stage flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 lg:px-8 relative custom-scrollbar">
@@ -4443,6 +4479,14 @@ const App: React.FC = () => {
 
           {!loading && !errorMsg && (
             <>
+                {activeModule === ModuleType.HOME && (
+                  <ModuleLandingHub
+                    currentUser={currentUser}
+                    syncStatus={workspaceSyncStatus}
+                    syncing={workspaceSyncing}
+                    onEnterWorkspace={() => setActiveModule(ModuleType.DISCOVERY)}
+                  />
+                )}
                 {activeModule === ModuleType.DISCOVERY && (
                     <ClientFinder 
                         state={discoveryState} 

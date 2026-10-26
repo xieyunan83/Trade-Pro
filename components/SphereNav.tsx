@@ -70,6 +70,10 @@ export const SphereNav: React.FC<Props> = ({
   const pickSection = (sec: PlatformSection) => {
     setSectionId(sec.id);
     setPhase('submenu');
+    // 指挥舱仅一项：点板块直接进入今日看板
+    if (sec.id === 'home' && sec.items[0]) {
+      onSelectModule(sec.items[0].id);
+    }
   };
 
   const pickModule = (mod: ModuleType) => {

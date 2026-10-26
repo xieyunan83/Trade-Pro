@@ -5,6 +5,9 @@ import { useEffect, useRef } from 'react';
 import { ModuleType } from '../types';
 
 const MODULE_ALIASES: Record<string, ModuleType> = {
+  home: ModuleType.HOME,
+  hub: ModuleType.HOME,
+  landing: ModuleType.HOME,
   discovery: ModuleType.DISCOVERY,
   background: ModuleType.BACKGROUND,
   products: ModuleType.PRODUCTS,

@@ -28,11 +28,12 @@ import {
   Truck,
   Warehouse,
   FileSpreadsheet,
+  Radio,
   type LucideIcon,
 } from 'lucide-react';
 import { ModuleType } from '../types';
 
-export type PlatformSectionId = 'opportunity' | 'product' | 'promote' | 'connect' | 'ecosystem';
+export type PlatformSectionId = 'home' | 'opportunity' | 'product' | 'promote' | 'connect' | 'ecosystem';
 
 export type PlatformNavItem = {
   id: ModuleType;
@@ -53,6 +54,16 @@ export type PlatformSection = {
 };
 
 export const PLATFORM_SECTIONS: PlatformSection[] = [
+  {
+    id: 'home',
+    label: '指挥舱',
+    sub: 'Hub',
+    accent: '#67e8f9',
+    icon: Radio,
+    items: [
+      { id: ModuleType.HOME, label: '今日看板', sub: 'Home', icon: Radio },
+    ],
+  },
   {
     id: 'opportunity',
     label: '商机',

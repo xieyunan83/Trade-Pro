@@ -54,6 +54,10 @@
     "api/social.ts": {
       "maxDuration": 60,
       "memory": 512
+    },
+    "api/landing.ts": {
+      "maxDuration": 60,
+      "memory": 512
     }
   },
   "rewrites": [

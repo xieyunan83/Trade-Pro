@@ -37,14 +37,16 @@ export const DATA_PROVIDER_DEFS: DataProviderDef[] = [
   {
     id: 'toysbear',
     label: '小竹熊',
-    description: '澄海玩具选品 / 展厅货源；产品库同步与报价协同',
-    docsHint: 'https://www.toysbear.com/',
+    description:
+      '澄海玩具选品 / 展厅货源。API Key 栏可粘贴登录后浏览器里的 Bearer 访问令牌，用于着陆页「行业资讯/新品」与产品库同步（正式数据分享协议前的过渡方案）',
+    docsHint: 'https://www.toysbear.com/toyConsultation',
   },
   {
     id: 'skybird',
     label: '霄鸟云',
-    description: '澄海玩具 B2B 产品库；线上展厅与一键报价数据源',
-    docsHint: 'https://www.toysaas.com/',
+    description:
+      '澄海玩具 B2B 产品库。同样可粘贴访问令牌；着陆页会优先用已启用源的令牌拉取优选新品（公开页作兜底）',
+    docsHint: 'https://www.toysaas.com/new_arrivals',
   },
   {
     id: 'customs',

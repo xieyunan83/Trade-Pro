@@ -1,0 +1,333 @@
+import React, { useCallback, useEffect, useState } from 'react';
+import {
+  Newspaper,
+  Sparkles,
+  LineChart,
+  RefreshCw,
+  Loader2,
+  ExternalLink,
+  CloudDownload,
+  Radio,
+} from 'lucide-react';
+import type { User } from '../types';
+import {
+  fetchLandingHub,
+  loadLandingCache,
+  type LandingPayload,
+} from '../services/landingHub';
+
+type Props = {
+  currentUser: User;
+  /** 登录后资料同步状态文案 */
+  syncStatus?: string | null;
+  syncing?: boolean;
+  onEnterWorkspace?: () => void;
+};
+
+const fmtTime = (ms?: number) => {
+  if (!ms) return '';
+  try {
+    return new Date(ms).toLocaleString('zh-CN', {
+      hour12: false,
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return '';
+  }
+};
+
+export const ModuleLandingHub: React.FC<Props> = ({
+  currentUser,
+  syncStatus,
+  syncing,
+  onEnterWorkspace,
+}) => {
+  const [data, setData] = useState<LandingPayload | null>(() => loadLandingCache());
+  const [loading, setLoading] = useState(!loadLandingCache());
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async (force = false) => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const payload = await fetchLandingHub({ force });
+      setData(payload);
+    } catch (e: any) {
+      setErr(e?.message || String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load(false);
+  }, [load]);
+
+  const fx = data?.fx?.quotes || [];
+  const news = data?.news?.items || [];
+  const products = data?.products?.items || [];
+
+  return (
+    <div className="tp-landing relative min-h-[70vh] -mx-1 sm:mx-0">
+      {/* 氛围层 */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 -z-10 overflow-hidden rounded-3xl"
+      >
+        <div className="absolute -top-24 -right-16 h-72 w-72 rounded-full bg-cyan-400/20 blur-3xl" />
+        <div className="absolute top-40 -left-20 h-64 w-64 rounded-full bg-sky-500/10 blur-3xl" />
+        <div
+          className="absolute inset-0 opacity-[0.35]"
+          style={{
+            backgroundImage:
+              'linear-gradient(rgba(15,23,42,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(15,23,42,0.04) 1px, transparent 1px)',
+            backgroundSize: '28px 28px',
+          }}
+        />
+      </div>
+
+      <section className="relative mb-6 sm:mb-8 rounded-3xl border border-cyan-200/60 bg-gradient-to-br from-slate-950 via-slate-900 to-cyan-950 text-white overflow-hidden shadow-xl shadow-cyan-900/10">
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(34,211,238,0.18),transparent_55%)]" />
+        <div className="relative px-5 sm:px-8 py-7 sm:py-9 flex flex-col lg:flex-row lg:items-end lg:justify-between gap-5">
+          <div>
+            <div className="inline-flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.22em] text-cyan-300/90 mb-3">
+              <Radio size={12} className="animate-pulse" /> Command Hub
+            </div>
+            <h1 className="text-3xl sm:text-4xl font-black tracking-tight">
+              外贸智慧协同
+            </h1>
+            <p className="mt-2 text-sm sm:text-base text-slate-300 font-medium max-w-xl leading-relaxed">
+              你好，{currentUser.username}。行业脉搏 · 优选新品 · 即时汇率，登录即可掌握今日作战面。
+            </p>
+            <div className="mt-4 flex flex-wrap items-center gap-2 text-[11px] font-bold">
+              {syncing ? (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-cyan-400/15 border border-cyan-300/30 px-3 py-1 text-cyan-100">
+                  <Loader2 size={12} className="animate-spin" /> 正在同步业务资料…
+                </span>
+              ) : syncStatus ? (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-400/15 border border-emerald-300/30 px-3 py-1 text-emerald-100">
+                  <CloudDownload size={12} /> {syncStatus}
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-white/10 border border-white/15 px-3 py-1 text-slate-200">
+                  资料已在后台自动同步
+                </span>
+              )}
+              {data?.fetchedAt ? (
+                <span className="text-slate-400">情报刷新 {fmtTime(data.fetchedAt)}</span>
+              ) : null}
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => void load(true)}
+              disabled={loading}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-white/10 hover:bg-white/15 border border-white/20 px-4 py-2.5 text-sm font-extrabold disabled:opacity-50"
+            >
+              {loading ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+              刷新情报
+            </button>
+            {onEnterWorkspace && (
+              <button
+                type="button"
+                onClick={onEnterWorkspace}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 px-4 py-2.5 text-sm font-extrabold"
+              >
+                进入客户搜索
+              </button>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {err && (
+        <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 text-amber-900 px-4 py-3 text-sm font-bold">
+          情报源暂时不可用：{err}。可稍后重试；汇率与资讯需服务端代理。
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 sm:gap-5">
+        {/* 行业新闻 */}
+        <section className="xl:col-span-4 rounded-3xl border border-slate-200/80 bg-white/90 backdrop-blur-md shadow-sm overflow-hidden flex flex-col min-h-[420px]">
+          <header className="px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <div className="h-9 w-9 rounded-xl bg-slate-900 text-cyan-300 flex items-center justify-center">
+                <Newspaper size={16} />
+              </div>
+              <div>
+                <h2 className="font-black text-slate-900">行业新闻</h2>
+                <p className="text-[11px] text-slate-500 font-medium">国内 · 国际 · 优选资讯</p>
+              </div>
+            </div>
+          </header>
+          <div className="flex-1 overflow-y-auto custom-scrollbar p-3 sm:p-4 space-y-2">
+            {loading && !news.length ? (
+              <div className="flex items-center gap-2 text-slate-400 text-sm font-bold p-6 justify-center">
+                <Loader2 className="animate-spin" size={16} /> 拉取中…
+              </div>
+            ) : news.length === 0 ? (
+              <p className="text-sm text-slate-500 font-medium p-4 text-center">暂无新闻，请稍后刷新</p>
+            ) : (
+              news.map((n) => (
+                <a
+                  key={n.id}
+                  href={n.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="group block rounded-2xl border border-transparent hover:border-cyan-200 hover:bg-cyan-50/50 px-3 py-2.5 transition-colors"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-sm font-bold text-slate-800 leading-snug group-hover:text-cyan-900">
+                      {n.title}
+                    </p>
+                    <ExternalLink size={12} className="shrink-0 text-slate-300 mt-1 group-hover:text-cyan-600" />
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-2 text-[10px] font-bold text-slate-400">
+                    <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-slate-600">{n.source}</span>
+                    {n.region === 'intl' && (
+                      <span className="rounded-md bg-sky-50 text-sky-700 px-1.5 py-0.5">国际</span>
+                    )}
+                    {n.region === 'cn' && (
+                      <span className="rounded-md bg-emerald-50 text-emerald-700 px-1.5 py-0.5">国内</span>
+                    )}
+                    {n.region === 'industry' && (
+                      <span className="rounded-md bg-violet-50 text-violet-700 px-1.5 py-0.5">优选</span>
+                    )}
+                  </div>
+                </a>
+              ))
+            )}
+          </div>
+        </section>
+
+        {/* 行业新品 */}
+        <section className="xl:col-span-4 rounded-3xl border border-slate-200/80 bg-white/90 backdrop-blur-md shadow-sm overflow-hidden flex flex-col min-h-[420px]">
+          <header className="px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <div className="h-9 w-9 rounded-xl bg-slate-900 text-amber-300 flex items-center justify-center">
+                <Sparkles size={16} />
+              </div>
+              <div>
+                <h2 className="font-black text-slate-900">行业新品</h2>
+                <p className="text-[11px] text-slate-500 font-medium">优选展区动态</p>
+              </div>
+            </div>
+          </header>
+          <div className="flex-1 overflow-y-auto custom-scrollbar p-3 sm:p-4">
+            {data?.products?.needsCredential && !products.length ? (
+              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-5 text-center">
+                <p className="text-sm font-bold text-slate-700">行业新品源待接入</p>
+                <p className="text-xs text-slate-500 font-medium mt-2 leading-relaxed">
+                  请在管理后台「数据接入」中启用优选货源，并粘贴登录后的访问令牌，即可在此同步新品与深度资讯。
+                </p>
+              </div>
+            ) : null}
+            {loading && !products.length && !data?.products?.needsCredential ? (
+              <div className="flex items-center gap-2 text-slate-400 text-sm font-bold p-6 justify-center">
+                <Loader2 className="animate-spin" size={16} /> 拉取中…
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-2.5">
+                {products.map((p) => (
+                  <a
+                    key={p.id}
+                    href={p.url || '#'}
+                    target={p.url ? '_blank' : undefined}
+                    rel="noopener noreferrer"
+                    className="rounded-2xl border border-slate-100 bg-gradient-to-b from-white to-slate-50 p-3 hover:border-cyan-200 hover:shadow-md transition-all"
+                    onClick={(e) => {
+                      if (!p.url) e.preventDefault();
+                    }}
+                  >
+                    {p.image ? (
+                      <img
+                        src={p.image}
+                        alt=""
+                        className="w-full h-24 object-cover rounded-xl mb-2 bg-slate-100"
+                        loading="lazy"
+                      />
+                    ) : (
+                      <div className="w-full h-16 rounded-xl mb-2 bg-gradient-to-br from-cyan-50 to-slate-100 flex items-center justify-center text-cyan-700/40">
+                        <Sparkles size={22} />
+                      </div>
+                    )}
+                    <p className="text-xs font-bold text-slate-800 leading-snug line-clamp-3">{p.title}</p>
+                    <p className="text-[10px] text-slate-400 font-bold mt-1">{p.source}</p>
+                  </a>
+                ))}
+              </div>
+            )}
+            {data?.products?.error && (
+              <p className="mt-3 text-[11px] text-amber-700 font-medium">{data.products.error}</p>
+            )}
+          </div>
+        </section>
+
+        {/* 即时汇率 */}
+        <section className="xl:col-span-4 rounded-3xl border border-slate-200/80 bg-white/90 backdrop-blur-md shadow-sm overflow-hidden flex flex-col min-h-[420px]">
+          <header className="px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <div className="h-9 w-9 rounded-xl bg-slate-900 text-emerald-300 flex items-center justify-center">
+                <LineChart size={16} />
+              </div>
+              <div>
+                <h2 className="font-black text-slate-900">即时汇率</h2>
+                <p className="text-[11px] text-slate-500 font-medium">中行买入 / 卖出 / 中间价</p>
+              </div>
+            </div>
+          </header>
+          <div className="flex-1 overflow-x-auto overflow-y-auto custom-scrollbar">
+            {loading && !fx.length ? (
+              <div className="flex items-center gap-2 text-slate-400 text-sm font-bold p-6 justify-center">
+                <Loader2 className="animate-spin" size={16} /> 拉取中行牌价…
+              </div>
+            ) : fx.length === 0 ? (
+              <p className="text-sm text-slate-500 font-medium p-4 text-center">
+                {data?.fx?.error || '暂无汇率数据'}
+              </p>
+            ) : (
+              <table className="w-full text-left text-xs">
+                <thead className="sticky top-0 bg-slate-50 text-slate-500 font-black">
+                  <tr>
+                    <th className="px-3 py-2.5">货币</th>
+                    <th className="px-2 py-2.5 text-right">中行买入</th>
+                    <th className="px-2 py-2.5 text-right">中行卖出</th>
+                    <th className="px-3 py-2.5 text-right">中间价</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {fx.map((q) => (
+                    <tr key={q.code || q.currency} className="border-t border-slate-50 hover:bg-cyan-50/40">
+                      <td className="px-3 py-2.5">
+                        <div className="font-black text-slate-800">{q.currency}</div>
+                        <div className="text-[10px] font-bold text-slate-400">{q.code}</div>
+                      </td>
+                      <td className="px-2 py-2.5 text-right font-mono font-bold text-emerald-700 tabular-nums">
+                        {q.bocBuy}
+                      </td>
+                      <td className="px-2 py-2.5 text-right font-mono font-bold text-rose-700 tabular-nums">
+                        {q.bocSell}
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-mono font-black text-slate-900 tabular-nums">
+                        {q.bocMid}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+          <footer className="px-4 py-3 border-t border-slate-100 text-[10px] text-slate-400 font-medium leading-relaxed">
+            {data?.fx?.note ||
+              '数据来源：中国银行外汇牌价。中间价为中行折算价。单位：人民币 / 100 外币。'}
+            {fx[0]?.publishedAt ? ` 发布 ${fx[0].publishedAt}` : ''}
+          </footer>
+        </section>
+      </div>
+    </div>
+  );
+};

@@ -1,5 +1,7 @@
 
 export enum ModuleType {
+  /** 登录落地：行业新闻 / 新品 / 汇率 */
+  HOME = 'home',
   DISCOVERY = 'discovery',
   BACKGROUND = 'background',
   PRODUCTS = 'products',
@@ -47,6 +49,7 @@ export type UserRole = 'admin' | 'director' | 'manager' | 'user';
 
 /** 细粒度权限（模块 + 功能） */
 export type PermissionKey =
+  | 'module.home'
   | 'module.discovery'
   | 'module.background'
   | 'module.products'
