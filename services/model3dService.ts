@@ -1,12 +1,16 @@
 /**
- * 图/文生 3D：经同域代理调用图生 3D OpenAPI（任务创建 → 轮询 → GLB/预览）。
- * Key 来自管理后台「数据接入 · 图生 3D API」。
+ * 图/文生 3D：经同域代理调用 OpenAPI（上传 → 建任务 → 轮询 → GLB）。
+ * Key：管理后台「数据接入 · 图生 3D API」或环境变量；进入模块时会拉取云端配置。
  */
 import { env } from './env';
 import { isLocalDevHost } from './qwenProxy';
-import { loadDataProviderLocal, type DataProviderMeta } from './dataProviders';
-
-const TRIPO_ORIGIN = 'https://api.tripo3d.ai';
+import {
+  loadDataProvider,
+  loadDataProviderLocal,
+  saveDataProviderLocal,
+  type DataProviderMeta,
+} from './dataProviders';
+import { compressImageDataUrl } from './catalogExcelService';
 
 export type Model3dGenerateInput = {
   mode: 'image' | 'text';
@@ -33,27 +37,61 @@ const sanitizeKey = (k: string) =>
     .replace(/\s+/g, '')
     .trim();
 
+const pickKey = (meta: DataProviderMeta): string =>
+  sanitizeKey(meta.apiKey || '') || sanitizeKey(env.tripoApiKey || '');
+
 export const getModel3dProviderStatus = (): {
   ready: boolean;
   detail: string;
+  hasKey: boolean;
+  enabled: boolean;
 } => {
   const meta = loadDataProviderLocal('tripo');
-  const envKey = sanitizeKey(env.tripoApiKey || '');
-  if ((meta.enabled && sanitizeKey(meta.apiKey || '')) || envKey) {
-    return { ready: true, detail: '生图服务已就绪' };
+  const key = pickKey(meta);
+  const hasKey = !!key;
+  const enabled = !!(meta.enabled || sanitizeKey(env.tripoApiKey || ''));
+  if (hasKey && enabled) {
+    return { ready: true, detail: '3D 服务已就绪', hasKey, enabled: true };
   }
-  return { ready: false, detail: '请联系管理员在「数据接入」配置图生 3D API Key' };
+  if (hasKey && !meta.enabled) {
+    return {
+      ready: false,
+      detail: '已填写 Key，请在「数据接入」打开「图生 3D API」开关',
+      hasKey,
+      enabled: false,
+    };
+  }
+  return {
+    ready: false,
+    detail: '请先配置图生 3D API Key（系统管理 → 数据接入，或本页管理员快捷配置）',
+    hasKey: false,
+    enabled: false,
+  };
+};
+
+/** 进入 3D 模块时拉取云端配置，避免「后台已配、前台仍无 Key」 */
+export const hydrateModel3dProvider = async (): Promise<ReturnType<typeof getModel3dProviderStatus>> => {
+  try {
+    const cloud = await loadDataProvider('tripo');
+    // 有 Key 但未开开关时自动启用，避免演示时「点了没反应」
+    if (sanitizeKey(cloud.apiKey || '') && !cloud.enabled) {
+      saveDataProviderLocal('tripo', { ...cloud, enabled: true });
+    }
+  } catch {
+    /* 本地即可 */
+  }
+  return getModel3dProviderStatus();
 };
 
 const resolveMeta = (): DataProviderMeta & { apiKey: string } => {
   const meta = loadDataProviderLocal('tripo');
-  const envKey = sanitizeKey(env.tripoApiKey || '');
-  const apiKey = sanitizeKey(meta.apiKey || '') || envKey;
+  const apiKey = pickKey(meta);
   if (!apiKey) {
-    throw new Error('未配置图生 3D API。请管理员在「系统管理 → 数据接入」启用并填写 Key。');
+    throw new Error('未配置图生 3D API。请管理员在「系统管理 → 数据接入 → 图生 3D API」启用并填写 Key。');
   }
-  if (!meta.enabled && !envKey) {
-    throw new Error('图生 3D API 未启用。请管理员在「数据接入」打开开关。');
+  if (!meta.enabled && !sanitizeKey(env.tripoApiKey || '')) {
+    // 有本地 Key 但未启用：自动启用一次，方便演示
+    saveDataProviderLocal('tripo', { ...meta, enabled: true, apiKey });
   }
   return { ...meta, enabled: true, apiKey };
 };
@@ -71,8 +109,19 @@ const parseJson = async (res: Response): Promise<any> => {
   try {
     return text ? JSON.parse(text) : {};
   } catch {
-    throw new Error(`图生 3D 返回非 JSON（HTTP ${res.status}）：${text.slice(0, 200)}`);
+    throw new Error(`3D 服务返回非 JSON（HTTP ${res.status}）：${text.slice(0, 180)}`);
   }
+};
+
+const throwIfApiError = (res: Response, json: any, fallback: string) => {
+  if (res.ok && (json.code == null || json.code === 0)) return;
+  const msg =
+    json?.message ||
+    json?.error ||
+    json?.data?.message ||
+    (typeof json?.error === 'string' ? json.error : '') ||
+    fallback;
+  throw new Error(String(msg));
 };
 
 /** dataURL → Blob */
@@ -87,8 +136,24 @@ const dataUrlToBlob = async (dataUrl: string): Promise<{ blob: Blob; filename: s
   return { blob: new Blob([arr], { type: mime }), filename: `input.${ext}` };
 };
 
-/** 上传本地图，返回 file/image token */
-const uploadImage = async (apiKey: string, sourceImage: string): Promise<{ token: string; fileType: string }> => {
+/** 压缩大图，避免代理体积上限导致「点了没反应 / 上传失败」 */
+const prepareSourceImage = async (sourceImage: string): Promise<string> => {
+  if (!sourceImage.startsWith('data:image/')) return sourceImage;
+  // 粗略估体积：base64 过长则压到 1280 边
+  if (sourceImage.length > 900_000) {
+    return compressImageDataUrl(sourceImage, 1280, 0.78);
+  }
+  if (sourceImage.length > 400_000) {
+    return compressImageDataUrl(sourceImage, 1536, 0.82);
+  }
+  return sourceImage;
+};
+
+/** 上传本地图，返回 file/image token（优先 /upload/sts，失败回退 /upload） */
+const uploadImage = async (
+  apiKey: string,
+  sourceImage: string
+): Promise<{ token: string; fileType: string }> => {
   if (/^https?:\/\//i.test(sourceImage)) {
     const ext = sourceImage.toLowerCase().includes('.png')
       ? 'png'
@@ -98,28 +163,45 @@ const uploadImage = async (apiKey: string, sourceImage: string): Promise<{ token
     return { token: '', fileType: ext };
   }
 
-  const { blob, filename } = await dataUrlToBlob(sourceImage);
-  const form = new FormData();
-  form.append('file', blob, filename);
-
-  const res = await fetch(tripoUrl('/v2/openapi/upload/sts'), {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}` },
-    body: form,
-  });
-  const json = await parseJson(res);
-  if (!res.ok || (json.code != null && json.code !== 0)) {
-    throw new Error(json.message || json.error || `上传失败 HTTP ${res.status}`);
+  const prepared = await prepareSourceImage(sourceImage);
+  const { blob, filename } = await dataUrlToBlob(prepared);
+  if (blob.size > 9.5 * 1024 * 1024) {
+    throw new Error('参考图过大（需小于 10MB），请换一张或先压缩后再试');
   }
-  const token =
-    json.data?.image_token ||
-    json.data?.file_token ||
-    json.image_token ||
-    json.file_token ||
-    '';
-  if (!token) throw new Error('上传成功但未返回 image_token');
+
+  const tryUpload = async (path: string) => {
+    const form = new FormData();
+    form.append('file', blob, filename);
+    const res = await fetch(tripoUrl(path), {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: form,
+    });
+    const json = await parseJson(res);
+    throwIfApiError(res, json, `上传失败 HTTP ${res.status}`);
+    const token =
+      json.data?.image_token ||
+      json.data?.file_token ||
+      json.image_token ||
+      json.file_token ||
+      '';
+    if (!token) throw new Error('上传成功但未返回 image_token');
+    return token as string;
+  };
+
+  let token: string;
+  try {
+    token = await tryUpload('/v2/openapi/upload/sts');
+  } catch (e1: any) {
+    try {
+      token = await tryUpload('/v2/openapi/upload');
+    } catch {
+      throw new Error(e1?.message || '参考图上传失败');
+    }
+  }
+
   const fileType = filename.split('.').pop() || 'jpg';
-  return { token, fileType };
+  return { token, fileType: fileType === 'jpg' ? 'jpeg' : fileType };
 };
 
 const createTask = async (apiKey: string, body: Record<string, unknown>): Promise<string> => {
@@ -132,9 +214,7 @@ const createTask = async (apiKey: string, body: Record<string, unknown>): Promis
     body: JSON.stringify(body),
   });
   const json = await parseJson(res);
-  if (!res.ok || (json.code != null && json.code !== 0)) {
-    throw new Error(json.message || json.error || `创建任务失败 HTTP ${res.status}`);
-  }
+  throwIfApiError(res, json, `创建任务失败 HTTP ${res.status}`);
   const taskId = json.data?.task_id || json.task_id;
   if (!taskId) throw new Error('创建任务成功但未返回 task_id');
   return String(taskId);
@@ -168,7 +248,7 @@ const pollTask = async (
     }
     await sleep(2500);
   }
-  throw new Error('3D 生成超时，请稍后在任务列表重试或到供应商控制台查看额度');
+  throw new Error('3D 生成超时，请稍后在项目库重试或检查账户额度');
 };
 
 const pickUrls = (data: any): Model3dGenerateResult => {
@@ -184,7 +264,7 @@ const pickUrls = (data: any): Model3dGenerateResult => {
   const previewImageUrl =
     out.rendered_image || out.preview_image || out.thumbnail || out.rendered_image_url || '';
   if (!modelUrl) {
-    throw new Error('任务完成但未返回模型下载地址，请检查供应商账户额度与权限');
+    throw new Error('任务完成但未返回模型下载地址，请检查账户额度与权限');
   }
   return {
     taskId: String(data.task_id || ''),
@@ -230,12 +310,12 @@ export const generateModel3d = async (input: Model3dGenerateInput): Promise<Mode
   }
 
   const img = (input.sourceImage || '').trim();
-  if (!img) throw new Error('请上传产品图');
+  if (!img) throw new Error('请上传或选用产品图');
 
   let fileField: Record<string, unknown>;
   if (/^https?:\/\//i.test(img)) {
     fileField = {
-      type: img.toLowerCase().includes('.png') ? 'png' : 'jpg',
+      type: img.toLowerCase().includes('.png') ? 'png' : 'jpeg',
       url: img,
     };
   } else {
@@ -253,7 +333,6 @@ export const generateModel3d = async (input: Model3dGenerateInput): Promise<Mode
     enable_image_autofix: true,
   };
   if (input.prompt?.trim()) {
-    // 部分版本忽略；保留不影响
     body.prompt = input.prompt.trim();
   }
   if (quality === 'engine_ready') {

@@ -10,6 +10,8 @@ import {
   Layers,
   Sparkles,
   ExternalLink,
+  KeyRound,
+  Save,
 } from 'lucide-react';
 import type { User } from '../types';
 import { ModuleType } from '../types';
@@ -22,7 +24,12 @@ import {
   saveModel3dJobs,
   newCreativeId,
 } from '../services/creativeStudioStore';
-import { generateModel3d, getModel3dProviderStatus } from '../services/model3dService';
+import {
+  generateModel3d,
+  getModel3dProviderStatus,
+  hydrateModel3dProvider,
+} from '../services/model3dService';
+import { loadDataProviderLocal, saveDataProvider } from '../services/dataProviders';
 import { consumeCreativeHandoff } from '../services/creativeAssetBridge';
 import { CreativePipelineBar, CreativeRefPicker } from './CreativeRefPicker';
 
@@ -44,11 +51,35 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
   const [skuName, setSkuName] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [msgTone, setMsgTone] = useState<'info' | 'error' | 'ok'>('info');
   const [activeId, setActiveId] = useState<string | null>(jobs[0]?.id || null);
+  const [provider, setProvider] = useState(() => getModel3dProviderStatus());
+  const [hydrating, setHydrating] = useState(true);
+  const [quickKey, setQuickKey] = useState('');
+  const [savingKey, setSavingKey] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const skus = useMemo(() => loadCatalogSkus(), []);
-  const provider = getModel3dProviderStatus();
   const active = jobs.find((j) => j.id === activeId) || null;
+  const isAdmin = currentUser.role === 'admin' || currentUser.role === 'director';
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setHydrating(true);
+      const st = await hydrateModel3dProvider();
+      if (!cancelled) {
+        setProvider(st);
+        setHydrating(false);
+        if (!st.ready) {
+          setMsgTone('error');
+          setMsg(st.detail);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const handoff = consumeCreativeHandoff('design_3d');
@@ -57,12 +88,35 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     setSourceImage(handoff.images[0]);
     if (handoff.skuCode) setSkuPick(handoff.skuCode);
     if (handoff.skuName) setSkuName(handoff.skuName);
+    setMsgTone('ok');
     setMsg(
       handoff.note
         ? `已从平面设计带入参考图：${handoff.note}`
         : '已从平面设计 / 产品库带入参考图，可直接生成 3D'
     );
   }, []);
+
+  const saveQuickKey = async () => {
+    const key = quickKey.replace(/^\uFEFF/, '').replace(/^Bearer\s+/i, '').replace(/\s+/g, '').trim();
+    if (!key) {
+      setMsgTone('error');
+      setMsg('请粘贴图生 3D API Key');
+      return;
+    }
+    setSavingKey(true);
+    const prev = loadDataProviderLocal('tripo');
+    await saveDataProvider('tripo', {
+      ...prev,
+      enabled: true,
+      apiKey: key,
+    });
+    const st = getModel3dProviderStatus();
+    setProvider(st);
+    setSavingKey(false);
+    setQuickKey('');
+    setMsgTone(st.ready ? 'ok' : 'error');
+    setMsg(st.ready ? '3D API 已保存并启用，可以开始生成' : st.detail);
+  };
 
   const persist = (next: Model3dJob[]) => {
     setJobs(next);
@@ -92,16 +146,24 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
   };
 
   const runGenerate = async () => {
-    if (!provider.ready) {
-      setMsg(provider.detail);
+    const live = getModel3dProviderStatus();
+    setProvider(live);
+    if (!live.ready) {
+      setMsgTone('error');
+      setMsg(live.detail);
+      window.alert(live.detail);
       return;
     }
     if (mode === 'image' && !sourceImage) {
-      setMsg('请先上传产品图 / 草图');
+      setMsgTone('error');
+      setMsg('请先选用或上传产品图');
+      window.alert('请先选用或上传产品图，再生成 3D');
       return;
     }
     if (mode === 'text' && !prompt.trim()) {
+      setMsgTone('error');
       setMsg('请填写文字描述');
+      window.alert('请填写文字描述');
       return;
     }
     const sku = skus.find((s) => s.id === skuPick || s.skuCode === skuPick);
@@ -131,6 +193,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     persist([job, ...jobs]);
     setActiveId(job.id);
     setBusy(true);
+    setMsgTone('info');
     setMsg('正在提交 3D 任务…');
 
     try {
@@ -144,6 +207,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
             progress: Math.round(pct),
             previewHint: `生成中 ${Math.round(pct)}% · ${status}`,
           });
+          setMsgTone('info');
           setMsg(`生成中 ${Math.round(pct)}%`);
         },
       });
@@ -158,14 +222,18 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         previewHint: '模型已就绪，可下载 GLB',
         error: undefined,
       });
-      setMsg('3D 模型已生成');
+      setMsgTone('ok');
+      setMsg('3D 模型已生成，可在下方下载 GLB');
     } catch (e: any) {
+      const errText = e?.message || String(e);
       patchJob(job.id, {
         status: 'failed',
-        error: e?.message || String(e),
-        previewHint: e?.message || '生成失败',
+        error: errText,
+        previewHint: errText,
       });
-      setMsg(e?.message || '生成失败');
+      setMsgTone('error');
+      setMsg(errText);
+      window.alert(`3D 生成失败：${errText}`);
     } finally {
       setBusy(false);
     }
@@ -198,18 +266,55 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
           </div>
           <div
             className={`text-[10px] font-bold rounded-xl px-3 py-2 border ${
-              provider.ready
-                ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
-                : 'text-amber-800 bg-amber-50 border-amber-200'
+              hydrating
+                ? 'text-slate-600 bg-slate-50 border-slate-200'
+                : provider.ready
+                  ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+                  : 'text-rose-800 bg-rose-50 border-rose-200'
             }`}
           >
-            {provider.ready ? '服务已就绪' : '需配置 API Key'}
+            {hydrating ? '正在同步配置…' : provider.ready ? '3D 服务已就绪' : '需配置 API Key'}
           </div>
         </div>
       </div>
 
       <div className="grid lg:grid-cols-12 gap-4">
         <div className="lg:col-span-4 space-y-3">
+          {!provider.ready && (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 space-y-2">
+              <div className="text-xs font-black text-rose-900 flex items-center gap-1.5">
+                <KeyRound size={14} /> 尚未配置图生 3D API
+              </div>
+              <p className="text-[11px] text-rose-800/90 font-medium leading-relaxed">
+                未配置 Key 时点击「生成」不会创建任务。请管理员在「系统管理 → 数据接入 → 图生 3D API」启用并填写
+                Key（格式通常以 tsk_ 开头）。
+              </p>
+              {isAdmin && (
+                <div className="space-y-2 pt-1">
+                  <label className="text-[10px] font-black text-rose-700 uppercase tracking-wider">
+                    管理员快捷配置
+                  </label>
+                  <input
+                    type="password"
+                    value={quickKey}
+                    onChange={(e) => setQuickKey(e.target.value)}
+                    placeholder="粘贴图生 3D API Key"
+                    className="w-full rounded-xl border border-rose-200 bg-white px-3 py-2 text-sm"
+                    autoComplete="off"
+                  />
+                  <button
+                    type="button"
+                    disabled={savingKey}
+                    onClick={() => void saveQuickKey()}
+                    className="w-full inline-flex items-center justify-center gap-1.5 rounded-xl bg-rose-700 hover:bg-rose-800 text-white text-xs font-black py-2.5 disabled:opacity-60"
+                  >
+                    {savingKey ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                    保存并启用
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
           <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
             <div className="flex gap-2">
               {(
@@ -351,21 +456,32 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
 
             <button
               type="button"
-              disabled={busy}
+              disabled={busy || hydrating}
               onClick={() => void runGenerate()}
-              className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-black py-3 disabled:opacity-50 inline-flex items-center justify-center gap-2"
+              className={`w-full rounded-xl text-white text-sm font-black py-3 disabled:opacity-50 inline-flex items-center justify-center gap-2 ${
+                provider.ready
+                  ? 'bg-indigo-600 hover:bg-indigo-700'
+                  : 'bg-slate-700 hover:bg-slate-800'
+              }`}
             >
               {busy ? <Loader2 className="animate-spin" size={16} /> : <Box size={16} />}
-              {busy ? `生成中… ${active?.progress ?? 0}%` : '生成 3D 模型'}
+              {busy
+                ? `生成中… ${active?.progress ?? 0}%`
+                : provider.ready
+                  ? '生成 3D 模型'
+                  : '生成 3D 模型（需先配置 Key）'}
             </button>
             {msg && (
-              <p className="text-xs font-bold text-indigo-900 bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-2">
+              <p
+                className={`text-xs font-bold rounded-xl px-3 py-2 border ${
+                  msgTone === 'error'
+                    ? 'text-rose-900 bg-rose-50 border-rose-200'
+                    : msgTone === 'ok'
+                      ? 'text-emerald-900 bg-emerald-50 border-emerald-200'
+                      : 'text-indigo-900 bg-indigo-50 border-indigo-100'
+                }`}
+              >
                 {msg}
-              </p>
-            )}
-            {!provider.ready && (
-              <p className="text-[11px] text-amber-800 font-medium">
-                管理员请到「系统管理 → 数据接入 → 图生 3D API」启用并填写 Key。
               </p>
             )}
           </div>
