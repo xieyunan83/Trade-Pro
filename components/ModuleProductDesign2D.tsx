@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   Sparkles,
   Plus,
@@ -10,6 +10,8 @@ import {
   AlertTriangle,
   CheckCircle2,
   Package,
+  ImagePlus,
+  X,
 } from 'lucide-react';
 import type { User } from '../types';
 import {
@@ -25,6 +27,7 @@ import {
 } from '../services/designAgentStore';
 import { generateDesignImages, getDesignAgentConfigStatus } from '../services/designAgentService';
 import { loadCatalogSkus } from '../services/productCatalogTypes';
+import { compressImageDataUrl } from '../services/catalogExcelService';
 
 type Props = {
   currentUser: User;
@@ -44,12 +47,16 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser }) => {
   const [leftTab, setLeftTab] = useState<LeftTab>('skills');
   const [prompt, setPrompt] = useState('');
   const [skillId, setSkillId] = useState<DesignSkillId>('product_hero');
-  const [size, setSize] = useState<'1K' | '2K' | '4K'>('2K');
+  const [size, setSize] = useState<'1K' | '2K' | '4K'>('1K');
   const [count, setCount] = useState(1);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [skuPick, setSkuPick] = useState('');
+  /** 用户上传的参考图（data URL），可与文字描述组合图生图 */
+  const [refUploads, setRefUploads] = useState<string[]>([]);
+  const [refBusy, setRefBusy] = useState(false);
+  const refInputRef = useRef<HTMLInputElement>(null);
   const skus = useMemo(() => loadCatalogSkus(), []);
   const status = getDesignAgentConfigStatus();
 
@@ -159,18 +166,60 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser }) => {
     return proj;
   };
 
+  const onPickRefFiles = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setRefBusy(true);
+    setError(null);
+    try {
+      const next = [...refUploads];
+      for (const file of Array.from(files)) {
+        if (next.length >= 3) break;
+        if (!file.type.startsWith('image/')) continue;
+        const raw = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ''));
+          reader.onerror = () => reject(new Error('读取图片失败'));
+          reader.readAsDataURL(file);
+        });
+        if (!raw.startsWith('data:image/')) continue;
+        const compressed = await compressImageDataUrl(raw);
+        next.push(compressed);
+      }
+      setRefUploads(next.slice(0, 3));
+    } catch (e: any) {
+      setError(e?.message || '参考图处理失败');
+    } finally {
+      setRefBusy(false);
+      if (refInputRef.current) refInputRef.current.value = '';
+    }
+  };
+
+  const collectRefImages = (proj: DesignProject): string[] => {
+    const boundSku =
+      skus.find((s) => s.id === skuPick || s.skuCode === skuPick) ||
+      skus.find((s) => s.skuCode === proj.skuCode);
+    const fromSku = (boundSku?.images || []).filter(Boolean);
+    const merged: string[] = [];
+    for (const u of [...refUploads, ...fromSku]) {
+      if (!u || merged.includes(u)) continue;
+      merged.push(u);
+      if (merged.length >= 3) break;
+    }
+    return merged;
+  };
+
   const runGenerate = async () => {
     setConfirmOpen(false);
     const proj = ensureProject();
     const finalPrompt = buildFinalPrompt();
-    const boundSku =
-      skus.find((s) => s.id === skuPick || s.skuCode === skuPick) ||
-      skus.find((s) => s.skuCode === proj.skuCode);
-    const refImages = (boundSku?.images || []).filter(Boolean).slice(0, 2);
+    const refImages = collectRefImages(proj);
+    const modeHint = refImages.length
+      ? `参考图 ${refImages.length} 张 + 文字`
+      : '纯文字';
     const userMsg = {
       id: newDesignId('m'),
       role: 'user' as const,
-      text: prompt.trim() || `使用 Skill「${skill.label}」生成`,
+      text: prompt.trim() || `使用 Skill「${skill.label}」生成（${modeHint}）`,
       at: Date.now(),
     };
 
@@ -181,7 +230,6 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser }) => {
         prompt: finalPrompt,
         size,
         n: count,
-        // 默认关闭深度思考，避免同步长连接被网关掐断
         thinkingMode: false,
         referenceImages: refImages.length ? refImages : undefined,
       });
@@ -197,7 +245,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser }) => {
       const agentMsg = {
         id: newDesignId('m'),
         role: 'agent' as const,
-        text: `已生成 ${newAssets.length} 张并放到画布。可继续改稿，例如「背景更干净」「保留包装文字」。`,
+        text: `已用「${modeHint}」生成 ${newAssets.length} 张并放到画布。可继续改稿，或换参考图再生成。`,
         at: now,
         assetIds: newAssets.map((a) => a.id),
       };
@@ -248,7 +296,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser }) => {
           </div>
           <h2 className="text-xl font-extrabold text-slate-900 mt-1.5">产品设计 · 平面图</h2>
           <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1 max-w-2xl leading-relaxed">
-            选择 Skill、描述需求并确认后生成平面图，结果保存在本项目画布中，可下载复用。
+            支持纯文字生图，也可上传参考图 + 文字一起改稿。结果保存在本项目画布，可下载复用。
           </p>
         </div>
         <div className="text-right shrink-0">
@@ -467,12 +515,54 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser }) => {
             <div className="mt-1 text-sm font-black text-violet-800">{skill.label}</div>
             <div className="text-[10px] text-slate-500">{skill.aspectHint}</div>
           </div>
+          <div>
+            <label className="text-[10px] font-black text-slate-400 uppercase flex items-center gap-1">
+              <ImagePlus size={10} /> 参考图（可选，最多 3 张）
+            </label>
+            <input
+              ref={refInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/bmp"
+              multiple
+              className="hidden"
+              onChange={(e) => void onPickRefFiles(e.target.files)}
+            />
+            <div className="mt-1.5 flex flex-wrap gap-2">
+              {refUploads.map((src, i) => (
+                <div key={`${i}-${src.slice(-24)}`} className="relative w-14 h-14 rounded-lg overflow-hidden border border-violet-200 bg-slate-50">
+                  <img src={src} alt="" className="w-full h-full object-contain" />
+                  <button
+                    type="button"
+                    aria-label="移除参考图"
+                    onClick={() => setRefUploads((prev) => prev.filter((_, j) => j !== i))}
+                    className="absolute top-0.5 right-0.5 rounded-full bg-slate-900/80 text-white p-0.5"
+                  >
+                    <X size={10} />
+                  </button>
+                </div>
+              ))}
+              {refUploads.length < 3 && (
+                <button
+                  type="button"
+                  disabled={refBusy || loading}
+                  onClick={() => refInputRef.current?.click()}
+                  className="w-14 h-14 rounded-lg border border-dashed border-violet-300 text-violet-600 hover:bg-violet-50 flex flex-col items-center justify-center gap-0.5 disabled:opacity-50"
+                >
+                  {refBusy ? <Loader2 size={14} className="animate-spin" /> : <ImagePlus size={14} />}
+                  <span className="text-[8px] font-black">上传</span>
+                </button>
+              )}
+            </div>
+            <p className="text-[9px] text-slate-400 font-medium mt-1 leading-relaxed">
+              有参考图时按「图 + 文」改稿；无参考图则纯文字生图。上传图会自动压缩以节省额度。
+            </p>
+          </div>
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            rows={5}
+            rows={4}
             placeholder="例如：遥控车主图，白底，包装盒完整可见，适合亚马逊主图…"
-            className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-medium resize-y min-h-[6rem]"
+            className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-medium resize-y min-h-[5rem]"
           />
           <div className="flex gap-2">
             <select
@@ -480,7 +570,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser }) => {
               value={size}
               onChange={(e) => setSize(e.target.value as '1K' | '2K' | '4K')}
             >
-              <option value="1K">1K</option>
+              <option value="1K">1K（省额度）</option>
               <option value="2K">2K</option>
               <option value="4K">4K</option>
             </select>
@@ -511,7 +601,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser }) => {
             {loading ? '生图中，约 1–2 分钟…' : '确认生成'}
           </button>
           <p className="text-[10px] text-slate-400 font-medium leading-relaxed">
-            生成前需确认，避免误消耗额度。复杂场景可能需要一两分钟，请勿关闭页面。
+            默认 1K、1 张更省额度；需要更清晰再选 2K。生成前需确认。
           </p>
         </aside>
       </div>
@@ -524,8 +614,23 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser }) => {
             <p className="text-sm text-slate-600 font-medium leading-relaxed">
               Skill「{skill.label}」· {count} 张 · {size}
               <br />
-              引擎：{status.label}
+              模式：
+              {refUploads.length || skuPick
+                ? `参考图 ${Math.min(3, refUploads.length + (skus.find((s) => s.id === skuPick)?.images?.length ? 1 : 0))} 张 + 文字`
+                : '纯文字'}
             </p>
+            {refUploads.length > 0 && (
+              <div className="flex gap-2 flex-wrap">
+                {refUploads.map((src, i) => (
+                  <img
+                    key={i}
+                    src={src}
+                    alt=""
+                    className="w-12 h-12 rounded-lg object-contain border border-slate-200 bg-slate-50"
+                  />
+                ))}
+              </div>
+            )}
             <p className="text-[11px] text-slate-500 bg-slate-50 rounded-xl px-3 py-2 font-medium max-h-24 overflow-y-auto">
               {buildFinalPrompt()}
             </p>
