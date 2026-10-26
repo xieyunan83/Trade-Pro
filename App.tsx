@@ -15,6 +15,7 @@ import {
   mergeDecisionMakersIntoAutomationTasks,
   newAutomationTaskId,
 } from './services/automationQueueRepair';
+import { pullMergePushAutomationQueue } from './services/automationQueueCloud';
 import { fetchGlobalConfig, fetchDocumentsFromRepo, backupUserHistory, fetchCRMFromCloud, saveCRMToCloud, fetchUserHistoryFromCloud, checkGitHubStatus, fetchApiConfigsFromCloud, setManualGitHubConfig } from './services/githubService';
 import { isSupabaseConfigured, getKnowledgeFiles, getInvestigationHistory, saveInvestigationHistory, saveDiscoverySearch, getCrmClients, syncCrmClients, saveCrmClientsBulk, deleteCrmClient, deleteCrmClientsBulk, getDiscoverySearchArchives, deleteInvestigationHistory, deleteDiscoverySearchFromCloud, deleteDiscoverySearchesByMeta, getProductProfilesCloud } from './services/supabase';
 import {
@@ -509,7 +510,21 @@ const App: React.FC = () => {
                 `[automation] repaired ids=${repaired.repaired}, claimed orphans=${repaired.claimed}, total=${repaired.tasks.length}`
               );
             }
-            const scopedQueue = scope(repaired.tasks);
+            // 背调作业队列：本机 ∪ 云端合并后再写回，保证浏览器与 Windows 客户端条数一致
+            let queueTasks = repaired.tasks;
+            if (isSupabaseConfigured()) {
+              try {
+                const synced = await pullMergePushAutomationQueue();
+                queueTasks = synced.tasks;
+                console.info(
+                  `[automation-cloud] local=${synced.local} cloud=${synced.cloud} merged=${synced.merged} uploaded=${synced.uploaded}` +
+                    (synced.error ? ` err=${synced.error}` : '')
+                );
+              } catch (e) {
+                console.warn('[automation-cloud] sync failed, using local queue', e);
+              }
+            }
+            const scopedQueue = scope(queueTasks);
             if (!cancelled) setAutomationResults(scopedQueue);
             const files = await getAllFilesFromDB();
             if (!cancelled) setKbCount(files.length);
@@ -3207,22 +3222,31 @@ const App: React.FC = () => {
     if (!currentUser) return;
     try {
       const repaired = await loadAndRepairAutomationQueue(currentUser);
+      let tasks = repaired.tasks;
+      let cloudNote = '';
+      if (isSupabaseConfigured()) {
+        const synced = await pullMergePushAutomationQueue();
+        tasks = synced.tasks;
+        cloudNote = `\n云端同步：本机 ${synced.local} → 云端原有 ${synced.cloud} → 合并 ${synced.merged}（已上传 ${synced.uploaded}）`;
+        if (synced.error) cloudNote += `\n云端提示：${synced.error}`;
+      }
       const scoped = filterOwnedRecords(
         currentUser,
-        repaired.tasks,
+        tasks,
         users,
         departments.length ? departments : loadDepartmentsFromStorage()
       );
       setAutomationResults(scoped);
       alert(
-        `已从本机重新加载任务队列：可见 ${scoped.length} 条` +
+        `已同步任务队列：本机可见 ${scoped.length} 条` +
           (repaired.repaired || repaired.claimed
             ? `（修复短ID ${repaired.repaired}，认领无归属 ${repaired.claimed}）`
             : '') +
-          `\n提示：被「清空列表/清除已完成」删掉的无法恢复；背调正文仍在「记录中心」。`
+          cloudNote +
+          `\n提示：请先在资料最全的电脑点一次本按钮，再在 Windows 客户端登录 kevin 点「重新加载队列」。`
       );
     } catch (e: any) {
-      alert(`重新加载失败：${e?.message || String(e)}`);
+      alert(`重新加载/同步失败：${e?.message || String(e)}`);
     }
   };
 

@@ -77,15 +77,23 @@ export const clearAllHistory = async (): Promise<void> => {
   });
 };
 
-export const saveAutomationTask = async (task: AutomationResult): Promise<void> => {
+export const saveAutomationTask = async (
+  task: AutomationResult,
+  opts?: { skipCloud?: boolean }
+): Promise<void> => {
   const db = await initDB();
-  return new Promise((resolve, reject) => {
+  await new Promise<void>((resolve, reject) => {
     const transaction = db.transaction('automation', 'readwrite');
     const store = transaction.objectStore('automation');
     const request = store.put(task);
     request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error);
   });
+  if (!opts?.skipCloud) {
+    void import('./automationQueueCloud')
+      .then((m) => m.pushAutomationTaskToCloud(task))
+      .catch(() => undefined);
+  }
 };
 
 export const getAutomationQueue = async (): Promise<AutomationResult[]> => {
@@ -99,15 +107,23 @@ export const getAutomationQueue = async (): Promise<AutomationResult[]> => {
   });
 };
 
-export const deleteAutomationTask = async (id: string): Promise<void> => {
+export const deleteAutomationTask = async (
+  id: string,
+  opts?: { skipCloud?: boolean }
+): Promise<void> => {
   const db = await initDB();
-  return new Promise((resolve, reject) => {
+  await new Promise<void>((resolve, reject) => {
     const transaction = db.transaction('automation', 'readwrite');
     const store = transaction.objectStore('automation');
     const request = store.delete(id);
     request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error);
   });
+  if (!opts?.skipCloud) {
+    void import('./automationQueueCloud')
+      .then((m) => m.deleteAutomationTaskFromCloud(id))
+      .catch(() => undefined);
+  }
 };
 
 export const clearAutomationQueue = async (): Promise<void> => {

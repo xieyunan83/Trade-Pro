@@ -913,10 +913,10 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                   type="button"
                   onClick={() => onReloadQueue()}
                   disabled={isAutomating}
-                  className="inline-flex items-center gap-1.5 bg-white border border-slate-200 text-slate-700 px-4 py-2 rounded-xl text-xs font-bold hover:bg-slate-50 disabled:opacity-50"
-                  title="从本机重新加载任务，修复短ID冲突与无归属导致的列表变少"
+                  className="inline-flex items-center gap-1.5 bg-teal-50 border border-teal-200 text-teal-800 px-4 py-2 rounded-xl text-xs font-bold hover:bg-teal-100 disabled:opacity-50"
+                  title="本机与云端合并同步；请先在资料最全的电脑点一次，再在 Windows 客户端点一次"
                 >
-                  <RefreshCw size={14} /> 重新加载队列
+                  <RefreshCw size={14} /> 同步队列（本机+云端）
                 </button>
               )}
               <button

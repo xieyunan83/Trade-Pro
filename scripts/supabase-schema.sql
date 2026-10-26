@@ -124,6 +124,25 @@ DROP POLICY IF EXISTS "product_profiles_all" ON product_profiles;
 CREATE POLICY "product_profiles_all" ON product_profiles
   FOR ALL USING (true) WITH CHECK (true);
 
+-- ==================== 背调作业队列（浏览器 ↔ 桌面客户端共用） ====================
+CREATE TABLE IF NOT EXISTS automation_queue (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id text NOT NULL DEFAULT 'default',
+  local_id text NOT NULL,
+  task_data jsonb NOT NULL,
+  updated_at timestamptz DEFAULT now(),
+  UNIQUE(user_id, local_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_automation_queue_user_updated
+  ON automation_queue (user_id, updated_at DESC);
+
+ALTER TABLE automation_queue ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "automation_queue_all" ON automation_queue;
+CREATE POLICY "automation_queue_all" ON automation_queue
+  FOR ALL USING (true) WITH CHECK (true);
+
 -- ==================== 应用用户账号（可选；当前实现复用 api_configs.__app_users__） ====================
 -- 手机端与电脑端共用同一套账号密码。若要用独立表，可执行下方 SQL；
 -- 现有代码已通过 api_configs 的 provider=__app_users__ 同步，无需必须建表。
