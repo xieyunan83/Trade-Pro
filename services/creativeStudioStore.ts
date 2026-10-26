@@ -12,8 +12,10 @@ export type Model3dJob = {
   mode: Model3dMode;
   quality: Model3dQuality;
   prompt: string;
-  /** data URL 或外链 */
+  /** data URL 或外链（首张，兼容旧数据） */
   sourceImage?: string;
+  /** 多角度参考图 */
+  sourceImages?: string[];
   skuCode?: string;
   skuName?: string;
   status: Model3dJobStatus;

@@ -365,7 +365,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
       (active?.skuCode
         ? { skuCode: active.skuCode, name: active.skuName || active.skuCode }
         : null);
-    const maxImgs = target === 'design_3d' ? 1 : target === 'packaging' ? 3 : 6;
+    const maxImgs = target === 'design_3d' ? 4 : target === 'packaging' ? 3 : 6;
     const sliced = urls.slice(0, maxImgs);
     setCreativeHandoff({
       images: sliced,
@@ -622,7 +622,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                   ) : null}
                 </div>
                 <p className="text-[10px] text-slate-400 font-medium">
-                  点击图片勾选；可多选后推送。3D 取选中首张，视频最多 6 张，包装最多 3 张。
+                  点击图片勾选；可多选后推送。3D 最多 4 张（多视图），视频最多 6 张，包装最多 3 张。
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {canvasAssets.map((a, i) => {

@@ -46,7 +46,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
   const [mode, setMode] = useState<Model3dMode>('image');
   const [quality, setQuality] = useState<Model3dQuality>('high_detail');
   const [prompt, setPrompt] = useState('');
-  const [sourceImage, setSourceImage] = useState<string | undefined>();
+  const [sourceImages, setSourceImages] = useState<string[]>([]);
   const [skuPick, setSkuPick] = useState('');
   const [skuName, setSkuName] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
@@ -85,14 +85,14 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     const handoff = consumeCreativeHandoff('design_3d');
     if (!handoff?.images?.[0]) return;
     setMode('image');
-    setSourceImage(handoff.images[0]);
+    setSourceImages(handoff.images.slice(0, 4));
     if (handoff.skuCode) setSkuPick(handoff.skuCode);
     if (handoff.skuName) setSkuName(handoff.skuName);
     setMsgTone('ok');
     setMsg(
       handoff.note
-        ? `已从平面设计带入参考图：${handoff.note}`
-        : '已从平面设计 / 产品库带入参考图，可直接生成 3D'
+        ? `已从平面设计带入 ${Math.min(handoff.images.length, 4)} 张参考图：${handoff.note}`
+        : `已从平面设计带入 ${Math.min(handoff.images.length, 4)} 张参考图（可多选多角度），可直接生成 3D`
     );
   }, []);
 
@@ -131,18 +131,25 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     });
   };
 
-  const onPickImage = (file: File) => {
-    if (!file.type.startsWith('image/')) {
-      setMsg('请上传图片文件');
-      return;
-    }
-    if (file.size > 10 * 1024 * 1024) {
-      setMsg('图片请小于 10MB');
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => setSourceImage(String(reader.result || ''));
-    reader.readAsDataURL(file);
+  const onPickImages = (files: FileList | null) => {
+    if (!files?.length) return;
+    const list = Array.from(files).slice(0, 4);
+    list.forEach((file) => {
+      if (!file.type.startsWith('image/')) {
+        setMsgTone('error');
+        setMsg('请上传图片文件');
+        return;
+      }
+      if (file.size > 10 * 1024 * 1024) {
+        setMsgTone('error');
+        setMsg('单张图片请小于 10MB');
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () =>
+        setSourceImages((prev) => [...prev, String(reader.result || '')].slice(0, 4));
+      reader.readAsDataURL(file);
+    });
   };
 
   const runGenerate = async () => {
@@ -154,9 +161,9 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
       window.alert(live.detail);
       return;
     }
-    if (mode === 'image' && !sourceImage) {
+    if (mode === 'image' && !sourceImages.length) {
       setMsgTone('error');
-      setMsg('请先选用或上传产品图');
+      setMsg('请先选用或上传产品图（可多选多角度）');
       window.alert('请先选用或上传产品图，再生成 3D');
       return;
     }
@@ -175,12 +182,15 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         : skuPick
           ? `${skuPick} · 3D`
           : mode === 'image'
-            ? '图生 3D'
+            ? sourceImages.length > 1
+              ? `多视图 3D · ${sourceImages.length} 张`
+              : '图生 3D'
             : `文生 3D · ${prompt.trim().slice(0, 24)}`,
       mode,
       quality,
       prompt: prompt.trim(),
-      sourceImage,
+      sourceImage: sourceImages[0],
+      sourceImages: sourceImages.slice(0, 4),
       skuCode: sku?.skuCode || skuPick || undefined,
       skuName: sku?.name || skuName,
       status: 'running',
@@ -194,13 +204,18 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     setActiveId(job.id);
     setBusy(true);
     setMsgTone('info');
-    setMsg('正在提交 3D 任务…');
+    setMsg(
+      sourceImages.length > 1
+        ? `正在提交多视图 3D 任务（${sourceImages.length} 张）…`
+        : '正在提交 3D 任务…'
+    );
 
     try {
       const result = await generateModel3d({
         mode,
         prompt: prompt.trim(),
-        sourceImage,
+        sourceImage: sourceImages[0],
+        sourceImages,
         quality,
         onProgress: (pct, status) => {
           patchJob(job.id, {
@@ -341,12 +356,12 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
             {mode === 'image' ? (
               <div className="space-y-2">
                 <CreativeRefPicker
-                  value={sourceImage ? [sourceImage] : []}
-                  onChange={(urls) => setSourceImage(urls[0])}
-                  multiple={false}
-                  max={1}
+                  value={sourceImages}
+                  onChange={setSourceImages}
+                  multiple
+                  max={4}
                   accent="indigo"
-                  title="从平面设计 / 产品库选用（可点 × 移除推送图）"
+                  title="从平面设计 / 产品库多选（最多 4 张，建议正面·侧面·背面）"
                   onSkuMeta={(meta) => {
                     if (meta?.skuCode) setSkuPick(meta.skuCode);
                     setSkuName(meta?.skuName);
@@ -358,19 +373,24 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                   className="w-full min-h-[100px] rounded-2xl border-2 border-dashed border-indigo-200 bg-indigo-50/40 hover:bg-indigo-50 flex flex-col items-center justify-center gap-2 text-indigo-800"
                 >
                   <Upload size={22} />
-                  <span className="text-xs font-black">或本地上传产品图 / 草图</span>
+                  <span className="text-xs font-black">
+                    或本地上传（可多选）· 已选 {sourceImages.length}/4
+                  </span>
                   <input
                     ref={fileRef}
                     type="file"
                     accept="image/png,image/jpeg,image/webp"
+                    multiple
                     className="hidden"
                     onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) onPickImage(f);
+                      onPickImages(e.target.files);
                       e.target.value = '';
                     }}
                   />
                 </button>
+                <p className="text-[10px] text-slate-400 font-medium leading-relaxed">
+                  多选 ≥2 张将按多视图重建（更贴近平面设计）；单张则走常规图生 3D。
+                </p>
               </div>
             ) : null}
 
@@ -427,8 +447,8 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                   const id = e.target.value;
                   setSkuPick(id);
                   const s = skus.find((x) => x.id === id);
-                  if (s?.images?.[0] && mode === 'image') {
-                    setSourceImage(s.images[0]);
+                  if (s?.images?.length && mode === 'image') {
+                    setSourceImages(s.images.filter(Boolean).slice(0, 4));
                   }
                 }}
                 className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
@@ -443,7 +463,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
               </select>
               {skuPick && skus.find((s) => s.id === skuPick)?.images?.[0] ? (
                 <p className="text-[10px] font-bold text-indigo-700 mt-1">
-                  已带入产品库图片，可直接图生 3D 或换图
+                  已带入产品库图片（可多选），可直接图生 3D 或增删参考
                 </p>
               ) : null}
             </div>

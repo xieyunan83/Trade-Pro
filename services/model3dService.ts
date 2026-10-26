@@ -15,8 +15,10 @@ import { compressImageDataUrl } from './catalogExcelService';
 export type Model3dGenerateInput = {
   mode: 'image' | 'text';
   prompt?: string;
-  /** data:image/...;base64,... 或 https URL */
+  /** 单图（兼容）；多图时优先用 sourceImages */
   sourceImage?: string;
+  /** 多角度参考（建议正面/侧面/背面等，最多 4 张 → 多视图建模） */
+  sourceImages?: string[];
   quality: 'high_detail' | 'engine_ready';
   onProgress?: (pct: number, status: string) => void;
 };
@@ -309,20 +311,65 @@ export const generateModel3d = async (input: Model3dGenerateInput): Promise<Mode
     return { ...pickUrls(data), taskId };
   }
 
-  const img = (input.sourceImage || '').trim();
-  if (!img) throw new Error('请上传或选用产品图');
+  const imgs = (
+    input.sourceImages?.length
+      ? input.sourceImages
+      : input.sourceImage
+        ? [input.sourceImage]
+        : []
+  )
+    .map((u) => (u || '').trim())
+    .filter(Boolean)
+    .slice(0, 4);
 
-  let fileField: Record<string, unknown>;
-  if (/^https?:\/\//i.test(img)) {
-    fileField = {
-      type: img.toLowerCase().includes('.png') ? 'png' : 'jpeg',
-      url: img,
-    };
-  } else {
+  if (!imgs.length) throw new Error('请上传或选用产品图');
+
+  const toFileField = async (img: string): Promise<Record<string, unknown>> => {
+    if (/^https?:\/\//i.test(img)) {
+      return {
+        type: img.toLowerCase().includes('.png') ? 'png' : 'jpeg',
+        url: img,
+      };
+    }
     const { token, fileType } = await uploadImage(apiKey, img);
-    input.onProgress?.(8, 'uploaded');
-    fileField = { type: fileType, file_token: token };
+    return { type: fileType, file_token: token };
+  };
+
+  const qualityBits =
+    quality === 'engine_ready'
+      ? { face_limit: 20000, smart_low_poly: true, quad: true }
+      : { face_limit: 150000, texture_quality: 'detailed', geometry_quality: 'detailed' };
+
+  // ≥2 张：多视图建模（files 固定 4 槽：front / left / back / right）
+  if (imgs.length >= 2) {
+    input.onProgress?.(5, 'uploading');
+    const uploaded: Record<string, unknown>[] = [];
+    for (let i = 0; i < imgs.length; i++) {
+      uploaded.push(await toFileField(imgs[i]));
+      input.onProgress?.(5 + Math.round(((i + 1) / imgs.length) * 8), 'uploaded');
+    }
+    // 按选用顺序填槽；不足 4 张用空对象占位（首张必须为正面）
+    const files: Record<string, unknown>[] = [{}, {}, {}, {}];
+    for (let i = 0; i < 4; i++) {
+      files[i] = uploaded[i] || {};
+    }
+    const body: Record<string, unknown> = {
+      type: 'multiview_to_model',
+      model_version: 'v2.5-20250123',
+      files,
+      texture: true,
+      pbr: true,
+      ...qualityBits,
+    };
+    if (input.prompt?.trim()) body.prompt = input.prompt.trim();
+    const taskId = await createTask(apiKey, body);
+    input.onProgress?.(14, 'running');
+    const data = await pollTask(apiKey, taskId, input.onProgress);
+    return { ...pickUrls(data), taskId };
   }
+
+  const fileField = await toFileField(imgs[0]);
+  input.onProgress?.(8, 'uploaded');
 
   const body: Record<string, unknown> = {
     type: 'image_to_model',
@@ -331,18 +378,10 @@ export const generateModel3d = async (input: Model3dGenerateInput): Promise<Mode
     texture: true,
     pbr: true,
     enable_image_autofix: true,
+    ...qualityBits,
   };
   if (input.prompt?.trim()) {
     body.prompt = input.prompt.trim();
-  }
-  if (quality === 'engine_ready') {
-    body.face_limit = 20000;
-    body.smart_low_poly = true;
-    body.quad = true;
-  } else {
-    body.face_limit = 150000;
-    body.texture_quality = 'detailed';
-    body.geometry_quality = 'detailed';
   }
 
   const taskId = await createTask(apiKey, body);

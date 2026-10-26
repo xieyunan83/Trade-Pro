@@ -89,6 +89,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
   const addImages = (files: FileList | null) => {
     if (!files?.length) return;
     const list = Array.from(files).slice(0, 6);
+    if (list.length > 1 || images.length >= 1) setMode('reference');
     list.forEach((file) => {
       if (!file.type.startsWith('image/')) return;
       if (file.size > 18 * 1024 * 1024) {
@@ -96,7 +97,12 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
         return;
       }
       const reader = new FileReader();
-      reader.onload = () => setImages((prev) => [...prev, String(reader.result || '')].slice(0, 6));
+      reader.onload = () =>
+        setImages((prev) => {
+          const next = [...prev, String(reader.result || '')].slice(0, 6);
+          if (next.length > 1) setMode('reference');
+          return next;
+        });
       reader.readAsDataURL(file);
     });
   };
@@ -121,6 +127,9 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
       setMsg(mode === 'reference' ? '请上传至少 1 张参考图（建议多角度）' : '请上传产品图');
       return;
     }
+    const effectiveMode: VideoMode =
+      mode === 'text' ? 'text' : images.length > 1 ? 'reference' : mode === 'reference' ? 'reference' : 'image';
+    if (effectiveMode === 'reference' && mode !== 'reference') setMode('reference');
     const sku = skus.find((s) => s.id === skuPick || s.skuCode === skuPick);
     const now = Date.now();
     const job: VideoJob = {
@@ -130,7 +139,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
         : skuPick
           ? `${skuPick} · ${durationSec}s`
           : `视频 · ${prompt.trim().slice(0, 20) || '未命名'}`,
-      mode,
+      mode: effectiveMode,
       prompt: prompt.trim(),
       storyboard: storyboard.trim() || undefined,
       durationSec,
@@ -148,11 +157,15 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
     persist([job, ...jobs]);
     setActiveId(job.id);
     setBusy(true);
-    setMsg('正在提交样片任务…');
+    setMsg(
+      effectiveMode === 'reference'
+        ? `正在提交多参考样片（${images.length} 张）…`
+        : '正在提交样片任务…'
+    );
 
     try {
       const result = await generateProductVideo({
-        mode,
+        mode: effectiveMode,
         prompt: buildFullPrompt() || 'Product showcase, smooth camera orbit, studio lighting',
         sourceImage: images[0],
         referenceImages: images.slice(1),
@@ -311,11 +324,15 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
               <div className="space-y-2">
                 <CreativeRefPicker
                   value={images}
-                  onChange={setImages}
-                  multiple={mode === 'reference' || images.length > 1}
+                  onChange={(urls) => {
+                    setImages(urls);
+                    // 多选时自动切到多参考，保证下游按多图生成
+                    if (urls.length > 1 && mode === 'image') setMode('reference');
+                  }}
+                  multiple
                   max={6}
                   accent="rose"
-                  title="从平面设计 / 产品库选用（可点 × 去掉多余推送图）"
+                  title="从平面设计 / 产品库多选（可点 × 去掉多余图）"
                   onSkuMeta={(meta) => {
                     if (meta?.skuCode) setSkuPick(meta.skuCode);
                     setSkuName(meta?.skuName);
@@ -326,19 +343,22 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
                   onClick={() => fileRef.current?.click()}
                   className="w-full rounded-xl border-2 border-dashed border-rose-200 bg-rose-50/40 py-3 text-xs font-black text-rose-800"
                 >
-                  或本地上传{mode === 'reference' ? '参考图（可多张）' : '产品图'} · 已选 {images.length}
+                  或本地上传参考图（可多选）· 已选 {images.length}/6
                 </button>
                 <input
                   ref={fileRef}
                   type="file"
                   accept="image/png,image/jpeg,image/webp,image/bmp"
-                  multiple={mode === 'reference'}
+                  multiple
                   className="hidden"
                   onChange={(e) => {
                     addImages(e.target.files);
                     e.target.value = '';
                   }}
                 />
+                <p className="text-[10px] text-slate-400 font-medium leading-relaxed">
+                  可连续勾选多张；选 ≥2 张时自动按多参考生成。
+                </p>
               </div>
             )}
 
