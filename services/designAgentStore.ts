@@ -9,6 +9,7 @@ export type DesignSkillId =
   | 'detail_long'
   | 'social_square'
   | 'booth_cover'
+  | 'multi_angle'
   | 'free';
 
 export type DesignAsset = {
@@ -17,6 +18,8 @@ export type DesignAsset = {
   url: string;
   prompt: string;
   skillId: DesignSkillId;
+  /** 多角度套图标签：正面 / 45° / 侧面 / 背面 */
+  angle?: string;
   createdAt: number;
 };
 
@@ -98,6 +101,15 @@ export const DESIGN_SKILLS: Array<{
     defaultPrompt:
       'Trade fair catalog cover style, premium product showcase, exhibition lighting, bilingual feel, professional B2B brochure cover composition',
     aspectHint: '3:4',
+  },
+  {
+    id: 'multi_angle',
+    label: '多角度套图',
+    category: '三维预备',
+    hint: '同一产品正面/45°/侧面/背面，供 3D 与视频复用',
+    defaultPrompt:
+      'Consistent product identity across angles, identical colors materials scale, clean white seamless background, studio softbox, commercial photography, no watermark, no text',
+    aspectHint: '1:1 · 4 视角',
   },
   {
     id: 'free',

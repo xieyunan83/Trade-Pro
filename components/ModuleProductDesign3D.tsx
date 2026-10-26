@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box,
   Upload,
@@ -12,6 +12,7 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import type { User } from '../types';
+import { ModuleType } from '../types';
 import { loadCatalogSkus } from '../services/productCatalogTypes';
 import {
   type Model3dJob,
@@ -22,19 +23,25 @@ import {
   newCreativeId,
 } from '../services/creativeStudioStore';
 import { generateModel3d, getModel3dProviderStatus } from '../services/model3dService';
+import { consumeCreativeHandoff } from '../services/creativeAssetBridge';
+import { CreativePipelineBar, CreativeRefPicker } from './CreativeRefPicker';
 
-type Props = { currentUser: User };
+type Props = {
+  currentUser: User;
+  onNavigateModule?: (mod: ModuleType) => void;
+};
 
 /**
  * 产品设计 · 3D：图/文生 3D、品质档、真实 GLB 导出。
  */
-export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser }) => {
+export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigateModule }) => {
   const [jobs, setJobs] = useState<Model3dJob[]>(() => loadModel3dJobs());
   const [mode, setMode] = useState<Model3dMode>('image');
   const [quality, setQuality] = useState<Model3dQuality>('high_detail');
   const [prompt, setPrompt] = useState('');
   const [sourceImage, setSourceImage] = useState<string | undefined>();
   const [skuPick, setSkuPick] = useState('');
+  const [skuName, setSkuName] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(jobs[0]?.id || null);
@@ -42,6 +49,20 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser }) => {
   const skus = useMemo(() => loadCatalogSkus(), []);
   const provider = getModel3dProviderStatus();
   const active = jobs.find((j) => j.id === activeId) || null;
+
+  useEffect(() => {
+    const handoff = consumeCreativeHandoff('design_3d');
+    if (!handoff?.images?.[0]) return;
+    setMode('image');
+    setSourceImage(handoff.images[0]);
+    if (handoff.skuCode) setSkuPick(handoff.skuCode);
+    if (handoff.skuName) setSkuName(handoff.skuName);
+    setMsg(
+      handoff.note
+        ? `已从平面设计带入参考图：${handoff.note}`
+        : '已从平面设计 / 产品库带入参考图，可直接生成 3D'
+    );
+  }, []);
 
   const persist = (next: Model3dJob[]) => {
     setJobs(next);
@@ -89,15 +110,17 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser }) => {
       id: newCreativeId('m3d'),
       title: sku
         ? `${sku.skuCode} · 3D`
-        : mode === 'image'
-          ? '图生 3D'
-          : `文生 3D · ${prompt.trim().slice(0, 24)}`,
+        : skuPick
+          ? `${skuPick} · 3D`
+          : mode === 'image'
+            ? '图生 3D'
+            : `文生 3D · ${prompt.trim().slice(0, 24)}`,
       mode,
       quality,
       prompt: prompt.trim(),
       sourceImage,
-      skuCode: sku?.skuCode,
-      skuName: sku?.name,
+      skuCode: sku?.skuCode || skuPick || undefined,
+      skuName: sku?.name || skuName,
       status: 'running',
       progress: 0,
       exportFormats: ['GLB'],
@@ -167,8 +190,11 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser }) => {
             </div>
             <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">产品设计 · 3D 图</h2>
             <p className="text-sm text-slate-500 font-medium mt-1 max-w-2xl">
-              上传产品图或输入描述，真实生成可下载的 3D 网格（GLB）。高细节适合渲染展示，引擎就绪适合低面数实时预览。
+              可选用平面设计出图或产品库图片作参考，真实生成可下载的 3D 网格（GLB）。
             </p>
+            <div className="mt-2">
+              <CreativePipelineBar current="3d" onNavigate={onNavigateModule} />
+            </div>
           </div>
           <div
             className={`text-[10px] font-bold rounded-xl px-3 py-2 border ${
@@ -208,31 +234,45 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser }) => {
             </div>
 
             {mode === 'image' ? (
-              <button
-                type="button"
-                onClick={() => fileRef.current?.click()}
-                className="w-full min-h-[140px] rounded-2xl border-2 border-dashed border-indigo-200 bg-indigo-50/40 hover:bg-indigo-50 flex flex-col items-center justify-center gap-2 text-indigo-800"
-              >
-                {sourceImage ? (
-                  <img src={sourceImage} alt="" className="max-h-36 rounded-xl object-contain" />
-                ) : (
-                  <>
-                    <Upload size={22} />
-                    <span className="text-xs font-black">拖入或点击上传产品图 / 草图</span>
-                  </>
-                )}
-                <input
-                  ref={fileRef}
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp"
-                  className="hidden"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) onPickImage(f);
-                    e.target.value = '';
+              <div className="space-y-2">
+                <CreativeRefPicker
+                  value={sourceImage ? [sourceImage] : []}
+                  onChange={(urls) => setSourceImage(urls[0])}
+                  multiple={false}
+                  max={1}
+                  accent="indigo"
+                  title="从平面设计 / 产品库选用"
+                  onSkuMeta={(meta) => {
+                    if (meta?.skuCode) setSkuPick(meta.skuCode);
+                    setSkuName(meta?.skuName);
                   }}
                 />
-              </button>
+                <button
+                  type="button"
+                  onClick={() => fileRef.current?.click()}
+                  className="w-full min-h-[120px] rounded-2xl border-2 border-dashed border-indigo-200 bg-indigo-50/40 hover:bg-indigo-50 flex flex-col items-center justify-center gap-2 text-indigo-800"
+                >
+                  {sourceImage ? (
+                    <img src={sourceImage} alt="" className="max-h-32 rounded-xl object-contain" />
+                  ) : (
+                    <>
+                      <Upload size={22} />
+                      <span className="text-xs font-black">或本地上传产品图 / 草图</span>
+                    </>
+                  )}
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) onPickImage(f);
+                      e.target.value = '';
+                    }}
+                  />
+                </button>
+              </div>
             ) : null}
 
             <div>

@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Clapperboard,
   Type,
@@ -12,6 +12,7 @@ import {
   Download,
 } from 'lucide-react';
 import type { User } from '../types';
+import { ModuleType } from '../types';
 import { loadCatalogSkus } from '../services/productCatalogTypes';
 import {
   type VideoJob,
@@ -21,13 +22,18 @@ import {
   newCreativeId,
 } from '../services/creativeStudioStore';
 import { generateProductVideo, getVideoProviderStatus } from '../services/wanVideoService';
+import { consumeCreativeHandoff } from '../services/creativeAssetBridge';
+import { CreativePipelineBar, CreativeRefPicker } from './CreativeRefPicker';
 
-type Props = { currentUser: User };
+type Props = {
+  currentUser: User;
+  onNavigateModule?: (mod: ModuleType) => void;
+};
 
 /**
  * 产品 AI 视频：文/图/多参考真实生视频；样片确认后正片。
  */
-export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser }) => {
+export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateModule }) => {
   const [jobs, setJobs] = useState<VideoJob[]>(() => loadVideoJobs());
   const [mode, setMode] = useState<VideoMode>('image');
   const [prompt, setPrompt] = useState('');
@@ -36,6 +42,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser }) => {
   const [aspect, setAspect] = useState<'16:9' | '9:16' | '1:1'>('16:9');
   const [images, setImages] = useState<string[]>([]);
   const [skuPick, setSkuPick] = useState('');
+  const [skuName, setSkuName] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(jobs[0]?.id || null);
@@ -43,6 +50,28 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser }) => {
   const skus = useMemo(() => loadCatalogSkus(), []);
   const provider = getVideoProviderStatus();
   const active = jobs.find((j) => j.id === activeId) || null;
+
+  useEffect(() => {
+    const handoff = consumeCreativeHandoff('ai_video');
+    if (!handoff?.images?.length) return;
+    setMode(handoff.images.length > 1 ? 'reference' : 'image');
+    setImages(handoff.images.slice(0, 6));
+    if (handoff.skuCode) setSkuPick(handoff.skuCode);
+    if (handoff.skuName) setSkuName(handoff.skuName);
+    if (!prompt.trim()) {
+      setPrompt(
+        handoff.images.length > 1
+          ? 'Keep product identity consistent, smooth orbit around product, studio lighting, clean background'
+          : 'Product hero video, gentle camera push-in, studio lighting, clean background'
+      );
+    }
+    setMsg(
+      handoff.note
+        ? `已从平面设计带入 ${handoff.images.length} 张参考图：${handoff.note}`
+        : `已带入 ${handoff.images.length} 张参考图，可直接生成样片`
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅启动时消费一次交接包
+  }, []);
 
   const persist = (next: VideoJob[]) => {
     setJobs(next);
@@ -96,15 +125,19 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser }) => {
     const now = Date.now();
     const job: VideoJob = {
       id: newCreativeId('vid'),
-      title: sku ? `${sku.skuCode} · ${durationSec}s` : `视频 · ${prompt.trim().slice(0, 20) || '未命名'}`,
+      title: sku
+        ? `${sku.skuCode} · ${durationSec}s`
+        : skuPick
+          ? `${skuPick} · ${durationSec}s`
+          : `视频 · ${prompt.trim().slice(0, 20) || '未命名'}`,
       mode,
       prompt: prompt.trim(),
       storyboard: storyboard.trim() || undefined,
       durationSec,
       aspect,
       sourceImages: images,
-      skuCode: sku?.skuCode,
-      skuName: sku?.name,
+      skuCode: sku?.skuCode || skuPick || undefined,
+      skuName: sku?.name || skuName,
       status: 'rendering',
       progress: 0,
       draftConfirmed: false,
@@ -230,8 +263,11 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser }) => {
             </div>
             <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">产品 AI 视频</h2>
             <p className="text-sm text-slate-500 font-medium mt-1 max-w-2xl">
-              文生 / 图生 / 多参考真实出片；先出样片确认，再渲更高清正片。
+              可直接选用平面多角度套图或产品库图片；先出样片确认，再渲正片。
             </p>
+            <div className="mt-2">
+              <CreativePipelineBar current="video" onNavigate={onNavigateModule} />
+            </div>
           </div>
           <div
             className={`text-[10px] font-bold rounded-xl px-3 py-2 border ${
@@ -272,13 +308,25 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser }) => {
             </div>
 
             {(mode === 'image' || mode === 'reference') && (
-              <div>
+              <div className="space-y-2">
+                <CreativeRefPicker
+                  value={images}
+                  onChange={setImages}
+                  multiple={mode === 'reference'}
+                  max={mode === 'reference' ? 6 : 1}
+                  accent="rose"
+                  title="从平面设计 / 产品库选用"
+                  onSkuMeta={(meta) => {
+                    if (meta?.skuCode) setSkuPick(meta.skuCode);
+                    setSkuName(meta?.skuName);
+                  }}
+                />
                 <button
                   type="button"
                   onClick={() => fileRef.current?.click()}
-                  className="w-full rounded-xl border-2 border-dashed border-rose-200 bg-rose-50/40 py-4 text-xs font-black text-rose-800"
+                  className="w-full rounded-xl border-2 border-dashed border-rose-200 bg-rose-50/40 py-3 text-xs font-black text-rose-800"
                 >
-                  上传{mode === 'reference' ? '参考图（可多张）' : '产品图'} · 已选 {images.length}
+                  或本地上传{mode === 'reference' ? '参考图（可多张）' : '产品图'} · 已选 {images.length}
                 </button>
                 <input
                   ref={fileRef}
@@ -292,13 +340,13 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser }) => {
                   }}
                 />
                 {images.length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-1.5">
+                  <div className="flex flex-wrap gap-1.5">
                     {images.map((src, i) => (
                       <img
                         key={i}
                         src={src}
                         alt=""
-                        className="w-14 h-14 rounded-lg object-cover border border-slate-200"
+                        className="w-14 h-14 rounded-lg object-contain bg-white border border-slate-200"
                       />
                     ))}
                     <button

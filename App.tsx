@@ -4759,13 +4759,22 @@ const App: React.FC = () => {
                     <ModuleProductQuote currentUser={currentUser} />
                 )}
                 {activeModule === ModuleType.PRODUCT_DESIGN_2D && currentUser && (
-                    <ModuleProductDesign2D currentUser={currentUser} />
+                    <ModuleProductDesign2D
+                      currentUser={currentUser}
+                      onNavigateModule={(mod) => setActiveModule(mod)}
+                    />
                 )}
                 {activeModule === ModuleType.PRODUCT_DESIGN_3D && currentUser && (
-                    <ModuleProductDesign3D currentUser={currentUser} />
+                    <ModuleProductDesign3D
+                      currentUser={currentUser}
+                      onNavigateModule={(mod) => setActiveModule(mod)}
+                    />
                 )}
                 {activeModule === ModuleType.PRODUCT_AI_VIDEO && currentUser && (
-                    <ModuleProductAiVideo currentUser={currentUser} />
+                    <ModuleProductAiVideo
+                      currentUser={currentUser}
+                      onNavigateModule={(mod) => setActiveModule(mod)}
+                    />
                 )}
                 {activeModule === ModuleType.SITE_BUILDER && currentUser && (
                     <ModuleSiteBuilder currentUser={currentUser} />

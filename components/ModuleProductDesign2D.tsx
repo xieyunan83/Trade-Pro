@@ -14,6 +14,7 @@ import {
   X,
 } from 'lucide-react';
 import type { User } from '../types';
+import { ModuleType } from '../types';
 import {
   DESIGN_SKILLS,
   type DesignAsset,
@@ -25,12 +26,19 @@ import {
   saveDesignAssets,
   saveDesignProjects,
 } from '../services/designAgentStore';
-import { generateDesignImages, getDesignAgentConfigStatus } from '../services/designAgentService';
+import {
+  generateDesignImages,
+  generateMultiAngleDesignImages,
+  getDesignAgentConfigStatus,
+} from '../services/designAgentService';
 import { loadCatalogSkus } from '../services/productCatalogTypes';
 import { compressImageDataUrl } from '../services/catalogExcelService';
+import { setCreativeHandoff } from '../services/creativeAssetBridge';
+import { CreativePipelineBar } from './CreativeRefPicker';
 
 type Props = {
   currentUser: User;
+  onNavigateModule?: (mod: ModuleType) => void;
 };
 
 type LeftTab = 'projects' | 'skills' | 'assets';
@@ -40,7 +48,7 @@ type LeftTab = 'projects' | 'skills' | 'assets';
  * Design Agent + Skills 一键工作流 + Canvas 资产沉淀 + 确认后生成
  * @see https://www.lovart.ai/
  */
-export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser }) => {
+export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigateModule }) => {
   const [projects, setProjects] = useState<DesignProject[]>(() => loadDesignProjects());
   const [assets, setAssets] = useState<DesignAsset[]>(() => loadDesignAssets());
   const [activeId, setActiveId] = useState<string | null>(projects[0]?.id || null);
@@ -226,26 +234,44 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser }) => {
     setLoading(true);
     setError(null);
     try {
-      const result = await generateDesignImages({
-        prompt: finalPrompt,
-        size,
-        n: count,
-        thinkingMode: false,
-        referenceImages: refImages.length ? refImages : undefined,
-      });
+      const isMulti = skillId === 'multi_angle';
+      const result = isMulti
+        ? await generateMultiAngleDesignImages({
+            prompt: finalPrompt,
+            size,
+            thinkingMode: false,
+            referenceImages: refImages.length ? refImages : undefined,
+            onProgress: (done, total, label) => {
+              setError(null);
+              // 复用 error 区上方 loading 文案：通过 button 文案体现
+              void done;
+              void total;
+              void label;
+            },
+          })
+        : await generateDesignImages({
+            prompt: finalPrompt,
+            size,
+            n: count,
+            thinkingMode: false,
+            referenceImages: refImages.length ? refImages : undefined,
+          });
       const now = Date.now();
-      const newAssets: DesignAsset[] = result.images.map((url) => ({
+      const newAssets: DesignAsset[] = result.images.map((url, i) => ({
         id: newDesignId('da'),
         projectId: proj.id,
         url,
         prompt: finalPrompt,
         skillId,
+        angle: result.angles?.[i],
         createdAt: now,
       }));
       const agentMsg = {
         id: newDesignId('m'),
         role: 'agent' as const,
-        text: `已用「${modeHint}」生成 ${newAssets.length} 张并放到画布。可继续改稿，或换参考图再生成。`,
+        text: isMulti
+          ? `已生成 ${newAssets.length} 张多角度套图（${(result.angles || []).join(' / ')}）。可点画布上「送去 3D / 视频」继续流水线。`
+          : `已用「${modeHint}」生成 ${newAssets.length} 张并放到画布。可继续改稿，或送去 3D / 视频。`,
         at: now,
         assetIds: newAssets.map((a) => a.id),
       };
@@ -286,6 +312,33 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser }) => {
     }
   };
 
+  const sendAssetsTo = (
+    target: 'design_3d' | 'ai_video',
+    urls: string[],
+    note?: string
+  ) => {
+    if (!urls.length) {
+      setError('请先生成或选中图片');
+      return;
+    }
+    const sku =
+      skus.find((s) => s.id === skuPick || s.skuCode === skuPick) ||
+      (active?.skuCode
+        ? { skuCode: active.skuCode, name: active.skuName || active.skuCode }
+        : null);
+    setCreativeHandoff({
+      images: urls.slice(0, target === 'design_3d' ? 1 : 6),
+      skuCode: sku?.skuCode || active?.skuCode,
+      skuName: (sku as any)?.name || active?.skuName,
+      note: note || active?.title,
+      from: 'design_2d',
+      target,
+    });
+    onNavigateModule?.(
+      target === 'design_3d' ? ModuleType.PRODUCT_DESIGN_3D : ModuleType.PRODUCT_AI_VIDEO
+    );
+  };
+
   return (
     <div className="max-w-[96rem] mx-auto animate-fade-in px-1 space-y-3">
       {/* 顶栏 */}
@@ -296,8 +349,11 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser }) => {
           </div>
           <h2 className="text-xl font-extrabold text-slate-900 mt-1.5">产品设计 · 平面图</h2>
           <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1 max-w-2xl leading-relaxed">
-            支持纯文字生图，也可上传参考图 + 文字一起改稿。结果保存在本项目画布，可下载复用。
+            文字 / 参考图生图；「多角度套图」一次出正面·45°·侧面·背面，可直接送去 3D 与视频。
           </p>
+          <div className="mt-2">
+            <CreativePipelineBar current="2d" onNavigate={onNavigateModule} />
+          </div>
         </div>
         <div className="text-right shrink-0">
           <div
@@ -436,22 +492,80 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser }) => {
                 </p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {canvasAssets.map((a, i) => (
-                  <div
-                    key={a.id}
-                    className="rounded-xl overflow-hidden border border-white shadow-sm bg-white group relative"
-                  >
-                    <img src={a.url} alt="" className="w-full aspect-square object-cover" />
+              <div className="space-y-2">
+                {canvasAssets.length > 0 && onNavigateModule ? (
+                  <div className="flex flex-wrap gap-1.5">
                     <button
                       type="button"
-                      onClick={() => void downloadUrl(a.url, i)}
-                      className="absolute bottom-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg bg-slate-900/80 text-white p-2"
+                      onClick={() =>
+                        sendAssetsTo(
+                          'design_3d',
+                          [canvasAssets[0].url],
+                          '平面主图 → 3D'
+                        )
+                      }
+                      className="text-[10px] font-black rounded-lg bg-indigo-600 text-white px-2.5 py-1.5"
                     >
-                      <Download size={14} />
+                      整套送去 3D（用首图）
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        sendAssetsTo(
+                          'ai_video',
+                          canvasAssets.map((x) => x.url),
+                          '多角度 → 视频'
+                        )
+                      }
+                      className="text-[10px] font-black rounded-lg bg-rose-600 text-white px-2.5 py-1.5"
+                    >
+                      全部送去视频
                     </button>
                   </div>
-                ))}
+                ) : null}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {canvasAssets.map((a, i) => (
+                    <div
+                      key={a.id}
+                      className="rounded-xl overflow-hidden border border-white shadow-sm bg-white group relative"
+                    >
+                      <img src={a.url} alt="" className="w-full aspect-square object-contain bg-slate-50" />
+                      {a.angle ? (
+                        <span className="absolute top-2 left-2 rounded-md bg-slate-900/80 text-white text-[10px] font-black px-2 py-0.5">
+                          {a.angle}
+                        </span>
+                      ) : null}
+                      <div className="absolute bottom-2 left-2 right-2 flex flex-wrap gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          type="button"
+                          onClick={() => void downloadUrl(a.url, i)}
+                          className="rounded-lg bg-slate-900/80 text-white p-1.5"
+                          title="下载"
+                        >
+                          <Download size={12} />
+                        </button>
+                        {onNavigateModule ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => sendAssetsTo('design_3d', [a.url], a.angle)}
+                              className="rounded-lg bg-indigo-600/95 text-white text-[9px] font-black px-2 py-1.5"
+                            >
+                              → 3D
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => sendAssetsTo('ai_video', [a.url], a.angle)}
+                              className="rounded-lg bg-rose-600/95 text-white text-[9px] font-black px-2 py-1.5"
+                            >
+                              → 视频
+                            </button>
+                          </>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>
@@ -598,10 +712,18 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser }) => {
             className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 hover:bg-violet-700 disabled:opacity-60 text-white text-sm font-black py-3"
           >
             {loading ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
-            {loading ? '生图中，约 1–2 分钟…' : '确认生成'}
+            {loading
+              ? skillId === 'multi_angle'
+                ? '多角度生成中（约需数分钟）…'
+                : '生图中，约 1–2 分钟…'
+              : skillId === 'multi_angle'
+                ? '确认生成多角度套图'
+                : '确认生成'}
           </button>
           <p className="text-[10px] text-slate-400 font-medium leading-relaxed">
-            默认 1K、1 张更省额度；需要更清晰再选 2K。生成前需确认。
+            {skillId === 'multi_angle'
+              ? '多角度将连续生成 4 张（默认 1K），便于后续 3D / 视频。'
+              : '默认 1K、1 张更省额度；需要更清晰再选 2K。生成前需确认。'}
           </p>
         </aside>
       </div>
@@ -612,12 +734,15 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser }) => {
           <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-5 space-y-3 border border-violet-100">
             <div className="font-extrabold text-slate-900 text-lg">确认生成</div>
             <p className="text-sm text-slate-600 font-medium leading-relaxed">
-              Skill「{skill.label}」· {count} 张 · {size}
+              Skill「{skill.label}」·{' '}
+              {skillId === 'multi_angle' ? '4 视角套图' : `${count} 张`} · {size}
               <br />
               模式：
-              {refUploads.length || skuPick
-                ? `参考图 ${Math.min(3, refUploads.length + (skus.find((s) => s.id === skuPick)?.images?.length ? 1 : 0))} 张 + 文字`
-                : '纯文字'}
+              {skillId === 'multi_angle'
+                ? '多角度（正面 / 45° / 侧面 / 背面）'
+                : refUploads.length || skuPick
+                  ? `参考图 + 文字`
+                  : '纯文字'}
             </p>
             {refUploads.length > 0 && (
               <div className="flex gap-2 flex-wrap">

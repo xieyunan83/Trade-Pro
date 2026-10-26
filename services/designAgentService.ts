@@ -6,6 +6,7 @@ import { generateWanImage } from './wanImageService';
 import { loadDataProviderLocal } from './dataProviders';
 import { listPoolKeys } from './apiKeyPool';
 import { env } from './env';
+import { MULTI_ANGLE_VIEWS } from './creativeAssetBridge';
 
 export type DesignGenerateOpts = {
   prompt: string;
@@ -18,6 +19,8 @@ export type DesignGenerateOpts = {
 export type DesignGenerateResult = {
   images: string[];
   engine: string;
+  /** 多角度时与 images 一一对应 */
+  angles?: string[];
 };
 
 export const getDesignAgentConfigStatus = (): {
@@ -69,52 +72,89 @@ const toUserFacingDesignError = (raw: string): string => {
     .slice(0, 220);
 };
 
+const wanOverride = () => {
+  const design = loadDataProviderLocal('design_agent');
+  if (design.enabled && (design.apiKey || '').trim()) {
+    return {
+      apiKey: design.apiKey!.trim(),
+      origin: (design.apiBase || '').trim() || undefined,
+      modelId: (design.extra?.modelId || '').trim() || undefined,
+    };
+  }
+  return undefined;
+};
+
 export const generateDesignImages = async (
   opts: DesignGenerateOpts
 ): Promise<DesignGenerateResult> => {
-  const design = loadDataProviderLocal('design_agent');
-  const size = opts.size || '2K';
+  const size = opts.size || '1K';
   const n = Math.min(4, Math.max(1, opts.n || 1));
   const timeoutMs = 240_000;
-
-  // 默认关闭深度思考：同步通道下更快更稳；调用方可显式传 true
   const thinkingMode = opts.thinkingMode === true;
+  const override = wanOverride();
 
   try {
-    if (design.enabled && (design.apiKey || '').trim()) {
+    const result = await generateWanImage(
+      {
+        prompt: opts.prompt,
+        size,
+        n,
+        thinkingMode,
+        watermark: false,
+        referenceImages: opts.referenceImages,
+        timeoutMs,
+      },
+      override
+    );
+    return { images: result.images, engine: 'design' };
+  } catch (e: any) {
+    throw new Error(toUserFacingDesignError(e?.message || String(e)));
+  }
+};
+
+/** 同一产品连出 4 个标准视角（默认 1K，省额度），供 3D / 视频复用 */
+export const generateMultiAngleDesignImages = async (
+  opts: Omit<DesignGenerateOpts, 'n'> & {
+    onProgress?: (done: number, total: number, label: string) => void;
+  }
+): Promise<DesignGenerateResult> => {
+  const size = opts.size || '1K';
+  const thinkingMode = false;
+  const override = wanOverride();
+  const images: string[] = [];
+  const angles: string[] = [];
+  const total = MULTI_ANGLE_VIEWS.length;
+
+  try {
+    for (let i = 0; i < total; i++) {
+      const view = MULTI_ANGLE_VIEWS[i];
+      opts.onProgress?.(i, total, view.label);
+      const prompt = `${opts.prompt.trim()}. Angle: ${view.label}. ${view.prompt}`;
       const result = await generateWanImage(
         {
-          prompt: opts.prompt,
+          prompt,
           size,
-          n,
+          n: 1,
           thinkingMode,
           watermark: false,
           referenceImages: opts.referenceImages,
-          timeoutMs,
+          timeoutMs: 180_000,
         },
-        {
-          apiKey: design.apiKey!.trim(),
-          origin: (design.apiBase || '').trim() || undefined,
-          modelId: (design.extra?.modelId || '').trim() || undefined,
-        }
+        override
       );
-      return {
-        images: result.images,
-        engine: 'design',
-      };
+      if (result.images[0]) {
+        images.push(result.images[0]);
+        angles.push(view.label);
+      }
+      opts.onProgress?.(i + 1, total, view.label);
     }
-
-    const result = await generateWanImage({
-      prompt: opts.prompt,
-      size,
-      n,
-      thinkingMode,
-      watermark: false,
-      referenceImages: opts.referenceImages,
-      timeoutMs,
-    });
-    return { images: result.images, engine: 'design' };
+    if (!images.length) throw new Error('多角度生图未返回图片');
+    return { images, angles, engine: 'design' };
   } catch (e: any) {
+    if (images.length) {
+      // 部分成功也返回，便于下游继续用
+      return { images, angles, engine: 'design' };
+    }
     throw new Error(toUserFacingDesignError(e?.message || String(e)));
   }
 };
