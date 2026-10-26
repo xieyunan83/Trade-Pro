@@ -44,9 +44,8 @@ type Props = {
 type LeftTab = 'projects' | 'skills' | 'assets';
 
 /**
- * 产品设计 · 平面图 —— 对齐 Lovart 理念：
- * Design Agent + Skills 一键工作流 + Canvas 资产沉淀 + 确认后生成
- * @see https://www.lovart.ai/
+ * 产品设计 · 平面图：
+ * Design Agent + Skills 工作流 + Canvas 资产沉淀 + 确认后生成
  */
 export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigateModule }) => {
   const [projects, setProjects] = useState<DesignProject[]>(() => loadDesignProjects());
@@ -313,7 +312,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
   };
 
   const sendAssetsTo = (
-    target: 'design_3d' | 'ai_video',
+    target: 'design_3d' | 'ai_video' | 'packaging',
     urls: string[],
     note?: string
   ) => {
@@ -326,8 +325,9 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
       (active?.skuCode
         ? { skuCode: active.skuCode, name: active.skuName || active.skuCode }
         : null);
+    const maxImgs = target === 'design_3d' ? 1 : target === 'packaging' ? 3 : 6;
     setCreativeHandoff({
-      images: urls.slice(0, target === 'design_3d' ? 1 : 6),
+      images: urls.slice(0, maxImgs),
       skuCode: sku?.skuCode || active?.skuCode,
       skuName: (sku as any)?.name || active?.skuName,
       note: note || active?.title,
@@ -335,7 +335,11 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
       target,
     });
     onNavigateModule?.(
-      target === 'design_3d' ? ModuleType.PRODUCT_DESIGN_3D : ModuleType.PRODUCT_AI_VIDEO
+      target === 'design_3d'
+        ? ModuleType.PRODUCT_DESIGN_3D
+        : target === 'packaging'
+          ? ModuleType.PRODUCT_PACKAGING
+          : ModuleType.PRODUCT_AI_VIDEO
     );
   };
 
@@ -521,6 +525,19 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                     >
                       全部送去视频
                     </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        sendAssetsTo(
+                          'packaging',
+                          [canvasAssets[0].url],
+                          '平面主图 → 包装'
+                        )
+                      }
+                      className="text-[10px] font-black rounded-lg bg-amber-600 text-white px-2.5 py-1.5"
+                    >
+                      送去包装设计
+                    </button>
                   </div>
                 ) : null}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -559,6 +576,13 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                               className="rounded-lg bg-rose-600/95 text-white text-[9px] font-black px-2 py-1.5"
                             >
                               → 视频
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => sendAssetsTo('packaging', [a.url], a.angle)}
+                              className="rounded-lg bg-amber-600/95 text-white text-[9px] font-black px-2 py-1.5"
+                            >
+                              → 包装
                             </button>
                           </>
                         ) : null}

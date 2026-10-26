@@ -1,5 +1,5 @@
 /**
- * 平面设计 / 3D / 视频 互通：素材清单 + 跨模块交接包。
+ * 平面设计 / 3D / 视频 / 包装 互通：素材清单 + 跨模块交接包。
  * 仅存 localStorage，不碰 CRM。
  */
 import { ModuleType } from '../types';
@@ -24,8 +24,8 @@ export type CreativeHandoff = {
   skuCode?: string;
   skuName?: string;
   note?: string;
-  from: 'design_2d' | 'catalog' | 'manual';
-  target: 'design_3d' | 'ai_video';
+  from: 'design_2d' | 'catalog' | 'manual' | 'packaging';
+  target: 'design_3d' | 'ai_video' | 'packaging';
   at: number;
 };
 
@@ -136,8 +136,11 @@ export const consumeCreativeHandoff = (
   return cur;
 };
 
-export const handoffTargetToModule = (target: CreativeHandoff['target']): ModuleType =>
-  target === 'design_3d' ? ModuleType.PRODUCT_DESIGN_3D : ModuleType.PRODUCT_AI_VIDEO;
+export const handoffTargetToModule = (target: CreativeHandoff['target']): ModuleType => {
+  if (target === 'design_3d') return ModuleType.PRODUCT_DESIGN_3D;
+  if (target === 'packaging') return ModuleType.PRODUCT_PACKAGING;
+  return ModuleType.PRODUCT_AI_VIDEO;
+};
 
 export const CREATIVE_PIPELINE: Array<{
   id: string;
@@ -162,5 +165,11 @@ export const CREATIVE_PIPELINE: Array<{
     label: '3 视频',
     module: ModuleType.PRODUCT_AI_VIDEO,
     blurb: '样片→正片',
+  },
+  {
+    id: 'packaging',
+    label: '4 包装设计',
+    module: ModuleType.PRODUCT_PACKAGING,
+    blurb: '形态 × 卖场 × 配色',
   },
 ];

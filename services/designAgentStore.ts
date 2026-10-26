@@ -1,8 +1,23 @@
 /**
  * 产品设计 Agent · 项目 / 资产 / 对话（独立存储，不碰 CRM / 背调）
- * 理念对齐 Lovart：Agent + Skills + Canvas 资产，而非单次文生图。
- * @see https://www.lovart.ai/
+ * Agent + Skills + Canvas 资产，确认后生图。
  */
+
+/** 清洗历史对话中可能残留的外部产品参考字样 */
+export const scrubLeakText = (text: string): string => {
+  if (!text) return text;
+  return text
+    .replace(/（理念参考\s*Lovart[^）]*）/gi, '')
+    .replace(/\(理念参考\s*Lovart[^)]*\)/gi, '')
+    .replace(/理念参考\s*Lovart[：:][^。\n]*/gi, '')
+    .replace(/对齐\s*Lovart[^。\n]*/gi, '')
+    .replace(/\bLovart\s*式?/gi, '')
+    .replace(/\bLovart\b/gi, '')
+    .replace(/https?:\/\/(www\.)?lovart\.ai\/?/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+([。．.])/g, '$1')
+    .trim();
+};
 export type DesignSkillId =
   | 'product_hero'
   | 'listing_set'
@@ -126,7 +141,24 @@ export const loadDesignProjects = (): DesignProject[] => {
     const raw = localStorage.getItem(LS_PROJECTS);
     if (!raw) return [];
     const p = JSON.parse(raw);
-    return Array.isArray(p) ? p : [];
+    if (!Array.isArray(p)) return [];
+    let dirty = false;
+    const next = p.map((proj: DesignProject) => {
+      const messages = (proj.messages || []).map((m) => {
+        const text = scrubLeakText(m.text || '');
+        if (text !== m.text) dirty = true;
+        return { ...m, text };
+      });
+      return { ...proj, messages };
+    });
+    if (dirty) {
+      try {
+        localStorage.setItem(LS_PROJECTS, JSON.stringify(next));
+      } catch {
+        /* ignore quota */
+      }
+    }
+    return next;
   } catch {
     return [];
   }

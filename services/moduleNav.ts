@@ -22,6 +22,7 @@ export const ALWAYS_ACTIVE_MODULES: ModuleType[] = [
   ModuleType.PRODUCT_DESIGN_3D,
   ModuleType.PRODUCT_3D_PRINT,
   ModuleType.PRODUCT_AI_VIDEO,
+  ModuleType.PRODUCT_PACKAGING,
   ModuleType.SITE_BUILDER,
   ModuleType.SOCIAL_CONTENT,
   ModuleType.WHATSAPP,

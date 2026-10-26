@@ -80,10 +80,9 @@ export const DATA_PROVIDER_DEFS: DataProviderDef[] = [
   },
   {
     id: 'design_agent',
-    label: '设计 Agent（平面）',
+    label: '设计 Agent（平面 / 包装）',
     description:
-      '产品设计 · 平面图专用。可填独立万相/兼容图像 API Key；Base 填 Origin；备注里可写模型 ID。未配则回退「万相图片生成」Key 池。',
-    docsHint: 'https://www.lovart.ai/',
+      '产品设计 · 平面图 / 包装设计专用。可填独立图像 API Key；Base 填 Origin；备注里可写模型 ID。未配则回退「图片生成」Key 池。',
   },
 ];
 

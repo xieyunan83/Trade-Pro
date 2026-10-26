@@ -29,6 +29,7 @@ import {
   Warehouse,
   FileSpreadsheet,
   Radio,
+  PackageOpen,
   type LucideIcon,
 } from 'lucide-react';
 import { ModuleType } from '../types';
@@ -128,6 +129,12 @@ export const PLATFORM_SECTIONS: PlatformSection[] = [
         label: '产品 AI 视频',
         sub: 'AI Video',
         icon: Clapperboard,
+      },
+      {
+        id: ModuleType.PRODUCT_PACKAGING,
+        label: '包装设计',
+        sub: 'Packaging',
+        icon: PackageOpen,
       },
     ],
   },

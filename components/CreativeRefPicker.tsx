@@ -161,9 +161,9 @@ export const CreativeRefPicker: React.FC<Props> = ({
   );
 };
 
-/** 三模块顶部共用的流水线导航条 */
+/** 创作流水线顶部导航条（平面 → 三维 → 视频 → 包装） */
 export const CreativePipelineBar: React.FC<{
-  current: '2d' | '3d' | 'video';
+  current: '2d' | '3d' | 'video' | 'packaging';
   onNavigate?: (mod: ModuleType) => void;
 }> = ({ current, onNavigate }) => {
   if (!onNavigate) return null;
@@ -171,10 +171,7 @@ export const CreativePipelineBar: React.FC<{
     <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-black">
       <span className="text-slate-400 uppercase tracking-wider mr-1">创作流水线</span>
       {CREATIVE_PIPELINE.map((step, i) => {
-        const active =
-          (current === '2d' && step.id === '2d') ||
-          (current === '3d' && step.id === '3d') ||
-          (current === 'video' && step.id === 'video');
+        const active = current === step.id;
         return (
           <React.Fragment key={step.id}>
             {i > 0 ? <span className="text-slate-300">→</span> : null}

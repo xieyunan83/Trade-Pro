@@ -262,6 +262,7 @@ export const SphereNav: React.FC<Props> = ({
                               ModuleType.PRODUCT_DESIGN_2D,
                               ModuleType.PRODUCT_DESIGN_3D,
                               ModuleType.PRODUCT_AI_VIDEO,
+                              ModuleType.PRODUCT_PACKAGING,
                               ModuleType.SITE_BUILDER,
                               ModuleType.SOCIAL_CONTENT,
                             ] as ModuleType[]

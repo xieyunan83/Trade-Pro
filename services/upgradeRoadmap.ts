@@ -83,14 +83,25 @@ export const MODULE_ROADMAP: Partial<Record<ModuleType, ModuleRoadmap>> = {
   [ModuleType.PRODUCT_DESIGN_2D]: {
     phase: 'P0',
     summary:
-      'Lovart 式设计 Agent：Skills 工作流 + 项目画布资产 + 确认卡生图；可挂产品库 SKU。',
+      '设计 Agent：Skills 工作流 + 项目画布资产 + 确认卡生图；可挂产品库 SKU。',
     bullets: [
       'Agent 对话下指令',
-      'Skills：主图 / Listing / 详情 / 社媒 / 展会封面',
+      'Skills：主图 / Listing / 详情 / 社媒 / 展会封面 / 多角度',
       '画布资产沉淀与下载',
-      '后台「设计 Agent」独立 API，未配则回退万相',
+      '后台「设计 Agent」独立 API，未配则回退图片服务',
     ],
-    inspiredBy: ['Lovart · AI Design Agent', 'TapNow'],
+    providers: ['design_agent', 'wan'],
+  },
+  [ModuleType.PRODUCT_PACKAGING]: {
+    phase: 'P0',
+    summary:
+      '包装设计 Agent：玩具包装形态 × 卖场适配 × 色彩气质；确认后出包装视觉。',
+    bullets: [
+      '开窗/闭窗/吸塑/礼盒/PDQ/铁盒/环保/盲盒等 Skills',
+      '内置卖场与配色方向',
+      '可挂产品库与平面主图',
+      '创作流水线第 4 步',
+    ],
     providers: ['design_agent', 'wan'],
   },
   [ModuleType.PRODUCT_DESIGN_3D]: {

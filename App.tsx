@@ -120,6 +120,7 @@ import { ModuleProductQuote } from './components/ModuleProductQuote';
 import { ModuleProductDesign2D } from './components/ModuleProductDesign2D';
 import { ModuleProductDesign3D } from './components/ModuleProductDesign3D';
 import { ModuleProductAiVideo } from './components/ModuleProductAiVideo';
+import { ModuleProductPackaging } from './components/ModuleProductPackaging';
 import { ModuleSiteBuilder } from './components/ModuleSiteBuilder';
 import { ModuleSocialContent } from './components/ModuleSocialContent';
 import { ModuleLandingHub } from './components/ModuleLandingHub';
@@ -4772,6 +4773,12 @@ const App: React.FC = () => {
                 )}
                 {activeModule === ModuleType.PRODUCT_AI_VIDEO && currentUser && (
                     <ModuleProductAiVideo
+                      currentUser={currentUser}
+                      onNavigateModule={(mod) => setActiveModule(mod)}
+                    />
+                )}
+                {activeModule === ModuleType.PRODUCT_PACKAGING && currentUser && (
+                    <ModuleProductPackaging
                       currentUser={currentUser}
                       onNavigateModule={(mod) => setActiveModule(mod)}
                     />

@@ -33,6 +33,8 @@ const MODULE_ALIASES: Record<string, ModuleType> = {
   product_design_3d: ModuleType.PRODUCT_DESIGN_3D,
   product_3d_print: ModuleType.PRODUCT_3D_PRINT,
   product_ai_video: ModuleType.PRODUCT_AI_VIDEO,
+  product_packaging: ModuleType.PRODUCT_PACKAGING,
+  packaging: ModuleType.PRODUCT_PACKAGING,
   site_builder: ModuleType.SITE_BUILDER,
   social_content: ModuleType.SOCIAL_CONTENT,
   whatsapp: ModuleType.WHATSAPP,

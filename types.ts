@@ -28,6 +28,8 @@ export enum ModuleType {
   PRODUCT_DESIGN_3D = 'product_design_3d',
   PRODUCT_3D_PRINT = 'product_3d_print',
   PRODUCT_AI_VIDEO = 'product_ai_video',
+  /** 包装设计（玩具包装形态 × 卖场 × 配色） */
+  PRODUCT_PACKAGING = 'product_packaging',
   /** —— 宣发板块 —— */
   SITE_BUILDER = 'site_builder',
   SOCIAL_CONTENT = 'social_content',
@@ -69,6 +71,7 @@ export type PermissionKey =
   | 'module.product_design_3d'
   | 'module.product_3d_print'
   | 'module.product_ai_video'
+  | 'module.product_packaging'
   | 'module.site_builder'
   | 'module.social_content'
   | 'module.whatsapp'
