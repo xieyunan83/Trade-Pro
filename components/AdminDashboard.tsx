@@ -1201,7 +1201,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
                         const n = Object.keys(seed.localStorage).length;
                         setSaveConfigMsg({
                           ok: true,
-                          text: `已下载桌面种子（${n} 项）。放到工程 desktop/seed.private.json 后执行 npm run pack:seed 并重新打包安装包。`,
+                          text: `已下载桌面种子（${n} 项，可选离线兜底）。日常账号/配置靠云端同步，安装包无需每次重打；仅空机或离线部署才需 pack:seed 重打包。`,
                         });
                       } catch (e: any) {
                         setSaveConfigMsg({

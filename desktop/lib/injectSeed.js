@@ -1,5 +1,6 @@
 /**
- * 首次打开 babyworld.ltd 时，把安装包内加密种子写入页面 localStorage。
+ * 首次打开时：仅向「空」的 localStorage 键写入安装包种子（不覆盖已有账号/配置）。
+ * 日常以云端同步为准，配置变更无需重打安装包。
  */
 const fs = require('fs');
 const path = require('path');

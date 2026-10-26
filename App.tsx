@@ -136,6 +136,7 @@ import {
   addExcludedCompany,
   hydrateExcludedCompaniesFromCloud,
 } from './services/excludedCompanies';
+import { isDesktopClient, shouldAutoResumeBatch } from './services/desktopRuntime';
 
 declare global {
   interface AIStudio {
@@ -2720,6 +2721,35 @@ const App: React.FC = () => {
       }
   };
 
+  /** 关页/刷新前提示，避免误停批量背调 */
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      const busy =
+        isAutomating ||
+        batchProgress.active ||
+        automationResults.some((t) => t.status === 'pending' || t.status === 'analyzing');
+      if (!busy) return;
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [isAutomating, batchProgress.active, automationResults]);
+
+  /** 桌面工作站：登录后自动续跑本机未完成的背调队列（线上升级不刷新则本来就不会停） */
+  const autoResumeBatchOnceRef = useRef(false);
+  useEffect(() => {
+    if (!currentUser || !userDataReadyRef.current) return;
+    if (autoResumeBatchOnceRef.current) return;
+    if (!shouldAutoResumeBatch()) return;
+    if (isAutomating || batchRunnerActiveRef.current || shouldStopRef.current) return;
+    const pending = automationResults.filter((t) => t.status === 'pending');
+    if (pending.length < 1) return;
+    autoResumeBatchOnceRef.current = true;
+    console.info(`[batch] desktop auto-resume ${pending.length} pending`);
+    void processBatchQueue(pending);
+  }, [currentUser, automationResults, isAutomating]);
+
   const handleBatchAnalyzeExisting = async (results: ClientSearchResult[]) => { 
       if (!results || results.length === 0) return;
       // 保留关键词标签到批量上下文
@@ -4031,6 +4061,13 @@ const App: React.FC = () => {
         sphereNavExpanded ? 'is-nav-expanded' : ''
       } ${sphereNavPhase === 'submenu' ? 'is-nav-submenu' : ''}`}
     >
+      {isDesktopClient() && (
+        <div className="fixed top-0 inset-x-0 z-[60] pointer-events-none flex justify-center px-2 pt-1 md:left-[4.5rem]">
+          <div className="pointer-events-auto max-w-3xl rounded-b-xl border border-teal-200/80 bg-teal-50/95 text-teal-900 text-[11px] sm:text-xs font-bold px-3 py-1.5 shadow-sm">
+            桌面工作站：推送升级不会自动刷新本窗口，批量背调可继续。请勿手动刷新/退出；Windows 请关闭睡眠。账号配置走云端，安装包无需每次重打。
+          </div>
+        </div>
+      )}
       {/* Mobile sidebar backdrop */}
       {mobileMenuOpen && (
         <div className="fixed inset-0 bg-ink-950/50 backdrop-blur-sm z-30 md:hidden" onClick={() => setMobileMenuOpen(false)} />
