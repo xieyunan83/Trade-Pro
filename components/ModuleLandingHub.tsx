@@ -22,6 +22,8 @@ type Props = {
   syncStatus?: string | null;
   syncing?: boolean;
   onEnterWorkspace?: () => void;
+  /** 管理员：打开数据接入说明（可选） */
+  onOpenDataSetup?: () => void;
 };
 
 const fmtTime = (ms?: number) => {
@@ -44,6 +46,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
   syncStatus,
   syncing,
   onEnterWorkspace,
+  onOpenDataSetup,
 }) => {
   const [data, setData] = useState<LandingPayload | null>(() => loadLandingCache());
   const [loading, setLoading] = useState(!loadLandingCache());
@@ -145,8 +148,20 @@ export const ModuleLandingHub: React.FC<Props> = ({
       </section>
 
       {err && (
-        <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 text-amber-900 px-4 py-3 text-sm font-bold">
-          情报源暂时不可用：{err}。可稍后重试；汇率与资讯需服务端代理。
+        <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 text-amber-950 px-4 py-3 text-sm font-bold space-y-2">
+          <p>情报源暂时不可用（{err}）。业务资料同步不受影响，可先点「进入客户搜索」开工。</p>
+          <p className="text-xs font-medium text-amber-800/90 leading-relaxed">
+            汇率与公开资讯由服务端拉取。管理员请到后台「数据接入」配置优选货源令牌；配置后回到本页点「刷新情报」。
+          </p>
+          {onOpenDataSetup && (
+            <button
+              type="button"
+              onClick={onOpenDataSetup}
+              className="text-xs font-black text-amber-900 underline underline-offset-2"
+            >
+              打开配置说明
+            </button>
+          )}
         </div>
       )}
 
@@ -170,7 +185,12 @@ export const ModuleLandingHub: React.FC<Props> = ({
                 <Loader2 className="animate-spin" size={16} /> 拉取中…
               </div>
             ) : news.length === 0 ? (
-              <p className="text-sm text-slate-500 font-medium p-4 text-center">暂无新闻，请稍后刷新</p>
+              <div className="p-5 text-center space-y-2">
+                <p className="text-sm text-slate-600 font-bold">暂无新闻</p>
+                <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                  公开资讯由服务端聚合。若刚部署完成，请等 1～2 分钟后点右上角「刷新情报」。
+                </p>
+              </div>
             ) : (
               news.map((n) => (
                 <a
@@ -219,11 +239,21 @@ export const ModuleLandingHub: React.FC<Props> = ({
           </header>
           <div className="flex-1 overflow-y-auto custom-scrollbar p-3 sm:p-4">
             {data?.products?.needsCredential && !products.length ? (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-5 text-center">
+              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-5 text-center space-y-2">
                 <p className="text-sm font-bold text-slate-700">行业新品源待接入</p>
-                <p className="text-xs text-slate-500 font-medium mt-2 leading-relaxed">
-                  请在管理后台「数据接入」中启用优选货源，并粘贴登录后的访问令牌，即可在此同步新品与深度资讯。
+                <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                  由<strong className="text-slate-700">系统管理员</strong>在后台 →「数据接入」启用优选货源，
+                  将浏览器登录后的访问令牌粘贴到 API Key，保存并启用。员工端无需操作。
                 </p>
+                {onOpenDataSetup && currentUser.role === 'admin' && (
+                  <button
+                    type="button"
+                    onClick={onOpenDataSetup}
+                    className="text-xs font-black text-cyan-800 underline"
+                  >
+                    前往数据接入
+                  </button>
+                )}
               </div>
             ) : null}
             {loading && !products.length && !data?.products?.needsCredential ? (

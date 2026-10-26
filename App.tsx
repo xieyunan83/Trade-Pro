@@ -163,6 +163,8 @@ const App: React.FC = () => {
   const [activeModule, setActiveModule] = useState<ModuleType>(ModuleType.HOME);
   const [workspaceSyncStatus, setWorkspaceSyncStatus] = useState<string | null>(null);
   const [workspaceSyncing, setWorkspaceSyncing] = useState(false);
+  /** 管理员进入与业务员相同的工作台（含今日看板） */
+  const [adminInWorkspace, setAdminInWorkspace] = useState(false);
   useModuleHashRoute(activeModule, setActiveModule);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -4135,20 +4137,31 @@ const App: React.FC = () => {
     );
   }
 
-  if (currentUser.role === 'admin') {
+  if (currentUser.role === 'admin' && !adminInWorkspace) {
     return (
       <AdminDashboard 
         onLogout={handleLogout} 
         currentUser={currentUser} 
         users={users}
         setUsers={setUsers}
+        onEnterWorkspace={() => {
+          setAdminInWorkspace(true);
+          setActiveModule(ModuleType.HOME);
+        }}
       />
     );
   }
 
-  if (hasKey === null) return <div className="h-screen flex items-center justify-center bg-slate-50"><Loader2 className="animate-spin text-blue-600" size={40} /></div>;
+  // 管理员进业务工作台时跳过「等密钥」门禁（密钥由自己在后台配）
+  if (hasKey === null && currentUser.role !== 'admin') {
+    return (
+      <div className="h-screen flex items-center justify-center bg-slate-50">
+        <Loader2 className="animate-spin text-blue-600" size={40} />
+      </div>
+    );
+  }
 
-  if (hasKey === false) {
+  if (hasKey === false && currentUser.role !== 'admin') {
       return (
           <div className="min-h-screen min-h-[100dvh] flex flex-col items-center justify-center bg-slate-50 p-6 text-center">
               <div className="bg-red-100 p-4 rounded-full text-red-600 mb-4"><AlertTriangle size={32}/></div>
@@ -4237,6 +4250,17 @@ const App: React.FC = () => {
             }
             onLogout={handleLogout}
           />
+          {currentUser.role === 'admin' && adminInWorkspace && (
+            <div className="px-1.5 pb-2">
+              <button
+                type="button"
+                onClick={() => setAdminInWorkspace(false)}
+                className="w-full text-[9px] font-black text-cyan-200/90 bg-cyan-500/10 border border-cyan-400/20 rounded-lg py-1.5 hover:bg-cyan-500/20"
+              >
+                返回管理后台
+              </button>
+            </div>
+          )}
         </div>
       </aside>
       

@@ -96,15 +96,23 @@ export const DataProvidersPanel: React.FC<Props> = ({ currentUser }) => {
 
   return (
     <div className="space-y-6 p-4 sm:p-6">
-      <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-5">
+      <div className="rounded-2xl border border-cyan-200 bg-gradient-to-br from-cyan-50 to-white p-5">
         <div className="flex items-start gap-3">
           <div className="h-10 w-10 rounded-xl bg-slate-900 text-cyan-300 flex items-center justify-center shrink-0">
             <Database size={18} />
           </div>
           <div>
-            <h3 className="font-black text-slate-900 text-lg">数据接入（升级骨架）</h3>
-            <p className="text-sm text-slate-500 font-medium mt-1 max-w-3xl leading-relaxed">
-              在此配置外部数据与创作服务凭证。员工端前台不展示供应商名称与调用细节；密钥与路由请在「API 配置」页管理。
+            <h3 className="font-black text-slate-900 text-lg">今日看板 · 情报源（必读）</h3>
+            <p className="text-sm text-slate-600 font-medium mt-1 max-w-3xl leading-relaxed">
+              中行汇率与公开行业新闻<strong>自动拉取</strong>，无需配置。若要同步「优选行业资讯 / 新品」：
+            </p>
+            <ol className="mt-2 text-sm text-slate-700 font-medium list-decimal list-inside space-y-1 max-w-3xl">
+              <li>在浏览器登录对应货源平台，打开开发者工具 → Network，复制接口请求头里的 Bearer Token。</li>
+              <li>在下方找到对应提供商，勾选启用，把 Token 粘贴到「API Key」，点保存。</li>
+              <li>回到「今日看板」或业务员工作台点「刷新情报」。</li>
+            </ol>
+            <p className="text-xs text-slate-500 font-medium mt-2">
+              正式数据分享协议签署前，此为过渡方案；员工前台不会显示供应商名称。
             </p>
           </div>
         </div>

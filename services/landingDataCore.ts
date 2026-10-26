@@ -75,7 +75,15 @@ const fetchText = async (url: string, accept?: string): Promise<string> => {
     if (res.ok) return await res.text();
     throw new Error(`HTTP ${res.status}`);
   } catch (first) {
-    if (typeof process === 'undefined' || !process.versions?.node) throw first;
+    // Vercel 无 curl；仅本地开发用系统代理回退
+    if (
+      typeof process === 'undefined' ||
+      !process.versions?.node ||
+      process.env.VERCEL ||
+      process.env.AWS_LAMBDA_FUNCTION_NAME
+    ) {
+      throw first;
+    }
     try {
       const { execFile } = await import('node:child_process');
       const { promisify } = await import('node:util');

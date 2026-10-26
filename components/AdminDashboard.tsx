@@ -5,8 +5,10 @@ import {
   Settings, Shield, Key, Bell, Save, Plus, Trash2, Globe, Server, 
   CheckCircle2, AlertTriangle, LogOut, Users, Database, 
   RefreshCw, X, FileText, Upload, Play, Loader2, Download, Cloud,
-  Youtube, Music, Video, FileSpreadsheet, FilePieChart, FileCode, Image, Mail, Building2
+  Youtube, Music, Video, FileSpreadsheet, FilePieChart, FileCode, Image, Mail, Building2,
+  Radio,
 } from 'lucide-react';
+import { ModuleLandingHub } from './ModuleLandingHub';
 import { getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/db';
 import { testApiKey, testQwenApiKey, testAnymailFinderApiKey, testHunterApiKey, testAnysearchApiKey, getTaskAIModels, saveTaskAIModels, describeTaskAIRouting, sanitizeApiKey, hydrateApiConfigsFromCloud, type TaskAIModels, type AIEngineChoice } from '../services/geminiService';
 import { testTavilyKeyPool, listTavilyKeys, setTavilyKeyPool, mergeTavilyKeyPool, getTavilyKeyStatuses, clearTavilyExhausted } from '../services/tavilyService';
@@ -43,7 +45,7 @@ import {
   syncAllWorkspaceData,
 } from '../services/workspaceCloudSync';
 
-type AdminTab = 'api' | 'data' | 'users' | 'org' | 'kb';
+type AdminTab = 'api' | 'data' | 'users' | 'org' | 'kb' | 'hub';
 
 const KB_ACCEPT = [
   '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
@@ -74,10 +76,18 @@ interface AdminDashboardProps {
   currentUser: User;
   users: User[];
   setUsers: React.Dispatch<React.SetStateAction<User[]>>;
+  /** 进入与业务员相同的工作台（含今日看板） */
+  onEnterWorkspace?: () => void;
 }
 
-export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, currentUser, users, setUsers }) => {
-  const [activeTab, setActiveTab] = useState<AdminTab>('api');
+export const AdminDashboard: React.FC<AdminDashboardProps> = ({
+  onLogout,
+  currentUser,
+  users,
+  setUsers,
+  onEnterWorkspace,
+}) => {
+  const [activeTab, setActiveTab] = useState<AdminTab>('hub');
   const [departments, setDepartments] = useState<Department[]>(() => loadDepartmentsFromStorage());
   const [localConfig, setLocalConfig] = useState<GlobalConfig>({
     lastUpdated: Date.now(),
@@ -1151,7 +1161,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
           <div className="text-sm font-bold truncate">
             当前登录: <span className="text-blue-400">{currentUser.username}</span>
           </div>
-          <button 
+          {onEnterWorkspace && (
+            <button
+              type="button"
+              onClick={onEnterWorkspace}
+              className="bg-cyan-600 hover:bg-cyan-500 px-4 py-2 rounded-lg text-sm font-black flex items-center gap-2 transition-all touch-manipulation flex-shrink-0"
+              title="查看与业务员相同的指挥舱 / 商机工作台"
+            >
+              <Radio size={16} /> 进入业务工作台
+            </button>
+          )}
+          <button
+            type="button"
             onClick={onLogout}
             className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg text-sm font-black flex items-center gap-2 transition-all touch-manipulation flex-shrink-0"
           >
@@ -1166,6 +1187,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
           {/* Tabs */}
           <div className="flex border-b bg-slate-50/50 overflow-x-auto scrollbar-hide">
             {([
+              { id: 'hub' as AdminTab, label: '今日看板', short: '看板', icon: Radio },
               { id: 'api' as AdminTab, label: 'API 密钥配置', short: 'API', icon: Key },
               { id: 'data' as AdminTab, label: '数据接入', short: '数据', icon: Database },
               { id: 'org' as AdminTab, label: '组织权限', short: '组织', icon: Building2 },
@@ -1185,6 +1207,47 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, curren
           </div>
 
           <div className="p-4 sm:p-6 md:p-10">
+            {activeTab === 'hub' && (
+              <div className="space-y-6 animate-fade-in">
+                <div className="rounded-2xl border border-cyan-100 bg-cyan-50/60 p-5">
+                  <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
+                    <Radio className="text-cyan-700" size={20} /> 登录落地 · 今日看板
+                  </h3>
+                  <ol className="mt-3 space-y-2 text-sm text-slate-700 font-medium list-decimal list-inside leading-relaxed">
+                    <li>业务员登录后默认进入此看板（行业新闻 / 新品 / 中行汇率），并自动同步 CRM 与作业。</li>
+                    <li>
+                      公开资讯与中行汇率无需额外配置。优选货源资讯/新品：打开「数据接入」→ 启用对应源 → 将登录后浏览器里的
+                      Bearer 访问令牌粘贴到 API Key → 保存。
+                    </li>
+                    <li>配置后点下方「刷新情报」，或点右上角「进入业务工作台」以员工视角验收。</li>
+                  </ol>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('data')}
+                      className="inline-flex items-center gap-2 rounded-xl bg-slate-900 text-white text-xs font-black px-4 py-2.5"
+                    >
+                      <Database size={14} /> 去数据接入配置
+                    </button>
+                    {onEnterWorkspace && (
+                      <button
+                        type="button"
+                        onClick={onEnterWorkspace}
+                        className="inline-flex items-center gap-2 rounded-xl border border-cyan-300 bg-white text-cyan-900 text-xs font-black px-4 py-2.5"
+                      >
+                        进入业务工作台
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <ModuleLandingHub
+                  currentUser={currentUser}
+                  syncStatus="管理员预览"
+                  onOpenDataSetup={() => setActiveTab('data')}
+                  onEnterWorkspace={onEnterWorkspace}
+                />
+              </div>
+            )}
             {activeTab === 'api' && (
               <div className="space-y-8 animate-fade-in">
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
