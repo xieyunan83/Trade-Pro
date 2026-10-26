@@ -1,5 +1,5 @@
 /**
- * 产品 AI 视频：DashScope 异步 video-synthesis（图生/文生视频）。
+ * 产品 AI 视频：DashScope 异步 video-synthesis（wan3.0-video）。
  * Key 优先「数据接入 · 视频生成 API」，否则回退万相图片 / 千问同账号 Key。
  */
 import { env } from './env';
@@ -38,6 +38,8 @@ export type VideoGenerateResult = {
 
 const VIDEO_PATH = '/api/v1/services/aigc/video-generation/video-synthesis';
 const TASK_PATH = (id: string) => `/api/v1/tasks/${encodeURIComponent(id)}`;
+/** 默认标准版；备注 / extra.modelId / 环境变量可覆盖 */
+const DEFAULT_VIDEO_MODEL = 'wan3.0-video';
 
 const sanitizeKey = (k: string) =>
   (k || '')
@@ -59,29 +61,12 @@ const normalizeOrigin = (apiKey: string, rawBase: string): string => {
 const readLs = (key: string) =>
   typeof localStorage !== 'undefined' ? localStorage.getItem(key)?.trim() || '' : '';
 
-export const getVideoProviderStatus = (): { ready: boolean; detail: string } => {
+/** 与千问同账号：不要求 wan_video 单独启用也能取到 Key */
+const pickVideoApiKey = (): string => {
   const videoMeta = loadDataProviderLocal('wan_video');
-  const pool =
-    sanitizeKey((videoMeta.enabled && videoMeta.apiKey) || '') ||
-    sanitizeKey(getActivePoolKey('wan') || '') ||
-    sanitizeKey(getActivePoolKey('qwen') || '') ||
-    sanitizeKey(readLs('trade_scout_wan_api_key')) ||
-    sanitizeKey(readLs('trade_scout_qwen_api_key')) ||
-    sanitizeKey(env.qwenApiKey || '') ||
-    sanitizeKey(env.wanApiKey || '');
-  if (pool) {
-    return { ready: true, detail: '视频生成服务已就绪' };
-  }
-  return { ready: false, detail: '请联系管理员在「数据接入」配置视频生成 API Key' };
-};
-
-type ResolvedVideoConfig = { apiKey: string; origin: string };
-
-const resolveVideoConfig = (): ResolvedVideoConfig => {
-  const videoMeta = loadDataProviderLocal('wan_video');
-
-  const apiKey = sanitizeKey(
+  return sanitizeKey(
     (videoMeta.enabled && videoMeta.apiKey) ||
+      videoMeta.apiKey ||
       getActivePoolKey('wan') ||
       getActivePoolKey('qwen') ||
       readLs('trade_scout_wan_api_key') ||
@@ -90,6 +75,20 @@ const resolveVideoConfig = (): ResolvedVideoConfig => {
       env.qwenApiKey ||
       ''
   );
+};
+
+export const getVideoProviderStatus = (): { ready: boolean; detail: string } => {
+  if (pickVideoApiKey()) {
+    return { ready: true, detail: '视频生成服务已就绪' };
+  }
+  return { ready: false, detail: '请联系管理员在「数据接入」配置视频生成 API Key（可与通义同账号）' };
+};
+
+type ResolvedVideoConfig = { apiKey: string; origin: string; modelId: string };
+
+const resolveVideoConfig = (): ResolvedVideoConfig => {
+  const videoMeta = loadDataProviderLocal('wan_video');
+  const apiKey = pickVideoApiKey();
 
   if (!apiKey) {
     throw new Error(
@@ -99,13 +98,17 @@ const resolveVideoConfig = (): ResolvedVideoConfig => {
 
   const rawBase =
     (videoMeta.enabled && videoMeta.apiBase) ||
+    videoMeta.apiBase ||
     readLs('trade_scout_wan_base_url') ||
     readLs('trade_scout_qwen_base_url') ||
     env.wanBaseUrl ||
     env.qwenBaseUrl ||
     DEFAULT_TOKEN_PLAN_ORIGIN;
 
-  return { apiKey, origin: normalizeOrigin(apiKey, rawBase) };
+  const modelId =
+    (videoMeta.extra?.modelId || '').trim() || env.wanVideoModelId || DEFAULT_VIDEO_MODEL;
+
+  return { apiKey, origin: normalizeOrigin(apiKey, rawBase), modelId };
 };
 
 /** 与万相生图一致：强制同域代理，避免错误代理模式导致 Failed to fetch */
@@ -146,18 +149,25 @@ const parseJson = async (res: Response): Promise<any> => {
   }
 };
 
-const mapDuration = (sec: number): 5 | 10 => (sec <= 5 ? 5 : 10);
+/** wan3.0：时长 2–15（样片短、正片可更长；超过 15 截断） */
+const mapDuration = (sec: number): number => Math.max(2, Math.min(15, Math.round(sec) || 5));
 
-const aspectToSize = (aspect: VideoGenerateInput['aspect']): string => {
-  if (aspect === '9:16') return '720*1280';
-  if (aspect === '1:1') return '960*960';
-  return '1280*720';
+const aspectToRatio = (aspect: VideoGenerateInput['aspect']): string => {
+  if (aspect === '9:16') return '9:16';
+  if (aspect === '1:1') return '1:1';
+  return '16:9';
 };
 
-const pickModel = (mode: VideoGenerateMode, tier: 'draft' | 'full'): string => {
-  if (mode === 'text') return 'wan2.6-t2v';
-  return tier === 'draft' ? 'wan2.6-i2v-flash' : 'wan2.6-i2v';
+/**
+ * wan3.0-video 统一模型；draft 可用 prime 加速（若账号未开通则仍走标准版由调用方重试）。
+ */
+const pickModel = (cfg: ResolvedVideoConfig): string => {
+  const custom = (cfg.modelId || '').trim();
+  if (custom) return custom;
+  return DEFAULT_VIDEO_MODEL;
 };
+
+type MediaItem = { type: string; url: string };
 
 const createAsyncTask = async (
   cfg: ResolvedVideoConfig,
@@ -259,57 +269,64 @@ const pickVideoUrl = (out: any): string => {
 };
 
 /**
- * 真实异步生成产品视频。
- * - draft：更快 flash / 720P
- * - full：更高质量 1080P
+ * 真实异步生成产品视频（wan3.0-video）。
+ * - text：仅 prompt
+ * - image：首帧 first_frame（与 reference_* 互斥）
+ * - reference：全部用 reference_image
  */
 export const generateProductVideo = async (input: VideoGenerateInput): Promise<VideoGenerateResult> => {
   const cfg = resolveVideoConfig();
   let prompt = (input.prompt || '').trim();
   if (!prompt) throw new Error('请填写画面与运镜描述');
 
-  const model = pickModel(input.mode, input.tier);
+  const model = pickModel(cfg);
   const duration = mapDuration(input.durationSec);
-  const resolution = input.tier === 'draft' ? '720P' : input.resolution;
+  const resolution = input.tier === 'draft' ? '720P' : input.resolution === '1080P' ? '1080P' : '720P';
 
   input.onProgress?.(3, 'queued');
 
   let taskInput: Record<string, unknown>;
-  let parameters: Record<string, unknown>;
+  const parameters: Record<string, unknown> = {
+    resolution,
+    ratio: aspectToRatio(input.aspect),
+    duration,
+    prompt_extend: true,
+  };
 
   if (input.mode === 'text') {
     taskInput = { prompt };
     if (input.negativePrompt?.trim()) {
       taskInput.negative_prompt = input.negativePrompt.trim();
     }
-    parameters = {
-      size: aspectToSize(input.aspect),
-      prompt_extend: true,
-      duration,
-      watermark: false,
-    };
   } else {
-    const imgs = [input.sourceImage, ...(input.referenceImages || [])].filter(Boolean) as string[];
+    const imgs = [input.sourceImage, ...(input.referenceImages || [])]
+      .filter(Boolean)
+      .map((u) => String(u).trim()) as string[];
     if (!imgs.length) throw new Error('请至少上传一张参考图');
-    let imgUrl = imgs[0].trim();
-    if (!/^https?:\/\//i.test(imgUrl) && !/^data:image\//i.test(imgUrl)) {
-      throw new Error('参考图格式无效');
-    }
+
     input.onProgress?.(4, 'preparing');
-    imgUrl = await prepareVideoImage(imgUrl);
-    if (imgs.length > 1) {
-      prompt = `${prompt}\nKeep product identity consistent across ${imgs.length} reference frames.`;
+    const prepared: string[] = [];
+    for (const img of imgs.slice(0, input.mode === 'reference' ? 5 : 1)) {
+      if (!/^https?:\/\//i.test(img) && !/^data:image\//i.test(img)) {
+        throw new Error('参考图格式无效');
+      }
+      prepared.push(await prepareVideoImage(img));
     }
-    taskInput = { prompt, img_url: imgUrl };
+
+    // first_frame 与 reference_image 互斥，不可同请求
+    const media: MediaItem[] =
+      input.mode === 'reference'
+        ? prepared.map((url) => ({ type: 'reference_image', url }))
+        : [{ type: 'first_frame', url: prepared[0] }];
+
+    if (input.mode === 'reference' && prepared.length > 1) {
+      prompt = `${prompt}\n参考图顺序：图1起保持产品外观一致。`;
+    }
+
+    taskInput = { prompt, media };
     if (input.negativePrompt?.trim()) {
       taskInput.negative_prompt = input.negativePrompt.trim();
     }
-    parameters = {
-      resolution,
-      prompt_extend: true,
-      duration,
-      watermark: false,
-    };
   }
 
   try {

@@ -208,11 +208,13 @@ export const DataProvidersPanel: React.FC<Props> = ({ currentUser }) => {
                   placeholder={
                     def.id === 'tripo'
                       ? 'tsk_…（图生 3D 控制台 API Key）'
-                      : def.id === 'wan_video'
-                        ? 'sk-… / sk-sp-…（可与万相同账号）'
-                        : def.id === 'design_agent'
-                          ? '图像 API Key'
-                          : 'API Key / Token'
+                      : def.id === 'hunyuan3d'
+                        ? 'TokenHub API Key（图生 3D 备选）'
+                        : def.id === 'wan_video'
+                          ? 'sk-… / sk-sp-…（可与千问同账号）'
+                          : def.id === 'design_agent'
+                            ? '图像 API Key'
+                            : 'API Key / Token'
                   }
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-mono"
                 />
@@ -227,7 +229,7 @@ export const DataProvidersPanel: React.FC<Props> = ({ currentUser }) => {
                   placeholder={
                     def.id === 'wan_video'
                       ? 'https://token-plan.cn-beijing.maas.aliyuncs.com（可选）'
-                      : def.id === 'tripo'
+                      : def.id === 'tripo' || def.id === 'hunyuan3d'
                         ? '默认即可，无需填写'
                         : 'https://…'
                   }
@@ -249,7 +251,7 @@ export const DataProvidersPanel: React.FC<Props> = ({ currentUser }) => {
                     def.id === 'design_agent'
                       ? '模型 ID（可选）'
                       : def.id === 'wan_video'
-                        ? '默认 wan2.6-i2v / t2v'
+                        ? '默认 wan3.0-video'
                         : '可选'
                   }
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-mono"

@@ -100,12 +100,14 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     const key = quickKey.replace(/^\uFEFF/, '').replace(/^Bearer\s+/i, '').replace(/\s+/g, '').trim();
     if (!key) {
       setMsgTone('error');
-      setMsg('请粘贴图生 3D API Key');
+      setMsg('请粘贴图生 3D API Key（主路径或备选均可）');
       return;
     }
     setSavingKey(true);
-    const prev = loadDataProviderLocal('tripo');
-    await saveDataProvider('tripo', {
+    // tsk_ → 主路径；其余视为混元 TokenHub 备选（试用）
+    const target = /^tsk_/i.test(key) ? 'tripo' : 'hunyuan3d';
+    const prev = loadDataProviderLocal(target);
+    await saveDataProvider(target, {
       ...prev,
       enabled: true,
       apiKey: key,
@@ -115,7 +117,13 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     setSavingKey(false);
     setQuickKey('');
     setMsgTone(st.ready ? 'ok' : 'error');
-    setMsg(st.ready ? '3D API 已保存并启用，可以开始生成' : st.detail);
+    setMsg(
+      st.ready
+        ? target === 'hunyuan3d'
+          ? '3D 备选 Key 已保存并启用，可以开始生成'
+          : '3D API 已保存并启用，可以开始生成'
+        : st.detail
+    );
   };
 
   const persist = (next: Model3dJob[]) => {
@@ -318,7 +326,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                     type="password"
                     value={quickKey}
                     onChange={(e) => setQuickKey(e.target.value)}
-                    placeholder="粘贴图生 3D API Key"
+                    placeholder="粘贴 Key（tsk_ 主路径 / TokenHub 备选）"
                     className="w-full rounded-xl border border-rose-200 bg-white px-3 py-2 text-sm"
                     autoComplete="off"
                   />

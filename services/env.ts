@@ -155,6 +155,8 @@ export const env = {
   wanApiKey: read('REACT_APP_WAN_API_KEY'),
   wanBaseUrl: read('REACT_APP_WAN_BASE_URL'),
   wanModelId: read('REACT_APP_WAN_MODEL') || 'wan2.7-image-pro',
+  /** 视频生成模型，默认 wan3.0-video */
+  wanVideoModelId: read('REACT_APP_WAN_VIDEO_MODEL') || 'wan3.0-video',
   /** 图生 3D（优先管理后台「数据接入 · 图生 3D API」） */
   tripoApiKey: read('REACT_APP_TRIPO_API_KEY'),
   defaultAIModel: (read('REACT_APP_DEFAULT_AI_MODEL') || bakedAppConfig.defaultAIModel || 'qwen') as DefaultAIModel,

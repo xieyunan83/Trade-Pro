@@ -69,14 +69,16 @@ export const DATA_PROVIDER_DEFS: DataProviderDef[] = [
   {
     id: 'hunyuan3d',
     label: '图生 3D（备选）',
-    description: '备选图生 3D Key；当前主路径走「图生 3D API」。',
+    description:
+      '备选图生 3D（TokenHub）。主路径额度不足或未配置时自动走此路；试用 Key 粘贴后打开开关即可。',
+    docsHint: 'https://cloud.tencent.com/document/product/1823/137181',
   },
   {
     id: 'wan_video',
     label: '视频生成 API',
     description:
-      '图生/文生视频（样片→正片）。可填通义视频 Key；未单独配置时回退「万相图片」或「千问」同账号 Key。',
-    docsHint: 'https://help.aliyun.com/zh/model-studio/image-to-video-guide',
+      '图生/文生视频（样片→正片，默认 wan3.0-video）。可填通义视频 Key；未单独配置时回退「万相图片」或「千问」同账号 Key。',
+    docsHint: 'https://help.aliyun.com/zh/model-studio/wan3-video-generation-guide',
   },
   {
     id: 'design_agent',

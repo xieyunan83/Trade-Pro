@@ -1,6 +1,6 @@
 /**
- * 图/文生 3D：经同域代理调用 OpenAPI（上传 → 建任务 → 轮询 → GLB）。
- * Key：管理后台「数据接入 · 图生 3D API」或环境变量；进入模块时会拉取云端配置。
+ * 图/文生 3D：主路径 OpenAPI（上传 → 建任务 → 轮询 → GLB）；
+ * 额度不足或未配置时自动回退混元 TokenHub（数据接入 · 图生 3D 备选）。
  */
 import { env } from './env';
 import { isLocalDevHost } from './qwenProxy';
@@ -12,6 +12,11 @@ import {
 } from './dataProviders';
 import { compressImageDataUrl } from './catalogExcelService';
 import { humanizeCreativeProviderError } from './providerErrorMessage';
+import {
+  generateHunyuanModel3d,
+  getHunyuan3dProviderStatus,
+  hydrateHunyuan3dProvider,
+} from './hunyuan3dService';
 
 export type Model3dGenerateInput = {
   mode: 'image' | 'text';
@@ -53,14 +58,29 @@ export const getModel3dProviderStatus = (): {
   const key = pickKey(meta);
   const hasKey = !!key;
   const enabled = !!(meta.enabled || sanitizeKey(env.tripoApiKey || ''));
-  if (hasKey && enabled) {
-    return { ready: true, detail: '3D 服务已就绪', hasKey, enabled: true };
+  const hunyuan = getHunyuan3dProviderStatus();
+
+  if ((hasKey && enabled) || hunyuan.ready) {
+    return {
+      ready: true,
+      detail: hunyuan.ready && !(hasKey && enabled) ? '3D 备选服务已就绪' : '3D 服务已就绪',
+      hasKey: hasKey || hunyuan.hasKey,
+      enabled: true,
+    };
   }
   if (hasKey && !meta.enabled) {
     return {
       ready: false,
-      detail: '已填写 Key，请在「数据接入」打开「图生 3D API」开关',
+      detail: '已填写 Key，请在「数据接入」打开「图生 3D API」开关（或配置备选 Key）',
       hasKey,
+      enabled: false,
+    };
+  }
+  if (hunyuan.hasKey && !hunyuan.ready) {
+    return {
+      ready: false,
+      detail: hunyuan.detail,
+      hasKey: true,
       enabled: false,
     };
   }
@@ -83,8 +103,18 @@ export const hydrateModel3dProvider = async (): Promise<ReturnType<typeof getMod
   } catch {
     /* 本地即可 */
   }
+  await hydrateHunyuan3dProvider();
   return getModel3dProviderStatus();
 };
+
+const isTripoReady = (): boolean => {
+  const meta = loadDataProviderLocal('tripo');
+  const key = pickKey(meta);
+  return !!(key && (meta.enabled || sanitizeKey(env.tripoApiKey || '')));
+};
+
+const isCreditOrQuotaError = (msg: string): boolean =>
+  /credit|余额|额度|quota|insufficient|payment|欠费|充值|balance|no funds|not enough/i.test(msg);
 
 const resolveMeta = (): DataProviderMeta & { apiKey: string } => {
   const meta = loadDataProviderLocal('tripo');
@@ -284,13 +314,46 @@ const pickUrls = (data: any): Model3dGenerateResult => {
 /**
  * 真实生成 3D 模型（异步任务）。
  * high_detail → 更高面数/纹理；engine_ready → 较低面数智能减面。
+ * 优先混元备选（若已配置，便于试用），否则主路径；额度失败时互备回退。
  */
 export const generateModel3d = async (input: Model3dGenerateInput): Promise<Model3dGenerateResult> => {
-  try {
-    return await generateModel3dInner(input);
-  } catch (e: any) {
-    throw new Error(humanizeCreativeProviderError(e?.message || e));
+  const tripoOk = isTripoReady();
+  const hunyuanOk = getHunyuan3dProviderStatus().ready;
+
+  if (!tripoOk && !hunyuanOk) {
+    throw new Error(
+      humanizeCreativeProviderError(
+        '未配置图生 3D API。请在「数据接入」填写主路径或备选 Key，或使用本页管理员快捷配置。'
+      )
+    );
   }
+
+  // 已配备选时优先走备选（主路径常见额度不足）；否则主路径
+  const order: Array<'hunyuan' | 'tripo'> = [];
+  if (hunyuanOk) order.push('hunyuan');
+  if (tripoOk) order.push('tripo');
+
+  let lastErr: Error | null = null;
+  for (let i = 0; i < order.length; i++) {
+    const provider = order[i];
+    try {
+      if (provider === 'hunyuan') {
+        return await generateHunyuanModel3d(input);
+      }
+      return await generateModel3dInner(input);
+    } catch (e: any) {
+      const msg = String(e?.message || e);
+      lastErr = new Error(humanizeCreativeProviderError(msg));
+      const canFallback =
+        i < order.length - 1 && (isCreditOrQuotaError(msg) || /未配置|Key|401|403|额度/i.test(msg));
+      if (canFallback) {
+        input.onProgress?.(3, 'fallback');
+        continue;
+      }
+      throw lastErr;
+    }
+  }
+  throw lastErr || new Error('3D 生成失败');
 };
 
 const generateModel3dInner = async (input: Model3dGenerateInput): Promise<Model3dGenerateResult> => {

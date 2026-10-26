@@ -231,6 +231,8 @@ export function aliyunDevProxyPlugin(
       mountOriginProxy(server, '/tavily-api', () => 'https://api.tavily.com');
       // 图生 3D OpenAPI（Authorization: Bearer tsk_***）
       mountOriginProxy(server, '/tripo-api', () => 'https://api.tripo3d.ai');
+      // 混元生 3D TokenHub
+      mountOriginProxy(server, '/tokenhub-api', () => 'https://tokenhub.tencentmaas.com');
       // 发文发布：LinkedIn / Meta Graph / X
       mountOriginProxy(server, '/linkedin-api', () => 'https://api.linkedin.com');
       mountOriginProxy(server, '/meta-api', () => 'https://graph.facebook.com');
