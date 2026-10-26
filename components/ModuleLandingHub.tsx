@@ -239,7 +239,6 @@ export const ModuleLandingHub: React.FC<Props> = ({
                     className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
                     loading="eager"
                     decoding="async"
-                    fetchPriority="high"
                   />
                 ) : (
                   <div

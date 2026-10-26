@@ -3,7 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="build-stamp" content="2026-07-31-v7-main-vibe">
+    <meta name="build-stamp" content="BUILD_STAMP_PLACEHOLDER">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
     <title>外贸智慧协同</title>
     
     <script>
@@ -35,6 +37,45 @@
                 }
             } catch (e) {}
         })();
+
+        /**
+         * 发版后旧 HTML 若仍指向已删除的 /assets/index-*.js → 整页白屏。
+         * 脚本加载失败时自动清缓存参数并重载一次；仍失败则给出可见提示。
+         */
+        window.__TP_BOOT_FAIL = function (reason) {
+            try {
+                var key = 'tp_boot_reload_v1';
+                var n = parseInt(sessionStorage.getItem(key) || '0', 10) || 0;
+                if (n < 1) {
+                    sessionStorage.setItem(key, String(n + 1));
+                    var u = new URL(location.href);
+                    u.searchParams.set('_boot', String(Date.now()));
+                    location.replace(u.toString());
+                    return;
+                }
+            } catch (e) {}
+            var el = document.getElementById('root');
+            if (!el) return;
+            el.innerHTML =
+                '<div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;font-family:system-ui,sans-serif;background:#f8fafc;color:#0f172a;text-align:center">' +
+                '<div style="font-size:18px;font-weight:800">页面资源未加载成功</div>' +
+                '<div style="font-size:13px;color:#64748b;max-width:360px;line-height:1.5">多半是发版缓存未刷新。请关闭客户端后重新打开，或按 Ctrl+Shift+R（Mac：Cmd+Shift+R）强制刷新。</div>' +
+                '<button type="button" onclick="location.href=location.pathname+\'?_boot=\'+Date.now()+location.hash" ' +
+                'style="margin-top:8px;padding:10px 18px;border:0;border-radius:12px;background:#0f172a;color:#fff;font-weight:700;cursor:pointer">立即重试</button>' +
+                '<div style="font-size:11px;color:#94a3b8">原因: ' +
+                String(reason || 'unknown') +
+                '</div></div>';
+        };
+        window.addEventListener(
+            'error',
+            function (e) {
+                var t = e && e.target;
+                if (t && t.tagName === 'SCRIPT' && t.src && /\/assets\//.test(t.src)) {
+                    window.__TP_BOOT_FAIL('script-404');
+                }
+            },
+            true
+        );
     </script>
 
     <meta name="description" content="外贸智慧协同：客户背调、决策人挖掘、开发信与宣发协同，企业级外贸获客平台。">
@@ -675,7 +716,11 @@
 
 </head>
 <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="tp-boot" style="min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:system-ui,sans-serif;color:#64748b;background:#f8fafc;">
+        正在加载…
+      </div>
+    </div>
     <script type="module" src="./index.tsx"></script>
 </body>
 </html>

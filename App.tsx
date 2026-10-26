@@ -4594,44 +4594,46 @@ const App: React.FC = () => {
           {!loading && !errorMsg && (
             <>
                 {activeModule === ModuleType.HOME && (
-                  <ModuleLandingHub
-                    currentUser={currentUser}
-                    syncStatus={workspaceSyncStatus}
-                    syncing={workspaceSyncing}
-                    onEnterWorkspace={() => setActiveModule(ModuleType.DISCOVERY)}
-                    onNavigateModule={(mod) => {
-                      // 报告类模块依赖当前 analysisData；未打开报告时改走作业列表，避免空白页
-                      const needsReport = (
-                        [
-                          ModuleType.BACKGROUND,
-                          ModuleType.PRODUCTS,
-                          ModuleType.DECISION_MAKERS,
-                          ModuleType.SIMILAR,
-                        ] as ModuleType[]
-                      ).includes(mod);
-                      if (needsReport && !analysisData) {
+                  <ErrorBoundary label="今日看板">
+                    <ModuleLandingHub
+                      currentUser={currentUser}
+                      syncStatus={workspaceSyncStatus}
+                      syncing={workspaceSyncing}
+                      onEnterWorkspace={() => setActiveModule(ModuleType.DISCOVERY)}
+                      onNavigateModule={(mod) => {
+                        // 报告类模块依赖当前 analysisData；未打开报告时改走作业列表，避免空白页
+                        const needsReport = (
+                          [
+                            ModuleType.BACKGROUND,
+                            ModuleType.PRODUCTS,
+                            ModuleType.DECISION_MAKERS,
+                            ModuleType.SIMILAR,
+                          ] as ModuleType[]
+                        ).includes(mod);
+                        if (needsReport && !analysisData) {
+                          setActiveModule(ModuleType.PROMO_GENERATOR);
+                          setSystemNotice(
+                            '请先在「营销工具 / 背调作业」打开一条已完成报告，再查看背调详情。'
+                          );
+                          return;
+                        }
+                        setActiveModule(mod);
+                      }}
+                      onStartPlaybook={(playbookId) => {
+                        setPendingPlaybookId(playbookId);
                         setActiveModule(ModuleType.PROMO_GENERATOR);
-                        setSystemNotice(
-                          '请先在「营销工具 / 背调作业」打开一条已完成报告，再查看背调详情。'
-                        );
-                        return;
-                      }
-                      setActiveModule(mod);
-                    }}
-                    onStartPlaybook={(playbookId) => {
-                      setPendingPlaybookId(playbookId);
-                      setActiveModule(ModuleType.PROMO_GENERATOR);
-                    }}
-                    journeyProgress={{
-                      skuCount: loadCatalogSkus().length,
-                      pendingTasks: automationResults.filter((t) => t.status === 'pending').length,
-                      failedTasks: automationResults.filter((t) => t.status === 'failed').length,
-                      completedBg: automationResults.filter(
-                        (t) => t.status === 'completed' && t.analysis
-                      ).length,
-                      crmCount: crmClients.length,
-                    }}
-                  />
+                      }}
+                      journeyProgress={{
+                        skuCount: loadCatalogSkus().length,
+                        pendingTasks: automationResults.filter((t) => t.status === 'pending').length,
+                        failedTasks: automationResults.filter((t) => t.status === 'failed').length,
+                        completedBg: automationResults.filter(
+                          (t) => t.status === 'completed' && t.analysis
+                        ).length,
+                        crmCount: crmClients.length,
+                      }}
+                    />
+                  </ErrorBoundary>
                 )}
                 {activeModule === ModuleType.DISCOVERY && (
                     <ClientFinder 

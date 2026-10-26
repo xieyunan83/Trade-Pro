@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
@@ -20,9 +21,16 @@ const waitDesktopSeed = (): Promise<void> => {
 };
 
 void waitDesktopSeed().then(() => {
+  try {
+    sessionStorage.removeItem('tp_boot_reload_v1');
+  } catch {
+    /* ignore */
+  }
   ReactDOM.createRoot(rootElement).render(
     <React.StrictMode>
-      <App />
+      <ErrorBoundary label="应用">
+        <App />
+      </ErrorBoundary>
     </React.StrictMode>
   );
 });

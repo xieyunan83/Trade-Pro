@@ -9,7 +9,8 @@ const path = require('path');
 const { injectSeedIntoPage } = require('./lib/injectSeed');
 
 const APP_ORIGIN = 'https://babyworld.ltd';
-const START_URL = `${APP_ORIGIN}/`;
+/** 每次启动带时间戳，避免发版后仍用旧 HTML 指向已删除的 JS（白屏） */
+const START_URL = `${APP_ORIGIN}/?_boot=${Date.now()}`;
 
 const isAppUrl = (url) => {
   try {
@@ -215,6 +216,8 @@ app.whenReady().then(() => {
   }
 
   const ses = session.defaultSession;
+  // 发版后旧缓存 HTML 会指向已删除的 hashed JS → 白屏；启动时清 HTTP 缓存
+  void ses.clearCache().catch((e) => console.warn('[cache] clearCache failed', e));
   ses.webRequest.onBeforeSendHeaders((details, callback) => {
     const headers = { ...details.requestHeaders };
     if (headers['User-Agent']) {
