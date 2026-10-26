@@ -72,8 +72,25 @@ export const pushAutomationTaskToCloud = async (task: AutomationResult): Promise
   }
 };
 
-export const deleteAutomationTaskFromCloud = async (localId: string): Promise<boolean> => {
+export const deleteAutomationTaskFromCloud = async (
+  localId: string,
+  opts?: { source?: 'user' | 'sync' }
+): Promise<boolean> => {
   if (!isSupabaseConfigured() || !localId.trim()) return false;
+  if ((opts?.source || 'user') === 'sync') {
+    const local = await getAutomationQueue();
+    const { guardCloudWrite, logCloudSafetyBlock } = await import('./cloudDataSafety');
+    const decision = guardCloudWrite({
+      kind: 'delete',
+      localCount: local.length,
+      payloadCount: 1,
+      label: 'automation_queue',
+    });
+    if (!decision.allow) {
+      logCloudSafetyBlock(decision);
+      return false;
+    }
+  }
   try {
     const { error } = await getSupabaseClient()
       .from('automation_queue')

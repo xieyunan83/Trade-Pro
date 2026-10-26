@@ -138,6 +138,7 @@ const emptyBucket = () => ({ local: 0, cloud: 0, merged: 0, uploaded: 0 });
 
 /**
  * 全量同步：合并本机与云端，先写回本机，再按需推上云端。
+ * 硬规则：本函数路径上绝不调用任何云端 delete；本机为空时只拉取，不覆盖云端。
  * 禁止用「空合并结果」覆盖本机已有数据（云端拉取失败时尤甚）。
  */
 export const syncAllWorkspaceData = async (
@@ -180,6 +181,7 @@ export const syncAllWorkspaceData = async (
       errors.push('CRM：云端不可用且本机为空');
     }
     let uploaded = 0;
+    // 仅 upsert，本路径永不 delete。本机空时也只 upsert 合并结果（=云端数据），不会清空云端。
     if (doUpload && mergedCrm.length > 0) {
       uploaded = await uploadCrmChunked(mergedCrm);
     }

@@ -85,6 +85,24 @@ export const fetchDocumentsFromRepo = async (): Promise<KnowledgeFile[]> => {
 
 export const backupUserHistory = async (username: string, history: HistoryItem[]) => {
   if (!octokit) return;
+  const { guardCloudWrite, logCloudSafetyBlock } = await import('./cloudDataSafety');
+  let remoteCount = -1;
+  try {
+    remoteCount = (await fetchUserHistoryFromCloud(username)).length;
+  } catch {
+    /* ignore */
+  }
+  const decision = guardCloudWrite({
+    kind: 'replace_file',
+    localCount: history.length,
+    payloadCount: history.length,
+    cloudCount: remoteCount,
+    label: `GitHub history/${username}.json`,
+  });
+  if (!decision.allow) {
+    logCloudSafetyBlock(decision);
+    return;
+  }
   const content = toBase64(JSON.stringify(history));
   try {
     let sha;
@@ -122,6 +140,25 @@ export const fetchUserHistoryFromCloud = async (username: string): Promise<Histo
 
 export const saveCRMToCloud = async (clients: Client[]) => {
   if (!octokit) return;
+  const { guardCloudWrite, logCloudSafetyBlock } = await import('./cloudDataSafety');
+  let remoteCount = -1;
+  try {
+    const existing = await fetchCRMFromCloud();
+    remoteCount = existing.length;
+  } catch {
+    /* ignore */
+  }
+  const decision = guardCloudWrite({
+    kind: 'replace_file',
+    localCount: clients.length,
+    payloadCount: clients.length,
+    cloudCount: remoteCount,
+    label: 'GitHub crm.json',
+  });
+  if (!decision.allow) {
+    logCloudSafetyBlock(decision);
+    return;
+  }
   const content = toBase64(JSON.stringify(clients));
   try {
     // Check if repo exists

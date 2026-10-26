@@ -1113,14 +1113,17 @@ const App: React.FC = () => {
           if (crmClients.length > 0) {
             syncCrmClients(crmClients).catch(e => console.error("Supabase CRM sync failed", e));
           }
-          if (!massWipe) {
+          // 本机空 / 疑似整库被清空时：绝不向云端发 delete
+          if (!massWipe && crmClients.length > 0 && removedIds.length) {
             for (const id of removedIds) {
-              deleteCrmClient(id).catch((e) => console.error('CRM delete sync failed', id, e));
+              deleteCrmClient(id, { source: 'sync' }).catch((e) =>
+                console.error('CRM delete sync failed', id, e)
+              );
             }
           }
       }
-      // GitHub 备份也要同步删除（即便已用 Supabase），否则下次登录会从 crm.json 复活
-      if (isGitHubConnected) {
+      // GitHub 整文件备份：本机空或疑似 mass wipe 时禁止覆盖（防把 crm.json 写成 []）
+      if (isGitHubConnected && !massWipe && mergedAll.length > 0) {
           saveCRMToCloud(filterOutCrmTombstones(mergedAll)).catch((e) =>
             console.error('Auto CRM GitHub sync failed', e)
           );
@@ -3317,7 +3320,25 @@ const App: React.FC = () => {
     setKeyResolutionContext({});
     setCurrentUser(null);
   };
-  const handleSyncToGitHub = async () => { if(!currentUser) return; setIsSyncing(true); try { await backupUserHistory(currentUser.username, history); await saveCRMToCloud(crmClients); alert("数据同步成功!"); } catch (e: any) { alert("同步失败: " + e.message); } finally { setIsSyncing(false); } };
+  const handleSyncToGitHub = async () => {
+    if (!currentUser) return;
+    setIsSyncing(true);
+    try {
+      // 本机为空时 backup/saveCRM 内部会拒绝覆盖云端文件，避免把备份写成 []
+      if (history.length > 0) await backupUserHistory(currentUser.username, history);
+      const allCrm = filterOutCrmTombstones(loadAllCrmClients());
+      if (allCrm.length > 0) await saveCRMToCloud(allCrm);
+      else if (crmClients.length === 0) {
+        alert('本机客户/历史为空，已跳过云端覆盖，避免清空在线备份。请先从云端恢复。');
+        return;
+      }
+      alert('数据同步成功!');
+    } catch (e: any) {
+      alert('同步失败: ' + e.message);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
   const handleAddClients = (newClients: Client[]) => {
     const stamped = newClients.map(stampOwnership);
     clearCrmTombstonesForClients(stamped);

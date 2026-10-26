@@ -4,8 +4,10 @@ import { getSupabaseConfig, isSupabaseConfigured } from './env'
 import { encodeSecret, decodeSecret } from './secretCodec'
 import { getCloudWorkspaceId } from './workspaceId'
 import { selectAllRows } from './supabasePaginate'
+import type { CloudDeleteSource } from './cloudDataSafety'
 
 export { isSupabaseConfigured }
+export type { CloudDeleteSource }
 
 const cloudUid = () => getCloudWorkspaceId()
 
@@ -523,8 +525,26 @@ export const getInvestigationHistory = async (): Promise<HistoryItem[]> => {
   return rows.map((row) => row.report_data).filter(Boolean)
 }
 
-export const deleteInvestigationHistory = async (localId: string): Promise<boolean> => {
+export const deleteInvestigationHistory = async (
+  localId: string,
+  opts?: { source?: CloudDeleteSource }
+): Promise<boolean> => {
   if (!isSupabaseConfigured()) return false
+  if ((opts?.source || 'user') === 'sync') {
+    const { getHistory } = await import('./db')
+    const { guardCloudWrite, logCloudSafetyBlock } = await import('./cloudDataSafety')
+    const localCount = (await getHistory()).length
+    const decision = guardCloudWrite({
+      kind: 'delete',
+      localCount,
+      payloadCount: 1,
+      label: 'investigation_history',
+    })
+    if (!decision.allow) {
+      logCloudSafetyBlock(decision)
+      return false
+    }
+  }
   try {
     const { error } = await supabase
       .from('investigation_history')
@@ -669,9 +689,16 @@ export const getDiscoverySearchArchives = async (): Promise<DiscoveryArchiveItem
 export const saveCrmClientsBulk = async (clients: Client[]): Promise<boolean> => {
   if (!isSupabaseConfigured()) return false
   try {
-    // 禁止用空列表清空云端：隔离过滤后的空视图不等于「用户删光了全部 CRM」
-    if (clients.length === 0) {
-      console.warn('跳过 CRM 空列表云端写入，避免误删')
+    // 禁止用空列表清空云端：upsert 空列表虽不删行，但也不应作为「同步成功」语义
+    const { guardCloudWrite, logCloudSafetyBlock } = await import('./cloudDataSafety')
+    const decision = guardCloudWrite({
+      kind: 'upsert',
+      localCount: clients.length,
+      payloadCount: clients.length,
+      label: 'crm_clients',
+    })
+    if (!decision.allow) {
+      logCloudSafetyBlock(decision)
       return true
     }
 
@@ -720,8 +747,27 @@ export const getCrmClients = async (): Promise<Client[]> => {
   return rows.map((row) => row.client_data).filter(Boolean)
 }
 
-export const deleteCrmClient = async (localId: string): Promise<boolean> => {
+export const deleteCrmClient = async (
+  localId: string,
+  opts?: { source?: CloudDeleteSource }
+): Promise<boolean> => {
   if (!isSupabaseConfigured()) return false
+  const source = opts?.source || 'user'
+  // 同步路径 + 本机空库 → 绝不删云端（防误清空连锁）
+  if (source === 'sync') {
+    const { loadAllCrmClients } = await import('../utils/workspaceScope')
+    const { guardCloudWrite, logCloudSafetyBlock } = await import('./cloudDataSafety')
+    const decision = guardCloudWrite({
+      kind: 'delete',
+      localCount: loadAllCrmClients().length,
+      payloadCount: 1,
+      label: 'crm_clients',
+    })
+    if (!decision.allow) {
+      logCloudSafetyBlock(decision)
+      return false
+    }
+  }
   try {
     const { error } = await supabase
       .from('crm_clients')
@@ -736,12 +782,40 @@ export const deleteCrmClient = async (localId: string): Promise<boolean> => {
   }
 }
 
-/** 批量删除 CRM（云端） */
-export const deleteCrmClientsBulk = async (localIds: string[]): Promise<number> => {
+/** 批量删除 CRM（云端）。同步/空本机时拒绝；仅用户明确删除可走。 */
+export const deleteCrmClientsBulk = async (
+  localIds: string[],
+  opts?: { source?: CloudDeleteSource }
+): Promise<number> => {
   if (!isSupabaseConfigured() || !localIds.length) return 0
+  const source = opts?.source || 'user'
+  if (source === 'sync') {
+    console.warn('[cloud-safety] 拒绝同步路径批量删除 CRM')
+    return 0
+  }
+  const { loadAllCrmClients } = await import('../utils/workspaceScope')
+  const { guardCloudWrite, logCloudSafetyBlock } = await import('./cloudDataSafety')
+  let cloudCount = -1
+  try {
+    cloudCount = (await getCrmClients()).length
+  } catch {
+    /* ignore */
+  }
+  const decision = guardCloudWrite({
+    kind: 'delete',
+    localCount: loadAllCrmClients().length,
+    payloadCount: localIds.length,
+    cloudCount,
+    label: 'crm_clients bulk',
+  })
+  // 用户明确批量删除时放行；仅当本机为空仍拦一道
+  if (!decision.allow && loadAllCrmClients().length <= 0) {
+    logCloudSafetyBlock(decision)
+    return 0
+  }
   let ok = 0
   for (const id of localIds) {
-    if (await deleteCrmClient(id)) ok += 1
+    if (await deleteCrmClient(id, { source: 'user' })) ok += 1
   }
   return ok
 }
