@@ -259,13 +259,13 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
         backgroundSize: '56px 56px',
       }} />
       <div className="text-center mb-8 sm:mb-12 px-2 relative z-10 animate-fade-in">
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-cyan-400/30 bg-cyan-400/10 text-cyan-200 text-[10px] font-bold uppercase tracking-[0.2em] mb-4">
-          Foreign Trade Collab
+        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-cyan-400/30 bg-cyan-400/10 text-cyan-200 text-[10px] font-bold tracking-[0.12em] mb-4">
+          谢郁楠开发
         </div>
         <h1 className="text-3xl sm:text-4xl md:text-5xl font-extrabold text-white tracking-tight mb-3 sm:mb-4">
           外贸智慧协同
         </h1>
-        <p className="text-base sm:text-lg md:text-xl text-slate-400 font-medium tracking-wide">企业级外贸获客与协同平台</p>
+        <p className="text-base sm:text-lg md:text-xl text-slate-400 font-medium tracking-wide">外贸获客与协同平台</p>
       </div>
 
       <div className="relative z-10 bg-white/95 backdrop-blur-xl p-6 sm:p-8 md:p-12 rounded-3xl sm:rounded-[2rem] shadow-signal w-full max-w-lg border border-white/20 animate-fade-in">
