@@ -199,9 +199,9 @@ export const SelectedRefsStrip: React.FC<{
   );
 };
 
-/** 创作流水线顶部导航条（平面 → 三维 → 视频 → 包装） */
+/** 创作流水线顶部导航条（平面 → 三维 → 视频 → 包装 → 市调匹配） */
 export const CreativePipelineBar: React.FC<{
-  current: '2d' | '3d' | 'video' | 'packaging';
+  current: '2d' | '3d' | 'video' | 'packaging' | 'match';
   onNavigate?: (mod: ModuleType) => void;
 }> = ({ current, onNavigate }) => {
   if (!onNavigate) return null;

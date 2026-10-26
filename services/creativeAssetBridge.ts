@@ -25,7 +25,7 @@ export type CreativeHandoff = {
   skuName?: string;
   note?: string;
   from: 'design_2d' | 'catalog' | 'manual' | 'packaging';
-  target: 'design_3d' | 'ai_video' | 'packaging';
+  target: 'design_3d' | 'ai_video' | 'packaging' | 'product_match';
   at: number;
 };
 
@@ -139,6 +139,7 @@ export const consumeCreativeHandoff = (
 export const handoffTargetToModule = (target: CreativeHandoff['target']): ModuleType => {
   if (target === 'design_3d') return ModuleType.PRODUCT_DESIGN_3D;
   if (target === 'packaging') return ModuleType.PRODUCT_PACKAGING;
+  if (target === 'product_match') return ModuleType.PRODUCT_MATCH;
   return ModuleType.PRODUCT_AI_VIDEO;
 };
 
@@ -171,5 +172,11 @@ export const CREATIVE_PIPELINE: Array<{
     label: '4 包装设计',
     module: ModuleType.PRODUCT_PACKAGING,
     blurb: '形态 × 卖场 × 配色',
+  },
+  {
+    id: 'match',
+    label: '5 市调匹配',
+    module: ModuleType.PRODUCT_MATCH,
+    blurb: '国家 · 客户 · 开发信',
   },
 ];

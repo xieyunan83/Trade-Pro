@@ -387,11 +387,11 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
   };
 
   const sendAssetsTo = (
-    target: 'design_3d' | 'ai_video' | 'packaging',
+    target: 'design_3d' | 'ai_video' | 'packaging' | 'product_match',
     urls: string[],
     note?: string
   ) => {
-    if (!urls.length) {
+    if (!urls.length && target !== 'product_match') {
       setError('请先勾选要推送的图片（可多选）');
       return;
     }
@@ -405,7 +405,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     setCreativeHandoff({
       images: sliced,
       skuCode: sku?.skuCode || active?.skuCode,
-      skuName: (sku as any)?.name || active?.skuName,
+      skuName: (sku as any)?.name || active?.skuName || active?.title,
       note: note || active?.title,
       from: 'design_2d',
       target,
@@ -415,19 +415,34 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
         ? ModuleType.PRODUCT_DESIGN_3D
         : target === 'packaging'
           ? ModuleType.PRODUCT_PACKAGING
-          : ModuleType.PRODUCT_AI_VIDEO
+          : target === 'product_match'
+            ? ModuleType.PRODUCT_MATCH
+            : ModuleType.PRODUCT_AI_VIDEO
     );
   };
 
-  const sendSelectedTo = (target: 'design_3d' | 'ai_video' | 'packaging') => {
+  const sendSelectedTo = (target: 'design_3d' | 'ai_video' | 'packaging' | 'product_match') => {
     const urls = selectedAssets.map((a) => a.url);
-    if (!urls.length) {
+    if (!urls.length && target !== 'product_match') {
       setError('请先勾选图片，再推送到下游模块');
       return;
     }
     const label =
-      target === 'design_3d' ? '3D' : target === 'packaging' ? '包装' : '视频';
-    sendAssetsTo(target, urls, `已选 ${urls.length} 张 → ${label}`);
+      target === 'design_3d'
+        ? '3D'
+        : target === 'packaging'
+          ? '包装'
+          : target === 'product_match'
+            ? '市调匹配'
+            : '视频';
+    const fallbackUrls =
+      urls.length > 0
+        ? urls
+        : canvasAssets
+            .slice(0, 2)
+            .map((a) => a.url)
+            .filter(Boolean);
+    sendAssetsTo(target, fallbackUrls, `${active?.title || '平面项目'} → ${label}`);
   };
 
   return (
@@ -652,6 +667,13 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                         className="text-[10px] font-black rounded-lg bg-amber-600 text-white px-2.5 py-1.5 disabled:opacity-40"
                       >
                         选中 → 包装
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => sendSelectedTo('product_match')}
+                        className="text-[10px] font-black rounded-lg bg-emerald-600 text-white px-2.5 py-1.5"
+                      >
+                        → 市调匹配
                       </button>
                     </>
                   ) : null}

@@ -4709,8 +4709,10 @@ const App: React.FC = () => {
                 {activeModule === ModuleType.PRODUCT_MATCH && (
                     <ModuleProductMatch
                         history={history}
+                        crmClients={crmClients}
                         onOpenHistory={loadFromHistory}
                         onGoCrm={() => setActiveModule(ModuleType.CLIENT_CRM)}
+                        onNavigateModule={setActiveModule}
                     />
                 )}
                 {activeModule === ModuleType.EMAIL_CAMPAIGN && (

@@ -76,7 +76,7 @@ export const PLATFORM_SECTIONS: PlatformSection[] = [
       { id: ModuleType.PRODUCTS, label: '产品分析', sub: 'Products', icon: PackageSearch },
       { id: ModuleType.DECISION_MAKERS, label: '决策人挖掘', sub: 'Contacts', icon: Users },
       { id: ModuleType.SIMILAR, label: '同类推荐', sub: 'Similar', icon: Network },
-      { id: ModuleType.PRODUCT_MATCH, label: '新品匹配', sub: 'Match', icon: Target },
+      { id: ModuleType.PRODUCT_MATCH, label: '市调匹配', sub: 'GTM', icon: Target },
     ],
   },
   {
