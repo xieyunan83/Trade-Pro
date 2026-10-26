@@ -181,7 +181,8 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser }) => {
         prompt: finalPrompt,
         size,
         n: count,
-        thinkingMode: true,
+        // 默认关闭深度思考，避免同步长连接被网关掐断
+        thinkingMode: false,
         referenceImages: refImages.length ? refImages : undefined,
       });
       const now = Date.now();

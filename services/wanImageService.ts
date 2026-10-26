@@ -6,7 +6,6 @@ import {
   DEFAULT_TOKEN_PLAN_ORIGIN,
   isLocalDevHost,
   qwenCorsHint,
-  resolveQwenRequestTarget,
 } from './qwenProxy';
 
 const LS_KEY = 'trade_scout_wan_api_key';
@@ -14,7 +13,10 @@ const LS_BASE = 'trade_scout_wan_base_url';
 const LS_MODEL = 'trade_scout_wan_model_id';
 
 const DEFAULT_WAN_MODEL = 'wan2.7-image-pro';
-const WAN_PATH = '/api/v1/services/aigc/multimodal-generation/generation';
+/** Token Plan / 同步多模态（官方 Token Plan 文生图示例） */
+const SYNC_PATH = '/api/v1/services/aigc/multimodal-generation/generation';
+/** 异步文生图（需 X-DashScope-Async: enable） */
+const ASYNC_PATH = '/api/v1/services/aigc/image-generation/generation';
 const TASK_PATH = (id: string) => `/api/v1/tasks/${encodeURIComponent(id)}`;
 
 const sanitizeApiKey = (key: string): string =>
@@ -42,7 +44,7 @@ export interface GenerateWanImageOptions {
   thinkingMode?: boolean;
   /** 可选参考图 URL（图生图 / 编辑） */
   referenceImages?: string[];
-  /** 总等待上限（毫秒），含异步轮询；电商长图建议 180000+ */
+  /** 总等待上限（毫秒），含异步轮询 */
   timeoutMs?: number;
 }
 
@@ -101,7 +103,6 @@ export const resolveWanImageConfig = async (
     }
   }
 
-  // 未单独配置万相时，回退到千问 Token Plan 同一套 Key / 域名
   const wanPoolKey = getActivePoolKey('wan');
   const qwenKey = getActivePoolKey('qwen') || readLocal('trade_scout_qwen_api_key') || env.qwenApiKey;
   const qwenBase = readLocal('trade_scout_qwen_base_url') || env.qwenBaseUrl;
@@ -133,13 +134,18 @@ export const resolveWanImageConfig = async (
   return { apiKey, origin, modelId };
 };
 
-const buildUrl = (origin: string, path: string): { url: string; proxyOrigin?: string } => {
-  const absolute = `${origin.replace(/\/$/, '')}${path}`;
+/**
+ * 生图一律走同域代理，忽略可能损坏的 custom/supabase 代理模式。
+ * （错误代理模式会直接导致浏览器 Failed to fetch）
+ */
+const buildUrl = (origin: string, path: string): { url: string; proxyOrigin: string } => {
   if (isLocalDevHost()) {
     return { url: `/qwen-api${path}`, proxyOrigin: origin };
   }
-  const resolved = resolveQwenRequestTarget(absolute);
-  return { url: resolved.url, proxyOrigin: resolved.proxyOrigin || origin };
+  return {
+    url: `/api/qwen?__upstream=${encodeURIComponent(path)}`,
+    proxyOrigin: origin || DEFAULT_TOKEN_PLAN_ORIGIN,
+  };
 };
 
 const parseJson = async (res: Response): Promise<any> => {
@@ -162,7 +168,6 @@ const networkFailMessage = (e: any, action: string): string => {
   return `${action}失败：${msg}${qwenCorsHint(msg)}`;
 };
 
-/** 仅公网 URL / data URL；blob/file 无法被上游拉取 */
 const sanitizeRefImages = (imgs?: string[]): string[] =>
   (imgs || [])
     .map((s) => (s || '').trim())
@@ -201,8 +206,11 @@ const extractImageUrls = (data: any): string[] => {
   return [...new Set(urls.filter(Boolean))];
 };
 
+const msgOf = (data: any): string =>
+  String(data?.message || data?.error?.message || data?.code || '').slice(0, 400);
+
 const throwHttpError = (status: number, data: any, config: WanImageConfig, proxiedTo: string) => {
-  const msg = data?.message || data?.error?.message || data?.code || JSON.stringify(data).slice(0, 300);
+  const msg = msgOf(data) || JSON.stringify(data).slice(0, 300);
   if (status === 401) {
     throw new Error(
       `万相 API Key 被拒绝 (401)。目标=${proxiedTo}；` +
@@ -219,53 +227,64 @@ const throwHttpError = (status: number, data: any, config: WanImageConfig, proxi
   throw new Error(`万相生成失败 (${status}): ${msg}`);
 };
 
-/**
- * 异步提交生图任务（短请求），避免同步长连接被网关掐断导致浏览器 Failed to fetch。
- */
-const submitAsyncTask = async (
+const isAsyncUnsupported = (status: number, data: any): boolean => {
+  const msg = msgOf(data);
+  return (
+    /does not support asynchronous|不支持异步|InvalidEndpointOrModel\.UnsupportedAsync|AsyncCallNotSupported/i.test(
+      msg
+    ) ||
+    (status === 400 && /async/i.test(msg) && /not support|unsupported|不支持/i.test(msg))
+  );
+};
+
+const isSyncUnsupported = (status: number, data: any): boolean => {
+  const msg = msgOf(data);
+  return /does not support synchronous|不支持同步|UnsupportedSync/i.test(msg);
+};
+
+type PostResult = { ok: boolean; status: number; data: any; proxiedTo: string };
+
+const postUpstream = async (
   config: WanImageConfig,
-  body: Record<string, unknown>
-): Promise<string> => {
-  const { url, proxyOrigin } = buildUrl(config.origin, WAN_PATH);
+  path: string,
+  body: Record<string, unknown>,
+  extraHeaders: Record<string, string>,
+  timeoutMs: number
+): Promise<PostResult> => {
+  const { url, proxyOrigin } = buildUrl(config.origin, path);
   const headers = buildAliyunFetchHeaders({
     targetUrl: url,
     apiKey: config.apiKey,
-    proxyOrigin: proxyOrigin || config.origin,
+    proxyOrigin,
     extra: {
-      'X-DashScope-Async': 'enable',
-      'X-Upstream-Path': WAN_PATH,
+      'X-Upstream-Path': path,
+      ...extraHeaders,
     },
   });
 
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   let response: Response;
   try {
     response = await fetch(url, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
+      signal: controller.signal,
     });
   } catch (e: any) {
-    throw new Error(networkFailMessage(e, '提交生图任务'));
+    throw new Error(networkFailMessage(e, '生图请求'));
+  } finally {
+    clearTimeout(timer);
   }
 
   const data = await parseJson(response);
-  if (!response.ok) {
-    throwHttpError(
-      response.status,
-      data,
-      config,
-      response.headers.get('X-Proxied-To') || config.origin
-    );
-  }
-
-  const taskId = data?.output?.task_id || data?.task_id;
-  if (!taskId) {
-    // 个别账号仍走同步：直接带图返回
-    const syncImages = extractImageUrls(data);
-    if (syncImages.length) return `__sync__:${syncImages.join('\n')}`;
-    throw new Error('生图任务已受理但未返回 task_id，请稍后重试');
-  }
-  return String(taskId);
+  return {
+    ok: response.ok,
+    status: response.status,
+    data,
+    proxiedTo: response.headers.get('X-Proxied-To') || config.origin,
+  };
 };
 
 const pollTask = async (
@@ -278,7 +297,7 @@ const pollTask = async (
   const headers = buildAliyunFetchHeaders({
     targetUrl: url,
     apiKey: config.apiKey,
-    proxyOrigin: proxyOrigin || config.origin,
+    proxyOrigin,
     extra: { 'X-Upstream-Path': path },
   });
 
@@ -290,8 +309,7 @@ const pollTask = async (
     try {
       response = await fetch(url, { method: 'GET', headers });
     } catch (e: any) {
-      // 轮询偶发断线：短暂等待后继续，不立刻失败
-      if (attempt < 3 || Date.now() - started < timeoutMs - 5_000) {
+      if (Date.now() - started < timeoutMs - 5_000) {
         await sleep(2_000);
         continue;
       }
@@ -313,9 +331,7 @@ const pollTask = async (
 
     if (status === 'SUCCEEDED' || status === 'SUCCESS') {
       const images = extractImageUrls(data);
-      if (!images.length) {
-        throw new Error('生图完成但未返回图片地址，请重试');
-      }
+      if (!images.length) throw new Error('生图完成但未返回图片地址，请重试');
       return { images, raw: data };
     }
     if (status === 'FAILED' || status === 'CANCELED' || status === 'CANCELLED') {
@@ -325,19 +341,20 @@ const pollTask = async (
     await sleep(attempt < 4 ? 1_500 : 2_500);
   }
 
-  throw new Error(
-    `生图等待超时（${Math.round(timeoutMs / 1000)} 秒）。可关掉「深度思考」或降低分辨率后重试。`
-  );
+  throw new Error(`生图等待超时（${Math.round(timeoutMs / 1000)} 秒）。可改用 1K 分辨率后重试。`);
 };
 
+/**
+ * 1) 优先异步 image-generation（短请求 + 轮询，不易 Failed to fetch）
+ * 2) 若不支持异步 / Token Plan：同步 multimodal（官方 Token Plan 路径，勿带 Async 头）
+ */
 export const generateWanImage = async (
   options: GenerateWanImageOptions,
   configOverride?: Partial<WanImageConfig>
 ): Promise<WanImageResult> => {
   const config = await resolveWanImageConfig(configOverride);
   const refs = sanitizeRefImages(options.referenceImages);
-  // 有参考图时 thinking_mode 官方无效，强制关闭以免异常
-  const thinkingMode = refs.length > 0 ? false : options.thinkingMode !== false;
+  const thinkingMode = refs.length > 0 ? false : options.thinkingMode === true;
   const timeoutMs = options.timeoutMs ?? 180_000;
 
   const content: Array<Record<string, string>> = [];
@@ -357,14 +374,67 @@ export const generateWanImage = async (
     },
   };
 
-  const taskId = await submitAsyncTask(config, body);
-  if (taskId.startsWith('__sync__:')) {
-    const images = taskId.slice('__sync__:'.length).split('\n').filter(Boolean);
-    return { images, raw: { sync: true } };
+  // —— 路径 1：异步 image-generation ——
+  let asyncBlocked = false;
+  try {
+    const asyncRes = await postUpstream(
+      config,
+      ASYNC_PATH,
+      body,
+      { 'X-DashScope-Async': 'enable' },
+      45_000
+    );
+    if (asyncRes.ok) {
+      const taskId = asyncRes.data?.output?.task_id || asyncRes.data?.task_id;
+      if (taskId) {
+        const polled = await pollTask(config, String(taskId), timeoutMs);
+        return { images: polled.images, raw: polled.raw, taskId: String(taskId) };
+      }
+      const syncImages = extractImageUrls(asyncRes.data);
+      if (syncImages.length) return { images: syncImages, raw: asyncRes.data };
+      throw new Error('异步生图已受理但未返回 task_id');
+    }
+    if (isAsyncUnsupported(asyncRes.status, asyncRes.data)) {
+      asyncBlocked = true;
+      console.warn('[Wan] 当前账号不支持异步 image-generation，回退 Token Plan 同步 multimodal');
+    } else {
+      throwHttpError(asyncRes.status, asyncRes.data, config, asyncRes.proxiedTo);
+    }
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    // 网络层失败也尝试同步回退（部分环境异步路径不可达）
+    if (/网络中断|Failed to fetch|NetworkError|Load failed/i.test(msg)) {
+      console.warn('[Wan] 异步提交网络失败，尝试同步 multimodal', msg);
+      asyncBlocked = true;
+    } else if (!asyncBlocked) {
+      throw e;
+    }
   }
 
-  const polled = await pollTask(config, taskId, timeoutMs);
-  return { images: polled.images, raw: polled.raw, taskId };
+  // —— 路径 2：Token Plan 同步 multimodal（禁止 Async 头）——
+  const syncTimeout = Math.min(timeoutMs, 240_000);
+  const syncRes = await postUpstream(config, SYNC_PATH, body, {}, syncTimeout);
+  if (!syncRes.ok) {
+    if (isSyncUnsupported(syncRes.status, syncRes.data) && !asyncBlocked) {
+      throw new Error('当前账号仅支持异步生图，但异步通道不可用。请联系管理员检查配置。');
+    }
+    throwHttpError(syncRes.status, syncRes.data, config, syncRes.proxiedTo);
+  }
+
+  // 同步响应里偶发也带 task_id
+  const maybeTask = syncRes.data?.output?.task_id || syncRes.data?.task_id;
+  if (maybeTask && !extractImageUrls(syncRes.data).length) {
+    const polled = await pollTask(config, String(maybeTask), timeoutMs);
+    return { images: polled.images, raw: polled.raw, taskId: String(maybeTask) };
+  }
+
+  const images = extractImageUrls(syncRes.data);
+  if (!images.length) {
+    throw new Error(
+      '万相未返回图片 URL，请检查模型是否为 wan2.7-image-pro，以及套餐是否开通万相。'
+    );
+  }
+  return { images, raw: syncRes.data };
 };
 
 export const testWanImageApi = async (
@@ -392,12 +462,12 @@ export const testWanImageApi = async (
           size: '1K',
           n: 1,
           thinkingMode: false,
-          timeoutMs: 90_000,
+          timeoutMs: 120_000,
         },
         config
       ),
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('万相连接测试超时（90 秒）')), 90_000)
+        setTimeout(() => reject(new Error('万相连接测试超时（120 秒）')), 120_000)
       ),
     ]);
     return { success: true, message: `万相连接成功 ✅ 已生成 ${result.images.length} 张图` };

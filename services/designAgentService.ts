@@ -52,13 +52,13 @@ export const getDesignAgentConfigStatus = (): {
 /** 业务员界面：去掉供应商/模型细节 */
 const toUserFacingDesignError = (raw: string): string => {
   const msg = (raw || '').trim() || '生成失败';
-  if (/Failed to fetch|NetworkError|Load failed|网络中断|提交生图任务网络/i.test(msg)) {
-    return '生图请求中断，请检查网络后重试；若多次失败请联系管理员。';
+  if (/Failed to fetch|NetworkError|Load failed|网络中断|生图请求网络/i.test(msg)) {
+    return '生图请求中断。请硬刷新页面后重试；仍失败请将分辨率改为 1K，或联系管理员。';
   }
   if (/超时|timeout|AbortError/i.test(msg)) {
-    return '生图等待超时。可改用 1K 分辨率、关闭深度思考后重试。';
+    return '生图等待超时。请改用 1K 分辨率后重试。';
   }
-  if (/401|API Key|未配置|InvalidApiKey|鉴权/i.test(msg)) {
+  if (/401|API Key|未配置|InvalidApiKey|鉴权|被拒绝/i.test(msg)) {
     return '生图服务暂不可用，请联系管理员检查配置。';
   }
   if (/model|不支持|不可用/i.test(msg)) {
@@ -77,6 +77,9 @@ export const generateDesignImages = async (
   const n = Math.min(4, Math.max(1, opts.n || 1));
   const timeoutMs = 240_000;
 
+  // 默认关闭深度思考：同步通道下更快更稳；调用方可显式传 true
+  const thinkingMode = opts.thinkingMode === true;
+
   try {
     if (design.enabled && (design.apiKey || '').trim()) {
       const result = await generateWanImage(
@@ -84,7 +87,7 @@ export const generateDesignImages = async (
           prompt: opts.prompt,
           size,
           n,
-          thinkingMode: opts.thinkingMode !== false,
+          thinkingMode,
           watermark: false,
           referenceImages: opts.referenceImages,
           timeoutMs,
@@ -105,7 +108,7 @@ export const generateDesignImages = async (
       prompt: opts.prompt,
       size,
       n,
-      thinkingMode: opts.thinkingMode !== false,
+      thinkingMode,
       watermark: false,
       referenceImages: opts.referenceImages,
       timeoutMs,
