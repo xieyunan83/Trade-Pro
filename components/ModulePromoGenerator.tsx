@@ -1325,6 +1325,11 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                           </div>
                         ) : (
                           <div
+                            title={
+                              row.status === 'failed' && task?.error
+                                ? task.error
+                                : undefined
+                            }
                             className={`inline-flex max-w-full items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-black uppercase tracking-tighter ${
                               row.status === 'completed'
                                 ? 'bg-green-100 text-green-600'

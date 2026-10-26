@@ -24,12 +24,39 @@ export const slimAutomationTaskForCloud = (task: AutomationResult): AutomationRe
 const taskStamp = (t: AutomationResult): number =>
   Math.max(Number(t.completedAt) || 0, Number(t.createdAt) || 0, 0);
 
+/**
+ * 状态优先级（高者胜出）。
+ * 旧逻辑把 analyzing/pending 排在 completed 之上，云同步会把已完成结果打回待处理/失败，
+ * Windows 客户端与浏览器互相同步时尤其明显。
+ */
+const automationStatusRank = (t: AutomationResult): number => {
+  if (t.status === 'completed' && t.analysis) return 50;
+  if (t.status === 'completed') return 40;
+  if (t.status === 'generating_email') return 32;
+  if (t.status === 'analyzing') return 28;
+  if (t.status === 'pending') return 20;
+  if (t.status === 'failed') return 10;
+  return 0;
+};
+
+/** 云端残留的僵尸 analyzing（崩溃/关客户端）降为 pending，避免压过本机 failed/completed */
+const normalizeForMerge = (t: AutomationResult): AutomationResult => {
+  if (t.status !== 'analyzing') return t;
+  const stamp = taskStamp(t);
+  const ageMs = stamp ? Date.now() - stamp : Number.POSITIVE_INFINITY;
+  if (ageMs > 45 * 60 * 1000) {
+    return { ...t, status: 'pending' };
+  }
+  return t;
+};
+
 export const mergeAutomationQueues = (
   local: AutomationResult[],
   cloud: AutomationResult[]
 ): AutomationResult[] => {
   const map = new Map<string, AutomationResult>();
-  for (const t of [...cloud, ...local]) {
+  for (const raw of [...cloud, ...local]) {
+    const t = normalizeForMerge(raw);
     const id = (t.id || '').trim();
     if (!id) continue;
     const prev = map.get(id);
@@ -37,15 +64,44 @@ export const mergeAutomationQueues = (
       map.set(id, t);
       continue;
     }
-    const rank = (s: AutomationResult['status']) =>
-      s === 'analyzing' ? 3 : s === 'pending' ? 2 : s === 'completed' ? 1 : 0;
-    if (rank(t.status) > rank(prev.status)) {
-      map.set(id, t);
+    // 本机刚失败时，云端可能仍残留 analyzing：按时间戳取较新者，避免失败被僵尸 analyzing 盖掉
+    if (
+      (t.status === 'analyzing' && prev.status === 'failed') ||
+      (t.status === 'failed' && prev.status === 'analyzing')
+    ) {
+      const tTime = t.status === 'failed' ? Number(t.failedAt) || taskStamp(t) : taskStamp(t);
+      const pTime =
+        prev.status === 'failed' ? Number(prev.failedAt) || taskStamp(prev) : taskStamp(prev);
+      const newer = tTime >= pTime ? t : prev;
+      map.set(id, {
+        ...newer,
+        analysis: t.analysis || prev.analysis,
+        error: newer.status === 'failed' ? newer.error || t.error || prev.error : undefined,
+      });
       continue;
     }
-    if (rank(t.status) === rank(prev.status) && taskStamp(t) >= taskStamp(prev)) {
+
+    const rt = automationStatusRank(t);
+    const rp = automationStatusRank(prev);
+    if (rt > rp) {
+      // 已完成报告优先保留；analyzing 不得覆盖 completed
+      map.set(id, {
+        ...t,
+        analysis: t.analysis || prev.analysis,
+        error: t.status === 'failed' ? t.error || prev.error : undefined,
+      });
+      continue;
+    }
+    if (rt === rp && taskStamp(t) >= taskStamp(prev)) {
       const analysis = t.analysis || prev.analysis;
-      map.set(id, { ...prev, ...t, analysis });
+      map.set(id, {
+        ...prev,
+        ...t,
+        analysis,
+        error: t.status === 'failed' ? t.error || prev.error : t.error,
+      });
+    } else if (rt === rp && !prev.analysis && t.analysis) {
+      map.set(id, { ...prev, ...t, analysis: t.analysis });
     }
   }
   return Array.from(map.values()).sort((a, b) => taskStamp(b) - taskStamp(a));

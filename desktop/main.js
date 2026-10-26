@@ -202,10 +202,16 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  // Windows 工作站休眠/锁屏时杀网络会导致批量背调大面积 FAILED
   try {
     powerSaveId = powerSaveBlocker.start('prevent-app-suspension');
   } catch (e) {
     console.warn('[power] prevent-app-suspension failed', e);
+  }
+  try {
+    powerSaveBlocker.start('prevent-display-sleep');
+  } catch (e) {
+    console.warn('[power] prevent-display-sleep failed', e);
   }
 
   const ses = session.defaultSession;

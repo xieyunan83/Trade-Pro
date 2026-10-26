@@ -91,21 +91,58 @@ export const clearAllHistory = async (): Promise<void> => {
   });
 };
 
-export const saveAutomationTask = async (
-  task: AutomationResult,
-  opts?: { skipCloud?: boolean }
-): Promise<void> => {
-  const db = await initDB();
-  await new Promise<void>((resolve, reject) => {
+/** 本机队列体积过大时瘦身（Windows IndexedDB 配额更容易触顶） */
+const slimAutomationTaskForLocal = (task: AutomationResult): AutomationResult => {
+  const analysis = task.analysis;
+  if (!analysis) {
+    return { ...task, productImages: undefined, mailGroup: undefined };
+  }
+  return {
+    ...task,
+    productImages: undefined,
+    mailGroup: undefined,
+    analysis: {
+      ...analysis,
+      products: (analysis.products || []).slice(0, 10).map((p) => ({
+        ...p,
+        imageUrl: undefined,
+      })),
+      similarCompanies: (analysis.similarCompanies || []).slice(0, 12),
+      websiteCategories: (analysis.websiteCategories || []).slice(0, 12),
+    },
+  };
+};
+
+const putAutomationTask = (db: IDBDatabase, task: AutomationResult): Promise<void> =>
+  new Promise((resolve, reject) => {
     const transaction = db.transaction('automation', 'readwrite');
     const store = transaction.objectStore('automation');
     const request = store.put(task);
     request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error);
   });
+
+export const saveAutomationTask = async (
+  task: AutomationResult,
+  opts?: { skipCloud?: boolean }
+): Promise<void> => {
+  const db = await initDB();
+  let toCloud = task;
+  try {
+    await putAutomationTask(db, task);
+  } catch (e: any) {
+    const msg = String(e?.name || e?.message || e || '');
+    if (/QuotaExceeded|quota|磁盘|空间不足/i.test(msg)) {
+      console.warn('[automation] IndexedDB quota — saving slim task', task.id);
+      toCloud = slimAutomationTaskForLocal(task);
+      await putAutomationTask(db, toCloud);
+    } else {
+      throw e;
+    }
+  }
   if (!opts?.skipCloud) {
     void import('./automationQueueCloud')
-      .then((m) => m.pushAutomationTaskToCloud(task))
+      .then((m) => m.pushAutomationTaskToCloud(toCloud))
       .catch(() => undefined);
   }
 };

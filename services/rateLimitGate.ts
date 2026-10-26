@@ -40,6 +40,20 @@ export const isRateLimitError = (err: unknown): boolean => {
   return /429|rate\s*limit|quota exceeded|too many requests|请求过于频繁|Throttl/i.test(msg);
 };
 
+/** 批量背调可重试：限流 + 超时 + 网络抖动 + 模型偶发坏 JSON */
+export const isTransientAnalysisError = (err: unknown): boolean => {
+  if (isRateLimitError(err)) return true;
+  const msg = String((err as any)?.message || err || '');
+  return /timeout|超时|Failed to fetch|NetworkError|network|ECONNRESET|ENOTFOUND|502|503|504|546|aborted|AbortError|未返回有效 JSON|Structure mismatch|Empty response|空响应|CONNECTION_FAILED|Connection Failed|资源不足|FUNCTION_INVOCATION/i.test(
+    msg
+  );
+};
+
+export const shortErrorMessage = (err: unknown, max = 180): string => {
+  const msg = String((err as any)?.message || err || '未知错误').replace(/\s+/g, ' ').trim();
+  return msg.length > max ? `${msg.slice(0, max)}…` : msg;
+};
+
 /** 若在冷却中则等待到解锁（带轻微抖动，避免惊群） */
 export const waitForApiCooldown = async (shouldStop?: () => boolean): Promise<void> => {
   while (Date.now() < cooldownUntil) {
@@ -64,10 +78,13 @@ export const withRateLimitRetry = async <T,>(
     shouldStop?: () => boolean;
     baseWaitSec?: number;
     onCooldown?: (sec: number) => void;
+    /** 默认仅重试限流；批量背调可开 transient 覆盖超时/网络/坏 JSON */
+    retryTransient?: boolean;
   } = {}
 ): Promise<T> => {
   const maxAttempts = opts.maxAttempts ?? 4;
   const baseWaitSec = opts.baseWaitSec ?? 45;
+  const retryTransient = opts.retryTransient === true;
   let lastErr: unknown;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -79,12 +96,19 @@ export const withRateLimitRetry = async <T,>(
       return await fn();
     } catch (e) {
       lastErr = e;
-      if (!isRateLimitError(e) || attempt >= maxAttempts) throw e;
-      const waitSec = Math.min(baseWaitSec * attempt, 180);
-      console.warn(`[rateLimit] attempt ${attempt}/${maxAttempts} hit limit, wait ${waitSec}s`);
-      noteRateLimited(waitSec);
+      const retryable = retryTransient ? isTransientAnalysisError(e) : isRateLimitError(e);
+      if (!retryable || attempt >= maxAttempts) throw e;
+      const waitSec = isRateLimitError(e)
+        ? Math.min(baseWaitSec * attempt, 180)
+        : Math.min(8 * attempt, 40);
+      console.warn(
+        `[rateLimit] attempt ${attempt}/${maxAttempts} transient, wait ${waitSec}s`,
+        shortErrorMessage(e, 80)
+      );
+      if (isRateLimitError(e)) noteRateLimited(waitSec);
       opts.onCooldown?.(waitSec);
-      await waitForApiCooldown(opts.shouldStop);
+      if (isRateLimitError(e)) await waitForApiCooldown(opts.shouldStop);
+      else await new Promise((r) => setTimeout(r, waitSec * 1000));
     }
   }
   throw lastErr;

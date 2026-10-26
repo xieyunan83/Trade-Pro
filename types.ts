@@ -234,6 +234,10 @@ export interface AutomationResult {
   createdAt?: number;
   /** 背调完成时间（ms epoch） */
   completedAt?: number;
+  /** 失败原因（供列表悬停与重试判断） */
+  error?: string;
+  /** 最近失败时间 */
+  failedAt?: number;
   ownerUsername?: string;
   departmentId?: string;
 }

@@ -5,6 +5,8 @@ import {
   subscribeCooldown,
   withRateLimitRetry,
   isRateLimitError,
+  isTransientAnalysisError,
+  shortErrorMessage,
   noteRateLimited,
   getCooldownRemainingSec,
 } from './services/rateLimitGate';
@@ -2349,17 +2351,30 @@ const App: React.FC = () => {
     try {
       const kw = (task.keyword || opts.keyword || discoveryState.product || '').trim();
       if (kw) addCustomKeyword(kw);
+      const analyzeOpts = {
+        searchKeyword: kw || undefined,
+        searchTags: kw ? buildSearchTags(kw, task.country || '') : undefined,
+        searchCountry: task.country || undefined,
+      };
+      const preferredMode = task.mode || 'economy';
       const result = await withRateLimitRetry(
-        () =>
-          analyzeCompany(task.website, task.mode || 'economy', {
-            searchKeyword: kw || undefined,
-            searchTags: kw ? buildSearchTags(kw, task.country || '') : undefined,
-            searchCountry: task.country || undefined,
-          }),
+        async () => {
+          try {
+            return await analyzeCompany(task.website, preferredMode, analyzeOpts);
+          } catch (e) {
+            // DETAILED 在弱网/Windows 工作站上更容易超时或坏 JSON → 降级 ECONOMY 再试一次
+            if (preferredMode === 'detailed' && isTransientAnalysisError(e)) {
+              console.warn('[pipeline] detailed failed, fallback economy', task.website, e);
+              return await analyzeCompany(task.website, 'economy', analyzeOpts);
+            }
+            throw e;
+          }
+        },
         {
           maxAttempts: 4,
           baseWaitSec: 45,
           shouldStop: () => shouldStopRef.current,
+          retryTransient: true,
         }
       );
 
@@ -2378,9 +2393,15 @@ const App: React.FC = () => {
         },
         mailGroup: undefined,
         keyword: kw || task.keyword,
+        error: undefined,
+        failedAt: undefined,
       };
 
-      await saveAutomationTask(completedTask);
+      try {
+        await saveAutomationTask(completedTask);
+      } catch (saveErr) {
+        console.error('流水线任务落盘失败（界面仍记为完成）', saveErr);
+      }
       setAutomationResults((prev) => prev.map((t) => (t.id === task.id ? completedTask : t)));
 
       let historyId: string | null = null;
@@ -2454,8 +2475,17 @@ const App: React.FC = () => {
       }
     } catch (e: any) {
       console.error(`Pipeline task ${task.id} failed`, e);
-      const failedTask: AutomationResult = { ...task, status: 'failed' };
-      await saveAutomationTask(failedTask);
+      const failedTask: AutomationResult = {
+        ...task,
+        status: 'failed',
+        error: shortErrorMessage(e),
+        failedAt: Date.now(),
+      };
+      try {
+        await saveAutomationTask(failedTask);
+      } catch {
+        /* ignore */
+      }
       setAutomationResults((prev) => prev.map((t) => (t.id === task.id ? failedTask : t)));
       if (isRateLimitError(e)) {
         noteRateLimited(60);
@@ -2677,17 +2707,29 @@ const App: React.FC = () => {
           try {
             const kw = (task.keyword || discoveryState.product || '').trim();
             if (kw) addCustomKeyword(kw);
+            const analyzeOpts = {
+              searchKeyword: kw || undefined,
+              searchTags: kw ? buildSearchTags(kw, task.country || '') : undefined,
+              searchCountry: task.country || undefined,
+            };
+            const preferredMode = task.mode || 'economy';
             const result = await withRateLimitRetry(
-              () =>
-                analyzeCompany(task.website, task.mode || 'economy', {
-                  searchKeyword: kw || undefined,
-                  searchTags: kw ? buildSearchTags(kw, task.country || '') : undefined,
-                  searchCountry: task.country || undefined,
-                }),
+              async () => {
+                try {
+                  return await analyzeCompany(task.website, preferredMode, analyzeOpts);
+                } catch (e) {
+                  if (preferredMode === 'detailed' && isTransientAnalysisError(e)) {
+                    console.warn('[batch] detailed failed, fallback economy', task.website, e);
+                    return await analyzeCompany(task.website, 'economy', analyzeOpts);
+                  }
+                  throw e;
+                }
+              },
               {
                 maxAttempts: 4,
                 baseWaitSec: 45,
                 shouldStop: () => shouldStopRef.current,
+                retryTransient: true,
               }
             );
 
@@ -2701,12 +2743,19 @@ const App: React.FC = () => {
               analysis: result,
               mailGroup: undefined,
               keyword: kw || task.keyword || discoveryState.product,
+              error: undefined,
+              failedAt: undefined,
             };
 
             batchSeedByIdRef.current.set(task.id, completedTask);
-            await saveAutomationTask(completedTask);
+            // 先更新 UI，再落盘：避免 IndexedDB 配额失败把已成功的背调标成 FAILED
             syncAutomationResults((prev) => prev.map((t) => (t.id === task.id ? completedTask : t)));
             refreshBatchProgressFromSession('');
+            try {
+              await saveAutomationTask(completedTask);
+            } catch (saveErr) {
+              console.error('批量任务落盘失败（界面仍记为完成）', saveErr);
+            }
 
             try {
               await saveAnalysisToHistory(result, 'batch');
@@ -2718,7 +2767,11 @@ const App: React.FC = () => {
             updateCrmStatus(result);
           } catch (e: any) {
             if (shouldStopRef.current) {
-              const paused: AutomationResult = { ...task, status: 'pending' };
+              const paused: AutomationResult = {
+                ...task,
+                status: 'pending',
+                error: undefined,
+              };
               batchSeedByIdRef.current.set(task.id, paused);
               syncAutomationResults((prev) =>
                 prev.map((t) => (t.id === task.id ? paused : t))
@@ -2727,11 +2780,16 @@ const App: React.FC = () => {
               return;
             }
             console.error(`Task ${task.id} failed`, e);
-            const failedTask: AutomationResult = { ...task, status: 'failed' };
+            const failedTask: AutomationResult = {
+              ...task,
+              status: 'failed',
+              error: shortErrorMessage(e),
+              failedAt: Date.now(),
+            };
             batchSeedByIdRef.current.set(task.id, failedTask);
-            await saveAutomationTask(failedTask);
             syncAutomationResults((prev) => prev.map((t) => (t.id === task.id ? failedTask : t)));
             refreshBatchProgressFromSession('');
+            void saveAutomationTask(failedTask).catch(() => undefined);
             if (isRateLimitError(e)) {
               noteRateLimited(75);
             }
@@ -2816,10 +2874,31 @@ const App: React.FC = () => {
     if (!shouldAutoResumeBatch()) return;
     if (isAutomating || batchRunnerActiveRef.current || shouldStopRef.current) return;
     const pending = automationResults.filter((t) => t.status === 'pending');
-    if (pending.length < 1) return;
+    // 桌面端顺带续跑近期瞬时失败（超时/网络/坏 JSON），避免 Windows 工作站一失败就堆死
+    const retryFailed = automationResults
+      .filter(
+        (t) =>
+          t.status === 'failed' &&
+          (!t.failedAt || Date.now() - t.failedAt < 48 * 60 * 60 * 1000) &&
+          isTransientAnalysisError({ message: t.error || '' })
+      )
+      .slice(0, 80)
+      .map((t) => ({ ...t, status: 'pending' as const, error: undefined }));
+    const toRun = [...pending, ...retryFailed];
+    if (toRun.length < 1) return;
     autoResumeBatchOnceRef.current = true;
-    console.info(`[batch] desktop auto-resume ${pending.length} pending`);
-    void processBatchQueue(pending);
+    if (retryFailed.length) {
+      syncAutomationResults((prev) =>
+        prev.map((t) => {
+          const hit = retryFailed.find((r) => r.id === t.id);
+          return hit || t;
+        })
+      );
+    }
+    console.info(
+      `[batch] desktop auto-resume pending=${pending.length} retryFailed=${retryFailed.length}`
+    );
+    void processBatchQueue(toRun);
   }, [currentUser, automationResults, isAutomating]);
 
   const handleBatchAnalyzeExisting = async (results: ClientSearchResult[]) => { 
