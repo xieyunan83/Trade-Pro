@@ -196,7 +196,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser }) => {
       const agentMsg = {
         id: newDesignId('m'),
         role: 'agent' as const,
-        text: `已生成 ${newAssets.length} 张并放到画布（引擎：${result.engine}）。可继续改稿，例如「背景更干净」「保留包装文字」。`,
+        text: `已生成 ${newAssets.length} 张并放到画布。可继续改稿，例如「背景更干净」「保留包装文字」。`,
         at: now,
         assetIds: newAssets.map((a) => a.id),
       };
@@ -507,10 +507,10 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser }) => {
             className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 hover:bg-violet-700 disabled:opacity-60 text-white text-sm font-black py-3"
           >
             {loading ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
-            {loading ? 'Agent 生成中…' : '确认生成'}
+            {loading ? '生图中，约 1–2 分钟…' : '确认生成'}
           </button>
           <p className="text-[10px] text-slate-400 font-medium leading-relaxed">
-            生成前需确认，避免误消耗额度。
+            生成前需确认，避免误消耗额度。复杂场景可能需要一两分钟，请勿关闭页面。
           </p>
         </aside>
       </div>

@@ -49,44 +49,69 @@ export const getDesignAgentConfigStatus = (): {
   };
 };
 
+/** 业务员界面：去掉供应商/模型细节 */
+const toUserFacingDesignError = (raw: string): string => {
+  const msg = (raw || '').trim() || '生成失败';
+  if (/Failed to fetch|NetworkError|Load failed|网络中断|提交生图任务网络/i.test(msg)) {
+    return '生图请求中断，请检查网络后重试；若多次失败请联系管理员。';
+  }
+  if (/超时|timeout|AbortError/i.test(msg)) {
+    return '生图等待超时。可改用 1K 分辨率、关闭深度思考后重试。';
+  }
+  if (/401|API Key|未配置|InvalidApiKey|鉴权/i.test(msg)) {
+    return '生图服务暂不可用，请联系管理员检查配置。';
+  }
+  if (/model|不支持|不可用/i.test(msg)) {
+    return '当前生图模型不可用，请联系管理员调整配置后重试。';
+  }
+  return msg
+    .replace(/万相|Token Plan|sk-sp-[\w-]*|阿里云|dashscope|wan2\.7[\w-]*/gi, '生图服务')
+    .slice(0, 220);
+};
+
 export const generateDesignImages = async (
   opts: DesignGenerateOpts
 ): Promise<DesignGenerateResult> => {
   const design = loadDataProviderLocal('design_agent');
   const size = opts.size || '2K';
   const n = Math.min(4, Math.max(1, opts.n || 1));
+  const timeoutMs = 240_000;
 
-  if (design.enabled && (design.apiKey || '').trim()) {
-    const result = await generateWanImage(
-      {
-        prompt: opts.prompt,
-        size,
-        n,
-        thinkingMode: opts.thinkingMode !== false,
-        watermark: false,
-        referenceImages: opts.referenceImages,
-        timeoutMs: 120_000,
-      },
-      {
-        apiKey: design.apiKey!.trim(),
-        origin: (design.apiBase || '').trim() || undefined,
-        modelId: (design.extra?.modelId || '').trim() || undefined,
-      }
-    );
-    return {
-      images: result.images,
-      engine: design.extra?.modelId || 'design_agent',
-    };
+  try {
+    if (design.enabled && (design.apiKey || '').trim()) {
+      const result = await generateWanImage(
+        {
+          prompt: opts.prompt,
+          size,
+          n,
+          thinkingMode: opts.thinkingMode !== false,
+          watermark: false,
+          referenceImages: opts.referenceImages,
+          timeoutMs,
+        },
+        {
+          apiKey: design.apiKey!.trim(),
+          origin: (design.apiBase || '').trim() || undefined,
+          modelId: (design.extra?.modelId || '').trim() || undefined,
+        }
+      );
+      return {
+        images: result.images,
+        engine: 'design',
+      };
+    }
+
+    const result = await generateWanImage({
+      prompt: opts.prompt,
+      size,
+      n,
+      thinkingMode: opts.thinkingMode !== false,
+      watermark: false,
+      referenceImages: opts.referenceImages,
+      timeoutMs,
+    });
+    return { images: result.images, engine: 'design' };
+  } catch (e: any) {
+    throw new Error(toUserFacingDesignError(e?.message || String(e)));
   }
-
-  const result = await generateWanImage({
-    prompt: opts.prompt,
-    size,
-    n,
-    thinkingMode: opts.thinkingMode !== false,
-    watermark: false,
-    referenceImages: opts.referenceImages,
-    timeoutMs: 120_000,
-  });
-  return { images: result.images, engine: 'wan' };
 };
