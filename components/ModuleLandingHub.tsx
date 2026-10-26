@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Newspaper,
   Sparkles,
@@ -7,6 +7,7 @@ import {
   Loader2,
   ExternalLink,
   Radio,
+  ArrowRight,
 } from 'lucide-react';
 import type { User } from '../types';
 import { ModuleType } from '../types';
@@ -27,11 +28,8 @@ type Props = {
   syncStatus?: string | null;
   syncing?: boolean;
   onEnterWorkspace?: () => void;
-  /** 管理员：打开数据接入说明（可选，前台看板不展示接入文案） */
   onOpenDataSetup?: () => void;
-  /** 任务流模块跳转 */
   onNavigateModule?: (mod: ModuleType) => void;
-  /** 一键启动获客剧本 */
   onStartPlaybook?: (playbookId: string) => void;
   journeyProgress?: JourneyProgressHint;
 };
@@ -40,8 +38,8 @@ const SHOWCASE_ACCENTS = [
   'from-cyan-100 to-sky-50',
   'from-amber-100 to-orange-50',
   'from-emerald-100 to-teal-50',
-  'from-violet-100 to-fuchsia-50',
-  'from-rose-100 to-pink-50',
+  'from-sky-100 to-cyan-50',
+  'from-rose-100 to-orange-50',
 ];
 
 const initialLanding = (): LandingPayload =>
@@ -72,6 +70,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
   const [data, setData] = useState<LandingPayload>(initialLanding);
   const [loading, setLoading] = useState(() => !loadLandingCache());
   const [err, setErr] = useState<string | null>(null);
+  const [featuredIdx, setFeaturedIdx] = useState(0);
   const dataRef = useRef(data);
   dataRef.current = data;
 
@@ -81,7 +80,6 @@ export const ModuleLandingHub: React.FC<Props> = ({
       (cur.fx?.quotes?.length || 0) > 0 ||
       (cur.news?.items?.length || 0) > 0 ||
       (cur.products?.items?.length || 0) > 0;
-    // 已有内容时静默刷新，避免整页转圈
     if (!hasPaint || force) setLoading(true);
     setErr(null);
     try {
@@ -97,7 +95,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
   useEffect(() => {
     void load(false);
     const imgs = withShowcaseProducts(dataRef.current.products?.items)
-      .slice(0, 2)
+      .slice(0, 3)
       .map((p) => p.image)
       .filter(Boolean) as string[];
     const links: HTMLLinkElement[] = [];
@@ -117,11 +115,31 @@ export const ModuleLandingHub: React.FC<Props> = ({
   const fx = data?.fx?.quotes || [];
   const news = data?.news?.items || [];
   const products = withShowcaseProducts(data?.products?.items);
+  const safeFeatured = products.length
+    ? Math.min(featuredIdx, products.length - 1)
+    : 0;
+  const featured = products[safeFeatured];
+  const sideProducts = useMemo(() => {
+    if (!products.length) return [];
+    return products.filter((_, i) => i !== safeFeatured).slice(0, 4);
+  }, [products, safeFeatured]);
+
+  // 自动轮播主推款，增加动感
+  useEffect(() => {
+    if (products.length < 2) return;
+    const t = window.setInterval(() => {
+      setFeaturedIdx((i) => (i + 1) % Math.min(products.length, 6));
+    }, 4500);
+    return () => window.clearInterval(t);
+  }, [products.length]);
+
+  const goCatalog = () => onNavigateModule?.(ModuleType.PRODUCT_CATALOG);
 
   return (
     <div className="tp-landing relative -mx-1 sm:mx-0 space-y-3">
-      {/* 紧凑顶栏：不再占半屏 */}
+      {/* 顶栏 */}
       <section className="relative rounded-2xl border border-cyan-200/60 bg-gradient-to-r from-slate-950 via-slate-900 to-cyan-950 text-white overflow-hidden">
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_right,rgba(34,211,238,0.15),transparent_55%)] pointer-events-none" />
         <div className="relative px-3 sm:px-4 py-2.5 flex flex-wrap items-center gap-2 sm:gap-3">
           <div className="inline-flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.18em] text-cyan-300/90">
             <Radio size={11} className="animate-pulse" /> Hub
@@ -176,10 +194,156 @@ export const ModuleLandingHub: React.FC<Props> = ({
         </div>
       )}
 
-      {/* 情报三栏优先露在首屏 */}
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-3">
-        {/* 行业新闻 */}
-        <section className="xl:col-span-4 rounded-2xl border border-slate-200/80 bg-white/95 shadow-sm overflow-hidden flex flex-col max-h-[340px] min-h-[260px]">
+      {/* 新品推荐：主视觉区 */}
+      <section className="rounded-2xl border border-slate-200/80 bg-white shadow-sm overflow-hidden">
+        <header className="px-4 py-3 flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-cyan-50/40">
+          <div className="flex items-center gap-2.5">
+            <div className="h-9 w-9 rounded-xl bg-slate-900 text-amber-300 flex items-center justify-center shadow-sm">
+              <Sparkles size={16} />
+            </div>
+            <div>
+              <h2 className="text-base font-black text-slate-900 tracking-tight">新品推荐</h2>
+              <p className="text-[11px] text-slate-500 font-medium">澄海玩具优选 · 大图速览 · 参数一目了然</p>
+            </div>
+          </div>
+          {onNavigateModule ? (
+            <button
+              type="button"
+              onClick={goCatalog}
+              className="inline-flex items-center gap-1 text-[11px] font-black text-cyan-800 hover:text-cyan-950 bg-cyan-50 hover:bg-cyan-100 border border-cyan-200/80 px-3 py-1.5 rounded-lg transition-colors"
+            >
+              去产品库选品 <ArrowRight size={12} />
+            </button>
+          ) : null}
+        </header>
+
+        <div className="p-3 sm:p-4">
+          {loading && products.length === 0 ? (
+            <div className="flex items-center gap-2 text-slate-400 text-sm font-bold py-16 justify-center">
+              <Loader2 className="animate-spin" size={18} /> 加载优选产品…
+            </div>
+          ) : !featured ? (
+            <p className="text-sm text-slate-500 font-medium py-12 text-center">暂无推荐，请稍后刷新</p>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-3">
+              {/* 主推大图 */}
+              <button
+                type="button"
+                onClick={goCatalog}
+                className="lg:col-span-7 group relative rounded-2xl overflow-hidden bg-slate-900 text-left min-h-[220px] sm:min-h-[280px] focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+              >
+                {featured.image ? (
+                  <img
+                    src={featured.image}
+                    alt=""
+                    className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
+                    loading="eager"
+                    decoding="async"
+                    fetchPriority="high"
+                  />
+                ) : (
+                  <div
+                    className={`absolute inset-0 bg-gradient-to-br ${SHOWCASE_ACCENTS[0]}`}
+                  />
+                )}
+                <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/35 to-transparent" />
+                <div className="absolute top-3 left-3 inline-flex items-center gap-1 rounded-full bg-cyan-400 text-slate-950 text-[10px] font-black px-2.5 py-1 shadow">
+                  <Sparkles size={11} /> 主推
+                </div>
+                <div className="absolute bottom-0 left-0 right-0 p-4 sm:p-5">
+                  <h3 className="text-lg sm:text-xl font-black text-white leading-snug line-clamp-2 drop-shadow">
+                    {featured.title}
+                  </h3>
+                  {featured.specs && featured.specs.length > 0 ? (
+                    <div className="mt-2.5 flex flex-wrap gap-1.5">
+                      {featured.specs.slice(0, 3).map((s) => (
+                        <span
+                          key={`${featured.id}-${s.label}`}
+                          className="rounded-md bg-white/15 backdrop-blur-sm border border-white/20 text-cyan-50 text-[10px] font-bold px-2 py-1"
+                        >
+                          {s.label} {s.value}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  <p className="mt-3 text-[11px] font-bold text-cyan-200/90 inline-flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    加入产品库选品 <ArrowRight size={12} />
+                  </p>
+                </div>
+              </button>
+
+              {/* 侧栏缩略图 */}
+              <div className="lg:col-span-5 grid grid-cols-2 gap-2.5 content-start">
+                {sideProducts.map((p, idx) => {
+                  const realIdx = products.findIndex((x) => x.id === p.id);
+                  const active = realIdx === safeFeatured;
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => setFeaturedIdx(realIdx >= 0 ? realIdx : idx)}
+                      onDoubleClick={goCatalog}
+                      className={`group text-left rounded-xl overflow-hidden border bg-white transition-all ${
+                        active
+                          ? 'border-cyan-400 shadow-md ring-1 ring-cyan-200'
+                          : 'border-slate-200 hover:border-cyan-300 hover:shadow-sm'
+                      }`}
+                    >
+                      <div className="relative aspect-[4/3] bg-slate-100 overflow-hidden">
+                        {p.image ? (
+                          <img
+                            src={p.image}
+                            alt=""
+                            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                            loading={idx < 2 ? 'eager' : 'lazy'}
+                            decoding="async"
+                          />
+                        ) : (
+                          <div
+                            className={`w-full h-full bg-gradient-to-br ${SHOWCASE_ACCENTS[(idx + 1) % SHOWCASE_ACCENTS.length]} flex items-center justify-center text-slate-400`}
+                          >
+                            <Sparkles size={20} />
+                          </div>
+                        )}
+                      </div>
+                      <div className="p-2">
+                        <p className="text-[11px] font-black text-slate-800 leading-snug line-clamp-2">
+                          {p.title}
+                        </p>
+                        {p.specs?.[0] ? (
+                          <p className="text-[9px] font-bold text-cyan-800/80 mt-1 truncate">
+                            {p.specs[0].label} {p.specs[0].value}
+                          </p>
+                        ) : null}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {products.length > 1 ? (
+            <div className="mt-3 flex items-center justify-center gap-1.5">
+              {products.slice(0, 6).map((p, i) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  aria-label={`切换推荐 ${i + 1}`}
+                  onClick={() => setFeaturedIdx(i)}
+                  className={`h-1.5 rounded-full transition-all ${
+                    i === safeFeatured ? 'w-6 bg-cyan-500' : 'w-1.5 bg-slate-300 hover:bg-slate-400'
+                  }`}
+                />
+              ))}
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      {/* 新闻 + 汇率：次级情报带 */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3">
+        <section className="lg:col-span-7 rounded-2xl border border-slate-200/80 bg-white shadow-sm overflow-hidden flex flex-col max-h-[280px]">
           <header className="px-3 py-2.5 border-b border-slate-100 flex items-center gap-2">
             <div className="h-8 w-8 rounded-lg bg-slate-900 text-cyan-300 flex items-center justify-center">
               <Newspaper size={14} />
@@ -189,7 +353,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
               <p className="text-[10px] text-slate-500 font-medium">国内 · 国际 · 优选</p>
             </div>
           </header>
-          <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1">
+          <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-0.5">
             {loading && !news.length ? (
               <div className="flex items-center gap-2 text-slate-400 text-xs font-bold p-4 justify-center">
                 <Loader2 className="animate-spin" size={14} /> 拉取中…
@@ -197,97 +361,40 @@ export const ModuleLandingHub: React.FC<Props> = ({
             ) : news.length === 0 ? (
               <p className="text-xs text-slate-500 font-medium p-4 text-center">资讯更新中，请刷新</p>
             ) : (
-              news.slice(0, 12).map((n) => (
+              news.slice(0, 10).map((n) => (
                 <a
                   key={n.id}
                   href={n.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="group block rounded-xl border border-transparent hover:border-cyan-200 hover:bg-cyan-50/50 px-2.5 py-2 transition-colors"
+                  className="group flex items-start gap-2 rounded-xl hover:bg-cyan-50/70 px-2.5 py-2 transition-colors"
                 >
-                  <div className="flex items-start justify-between gap-2">
+                  <span
+                    className={`mt-1.5 h-1.5 w-1.5 rounded-full shrink-0 ${
+                      n.region === 'intl'
+                        ? 'bg-sky-500'
+                        : n.region === 'industry'
+                          ? 'bg-violet-500'
+                          : 'bg-emerald-500'
+                    }`}
+                  />
+                  <div className="min-w-0 flex-1">
                     <p className="text-xs font-bold text-slate-800 leading-snug line-clamp-2 group-hover:text-cyan-900">
                       {n.title}
                     </p>
-                    <ExternalLink size={11} className="shrink-0 text-slate-300 mt-0.5 group-hover:text-cyan-600" />
+                    <p className="text-[9px] font-bold text-slate-400 mt-0.5">{n.source}</p>
                   </div>
-                  <div className="mt-1 flex flex-wrap gap-1.5 text-[9px] font-bold text-slate-400">
-                    <span className="rounded bg-slate-100 px-1 py-0.5 text-slate-600">{n.source}</span>
-                    {n.region === 'intl' && (
-                      <span className="rounded bg-sky-50 text-sky-700 px-1 py-0.5">国际</span>
-                    )}
-                    {n.region === 'cn' && (
-                      <span className="rounded bg-emerald-50 text-emerald-700 px-1 py-0.5">国内</span>
-                    )}
-                    {n.region === 'industry' && (
-                      <span className="rounded bg-violet-50 text-violet-700 px-1 py-0.5">优选</span>
-                    )}
-                  </div>
+                  <ExternalLink
+                    size={11}
+                    className="shrink-0 text-slate-300 mt-1 group-hover:text-cyan-600"
+                  />
                 </a>
               ))
             )}
           </div>
         </section>
 
-        {/* 行业新品 */}
-        <section className="xl:col-span-4 rounded-2xl border border-slate-200/80 bg-white/95 shadow-sm overflow-hidden flex flex-col max-h-[340px] min-h-[260px]">
-          <header className="px-3 py-2.5 border-b border-slate-100 flex items-center gap-2">
-            <div className="h-8 w-8 rounded-lg bg-slate-900 text-amber-300 flex items-center justify-center">
-              <Sparkles size={14} />
-            </div>
-            <div>
-              <h2 className="text-sm font-black text-slate-900">行业新品</h2>
-              <p className="text-[10px] text-slate-500 font-medium">优选展区</p>
-            </div>
-          </header>
-          <div className="flex-1 overflow-y-auto custom-scrollbar p-2">
-            {loading && products.length === 0 ? (
-              <div className="flex items-center gap-2 text-slate-400 text-xs font-bold p-4 justify-center">
-                <Loader2 className="animate-spin" size={14} /> 拉取中…
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 gap-2">
-                {products.slice(0, 8).map((p, idx) => (
-                  <div
-                    key={p.id}
-                    className="rounded-xl border border-slate-100 bg-gradient-to-b from-white to-slate-50 p-2 hover:border-cyan-200 transition-all"
-                  >
-                    {p.image ? (
-                      <img
-                        src={p.image}
-                        alt=""
-                        width={240}
-                        height={72}
-                        className="w-full h-16 object-cover rounded-lg mb-1.5 bg-slate-100"
-                        loading={idx < 4 ? 'eager' : 'lazy'}
-                        decoding="async"
-                        fetchPriority={idx < 2 ? 'high' : 'auto'}
-                      />
-                    ) : (
-                      <div
-                        className={`w-full h-12 rounded-lg mb-1.5 bg-gradient-to-br ${SHOWCASE_ACCENTS[idx % SHOWCASE_ACCENTS.length]} flex items-center justify-center text-slate-500/50`}
-                      >
-                        <Sparkles size={16} />
-                      </div>
-                    )}
-                    <p className="text-[10px] font-bold text-slate-800 leading-snug line-clamp-2">{p.title}</p>
-                    {p.specs && p.specs.length > 0 ? (
-                      <p className="text-[9px] text-slate-500 font-medium mt-0.5 truncate">
-                        {p.specs
-                          .slice(0, 2)
-                          .map((s) => `${s.label} ${s.value}`)
-                          .join(' · ')}
-                      </p>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
-
-        {/* 即时汇率 */}
-        <section className="xl:col-span-4 rounded-2xl border border-slate-200/80 bg-white/95 shadow-sm overflow-hidden flex flex-col max-h-[340px] min-h-[260px]">
+        <section className="lg:col-span-5 rounded-2xl border border-slate-200/80 bg-white shadow-sm overflow-hidden flex flex-col max-h-[280px]">
           <header className="px-3 py-2.5 border-b border-slate-100 flex items-center gap-2">
             <div className="h-8 w-8 rounded-lg bg-slate-900 text-emerald-300 flex items-center justify-center">
               <LineChart size={14} />
@@ -297,7 +404,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
               <p className="text-[10px] text-slate-500 font-medium">中行买入 / 卖出 / 中间价</p>
             </div>
           </header>
-          <div className="flex-1 overflow-x-auto overflow-y-auto custom-scrollbar">
+          <div className="flex-1 overflow-y-auto custom-scrollbar">
             {loading && !fx.length ? (
               <div className="flex items-center gap-2 text-slate-400 text-xs font-bold p-4 justify-center">
                 <Loader2 className="animate-spin" size={14} /> 拉取中行牌价…
@@ -310,26 +417,26 @@ export const ModuleLandingHub: React.FC<Props> = ({
               <table className="w-full text-left text-[11px]">
                 <thead className="sticky top-0 bg-slate-50 text-slate-500 font-black">
                   <tr>
-                    <th className="px-2.5 py-2">货币</th>
-                    <th className="px-1.5 py-2 text-right">买入</th>
-                    <th className="px-1.5 py-2 text-right">卖出</th>
-                    <th className="px-2.5 py-2 text-right">中间价</th>
+                    <th className="px-3 py-2">货币</th>
+                    <th className="px-2 py-2 text-right">买入</th>
+                    <th className="px-2 py-2 text-right">卖出</th>
+                    <th className="px-3 py-2 text-right">中间价</th>
                   </tr>
                 </thead>
                 <tbody>
                   {fx.map((q) => (
-                    <tr key={q.code || q.currency} className="border-t border-slate-50 hover:bg-cyan-50/40">
-                      <td className="px-2.5 py-1.5">
+                    <tr key={q.code || q.currency} className="border-t border-slate-50 hover:bg-emerald-50/40">
+                      <td className="px-3 py-2">
                         <div className="font-black text-slate-800">{q.currency}</div>
                         <div className="text-[9px] font-bold text-slate-400">{q.code}</div>
                       </td>
-                      <td className="px-1.5 py-1.5 text-right font-mono font-bold text-emerald-700 tabular-nums">
+                      <td className="px-2 py-2 text-right font-mono font-bold text-emerald-700 tabular-nums">
                         {q.bocBuy}
                       </td>
-                      <td className="px-1.5 py-1.5 text-right font-mono font-bold text-rose-700 tabular-nums">
+                      <td className="px-2 py-2 text-right font-mono font-bold text-rose-700 tabular-nums">
                         {q.bocSell}
                       </td>
-                      <td className="px-2.5 py-1.5 text-right font-mono font-black text-slate-900 tabular-nums">
+                      <td className="px-3 py-2 text-right font-mono font-black text-slate-900 tabular-nums">
                         {q.bocMid}
                       </td>
                     </tr>
@@ -338,14 +445,13 @@ export const ModuleLandingHub: React.FC<Props> = ({
               </table>
             )}
           </div>
-          <footer className="px-2.5 py-1.5 border-t border-slate-100 text-[9px] text-slate-400 font-medium leading-relaxed">
+          <footer className="px-3 py-1.5 border-t border-slate-100 text-[9px] text-slate-400 font-medium">
             中国银行牌价 · 人民币 / 100 外币
             {fx[0]?.publishedAt ? ` · ${fx[0].publishedAt}` : ''}
           </footer>
         </section>
       </div>
 
-      {/* 任务流置于情报下方，默认折叠定盘细节 */}
       {onNavigateModule ? (
         <TradeJourneyPanel
           progressHint={

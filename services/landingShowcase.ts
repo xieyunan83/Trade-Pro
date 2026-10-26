@@ -1,5 +1,5 @@
 /**
- * 今日看板 · 行业新品展示样本（投资人演示用）
+ * 今日看板 · 新品推荐展示样本（投资人演示用）
  * 正式货源对接后由接口数据覆盖；前台不展示供应商名与接入说明。
  */
 import type { LandingProductItem } from './landingDataCore';
