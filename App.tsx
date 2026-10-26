@@ -141,7 +141,7 @@ import {
   addExcludedCompany,
   hydrateExcludedCompaniesFromCloud,
 } from './services/excludedCompanies';
-import { isDesktopClient, shouldAutoResumeBatch } from './services/desktopRuntime';
+import { shouldAutoResumeBatch } from './services/desktopRuntime';
 
 declare global {
   interface AIStudio {
@@ -4105,13 +4105,6 @@ const App: React.FC = () => {
         sphereNavExpanded ? 'is-nav-expanded' : ''
       } ${sphereNavPhase === 'submenu' ? 'is-nav-submenu' : ''}`}
     >
-      {isDesktopClient() && (
-        <div className="fixed top-0 inset-x-0 z-[60] pointer-events-none flex justify-center px-2 pt-1 md:left-[4.5rem]">
-          <div className="pointer-events-auto max-w-3xl rounded-b-xl border border-teal-200/80 bg-teal-50/95 text-teal-900 text-[11px] sm:text-xs font-bold px-3 py-1.5 shadow-sm">
-            桌面工作站：推送升级不会自动刷新本窗口，批量背调可继续。请勿手动刷新/退出；Windows 请关闭睡眠。账号配置走云端，安装包无需每次重打。
-          </div>
-        </div>
-      )}
       {/* Mobile sidebar backdrop */}
       {mobileMenuOpen && (
         <div className="fixed inset-0 bg-ink-950/50 backdrop-blur-sm z-30 md:hidden" onClick={() => setMobileMenuOpen(false)} />

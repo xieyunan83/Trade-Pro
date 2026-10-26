@@ -10,6 +10,7 @@ import {
 } from './db';
 import { getCloudWorkspaceId } from './workspaceId';
 import { getSupabaseClient, isSupabaseConfigured } from './supabase';
+import { selectAllRows } from './supabasePaginate';
 
 const cloudUid = () => getCloudWorkspaceId();
 
@@ -91,23 +92,22 @@ export const deleteAutomationTaskFromCloud = async (localId: string): Promise<bo
 export const fetchAutomationQueueFromCloud = async (): Promise<AutomationResult[]> => {
   if (!isSupabaseConfigured()) return [];
   try {
-    const { data, error } = await getSupabaseClient()
-      .from('automation_queue')
-      .select('task_data, updated_at')
-      .eq('user_id', cloudUid())
-      .order('updated_at', { ascending: false });
+    const { rows, error } = await selectAllRows<{ task_data: AutomationResult }>(
+      getSupabaseClient(),
+      'automation_queue',
+      'task_data, updated_at',
+      { orderCol: 'updated_at', ascending: false, eq: { user_id: cloudUid() } }
+    );
     if (error) {
-      // 表不存在时给出明确提示
-      const msg = String((error as any)?.message || error);
-      if (/automation_queue|schema cache|does not exist/i.test(msg)) {
+      if (/automation_queue|schema cache|does not exist/i.test(error)) {
         console.warn(
-          '[automation-cloud] 缺少表 automation_queue，请在 SQL Editor 执行 scripts/supabase-schema.sql 中新增段落'
+          '[automation-cloud] 缺少表 automation_queue，请在 SQL Editor 执行 scripts/supabase-automation-queue.sql'
         );
       }
-      throw error;
+      throw new Error(error);
     }
-    return (data || [])
-      .map((row) => row.task_data as AutomationResult)
+    return rows
+      .map((row) => row.task_data)
       .filter((t) => t && (t.id || '').trim());
   } catch (e) {
     console.warn('[automation-cloud] fetch failed', e);

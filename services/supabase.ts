@@ -3,6 +3,7 @@ import { KnowledgeFile, HistoryItem, DiscoveryState, Client, DiscoveryArchiveIte
 import { getSupabaseConfig, isSupabaseConfigured } from './env'
 import { encodeSecret, decodeSecret } from './secretCodec'
 import { getCloudWorkspaceId } from './workspaceId'
+import { selectAllRows } from './supabasePaginate'
 
 export { isSupabaseConfigured }
 
@@ -510,13 +511,14 @@ export const saveInvestigationHistory = async (item: HistoryItem): Promise<boole
 export const getInvestigationHistory = async (): Promise<HistoryItem[]> => {
   if (!isSupabaseConfigured()) return []
   try {
-    const { data, error } = await supabase
-      .from('investigation_history')
-      .select('report_data, created_at')
-      .order('created_at', { ascending: false })
-
-    if (error) throw error
-    return (data || []).map(row => row.report_data as HistoryItem)
+    const { rows, error } = await selectAllRows<{ report_data: HistoryItem }>(
+      getSupabaseClient(),
+      'investigation_history',
+      'report_data, created_at',
+      { orderCol: 'created_at', ascending: false }
+    )
+    if (error) throw new Error(error)
+    return rows.map((row) => row.report_data).filter(Boolean)
   } catch (error) {
     console.error('获取背调历史失败:', error)
     return []
@@ -635,15 +637,15 @@ export const deleteDiscoverySearchesByMeta = async (product: string, country: st
 export const getDiscoverySearchArchives = async (): Promise<DiscoveryArchiveItem[]> => {
   if (!isSupabaseConfigured()) return []
   try {
-    const { data, error } = await supabase
-      .from('discovery_searches')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(100)
-
-    if (error) throw error
+    const { rows, error } = await selectAllRows<any>(
+      getSupabaseClient(),
+      'discovery_searches',
+      '*',
+      { orderCol: 'created_at', ascending: false }
+    )
+    if (error) throw new Error(error)
     const split = (s: string) => s.split(/[,，;/|]+/).map((x: string) => x.trim()).filter(Boolean)
-    return (data || []).map((row: any) => {
+    return rows.map((row: any) => {
       const countryStr = row.country || ''
       const typeStr = row.client_type || ''
       return {
@@ -708,13 +710,14 @@ export const syncCrmClients = async (clients: Client[]): Promise<boolean> => {
 export const getCrmClients = async (): Promise<Client[]> => {
   if (!isSupabaseConfigured()) return []
   try {
-    const { data, error } = await supabase
-      .from('crm_clients')
-      .select('client_data, updated_at')
-      .order('updated_at', { ascending: false })
-
-    if (error) throw error
-    return (data || []).map(row => row.client_data as Client)
+    const { rows, error } = await selectAllRows<{ client_data: Client }>(
+      getSupabaseClient(),
+      'crm_clients',
+      'client_data, updated_at',
+      { orderCol: 'updated_at', ascending: false }
+    )
+    if (error) throw new Error(error)
+    return rows.map((row) => row.client_data).filter(Boolean)
   } catch (error) {
     console.error('获取 CRM 失败:', error)
     return []
@@ -783,15 +786,14 @@ export const syncProductProfilesCloud = async (profiles: CustomerProductProfile[
 export const getProductProfilesCloud = async (): Promise<CustomerProductProfile[]> => {
   if (!isSupabaseConfigured()) return []
   try {
-    const { data, error } = await supabase
-      .from('product_profiles')
-      .select('profile_data, updated_at')
-      .order('updated_at', { ascending: false })
-
-    if (error) throw error
-    return (data || [])
-      .map((row) => row.profile_data as CustomerProductProfile)
-      .filter(Boolean)
+    const { rows, error } = await selectAllRows<{ profile_data: CustomerProductProfile }>(
+      getSupabaseClient(),
+      'product_profiles',
+      'profile_data, updated_at',
+      { orderCol: 'updated_at', ascending: false }
+    )
+    if (error) throw new Error(error)
+    return rows.map((row) => row.profile_data).filter(Boolean)
   } catch (error) {
     console.error('获取产品画像失败:', error)
     return []
