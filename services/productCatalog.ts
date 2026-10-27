@@ -989,6 +989,55 @@ export const loadProductCatalog = async (): Promise<CustomerProductProfile[]> =>
   return local.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 };
 
+/** CRM 是否已有产品/设计向标签 */
+export const crmHasDesignProductTags = (client: {
+  tags?: string[];
+  productType?: string;
+}): boolean => {
+  const tags = client.tags || [];
+  if (tags.some((t) => /^(在售:|采购:|包装:|配色:|MOQ:|旺季:)/.test(String(t || '')))) {
+    return true;
+  }
+  const pt = (client.productType || '').trim();
+  return !!pt && pt !== 'N/A';
+};
+
+/**
+ * CRM 空白客户（阶段 C）：缺设计匹配信号 / 产品标签。
+ * 须有官网，才能轻量补采。
+ */
+export const isCrmClientBlankForDesignFill = (
+  client: { id: string; name?: string; website?: string; tags?: string[]; productType?: string },
+  profile?: CustomerProductProfile | null
+): boolean => {
+  if (!(client.website || '').trim()) return false;
+  if (crmHasDesignProductTags(client) && profileHasDesignSignals(profile)) return false;
+  if (profileHasDesignSignals(profile) && (profile?.catalogQuality || 0) >= 30) return false;
+  if (crmHasDesignProductTags(client) && (profile?.designSignalQuality || 0) >= 40) return false;
+  return true;
+};
+
+/** 列出 CRM 中待轻量补全的空白客户 */
+export const listBlankCrmClientsForDesignFill = <
+  T extends { id: string; name?: string; website?: string; tags?: string[]; productType?: string },
+>(
+  clients: T[],
+  profiles: CustomerProductProfile[]
+): T[] => {
+  const byDomain = new Map<string, CustomerProductProfile>();
+  const byId = new Map<string, CustomerProductProfile>();
+  for (const p of profiles) {
+    const d = domainKey(p.website) || p.id;
+    if (d) byDomain.set(d, p);
+    if (p.crmClientId) byId.set(p.crmClientId, p);
+  }
+  return clients.filter((c) => {
+    const d = domainKey(c.website);
+    const profile = byId.get(c.id) || (d ? byDomain.get(d) : undefined) || null;
+    return isCrmClientBlankForDesignFill(c, profile);
+  });
+};
+
 export const removeProductProfile = async (id: string): Promise<void> => {
   await deleteProductProfile(id);
   void deleteProductProfileCloud(id).catch(() => undefined);

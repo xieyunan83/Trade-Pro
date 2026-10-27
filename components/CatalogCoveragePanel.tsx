@@ -1,19 +1,23 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Loader2, RefreshCw, Database, AlertCircle } from 'lucide-react';
+import { Loader2, RefreshCw, Database, AlertCircle, Sparkles } from 'lucide-react';
 import type { Client, HistoryItem } from '../types';
 import {
   backfillProductCatalogFromHistory,
   buildCatalogCoverageReport,
+  listBlankCrmClientsForDesignFill,
   loadProductCatalog,
   type CatalogCoverageReport,
   type CatalogGapKind,
 } from '../services/productCatalog';
 import { clientPatchFromAnalysis, normalizeCrmHost } from '../utils/crmHistory';
+import { isDesignSignalQueueBusy } from '../services/designSignalQueue';
 
 type Props = {
   history: HistoryItem[];
   crmClients: Client[];
   onCrmPatched?: (clients: Client[]) => void;
+  /** 阶段 C：对 CRM 空白客户启动轻量设计信号补全 */
+  onStartDesignFill?: (blankClients: Client[]) => void;
   ownerUsername?: string;
   departmentId?: string;
 };
@@ -35,16 +39,19 @@ export const CatalogCoveragePanel: React.FC<Props> = ({
   history,
   crmClients,
   onCrmPatched,
+  onStartDesignFill,
   ownerUsername,
   departmentId,
 }) => {
   const [report, setReport] = useState<CatalogCoverageReport | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [blankCount, setBlankCount] = useState(0);
 
   const refresh = useCallback(async () => {
     const profiles = await loadProductCatalog();
     setReport(buildCatalogCoverageReport(history, profiles, crmClients));
+    setBlankCount(listBlankCrmClientsForDesignFill(crmClients, profiles).length);
   }, [history, crmClients]);
 
   useEffect(() => {
@@ -122,16 +129,40 @@ export const CatalogCoveragePanel: React.FC<Props> = ({
             </div>
           </div>
         </div>
-        <button
-          type="button"
-          disabled={busy || !history.length}
-          onClick={() => void runBackfill()}
-          className="inline-flex items-center gap-1.5 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white text-[11px] font-black px-3 py-2"
-        >
-          {busy ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-          从历史同步补全
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={busy || !history.length}
+            onClick={() => void runBackfill()}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white text-[11px] font-black px-3 py-2"
+          >
+            {busy ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            从历史同步补全
+          </button>
+          {onStartDesignFill && (
+            <button
+              type="button"
+              disabled={busy || blankCount === 0 || isDesignSignalQueueBusy()}
+              onClick={async () => {
+                const profiles = await loadProductCatalog();
+                const blanks = listBlankCrmClientsForDesignFill(crmClients, profiles);
+                onStartDesignFill(blanks);
+              }}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-cyan-700 hover:bg-cyan-800 disabled:opacity-50 text-white text-[11px] font-black px-3 py-2"
+              title="仅 CRM 空白客户；通宵请保持本页打开、电脑勿睡眠"
+            >
+              <Sparkles size={14} />
+              补全 CRM 空白 ({blankCount})
+            </button>
+          )}
+        </div>
       </div>
+
+      {onStartDesignFill && (
+        <p className="text-[10px] font-bold text-slate-500 leading-relaxed">
+          「补全 CRM 空白」会联网轻量采集包装/配色/价带等（消耗额度）。通宵请用常开电脑：保持本页、关闭睡眠；刷新后队列会继续。
+        </p>
+      )}
 
       {msg && (
         <div className="text-[11px] font-bold text-teal-800 bg-teal-50 border border-teal-100 rounded-xl px-3 py-2">

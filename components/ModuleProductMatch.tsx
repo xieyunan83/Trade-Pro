@@ -31,6 +31,7 @@ interface ModuleProductMatchProps {
   crmClients: Client[];
   currentUser?: User;
   onCrmClientsChange?: (clients: Client[]) => void;
+  onStartDesignFill?: (blankClients: Client[]) => void;
   onOpenHistory?: (item: HistoryItem) => void;
   onGoCrm?: () => void;
   onNavigateModule?: (mod: ModuleType) => void;
@@ -105,6 +106,7 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
   crmClients,
   currentUser,
   onCrmClientsChange,
+  onStartDesignFill,
   onOpenHistory,
   onGoCrm,
   onNavigateModule,
@@ -189,6 +191,7 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
         ownerUsername={currentUser?.username}
         departmentId={currentUser?.departmentId}
         onCrmPatched={onCrmClientsChange}
+        onStartDesignFill={onStartDesignFill}
       />
 
       <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm">

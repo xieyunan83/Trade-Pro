@@ -4576,6 +4576,285 @@ Output JSON only:
   return existing ? preserveStrategySections(existing, out) : out;
 };
 
+/**
+ * 阶段 C：轻量「设计匹配信号」补全（包装/配色/人民币价/采购成本/周期/销量/标签）。
+ * 比 digProductIntelligence 更短，适合夜间批量；不冲掉战略/决策人等字段。
+ */
+export const digDesignSignals = async (
+  domainOrName: string,
+  existing?: AnalysisResult | null,
+  opts?: { searchKeyword?: string; searchCountry?: string }
+): Promise<AnalysisResult> => {
+  const searchKeyword = (opts?.searchKeyword || existing?.searchKeyword || '').trim();
+  const searchCountry = (opts?.searchCountry || existing?.searchCountry || '').trim();
+  const rawInput = (domainOrName || existing?.companyInfo?.website || existing?.companyInfo?.name || '').trim();
+  const canonicalDomain = cleanDomain(rawInput).toLowerCase();
+  const hasDomain = Boolean(canonicalDomain && canonicalDomain.includes('.') && !/\s/.test(canonicalDomain));
+  const companyName = existing?.companyInfo?.name || rawInput;
+
+  const prompt = `
+公司: "${companyName}" / 网站: "${hasDomain ? canonicalDomain : rawInput}"
+任务: 为外贸「产品设计与客户匹配」轻量补全设计信号（简体中文）。只输出 JSON。
+${searchKeyword ? `线索关键词: ${searchKeyword}` : ''}
+${searchCountry ? `市场: ${searchCountry}` : ''}
+
+请联网查看官网商品页/类目/批发页等公开信息。禁止编造；没有就写「公开信息未找到」。
+
+必须尽量填写：
+1) 在售/采购品类与短标签
+2) 典型包装方式（盒/吸塑/袋/彩盒等）
+3) 主配色或风格
+4) 零售价 → 人民币；并推算采购/FOB 成本人民币（合理倍率，写明依据弱则保守）
+5) 销量或进口规模弱信号（没有则「公开信息未找到」）
+6) 采购/补货周期、旺季、MOQ（没有则「公开信息未找到」）
+
+JSON:
+{
+  "websiteCategories": [{ "categoryName": "", "items": [], "priceMinCNY": 0, "priceMaxCNY": 0, "priceBand": "" }],
+  "businessScope": { "coreProducts": [], "relevantProducts": [], "priceSensitivity": "" },
+  "businessModel": { "procurementInfo": "" },
+  "tradeIntelligence": {
+    "importCategories": [],
+    "typicalMoq": "",
+    "buyingSeasons": "",
+    "estimatedAnnualImport": ""
+  },
+  "productSummary": {
+    "marketPreference": "",
+    "recommendedProducts": "",
+    "packagingAnalysis": "",
+    "colorPreference": "",
+    "featureAnalysis": ""
+  },
+  "productIntel": {
+    "sell": { "categories": [], "items": [], "tags": [], "notes": "" },
+    "procure": { "categories": [], "items": [], "tags": [], "notes": "" },
+    "matchTags": [],
+    "sourceNote": "轻量设计信号补全，基于公开信息"
+  },
+  "products": [{
+    "name": "", "category": "", "role": "sell", "tags": [],
+    "retailPrice": "", "retailPriceCNY": 0, "estimatedFOBPriceCNY": 0,
+    "priceMinCNY": 0, "priceMaxCNY": 0,
+    "colors": "", "packaging": "", "features": "", "keywordMatch": false
+  }]
+}
+products 5–10 条即可；role 为 sell|procure|both。
+`;
+
+  const text = await generateContentUnified('analysis', prompt, SYSTEM_INSTRUCTION, true);
+  const ai = extractJson(text) || {};
+
+  const products = (Array.isArray(ai.products) ? ai.products : [])
+    .map((p: any) => {
+      const roleRaw = String(p.role || 'sell').toLowerCase();
+      const role =
+        roleRaw === 'procure' || roleRaw === 'buy' || roleRaw === 'import'
+          ? ('procure' as const)
+          : roleRaw === 'both'
+            ? ('both' as const)
+            : ('sell' as const);
+      const tags = Array.isArray(p.tags)
+        ? p.tags.map((t: unknown) => String(t || '').trim()).filter(Boolean).slice(0, 8)
+        : [];
+      return {
+        name: String(p.name || '').trim(),
+        category: String(p.category || '').trim(),
+        role,
+        tags,
+        retailPrice: String(p.retailPrice || ''),
+        retailPriceCNY: Number(p.retailPriceCNY) || 0,
+        estimatedFOBPriceCNY: Number(p.estimatedFOBPriceCNY) || 0,
+        priceMinCNY: typeof p.priceMinCNY === 'number' ? p.priceMinCNY : undefined,
+        priceMaxCNY: typeof p.priceMaxCNY === 'number' ? p.priceMaxCNY : undefined,
+        pricingStrategy: p.pricingStrategy || '',
+        pitchPoint: p.pitchPoint || '',
+        techSpecs: p.techSpecs || '',
+        features: p.features || '',
+        colors: p.colors || '',
+        packaging: p.packaging || '',
+        imageUrl: p.imageUrl || '',
+        competitorLink: p.competitorLink || '',
+        keywordMatch: !!p.keywordMatch,
+      };
+    })
+    .filter((p: { name: string }) => p.name);
+
+  const sideFrom = (raw: any) => ({
+    categories: Array.isArray(raw?.categories)
+      ? raw.categories.map((x: unknown) => String(x || '').trim()).filter(Boolean).slice(0, 30)
+      : [],
+    items: Array.isArray(raw?.items)
+      ? raw.items.map((x: unknown) => String(x || '').trim()).filter(Boolean).slice(0, 40)
+      : [],
+    tags: Array.isArray(raw?.tags)
+      ? raw.tags.map((x: unknown) => String(x || '').trim()).filter(Boolean).slice(0, 24)
+      : [],
+    notes: String(raw?.notes || '').trim() || undefined,
+  });
+
+  const productIntel =
+    ai.productIntel && typeof ai.productIntel === 'object'
+      ? {
+          sell: sideFrom(ai.productIntel.sell),
+          procure: sideFrom(ai.productIntel.procure),
+          matchTags: Array.isArray(ai.productIntel.matchTags)
+            ? ai.productIntel.matchTags
+                .map((x: unknown) => String(x || '').trim())
+                .filter(Boolean)
+                .slice(0, 40)
+            : [],
+          sourceNote:
+            String(ai.productIntel.sourceNote || '').trim() ||
+            '轻量设计信号补全，基于公开信息',
+        }
+      : undefined;
+
+  const base: AnalysisResult = existing
+    ? { ...existing }
+    : ({
+        companyInfo: {
+          name: companyName,
+          headquarters: 'N/A',
+          foundedYear: 'N/A',
+          nature: 'N/A',
+          scale: 'N/A',
+          website: hasDomain ? canonicalDomain : rawInput,
+          description: 'N/A',
+        },
+        swot: { strengths: [], weaknesses: [], opportunities: [], threats: [] },
+        financialTrends: [],
+        trafficAnalysis: [],
+        websiteCategories: [],
+        businessScope: {
+          coreProducts: [],
+          relevantProducts: [],
+          brandPositioning: 'N/A',
+          consumerGroup: 'N/A',
+          productVariety: 'Medium',
+          priceSensitivity: 'N/A',
+          websiteStructure: 'N/A',
+        },
+        businessModel: {
+          channels: [],
+          hasDistributors: false,
+          exhibitionHistory: [],
+          ecommercePresence: [],
+          procurementInfo: 'N/A',
+        },
+        supplyChain: { role: 'N/A', serviceType: 'N/A' },
+        targetAudience: [],
+        financials: { revenueEstimate: 'N/A', paymentTerms: 'N/A', ipInfo: 'N/A' },
+        socials: {},
+        products: [],
+        marketTrends: 'N/A',
+        decisionMakers: [],
+        strategy: { buyingOfficeLocation: 'N/A', actionPlan: [] },
+        similarCompanies: [],
+      } as AnalysisResult);
+
+  const tiBase = base.tradeIntelligence || {
+    hsCodes: [],
+    importCategories: [],
+    customsSummary: '',
+    recentShipments: [],
+    topSourceCountries: [],
+    estimatedAnnualImport: '',
+    certifications: [],
+    complianceNotes: '',
+    preferredIncoterms: '',
+    typicalMoq: '',
+    buyingSeasons: '',
+    registrationId: '',
+    companyLinkedin: '',
+    riskLevel: '未知' as const,
+    riskNotes: '',
+  };
+
+  const merged: AnalysisResult = {
+    ...base,
+    websiteCategories:
+      Array.isArray(ai.websiteCategories) && ai.websiteCategories.length
+        ? ai.websiteCategories.map((cat: any) => {
+            const priceMinCNY =
+              typeof cat?.priceMinCNY === 'number' && cat.priceMinCNY > 0
+                ? cat.priceMinCNY
+                : undefined;
+            const priceMaxCNY =
+              typeof cat?.priceMaxCNY === 'number' && cat.priceMaxCNY > 0
+                ? cat.priceMaxCNY
+                : undefined;
+            const priceBand = String(cat?.priceBand || '').trim() || undefined;
+            return {
+              categoryName: String(cat?.categoryName || '未分类').trim(),
+              items: Array.isArray(cat?.items) ? cat.items.map(String).filter(Boolean) : [],
+              priceMinCNY,
+              priceMaxCNY,
+              priceBand:
+                priceBand ||
+                (priceMinCNY != null || priceMaxCNY != null
+                  ? `¥${priceMinCNY ?? '?'}–${priceMaxCNY ?? '?'}`
+                  : undefined),
+            };
+          })
+        : base.websiteCategories,
+    businessScope: {
+      ...base.businessScope,
+      ...(ai.businessScope || {}),
+      coreProducts: ai.businessScope?.coreProducts?.length
+        ? ai.businessScope.coreProducts
+        : base.businessScope.coreProducts,
+      relevantProducts: ai.businessScope?.relevantProducts?.length
+        ? ai.businessScope.relevantProducts
+        : base.businessScope.relevantProducts,
+      priceSensitivity:
+        ai.businessScope?.priceSensitivity || base.businessScope.priceSensitivity,
+    },
+    businessModel: {
+      ...base.businessModel,
+      procurementInfo:
+        String(ai.businessModel?.procurementInfo || '').trim() ||
+        base.businessModel.procurementInfo,
+    },
+    tradeIntelligence: {
+      ...tiBase,
+      importCategories: ai.tradeIntelligence?.importCategories?.length
+        ? ai.tradeIntelligence.importCategories
+        : tiBase.importCategories,
+      typicalMoq:
+        String(ai.tradeIntelligence?.typicalMoq || '').trim() || tiBase.typicalMoq,
+      buyingSeasons:
+        String(ai.tradeIntelligence?.buyingSeasons || '').trim() || tiBase.buyingSeasons,
+      estimatedAnnualImport:
+        String(ai.tradeIntelligence?.estimatedAnnualImport || '').trim() ||
+        tiBase.estimatedAnnualImport,
+    },
+    productSummary: ai.productSummary
+      ? {
+          marketPreference:
+            ai.productSummary.marketPreference || base.productSummary?.marketPreference || '',
+          recommendedProducts:
+            ai.productSummary.recommendedProducts ||
+            base.productSummary?.recommendedProducts ||
+            '',
+          packagingAnalysis:
+            ai.productSummary.packagingAnalysis || base.productSummary?.packagingAnalysis || '',
+          colorPreference:
+            ai.productSummary.colorPreference || base.productSummary?.colorPreference || '',
+          featureAnalysis:
+            ai.productSummary.featureAnalysis || base.productSummary?.featureAnalysis || '',
+        }
+      : base.productSummary,
+    productIntel: productIntel || base.productIntel,
+    products: products.length ? products : base.products,
+    searchKeyword: searchKeyword || base.searchKeyword,
+    searchCountry: searchCountry || base.searchCountry,
+  };
+
+  const out = normalizeAnalysisResult(merged);
+  return existing ? preserveStrategySections(existing, out) : out;
+};
+
 /** 检测文本是否主要为英文（用于已有报告译成中文） */
 export const looksLikeEnglishParagraph = (text?: string): boolean => {
   const t = (text || '').trim();

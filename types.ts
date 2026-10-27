@@ -186,7 +186,7 @@ export interface HistoryItem {
   /** 目标国家 */
   country?: string;
   /** 来源标记 */
-  source?: 'single' | 'batch' | 'discovery' | 'crm' | 'recover' | 'product_redig';
+  source?: 'single' | 'batch' | 'discovery' | 'crm' | 'recover' | 'product_redig' | 'design_signal_fill';
   /** 操作者用户名（用于权限隔离） */
   ownerUsername?: string;
   /** 操作者当时所属部门 */

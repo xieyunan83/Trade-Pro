@@ -29,6 +29,7 @@ import {
   rebuildProductCatalogFromHistory,
   backfillProductCatalogFromHistory,
   loadProductCatalog,
+  listBlankCrmClientsForDesignFill,
   hasRichProductCatalog,
   removeProductProfile,
   productCatalogDomainKey,
@@ -58,6 +59,7 @@ import { ModuleProducts } from './components/ModuleProducts';
 import { ModuleDecisionMakers } from './components/ModuleDecisionMakers';
 import { DmEmailSearchPanel } from './components/DmEmailSearchPanel';
 import { ProductDigPanel } from './components/ProductDigPanel';
+import { DesignSignalPanel } from './components/DesignSignalPanel';
 import {
   applyDmPersistToHistory,
   mergeHistoryPreferDmRich,
@@ -75,6 +77,13 @@ import {
   isProductDigQueueBusy,
 } from './services/productDigQueue';
 import type { ProductDigCompletePayload } from './services/productDigQueue';
+import {
+  enqueueDesignSignalBatch,
+  hydrateDesignSignalQueue,
+  setDesignSignalHistoryResolver,
+  setDesignSignalOnComplete,
+  type DesignSignalCompletePayload,
+} from './services/designSignalQueue';
 import { ManagerSystemPanel } from './components/ManagerSystemPanel';
 import {
   hydrateDeptApiKeysFromCloud,
@@ -308,7 +317,7 @@ const App: React.FC = () => {
   }, [crmClients]);
 
   useEffect(() => {
-    setProductDigHistoryResolver((clientId) => {
+    const resolveHist = (clientId: string) => {
       if (clientId.startsWith('hist_')) {
         const hid = clientId.slice(5);
         return historyRef.current.find((h) => h.id === hid);
@@ -316,8 +325,14 @@ const App: React.FC = () => {
       const client = crmClientsRef.current.find((c) => c.id === clientId);
       if (!client) return undefined;
       return findHistoryForClient(client, historyRef.current);
-    });
-    return () => setProductDigHistoryResolver(null);
+    };
+    setProductDigHistoryResolver(resolveHist);
+    setDesignSignalHistoryResolver(resolveHist);
+    hydrateDesignSignalQueue();
+    return () => {
+      setProductDigHistoryResolver(null);
+      setDesignSignalHistoryResolver(null);
+    };
   }, []);
 
   useEffect(() => {
@@ -2997,6 +3012,101 @@ const App: React.FC = () => {
     }
   };
 
+  /** 阶段 C：设计信号轻量补全完成 → 写历史 / 画像 / CRM */
+  const handleDesignSignalComplete = async (payload: DesignSignalCompletePayload) => {
+    const { clientId, domain, result, previousHistoryId } = payload;
+    const client = crmClientsRef.current.find((c) => c.id === clientId);
+    const hist = client
+      ? findHistoryForClient(client, historyRef.current)
+      : previousHistoryId
+        ? historyRef.current.find((h) => h.id === previousHistoryId)
+        : undefined;
+    const historyItem: HistoryItem = stampOwnership({
+      id: hist?.id || previousHistoryId || `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+      type: ModuleType.BACKGROUND,
+      data: result,
+      timestamp: Date.now(),
+      domain: result.companyInfo?.website || domain,
+      keyword: result.searchKeyword || hist?.keyword,
+      country: result.searchCountry || hist?.country || client?.country,
+      source: 'design_signal_fill',
+    });
+    try {
+      await persistHistoryItem(historyItem);
+      setHistory((prev) => {
+        const rest = prev.filter((h) => h.id !== historyItem.id);
+        return [historyItem, ...rest];
+      });
+      await indexAnalysisIntoProductCatalog(result, {
+        historyId: historyItem.id,
+        crmClientId: clientId,
+        ownerUsername: historyItem.ownerUsername,
+        departmentId: historyItem.departmentId,
+      });
+      const patch = clientPatchFromAnalysis(result, domain, Date.now());
+      setCrmClients((prev) =>
+        prev.map((c) => {
+          if (c.id !== clientId) return c;
+          const tags = [...new Set([...(c.tags || []), ...(patch.tags || [])])].slice(0, 48);
+          return {
+            ...c,
+            ...patch,
+            tags,
+            productType:
+              !c.productType || c.productType === 'N/A'
+                ? patch.productType || c.productType
+                : c.productType,
+          };
+        })
+      );
+    } catch (e) {
+      console.error('[designSignal] persist failed', domain, e);
+    }
+  };
+
+  const handleStartDesignFill = async (blankClients?: Client[]) => {
+    const authorized =
+      hasPermission(currentUser, 'feature.product_redig') ||
+      hasPermission(currentUser, 'feature.analyze_company');
+    if (!authorized) {
+      alert('你没有补全权限，请联系管理员开通。');
+      return;
+    }
+    let targets = blankClients;
+    if (!targets) {
+      const profiles = await loadProductCatalog();
+      targets = listBlankCrmClientsForDesignFill(crmClientsRef.current, profiles);
+    }
+    if (!targets.length) {
+      alert('CRM 中暂无需要补全的空白客户（须有官网，且缺产品/设计标签）。');
+      return;
+    }
+    if (
+      !confirm(
+        `将对 CRM 中 ${targets.length} 家空白客户做轻量设计信号补全（包装/配色/价带等）。\n` +
+          `请保持本页打开、电脑勿睡眠；刷新后队列会继续。\n通宵建议在常开电脑上运行。继续？`
+      )
+    ) {
+      return;
+    }
+    const { queued, skipped, reasons } = enqueueDesignSignalBatch(targets, { authorized: true });
+    if (queued === 0) {
+      alert(reasons[0] || '没有任务可加入队列');
+      return;
+    }
+    alert(
+      skipped > 0
+        ? `已加入补全队列 ${queued} 家（跳过 ${skipped}）。左下角可看进度。`
+        : `已加入补全队列 ${queued} 家。左下角可看进度。`
+    );
+  };
+
+  useEffect(() => {
+    setDesignSignalOnComplete(handleDesignSignalComplete);
+    return () => setDesignSignalOnComplete(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser?.username, currentUser?.departmentId]);
+
   const handleBatchProductDigFromCRM = (clients: Client[]) => {
     if (!clients?.length) return;
     const authorized =
@@ -4718,6 +4828,7 @@ const App: React.FC = () => {
                         crmClients={crmClients}
                         currentUser={currentUser}
                         onCrmClientsChange={setCrmClients}
+                        onStartDesignFill={handleStartDesignFill}
                         onOpenHistory={loadFromHistory}
                         onGoCrm={() => setActiveModule(ModuleType.CLIENT_CRM)}
                         onNavigateModule={setActiveModule}
@@ -5242,6 +5353,7 @@ const App: React.FC = () => {
         sphereNavPhase === 'submenu' ? 'md:left-[16.5rem]' : 'md:left-[5rem]'
       }`}>
         {hasPermission(currentUser, 'feature.dm_email_search') && <DmEmailSearchPanel />}
+        <DesignSignalPanel />
         <ProductDigPanel />
       </div>
 
