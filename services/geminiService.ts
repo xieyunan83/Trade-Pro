@@ -4594,19 +4594,26 @@ export const digDesignSignals = async (
 
   const prompt = `
 公司: "${companyName}" / 网站: "${hasDomain ? canonicalDomain : rawInput}"
-任务: 为外贸「产品设计与客户匹配」轻量补全设计信号（简体中文）。只输出 JSON。
+任务: 外贸「设计匹配信号」轻量补全。只输出 JSON。语言：简体中文。
 ${searchKeyword ? `线索关键词: ${searchKeyword}` : ''}
 ${searchCountry ? `市场: ${searchCountry}` : ''}
 
-请联网查看官网商品页/类目/批发页等公开信息。禁止编造；没有就写「公开信息未找到」。
+【反幻觉硬规则】
+- 仅采信官网/店铺/可核验公开页；无证据字段必须写「公开信息未找到」。
+- 禁止编造 SKU 名、精确价格、进口额、MOQ、海关编号、联系人。
+- 数字字段：无证据则填 0，并在对应字符串写「公开信息未找到」；禁止用「典型价」凑数。
 
-必须尽量填写：
-1) 在售/采购品类与短标签
-2) 典型包装方式（盒/吸塑/袋/彩盒等）
-3) 主配色或风格
-4) 零售价 → 人民币；并推算采购/FOB 成本人民币（合理倍率，写明依据弱则保守）
-5) 销量或进口规模弱信号（没有则「公开信息未找到」）
-6) 采购/补货周期、旺季、MOQ（没有则「公开信息未找到」）
+【定价推算（仅当页面有明确零售价时可推 FOB；否则 estimatedFOBPriceCNY=0）】
+采用零售业 Keystone / 渠道毛利反推（可审计）：
+  买方采购价(WS) ≈ 零售价(MSRP) × (1 − 零售毛利率)
+  玩具/礼品常用零售毛利率约 45%–55% → WS ≈ MSRP × 0.45～0.55
+  出口 FOB/出厂参考 ≈ WS × 0.70～0.95（预留对方运保税；取保守）
+  若仅有外币零售价：先按页面币种保留 retailPrice 原文，retailPriceCNY 用明示汇率或标注不确定时填 0。
+禁止使用「随便÷4」且不声明假设。
+
+【包装/配色】只描述页面可见：盒型、吸塑、袋装、开窗、主色块；不可见写「公开信息未找到」。
+
+【周期/销量】仅摘录页面或可核验公开线索；否则「公开信息未找到」。
 
 JSON:
 {
@@ -4630,7 +4637,7 @@ JSON:
     "sell": { "categories": [], "items": [], "tags": [], "notes": "" },
     "procure": { "categories": [], "items": [], "tags": [], "notes": "" },
     "matchTags": [],
-    "sourceNote": "轻量设计信号补全，基于公开信息"
+    "sourceNote": "仅基于公开页；无证据已标公开信息未找到"
   },
   "products": [{
     "name": "", "category": "", "role": "sell", "tags": [],
@@ -4639,11 +4646,14 @@ JSON:
     "colors": "", "packaging": "", "features": "", "keywordMatch": false
   }]
 }
-products 5–10 条即可；role 为 sell|procure|both。
+products 最多 8 条；role=sell|procure|both。宁缺毋滥。
 `;
 
   const text = await generateContentUnified('analysis', prompt, SYSTEM_INSTRUCTION, true);
   const ai = extractJson(text) || {};
+
+  const looksMissing = (s: string) =>
+    !s || /公开信息未找到|^n\/?a$|^未知$|^暂无$|^-$/i.test(s.trim());
 
   const products = (Array.isArray(ai.products) ? ai.products : [])
     .map((p: any) => {
@@ -4657,28 +4667,48 @@ products 5–10 条即可；role 为 sell|procure|both。
       const tags = Array.isArray(p.tags)
         ? p.tags.map((t: unknown) => String(t || '').trim()).filter(Boolean).slice(0, 8)
         : [];
+      const retailPrice = String(p.retailPrice || '').trim();
+      let retailPriceCNY = Number(p.retailPriceCNY) || 0;
+      let estimatedFOBPriceCNY = Number(p.estimatedFOBPriceCNY) || 0;
+      let priceMinCNY = typeof p.priceMinCNY === 'number' ? p.priceMinCNY : undefined;
+      let priceMaxCNY = typeof p.priceMaxCNY === 'number' ? p.priceMaxCNY : undefined;
+      // 无零售原文却有「整齐」推算价 → 视为幻觉，清零
+      if (looksMissing(retailPrice) && retailPriceCNY <= 0) {
+        estimatedFOBPriceCNY = 0;
+        priceMinCNY = undefined;
+        priceMaxCNY = undefined;
+      }
+      if (retailPriceCNY > 0 && estimatedFOBPriceCNY > retailPriceCNY) {
+        // FOB 不应高于零售；违反经济学常识则丢弃推算
+        estimatedFOBPriceCNY = 0;
+      }
+      if (retailPriceCNY > 0 && estimatedFOBPriceCNY > 0) {
+        const ratio = estimatedFOBPriceCNY / retailPriceCNY;
+        // Keystone 反推后 FOB 通常约在零售的 15%–55%；离谱则清零
+        if (ratio < 0.08 || ratio > 0.65) estimatedFOBPriceCNY = 0;
+      }
       return {
         name: String(p.name || '').trim(),
         category: String(p.category || '').trim(),
         role,
         tags,
-        retailPrice: String(p.retailPrice || ''),
-        retailPriceCNY: Number(p.retailPriceCNY) || 0,
-        estimatedFOBPriceCNY: Number(p.estimatedFOBPriceCNY) || 0,
-        priceMinCNY: typeof p.priceMinCNY === 'number' ? p.priceMinCNY : undefined,
-        priceMaxCNY: typeof p.priceMaxCNY === 'number' ? p.priceMaxCNY : undefined,
+        retailPrice: retailPrice || '公开信息未找到',
+        retailPriceCNY,
+        estimatedFOBPriceCNY,
+        priceMinCNY,
+        priceMaxCNY,
         pricingStrategy: p.pricingStrategy || '',
         pitchPoint: p.pitchPoint || '',
         techSpecs: p.techSpecs || '',
-        features: p.features || '',
-        colors: p.colors || '',
-        packaging: p.packaging || '',
+        features: looksMissing(String(p.features || '')) ? '公开信息未找到' : p.features,
+        colors: looksMissing(String(p.colors || '')) ? '公开信息未找到' : p.colors,
+        packaging: looksMissing(String(p.packaging || '')) ? '公开信息未找到' : p.packaging,
         imageUrl: p.imageUrl || '',
         competitorLink: p.competitorLink || '',
         keywordMatch: !!p.keywordMatch,
       };
     })
-    .filter((p: { name: string }) => p.name);
+    .filter((p: { name: string }) => p.name && !looksMissing(p.name));
 
   const sideFrom = (raw: any) => ({
     categories: Array.isArray(raw?.categories)

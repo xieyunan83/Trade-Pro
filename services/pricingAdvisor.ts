@@ -1,9 +1,23 @@
 /**
- * 定价参考：客户零售人民币 → 推算采购成本 → 对照我方出厂价，并给置信度。
- * 规则启发式 + 库内真实价带；不展示内部数据源名。
+ * 定价参考（证据优先）：库内观察价 → 权威公式推导 → 声明假设。
+ * 无观察数据时宁可「证据不足」，禁止编造价。
  */
 import type { CustomerProductProfile } from '../types';
 import { normalizeCategoryLabel } from './productCatalog';
+import {
+  convertToCny,
+  factoryBandFromObservedBuyCost,
+  factoryBandFromRetail,
+  factoryBandFromRetailLandedLadder,
+  FX_REF_TO_CNY,
+  marginRate,
+  parsePriceBandNumbers,
+  pickChannelProfile,
+  robustBandFromValues,
+  round2,
+  scoreEvidenceConfidence,
+  type EvidenceTier,
+} from './tradePricingTheory';
 
 export type PriceBandCny = { min: number; max: number };
 
@@ -20,55 +34,20 @@ export type PricingAdvice = {
   sampleSize: number;
   marketRetail?: PriceBandCny;
   marketBuyCost?: PriceBandCny;
-  /** 建议我方可报出厂价带（人民币） */
   suggestedFactory?: PriceBandCny;
   ourFactoryCny?: number;
   verdict: PricingVerdict;
   confidence: PricingConfidence;
   confidenceScore: number;
+  /** observed | derived | assumed | insufficient */
+  evidenceTier: EvidenceTier;
+  /** 使用的公式说明（可审计） */
+  formulaUsed?: string;
   reasons: string[];
   assumptions: string[];
 };
 
-const EMPTY = /^(n\/?a|未知|公开信息未找到|none|null|待补|暂无)?$/i;
-
-/** 从「¥12–35」「FOB $1.2-2.5」「15-40元」等解析数字区间 */
-export const parsePriceBandNumbers = (raw?: string): { lo?: number; hi?: number; currencyHint?: string } => {
-  const s = (raw || '').trim();
-  if (!s || EMPTY.test(s)) return {};
-  const currencyHint = /\$|usd|美元/i.test(s)
-    ? 'USD'
-    : /€|eur|欧元/i.test(s)
-      ? 'EUR'
-      : /¥|￥|cny|rmb|元/i.test(s)
-        ? 'CNY'
-        : undefined;
-  const nums = [...s.replace(/,/g, '').matchAll(/(\d+(?:\.\d+)?)/g)].map((m) => Number(m[1]));
-  const positive = nums.filter((n) => Number.isFinite(n) && n > 0);
-  if (!positive.length) return { currencyHint };
-  if (positive.length === 1) return { lo: positive[0], hi: positive[0], currencyHint };
-  return { lo: Math.min(...positive), hi: Math.max(...positive), currencyHint };
-};
-
-/** 粗略换算到人民币（无汇率接口时用保守近似，仅作参考） */
-export const toCnyApprox = (
-  lo?: number,
-  hi?: number,
-  currencyHint?: string
-): PriceBandCny | undefined => {
-  if (lo == null && hi == null) return undefined;
-  const rate =
-    currencyHint === 'USD' ? 7.2 : currencyHint === 'EUR' ? 7.8 : 1;
-  const a = (lo ?? hi!) * rate;
-  const b = (hi ?? lo!) * rate;
-  return { min: Math.round(Math.min(a, b) * 100) / 100, max: Math.round(Math.max(a, b) * 100) / 100 };
-};
-
-const mergeBand = (a?: PriceBandCny, b?: PriceBandCny): PriceBandCny | undefined => {
-  if (!a) return b;
-  if (!b) return a;
-  return { min: Math.min(a.min, b.min), max: Math.max(a.max, b.max) };
-};
+export { parsePriceBandNumbers };
 
 const profileMatchesCategory = (p: CustomerProductProfile, category: string): boolean => {
   const cat = normalizeCategoryLabel(category) || category;
@@ -93,49 +72,79 @@ export const aggregateMarketPriceBands = (
   retail?: PriceBandCny;
   buyCost?: PriceBandCny;
   sampleSize: number;
+  retailMethod?: string;
+  buyMethod?: string;
 } => {
   const matched = profiles.filter((p) => profileMatchesCategory(p, category));
-  let retail: PriceBandCny | undefined;
-  let buyCost: PriceBandCny | undefined;
-  let n = 0;
+  const retailVals: number[] = [];
+  const buyVals: number[] = [];
   for (const p of matched) {
-    const r =
-      p.priceMinCny != null || p.priceMaxCny != null
-        ? {
-            min: p.priceMinCny ?? p.priceMaxCny!,
-            max: p.priceMaxCny ?? p.priceMinCny!,
-          }
-        : undefined;
-    const b =
-      p.buyCostMinCny != null || p.buyCostMaxCny != null
-        ? {
-            min: p.buyCostMinCny ?? p.buyCostMaxCny!,
-            max: p.buyCostMaxCny ?? p.buyCostMinCny!,
-          }
-        : undefined;
-    if (r || b) n += 1;
-    retail = mergeBand(retail, r);
-    buyCost = mergeBand(buyCost, b);
+    if (p.priceMinCny != null && p.priceMinCny > 0) retailVals.push(p.priceMinCny);
+    if (p.priceMaxCny != null && p.priceMaxCny > 0) retailVals.push(p.priceMaxCny);
+    if (p.buyCostMinCny != null && p.buyCostMinCny > 0) buyVals.push(p.buyCostMinCny);
+    if (p.buyCostMaxCny != null && p.buyCostMaxCny > 0) buyVals.push(p.buyCostMaxCny);
+    for (const s of p.skus || []) {
+      if (s.retailPriceCNY != null && s.retailPriceCNY > 0) retailVals.push(s.retailPriceCNY);
+      if (s.estimatedFOBPriceCNY != null && s.estimatedFOBPriceCNY > 0) {
+        buyVals.push(s.estimatedFOBPriceCNY);
+      }
+    }
   }
-  return { retail, buyCost, sampleSize: n };
+  const retailBand = robustBandFromValues(retailVals);
+  const buyBand = robustBandFromValues(buyVals);
+  const sampleSize = matched.filter(
+    (p) =>
+      p.priceMinCny != null ||
+      p.priceMaxCny != null ||
+      p.buyCostMinCny != null ||
+      p.buyCostMaxCny != null ||
+      (p.skus || []).some((s) => (s.retailPriceCNY || 0) > 0 || (s.estimatedFOBPriceCNY || 0) > 0)
+  ).length;
+
+  return {
+    retail: retailBand ? { min: retailBand.min, max: retailBand.max } : undefined,
+    buyCost: buyBand ? { min: buyBand.min, max: buyBand.max } : undefined,
+    sampleSize,
+    retailMethod: retailBand?.method,
+    buyMethod: buyBand?.method,
+  };
+};
+
+export const toCnyApprox = (
+  lo?: number,
+  hi?: number,
+  currencyHint?: string
+): PriceBandCny | undefined => {
+  if (lo == null && hi == null) return undefined;
+  const cur = currencyHint || 'CNY';
+  const a = convertToCny(lo ?? hi!, cur);
+  const b = convertToCny(hi ?? lo!, cur);
+  return { min: Math.min(a.cny, b.cny), max: Math.max(a.cny, b.cny) };
 };
 
 /**
- * 建议出厂价：优先用库内采购成本带；否则用零售÷渠道倍率粗推。
+ * 建议出厂价：观察采购优先 → Keystone 渠道毛利反推 → 拒绝无证据臆造。
  */
 export const buildPricingAdvice = (opts: {
   category: string;
   profiles: CustomerProductProfile[];
-  /** 我方出厂价（人民币；若为美元请先换算） */
   ourFactoryCny?: number;
-  /** 用户填写的价格带原文 */
   priceBandText?: string;
+  channelHint?: string;
 }): PricingAdvice => {
   const category = (opts.category || '').trim() || '未指定品类';
-  const { retail, buyCost, sampleSize } = aggregateMarketPriceBands(opts.profiles, category);
+  const channel = pickChannelProfile(opts.channelHint || category);
+  const agg = aggregateMarketPriceBands(opts.profiles, category);
+  const { retail, buyCost, sampleSize } = agg;
 
   const parsed = parsePriceBandNumbers(opts.priceBandText);
-  const userBand = toCnyApprox(parsed.lo, parsed.hi, parsed.currencyHint);
+  let usedAssumedFx = false;
+  let userBand: PriceBandCny | undefined;
+  if (parsed.lo != null || parsed.hi != null) {
+    const cur = parsed.currencyHint || 'CNY';
+    if (cur !== 'CNY') usedAssumedFx = true;
+    userBand = toCnyApprox(parsed.lo, parsed.hi, cur);
+  }
 
   const ourFactoryCny =
     opts.ourFactoryCny != null && opts.ourFactoryCny > 0
@@ -145,83 +154,107 @@ export const buildPricingAdvice = (opts: {
         : undefined;
 
   const assumptions: string[] = [];
+  const reasons: string[] = [];
   let suggestedFactory: PriceBandCny | undefined;
+  let evidenceTier: EvidenceTier = 'insufficient';
+  let formulaUsed: string | undefined;
+  let usedLandedLadder = false;
 
   if (buyCost) {
-    // 对方采购价 ≈ 我方可成交出厂上沿；建议带取其 75%–100%
-    suggestedFactory = {
-      min: Math.round(buyCost.min * 0.75 * 100) / 100,
-      max: Math.round(buyCost.max * 1.0 * 100) / 100,
-    };
-    assumptions.push('建议出厂价参考库内客户采购/FOB 成本带（取约 75%–100%）');
+    const band = factoryBandFromObservedBuyCost(buyCost.min, buyCost.max);
+    suggestedFactory = { min: band.min, max: band.max };
+    evidenceTier = band.tier;
+    formulaUsed = band.formula;
+    assumptions.push(band.formula);
+    if (agg.buyMethod) assumptions.push(`采购样本聚合：${agg.buyMethod}`);
   } else if (retail) {
-    // 零售 → 出厂：保守除以 3.5–5（渠道加价）
-    suggestedFactory = {
-      min: Math.round((retail.min / 5) * 100) / 100,
-      max: Math.round((retail.max / 3.5) * 100) / 100,
-    };
-    assumptions.push('暂无采购成本，按终端零售÷3.5～5 粗推出厂带（渠道加价假设）');
+    const keystone = factoryBandFromRetail(retail.min, retail.max, channel);
+    const ladder = factoryBandFromRetailLandedLadder(retail.min, retail.max, channel);
+    suggestedFactory = { min: keystone.min, max: keystone.max };
+    evidenceTier = 'derived';
+    formulaUsed = keystone.formula;
+    assumptions.push(keystone.formula);
+    assumptions.push(
+      `交叉校验（规划阶梯，未并入建议带）：¥${ladder.min}–${ladder.max}；${ladder.formula}`
+    );
+    if (agg.retailMethod) assumptions.push(`零售样本聚合：${agg.retailMethod}`);
+    usedLandedLadder = true;
   } else {
-    assumptions.push('库内缺少该品类价带，建议先补全客户设计信号后再定价');
+    assumptions.push('库内无该品类观察零售/采购价，拒绝臆造建议出厂价');
   }
 
-  const reasons: string[] = [];
-  let verdict: PricingVerdict = '证据不足';
-  let confidenceScore = Math.min(90, 20 + sampleSize * 12);
-  if (buyCost) confidenceScore += 15;
-  if (retail) confidenceScore += 10;
-  if (ourFactoryCny != null) confidenceScore += 5;
+  if (usedAssumedFx) {
+    const fxKey = (parsed.currencyHint || 'USD').toUpperCase();
+    assumptions.push(FX_REF_TO_CNY[fxKey]?.note || '外币按参考中间价折算');
+  }
 
-  if (ourFactoryCny != null && suggestedFactory) {
+  let conf = scoreEvidenceConfidence({
+    tier: evidenceTier,
+    sampleSize,
+    hasObservedBuy: !!buyCost,
+    hasObservedRetail: !!retail,
+    usedAssumedFx,
+    usedLandedLadder: usedLandedLadder && !buyCost,
+  });
+
+  let verdict: PricingVerdict = '证据不足';
+
+  if (sampleSize < 2 && evidenceTier !== 'observed') {
+    // 样本过少且非直接观察：不输出建议价，防幻觉
+    suggestedFactory = undefined;
+    evidenceTier = 'insufficient';
+    conf = { score: Math.min(conf.score, 28), label: '低' };
+    reasons.push('样本不足（需≥2 家有价画像，或至少有观察采购/FOB），暂不给出建议价');
+  } else if (ourFactoryCny != null && suggestedFactory && evidenceTier !== 'insufficient') {
     const mid = (suggestedFactory.min + suggestedFactory.max) / 2;
+    const m = marginRate(mid, ourFactoryCny);
     if (ourFactoryCny < suggestedFactory.min * 0.85) {
       verdict = '偏低可冲量';
       reasons.push(
-        `我方约 ¥${ourFactoryCny} 低于建议带 ¥${suggestedFactory.min}–${suggestedFactory.max}，有冲量空间`
+        `我方约 ¥${round2(ourFactoryCny)} 低于建议带 ¥${suggestedFactory.min}–${suggestedFactory.max}`
       );
     } else if (ourFactoryCny > suggestedFactory.max * 1.15) {
       verdict = '偏贵需减配或改包装';
       reasons.push(
-        `我方约 ¥${ourFactoryCny} 高于建议带，可考虑减配、改包装或换渠道定位`
+        `我方约 ¥${round2(ourFactoryCny)} 高于建议带；可减配、改包装或换渠道`
       );
     } else {
       verdict = '落在可成交带';
       reasons.push(
-        `我方约 ¥${ourFactoryCny} 落在建议带 ¥${suggestedFactory.min}–${suggestedFactory.max}附近（中位约 ¥${Math.round(mid)}）`
+        `我方约 ¥${round2(ourFactoryCny)} 落在建议带（中位约 ¥${round2(mid)}）`
       );
     }
-  } else if (suggestedFactory) {
+    if (m != null) {
+      reasons.push(`相对建议中位的示意毛利率约 ${(m * 100).toFixed(0)}%（Margin=(P−C)/P）`);
+    }
+  } else if (suggestedFactory && evidenceTier !== 'insufficient') {
     verdict = '落在可成交带';
     reasons.push(
-      `建议出厂参考 ¥${suggestedFactory.min}–${suggestedFactory.max}（基于 ${sampleSize} 家库内画像）`
+      `建议出厂 ¥${suggestedFactory.min}–${suggestedFactory.max}（样本 ${sampleSize}，证据=${evidenceTier}）`
     );
-  } else {
-    reasons.push('库内价带不足，无法给出可靠定价建议');
-    confidenceScore = Math.min(confidenceScore, 25);
+  } else if (!reasons.length) {
+    reasons.push('证据不足：无库内观察价，不输出臆造价');
   }
 
-  if (retail) {
-    reasons.push(`终端零售参考 ¥${retail.min}–${retail.max}`);
-  }
-  if (buyCost) {
-    reasons.push(`客户采购成本参考 ¥${buyCost.min}–${buyCost.max}`);
-  }
+  if (retail) reasons.push(`终端零售观察带 ¥${retail.min}–${retail.max}`);
+  if (buyCost) reasons.push(`采购/FOB 观察带 ¥${buyCost.min}–${buyCost.max}`);
+  reasons.push(`渠道假设：${channel.label}`);
 
-  confidenceScore = Math.max(5, Math.min(95, Math.round(confidenceScore)));
-  const confidence: PricingConfidence =
-    confidenceScore >= 65 ? '高' : confidenceScore >= 40 ? '中' : '低';
+  const insufficient = evidenceTier === 'insufficient' || !suggestedFactory;
 
   return {
     category,
     sampleSize,
     marketRetail: retail,
     marketBuyCost: buyCost,
-    suggestedFactory,
+    suggestedFactory: insufficient ? undefined : suggestedFactory,
     ourFactoryCny,
-    verdict,
-    confidence,
-    confidenceScore,
-    reasons: reasons.slice(0, 6),
-    assumptions,
+    verdict: insufficient ? '证据不足' : verdict,
+    confidence: conf.label,
+    confidenceScore: conf.score,
+    evidenceTier: insufficient ? 'insufficient' : evidenceTier,
+    formulaUsed: insufficient ? undefined : formulaUsed,
+    reasons: reasons.slice(0, 8),
+    assumptions: assumptions.slice(0, 8),
   };
 };

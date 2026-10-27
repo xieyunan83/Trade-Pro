@@ -331,6 +331,12 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
                     </span>
                   </h3>
                   <div className="text-sm font-black text-teal-800">{pack.pricingAdvice.verdict}</div>
+                  <div className="text-[10px] font-bold text-slate-500">
+                    证据层级：{pack.pricingAdvice.evidenceTier || '—'}
+                    {pack.pricingAdvice.formulaUsed
+                      ? ` · ${pack.pricingAdvice.formulaUsed.slice(0, 80)}`
+                      : ''}
+                  </div>
                   {pack.pricingAdvice.suggestedFactory && (
                     <div className="text-xs font-bold text-slate-700">
                       建议出厂 ¥{pack.pricingAdvice.suggestedFactory.min}–
@@ -347,11 +353,11 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
                       </li>
                     ))}
                   </ul>
-                  {pack.pricingAdvice.assumptions[0] && (
-                    <p className="text-[10px] font-bold text-slate-400">
-                      {pack.pricingAdvice.assumptions[0]}
+                  {pack.pricingAdvice.assumptions.slice(0, 2).map((a) => (
+                    <p key={a} className="text-[10px] font-bold text-slate-400 leading-relaxed">
+                      {a}
                     </p>
-                  )}
+                  ))}
                 </section>
               )}
               {pack.designCard && (

@@ -172,11 +172,18 @@ export const DesignConstraintCardPanel: React.FC<Props> = ({
                 {card.pricing && (
                   <div className="text-[10px] font-bold text-teal-700 mt-0.5">
                     {card.pricing.verdict}
+                    {card.pricing.evidenceTier ? ` · ${card.pricing.evidenceTier}` : ''}
                   </div>
                 )}
               </div>
             </div>
           )}
+          {card.hintSources?.includes('industry_heuristic') &&
+            !card.hintSources.includes('library') && (
+              <p className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-2 py-1">
+                当前主要依据行业通则，库内观察不足；补全客户信号后再设计/定价更可靠。
+              </p>
+            )}
 
           {!compact && card.topCustomers.length > 0 && (
             <div className="text-[10px] font-bold text-slate-500">

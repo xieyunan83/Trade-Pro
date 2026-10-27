@@ -26,11 +26,13 @@ export type DesignConstraintCard = {
   buyingSeasons?: string;
   procurementHints: string[];
   designHints: string[];
+  /** 库内观察 vs 行业通则兜底 */
+  hintSources: Array<'library' | 'industry_heuristic'>;
   confidence: PricingConfidence;
   confidenceScore: number;
   topCustomers: Array<{ name: string; country?: string; website?: string }>;
   pricing?: PricingAdvice;
-  /** 规则适市补充（无库内数据时兜底） */
+  /** 规则适市补充（无库内数据时兜底；置信须下调） */
   marketFitPackaging: string[];
   marketFitFeatures: string[];
 };
@@ -121,32 +123,54 @@ export const buildDesignConstraintCard = (opts: {
   const fit = buildMarketFitAdvice({ categoryOrName: category, targetMarket: market });
 
   const designHints: string[] = [];
+  const hintSources: Array<'library' | 'industry_heuristic'> = [];
   if (packagingStyles.length) {
-    designHints.push(`优先包装形态：${packagingStyles.slice(0, 3).join('、')}`);
+    designHints.push(`【库内观察】优先包装：${packagingStyles.slice(0, 3).join('、')}`);
+    hintSources.push('library');
   } else if (fit.packaging[0]) {
-    designHints.push(fit.packaging[0]);
+    designHints.push(`【行业通则·待验证】${fit.packaging[0]}`);
+    hintSources.push('industry_heuristic');
   }
   if (colorPalettes.length) {
-    designHints.push(`主配色参考：${colorPalettes.slice(0, 4).join('、')}`);
+    designHints.push(`【库内观察】主配色：${colorPalettes.slice(0, 4).join('、')}`);
+    hintSources.push('library');
   } else if (colorPreference) {
-    designHints.push(`配色偏好：${colorPreference.slice(0, 80)}`);
+    designHints.push(`【库内摘要】配色：${colorPreference.slice(0, 80)}`);
+    hintSources.push('library');
   }
-  if (pricing.suggestedFactory) {
+  if (pricing.suggestedFactory && pricing.evidenceTier !== 'insufficient') {
     designHints.push(
-      `出厂价参考 ¥${pricing.suggestedFactory.min}–${pricing.suggestedFactory.max}（置信${pricing.confidence}）`
+      `【定价·${pricing.evidenceTier}】出厂 ¥${pricing.suggestedFactory.min}–${pricing.suggestedFactory.max}（置信${pricing.confidence}）`
     );
+    hintSources.push(pricing.evidenceTier === 'observed' ? 'library' : 'industry_heuristic');
+  } else {
+    designHints.push('【定价】证据不足，暂不给出建议出厂价');
   }
-  if (typicalMoq) designHints.push(`起订量线索：${typicalMoq}`);
-  if (buyingSeasons) designHints.push(`旺季/周期：${buyingSeasons}`);
-  if (!designHints.length) {
-    designHints.push(...fit.highlights.slice(0, 2));
+  if (typicalMoq && !/公开信息未找到/i.test(typicalMoq)) {
+    designHints.push(`【库内】起订量：${typicalMoq}`);
+    hintSources.push('library');
+  }
+  if (buyingSeasons && !/公开信息未找到/i.test(buyingSeasons)) {
+    designHints.push(`【库内】旺季/周期：${buyingSeasons}`);
+    hintSources.push('library');
+  }
+  if (!designHints.some((h) => h.includes('库内'))) {
+    designHints.push(...fit.highlights.slice(0, 2).map((h) => `【行业通则·待验证】${h}`));
+    hintSources.push('industry_heuristic');
   }
 
-  let confidenceScore = Math.min(90, 15 + sampleSize * 10 + withSignals.length * 8);
-  if (packagingStyles.length) confidenceScore += 8;
-  if (colorPalettes.length) confidenceScore += 8;
-  if (buyCost || retail) confidenceScore += 10;
-  confidenceScore = Math.max(8, Math.min(95, Math.round(confidenceScore)));
+  // 置信：库内信号主导；纯行业通则封顶「低/中」
+  let confidenceScore = pricing.confidenceScore || 20;
+  confidenceScore = Math.round(
+    confidenceScore * 0.55 +
+      Math.min(35, withSignals.length * 6) +
+      (packagingStyles.length ? 8 : 0) +
+      (colorPalettes.length ? 8 : 0)
+  );
+  if (!hintSources.includes('library')) {
+    confidenceScore = Math.min(confidenceScore, 38);
+  }
+  confidenceScore = Math.max(8, Math.min(92, confidenceScore));
   const confidence: PricingConfidence =
     confidenceScore >= 65 ? '高' : confidenceScore >= 40 ? '中' : '低';
 
@@ -174,7 +198,8 @@ export const buildDesignConstraintCard = (opts: {
     typicalMoq,
     buyingSeasons,
     procurementHints,
-    designHints: designHints.slice(0, 6),
+    designHints: designHints.slice(0, 7),
+    hintSources: [...new Set(hintSources)],
     confidence,
     confidenceScore,
     topCustomers,
@@ -184,16 +209,19 @@ export const buildDesignConstraintCard = (opts: {
   };
 };
 
-/** 约束卡 → 设计备注短文本（可写入 notes / prompt） */
+/** 约束卡 → 设计备注短文本（可写入 notes / prompt）；无证据不强塞价 */
 export const designConstraintToPromptNote = (card: DesignConstraintCard): string => {
+  const priceBit =
+    card.pricing?.suggestedFactory && card.pricing.evidenceTier !== 'insufficient'
+      ? `出厂参考¥${card.pricing.suggestedFactory.min}-${card.pricing.suggestedFactory.max}(${card.pricing.evidenceTier})`
+      : '定价证据不足勿臆造价签';
   const parts = [
-    `【适市约束·${card.market}·${card.category}】`,
-    card.designHints.join('；'),
+    `【适市约束·${card.market}·${card.category}·置信${card.confidence}】`,
+    card.designHints.filter((h) => h.includes('库内')).join('；') ||
+      card.designHints.slice(0, 2).join('；'),
     card.packagingStyles.length ? `包装:${card.packagingStyles.slice(0, 3).join('/')}` : '',
     card.colorPalettes.length ? `配色:${card.colorPalettes.slice(0, 4).join('/')}` : '',
-    card.pricing?.suggestedFactory
-      ? `出厂参考¥${card.pricing.suggestedFactory.min}-${card.pricing.suggestedFactory.max}`
-      : '',
+    priceBit,
   ].filter(Boolean);
-  return parts.join(' ').slice(0, 400);
+  return parts.join(' ').slice(0, 420);
 };
