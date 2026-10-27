@@ -44,6 +44,16 @@ export const clientPatchFromAnalysis = (
     .map((t) => t.replace(/^关键词:/, '').trim())
     .filter(Boolean);
   const searchedKeywords = [...new Set([kw, ...tagKws].filter(Boolean))];
+  const productTags = [
+    ...(data?.productIntel?.matchTags || []),
+    ...(data?.productIntel?.sell?.tags || []),
+    ...(data?.productIntel?.procure?.tags || []),
+    ...(data?.businessScope?.coreProducts || []).slice(0, 4).map((c) => `在售:${c}`),
+    ...(data?.tradeIntelligence?.importCategories || []).slice(0, 4).map((c) => `采购:${c}`),
+  ]
+    .map((t) => String(t || '').trim())
+    .filter(Boolean);
+  const mergedTags = [...new Set([...(data?.searchTags || []), ...productTags])].slice(0, 40);
   return {
     name: data?.companyInfo?.name || fallbackDomain || 'Unknown',
     website,
@@ -54,6 +64,7 @@ export const clientPatchFromAnalysis = (
       'Global',
     productType:
       data?.businessScope?.coreProducts?.[0] ||
+      data?.productIntel?.sell?.categories?.[0] ||
       data?.products?.find((p) => p.category)?.category ||
       data?.products?.[0]?.name ||
       data?.searchKeyword ||
@@ -79,7 +90,7 @@ export const clientPatchFromAnalysis = (
     contacts: data?.decisionMakers || [],
     searchKeyword: data?.searchKeyword,
     searchedKeywords: searchedKeywords.length ? searchedKeywords : undefined,
-    tags: data?.searchTags,
+    tags: mergedTags.length ? mergedTags : data?.searchTags,
   };
 };
 

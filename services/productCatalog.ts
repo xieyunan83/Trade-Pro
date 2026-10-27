@@ -143,11 +143,26 @@ export const buildProductProfileFromAnalysis = (
     });
   };
 
+  const sellCatSet = new Set<string>();
+  const procureCatSet = new Set<string>();
+  const tagSet = new Set<string>();
+
+  const addTags = (tags?: string[]) => {
+    (tags || []).forEach((t) => {
+      const x = (t || '').trim();
+      if (x && x.length <= 32 && !/公开信息未找到/i.test(x)) tagSet.add(x);
+    });
+  };
+
   (analysis.products || []).forEach((p, idx) => {
     const name = (p.name || '').trim();
     if (!name || /公开信息未找到/i.test(name)) return;
     const cat = normalizeCategoryLabel(p.category) || normalizeCategoryLabel(name) || '未分类产品';
     categorySet.add(cat);
+    const role = p.role === 'procure' ? 'procure' : p.role === 'both' ? 'both' : 'sell';
+    if (role === 'sell' || role === 'both') sellCatSet.add(cat);
+    if (role === 'procure' || role === 'both') procureCatSet.add(cat);
+    addTags(p.tags);
     const retail = parseMoney(p.retailPriceCNY) ?? parseMoney(p.retailPrice);
     const fob = parseMoney(p.estimatedFOBPriceCNY);
     const lo = parseMoney(p.priceMinCNY) ?? (retail != null && fob != null ? Math.min(retail, fob) : retail ?? fob);
@@ -163,20 +178,65 @@ export const buildProductProfileFromAnalysis = (
       retailPrice: p.retailPrice,
       retailPriceCNY: retail,
       estimatedFOBPriceCNY: fob,
-      source: 'sku',
+      source: role === 'procure' ? 'procure' : 'sku',
       keywordMatch: !!p.keywordMatch,
+      role,
+      tags: (p.tags || []).filter(Boolean).slice(0, 8),
     });
   });
 
-  (analysis.businessScope?.coreProducts || []).forEach((c) => pushCat(c, 'core'));
-  (analysis.businessScope?.relevantProducts || []).forEach((c) => pushCat(c, 'core'));
-  (analysis.tradeIntelligence?.importCategories || []).forEach((c) => pushCat(c, 'trade'));
+  (analysis.businessScope?.coreProducts || []).forEach((c) => {
+    pushCat(c, 'core');
+    const n = normalizeCategoryLabel(c);
+    if (n) sellCatSet.add(n);
+  });
+  (analysis.businessScope?.relevantProducts || []).forEach((c) => {
+    pushCat(c, 'core');
+    const n = normalizeCategoryLabel(c);
+    if (n) sellCatSet.add(n);
+  });
+  (analysis.tradeIntelligence?.importCategories || []).forEach((c) => {
+    pushCat(c, 'trade');
+    const n = normalizeCategoryLabel(c);
+    if (n) procureCatSet.add(n);
+  });
   (analysis.websiteCategories || []).forEach((wc) => {
     const lo = parseMoney(wc.priceMinCNY);
     const hi = parseMoney(wc.priceMaxCNY);
     pushCat(wc.categoryName, 'website', { min: lo, max: hi });
+    const n = normalizeCategoryLabel(wc.categoryName);
+    if (n) sellCatSet.add(n);
     (wc.items || []).slice(0, 8).forEach((item) => pushCat(item, 'website', { min: lo, max: hi }));
   });
+
+  const intel = analysis.productIntel;
+  (intel?.sell?.categories || []).forEach((c) => {
+    pushCat(c, 'website');
+    const n = normalizeCategoryLabel(c);
+    if (n) sellCatSet.add(n);
+  });
+  (intel?.sell?.items || []).forEach((item) => pushCat(item, 'sku'));
+  addTags(intel?.sell?.tags);
+  (intel?.procure?.categories || []).forEach((c) => {
+    pushCat(c, 'procure');
+    const n = normalizeCategoryLabel(c);
+    if (n) procureCatSet.add(n);
+  });
+  (intel?.procure?.items || []).forEach((item) => {
+    const cat = normalizeCategoryLabel(item) || item;
+    if (!cat) return;
+    categorySet.add(cat);
+    procureCatSet.add(cat);
+    skus.push({
+      id: skuId(id, item, skus.length),
+      name: item,
+      category: cat,
+      source: 'procure',
+      role: 'procure',
+    });
+  });
+  addTags(intel?.procure?.tags);
+  addTags(intel?.matchTags);
 
   if (analysis.searchKeyword) pushCat(analysis.searchKeyword, 'category');
 
@@ -196,6 +256,21 @@ export const buildProductProfileFromAnalysis = (
       .filter(Boolean) as string[]),
   ];
 
+  const sellCategories = [...sellCatSet];
+  const procureCategories = [...procureCatSet];
+  const productTags = [...tagSet].slice(0, 40);
+  const skuCount = skus.filter((s) => s.source === 'sku' || s.source === 'procure').length;
+  const catalogQuality = Math.min(
+    100,
+    Math.round(
+      Math.min(40, categories.length * 5) +
+        Math.min(30, skuCount * 3) +
+        Math.min(15, sellCategories.length * 3) +
+        Math.min(15, procureCategories.length * 4) +
+        Math.min(10, productTags.length * 2)
+    )
+  );
+
   return {
     id,
     companyName: companyName || id,
@@ -208,14 +283,19 @@ export const buildProductProfileFromAnalysis = (
     historyId: meta?.historyId,
     crmClientId: meta?.crmClientId,
     categories,
+    sellCategories,
+    procureCategories,
+    productTags,
     priceMinCny: priceMin,
     priceMaxCny: priceMax,
     priceBand,
-    skus: skus.slice(0, 80),
+    skus: skus.slice(0, 100),
     importCategories: analysis.tradeIntelligence?.importCategories,
     hsCodes: analysis.tradeIntelligence?.hsCodes,
     coreProducts: analysis.businessScope?.coreProducts,
     searchKeywords: [...new Set(searchKeywords)],
+    catalogQuality,
+    hasSellProcureSplit: sellCategories.length > 0 && procureCategories.length > 0,
     updatedAt: Date.now(),
     ownerUsername: meta?.ownerUsername,
     departmentId: meta?.departmentId,
@@ -322,7 +402,7 @@ const priceRangesOverlap = (
   return aLo - pad(aLo) <= bHi + pad(bHi) && bLo - pad(bLo) <= aHi + pad(aHi);
 };
 
-/** 本地打分匹配：新品 → 客户产品库 */
+/** 仅用背调入库的真实品类/SKU/标签打分；理由必须可追溯到库字段 */
 export const matchOurProductToProfiles = (
   query: OurProductMatchQuery,
   profiles: CustomerProductProfile[]
@@ -335,6 +415,15 @@ export const matchOurProductToProfiles = (
   const hits: ProductMatchHit[] = [];
 
   for (const profile of profiles) {
+    // 无真实产品数据的空壳画像不参与匹配
+    const quality = profile.catalogQuality ?? 0;
+    const hasReal =
+      (profile.skus || []).length > 0 ||
+      (profile.categories || []).length > 0 ||
+      (profile.sellCategories || []).length > 0 ||
+      (profile.procureCategories || []).length > 0;
+    if (!hasReal || quality < 8) continue;
+
     if (countries.length) {
       const pc = (profile.country || '').toLowerCase();
       if (pc && !countries.some((c) => pc.includes(c) || c.includes(pc))) continue;
@@ -344,51 +433,76 @@ export const matchOurProductToProfiles = (
     const reasons: string[] = [];
     const matchedCategories: string[] = [];
 
-    // 品类精确 / 包含
-    for (const cat of profile.categories) {
+    const sellCats = profile.sellCategories?.length
+      ? profile.sellCategories
+      : profile.categories;
+    const procureCats = [
+      ...(profile.procureCategories || []),
+      ...(profile.importCategories || []),
+    ];
+
+    // 采购侧命中（出口匹配优先：对方会买什么）
+    for (const cat of procureCats) {
       const nCat = normalizeCategoryLabel(cat) || cat;
       if (category && (nCat === category || nCat.includes(category) || category.includes(nCat))) {
-        score += 42;
+        score += 48;
         matchedCategories.push(nCat);
-        reasons.push(`品类命中：${nCat}`);
+        reasons.push(`采购/进口品类命中（库内）：${nCat}`);
         break;
       }
     }
 
-    // SKU / 关键词 token
-    const blob = [
-      ...profile.categories,
-      ...profile.skus.map((s) => s.name),
-      ...(profile.coreProducts || []),
-      ...(profile.searchKeywords || []),
-      ...(profile.importCategories || []),
-    ]
-      .join(' ')
-      .toLowerCase();
-
-    let tokenHits = 0;
-    for (const t of qTokens) {
-      if (blob.includes(t)) tokenHits += 1;
-    }
-    if (tokenHits > 0) {
-      const add = Math.min(28, tokenHits * 8);
-      score += add;
-      reasons.push(`关键词重合 ${tokenHits} 项`);
+    // 在售侧命中
+    for (const cat of sellCats) {
+      const nCat = normalizeCategoryLabel(cat) || cat;
+      if (category && (nCat === category || nCat.includes(category) || category.includes(nCat))) {
+        if (!matchedCategories.includes(nCat)) {
+          score += matchedCategories.length ? 18 : 40;
+          matchedCategories.push(nCat);
+          reasons.push(`在售品类命中（库内）：${nCat}`);
+        }
+        break;
+      }
     }
 
-    // 近义品类（同 alias 组）
+    // 具体 SKU 名称命中
+    const skuHit = (profile.skus || []).find((s) => {
+      const blob = `${s.name} ${s.category}`.toLowerCase();
+      return qTokens.some((t) => t.length > 1 && blob.includes(t));
+    });
+    if (skuHit) {
+      score += 22;
+      reasons.push(
+        `SKU 线索命中（库内「${skuHit.name}」/${skuHit.role === 'procure' ? '采购' : '在售'}）`
+      );
+    }
+
+    // 标签命中
+    const tags = profile.productTags || [];
+    const tagHits = tags.filter((t) =>
+      qTokens.some((tok) => normalizeText(t).includes(tok) || tok.includes(normalizeText(t)))
+    );
+    if (tagHits.length) {
+      score += Math.min(20, tagHits.length * 6);
+      reasons.push(`标签命中（库内）：${tagHits.slice(0, 3).join('、')}`);
+    }
+
+    // 近义品类（仍须落在库内品类上）
     if (category && !matchedCategories.length) {
       for (const a of CATEGORY_ALIASES) {
-        const inQuery = a.keys.some((k) => normalizeText(category).includes(normalizeText(k))) || a.label === category;
+        const inQuery =
+          a.keys.some((k) => normalizeText(category).includes(normalizeText(k))) ||
+          a.label === category;
         if (!inQuery) continue;
-        const hit = profile.categories.some((c) => {
+        const pool = [...sellCats, ...procureCats, ...profile.categories];
+        const hit = pool.some((c) => {
           const nc = normalizeCategoryLabel(c) || c;
           return nc === a.label || a.keys.some((k) => normalizeText(c).includes(normalizeText(k)));
         });
         if (hit) {
           score += 26;
           matchedCategories.push(a.label);
-          reasons.push(`近义品类：${a.label}`);
+          reasons.push(`近义品类（库内）：${a.label}`);
           break;
         }
       }
@@ -401,29 +515,29 @@ export const matchOurProductToProfiles = (
       profile.priceMaxCny
     );
     if (priceOverlap) {
-      score += 22;
-      reasons.push(`价格区间重叠（客户 ${profile.priceBand || '有价位线索'}）`);
-    } else if (
-      (query.priceMinCny != null || query.priceMaxCny != null) &&
-      (profile.priceMinCny != null || profile.priceMaxCny != null)
-    ) {
-      // 有价但无重叠：轻微扣分不至于清零
-      score = Math.max(0, score - 4);
+      score += 16;
+      reasons.push(`价格区间重叠（库内 ${profile.priceBand || '有价位'}）`);
     }
 
-    // 有 SKU 级数据加一点可信度
     if (profile.skus.some((s) => s.source === 'sku')) {
       score += 6;
-      reasons.push('含具体 SKU 价格线索');
+      reasons.push(`含 ${profile.skus.filter((s) => s.source === 'sku').length} 条具体 SKU 记录`);
+    }
+    if (profile.hasSellProcureSplit) {
+      score += 8;
+      reasons.push('背调已区分在售/采购双边数据');
     }
 
+    // 无任何库内命中理由 → 丢弃（禁止空理由凑分）
+    if (!reasons.length) continue;
+
     score = Math.min(100, Math.round(score));
-    if (score < 18) continue;
+    if (score < 22) continue;
 
     hits.push({
       profile,
       score,
-      reasons: reasons.slice(0, 5),
+      reasons: reasons.slice(0, 6),
       matchedCategories: [...new Set(matchedCategories)],
       priceOverlap,
     });
@@ -452,6 +566,8 @@ export const hasRichProductCatalog = (analysis?: AnalysisResult | null): boolean
   if (!analysis) return false;
   const cats = analysis.websiteCategories || [];
   const products = analysis.products || [];
+  const intel = analysis.productIntel;
+  const importCats = analysis.tradeIntelligence?.importCategories || [];
 
   const catsWithPrice = cats.filter((c) => {
     const band = (c.priceBand || '').trim();
@@ -473,10 +589,25 @@ export const hasRichProductCatalog = (analysis?: AnalysisResult | null): boolean
     return hasCat && hasPrice;
   });
 
-  if (catsWithPrice.length >= 3) return true;
-  if (productsPriced.length >= 5) return true;
-  if (cats.length >= 4 && productsPriced.length >= 3) return true;
-  if (catsWithPrice.length >= 2 && productsPriced.length >= 4) return true;
+  const sellSide =
+    (intel?.sell?.categories || []).length >= 2 ||
+    catsWithPrice.length >= 3 ||
+    productsPriced.filter((p) => p.role !== 'procure').length >= 4;
+  const procureSide =
+    (intel?.procure?.categories || []).length >= 1 ||
+    importCats.length >= 1 ||
+    productsPriced.some((p) => p.role === 'procure' || p.role === 'both') ||
+    (analysis.businessModel?.procurementInfo || '').trim().length > 8;
+
+  const baseRich =
+    catsWithPrice.length >= 3 ||
+    productsPriced.length >= 5 ||
+    (cats.length >= 4 && productsPriced.length >= 3) ||
+    (catsWithPrice.length >= 2 && productsPriced.length >= 4);
+
+  // 新标准：全站在售丰富，且尽量有采购侧线索（匹配出口才有意义）
+  if (baseRich && sellSide && procureSide) return true;
+  if (baseRich && sellSide && (intel?.matchTags || []).length >= 2) return true;
   return false;
 };
 

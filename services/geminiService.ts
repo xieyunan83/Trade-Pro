@@ -3061,35 +3061,26 @@ export const analyzeCompany = async (
 
   const productFocusBlock = searchKeyword
     ? `
-  PRODUCT CATALOG COLLECTION (CRITICAL — FULL ASSORTMENT FIRST, keyword match SECOND):
-  - User discovered this client via "${searchKeyword}", but you MUST first inventory their ENTIRE sellable catalog
-    from official website + shop/catalog pages + other platforms (Amazon/Allegro/eBay/wholesale dirs if present).
-  - Do NOT only collect products related to "${searchKeyword}". Non-matching categories/SKUs are REQUIRED.
-  - websiteCategories: complete nav/catalog tree (aim 5–15 categoryName). EACH category MUST include
-    priceMinCNY, priceMaxCNY (CNY terminal/retail band for that category) and priceBand (e.g. "¥15–45" or "$4–12 CAD").
-  - products[]: 8–12 concrete SKUs spanning MULTIPLE categories across the full assortment (real names from site).
-    Cover breadth: at least several categories, not a single keyword niche.
-    (品类树 websiteCategories 必须完整；SKU 数量适中，避免挤掉 strategy / similarCompanies / marketTrends。)
-  - CRITICAL OUTPUT ORDER: fill marketTrends + strategy.actionPlan (5 steps) + similarCompanies (12–15) BEFORE the long products[].
-    Never omit 建议行动计划 / 同类公司 / 市场趋势.
-  - AFTER full collection: set keywordMatch=true ONLY for items clearly related to "${searchKeyword}"; false otherwise.
-    UI will highlight matches — never omit non-matching lines to "focus".
-  - EVERY product MUST include: category (标准化品类), retailPrice, retailPriceCNY, estimatedFOBPriceCNY, priceMinCNY, priceMaxCNY.
-  - priceMinCNY / priceMaxCNY = 该 SKU 或同系列终端价区间（人民币）；单点价则 min=max。
-  - businessScope.coreProducts = 全站主营品类；relevantProducts 可另列与 "${searchKeyword}" 相关的项。
-  - productSummary 可兼顾全站定位，并点出 "${searchKeyword}" 机会；不要只写关键词相关。
-  - tradeIntelligence.importCategories + hsCodes 尽量覆盖全品类进口线索。
-  ${searchCountry && !isVagueMarketCountry(searchCountry) ? `- Search target market context: ${searchCountry}.` : ''}
+  PRODUCT INTEL (CRITICAL — SELL + PROCURE, evidence only, for matching DB):
+  - User found this client via "${searchKeyword}", but you MUST inventory BOTH:
+    (A) SELL: what they retail/distribute (site nav + shop + marketplaces);
+    (B) PROCURE: what they buy/import from factories (import pages, wholesale buyer notes, customs categories).
+  - Do NOT invent SKUs/prices/tags. Unknown → "公开信息未找到".
+  - websiteCategories: complete SELL nav tree (5–15). EACH with priceMinCNY, priceMaxCNY, priceBand.
+  - products[]: 8–12 real items; each MUST set role=sell|procure|both and tags[] (short, evidenced).
+  - Fill productIntel { sell, procure, matchTags, sourceNote } for DB indexing.
+  - CRITICAL OUTPUT ORDER: marketTrends + strategy.actionPlan + similarCompanies BEFORE long products[].
+  - keywordMatch=true ONLY if related to "${searchKeyword}"; never drop non-matching lines.
+  - businessScope.coreProducts = 在售主营; tradeIntelligence.importCategories = 采购/进口品类; hsCodes short.
+  ${searchCountry && !isVagueMarketCountry(searchCountry) ? `- Market context: ${searchCountry}.` : ''}
 `
     : `
-  PRODUCT CATALOG COLLECTION (CRITICAL — full assortment for exporter matching DB):
-  - Crawl official shop/catalog/collection pages + other retail/wholesale platforms; inventory ALL major sellable categories.
-  - websiteCategories: 5–15 categories from real nav; EACH with priceMinCNY, priceMaxCNY, priceBand.
-  - products[]: 8–12 concrete SKUs spanning multiple categories (real site names, not vague "toys").
-  - CRITICAL: always include marketTrends, strategy.actionPlan (≥5), similarCompanies (12–15) — output these BEFORE products[].
-  - EVERY product MUST include category, retailPrice, retailPriceCNY, estimatedFOBPriceCNY, priceMinCNY, priceMaxCNY.
-  - coreProducts = top lines across the whole catalog; importCategories for trade.
-  - Set keywordMatch=false (no active search keyword).
+  PRODUCT INTEL (CRITICAL — SELL + PROCURE for exporter matching DB):
+  - Inventory SELL assortment (site/shop) AND PROCURE/import needs (trade/buyer evidence). No hallucination.
+  - websiteCategories: 5–15 sell-side categories with prices; products[] with role + tags.
+  - productIntel required; importCategories for procure side.
+  - Always include marketTrends, strategy.actionPlan (≥5), similarCompanies (12–15) BEFORE products[].
+  - Set keywordMatch=false when no search keyword.
 `;
 
   const identityBlock = `
@@ -3223,6 +3214,12 @@ ${productFocusBlock}
     "financialTrends": [{ "year": "2020", "revenue": 0, "procurement": 0 }],
     "trafficAnalysis": [{ "category": "", "trafficType": "Organic (SEO)", "topKeywords": "", "volumeEst": "Medium" }],
     "websiteCategories": [{ "categoryName": "", "items": [], "priceMinCNY": 0, "priceMaxCNY": 0, "priceBand": "" }],
+    "productIntel": {
+      "sell": { "categories": [], "items": [], "tags": [], "notes": "" },
+      "procure": { "categories": [], "items": [], "tags": [], "notes": "" },
+      "matchTags": [],
+      "sourceNote": "基于公开证据整理，未编造"
+    },
     "businessScope": { "coreProducts": [], "relevantProducts": [], "brandPositioning": "", "consumerGroup": "", "productVariety": "Medium", "priceSensitivity": "", "websiteStructure": "" },
     "businessModel": { "channels": [], "hasDistributors": false, "exhibitionHistory": [], "ecommercePresence": [], "procurementInfo": "" },
     "supplyChain": { "role": "", "serviceType": "" },
@@ -3264,7 +3261,7 @@ ${productFocusBlock}
       { "name": "", "website": "", "country": "", "mainProducts": "" }
     ],
     "decisionMakers": [{ "firstName": "", "lastName": "", "name": "", "title": "", "department": "", "emailGuess": "", "phone": "", "whatsapp": "", "linkedin": "", "yearsActive": "", "type": "Buyer", "source": "AI", "isVerified": false, "influenceScore": 4 }],
-    "products": [{ "name": "", "category": "", "retailPrice": "", "retailPriceCNY": 0, "estimatedFOBPriceCNY": 0, "priceMinCNY": 0, "priceMaxCNY": 0, "imageUrl": "", "competitorLink": "", "pricingStrategy": "", "pitchPoint": "", "techSpecs": "", "features": "", "colors": "", "packaging": "", "keywordMatch": false }]
+    "products": [{ "name": "", "category": "", "role": "sell", "tags": [], "retailPrice": "", "retailPriceCNY": 0, "estimatedFOBPriceCNY": 0, "priceMinCNY": 0, "priceMaxCNY": 0, "imageUrl": "", "competitorLink": "", "pricingStrategy": "", "pitchPoint": "", "techSpecs": "", "features": "", "colors": "", "packaging": "", "keywordMatch": false }]
   }
   `;
 
@@ -3355,17 +3352,64 @@ ${productFocusBlock}
         colorPreference: aiResult.productSummary?.colorPreference || "N/A",
         featureAnalysis: aiResult.productSummary?.featureAnalysis || "N/A"
     },
+    productIntel: aiResult.productIntel
+      ? {
+          sell: {
+            categories: Array.isArray(aiResult.productIntel.sell?.categories)
+              ? aiResult.productIntel.sell.categories.map(String).filter(Boolean)
+              : [],
+            items: Array.isArray(aiResult.productIntel.sell?.items)
+              ? aiResult.productIntel.sell.items.map(String).filter(Boolean)
+              : [],
+            tags: Array.isArray(aiResult.productIntel.sell?.tags)
+              ? aiResult.productIntel.sell.tags.map(String).filter(Boolean)
+              : [],
+            notes: aiResult.productIntel.sell?.notes
+              ? String(aiResult.productIntel.sell.notes)
+              : undefined,
+          },
+          procure: {
+            categories: Array.isArray(aiResult.productIntel.procure?.categories)
+              ? aiResult.productIntel.procure.categories.map(String).filter(Boolean)
+              : [],
+            items: Array.isArray(aiResult.productIntel.procure?.items)
+              ? aiResult.productIntel.procure.items.map(String).filter(Boolean)
+              : [],
+            tags: Array.isArray(aiResult.productIntel.procure?.tags)
+              ? aiResult.productIntel.procure.tags.map(String).filter(Boolean)
+              : [],
+            notes: aiResult.productIntel.procure?.notes
+              ? String(aiResult.productIntel.procure.notes)
+              : undefined,
+          },
+          matchTags: Array.isArray(aiResult.productIntel.matchTags)
+            ? aiResult.productIntel.matchTags.map(String).filter(Boolean)
+            : [],
+          sourceNote: String(aiResult.productIntel.sourceNote || '基于公开证据整理，未编造'),
+        }
+      : undefined,
     socials: aiResult.socials || {},
-    products: (Array.isArray(aiResult.products) ? aiResult.products : []).map((p: any) => ({
-        ...p,
-        category: p.category || '',
-        priceMinCNY: typeof p.priceMinCNY === 'number' ? p.priceMinCNY : undefined,
-        priceMaxCNY: typeof p.priceMaxCNY === 'number' ? p.priceMaxCNY : undefined,
-        features: p.features || "N/A",
-        colors: p.colors || "N/A",
-        packaging: p.packaging || "N/A",
-        keywordMatch: !!p.keywordMatch,
-    })),
+    products: (Array.isArray(aiResult.products) ? aiResult.products : []).map((p: any) => {
+        const roleRaw = String(p.role || 'sell').toLowerCase();
+        const role =
+          roleRaw === 'procure' || roleRaw === 'buy' || roleRaw === 'import'
+            ? ('procure' as const)
+            : roleRaw === 'both'
+              ? ('both' as const)
+              : ('sell' as const);
+        return {
+          ...p,
+          category: p.category || '',
+          role,
+          tags: Array.isArray(p.tags) ? p.tags.map(String).filter(Boolean).slice(0, 8) : [],
+          priceMinCNY: typeof p.priceMinCNY === 'number' ? p.priceMinCNY : undefined,
+          priceMaxCNY: typeof p.priceMaxCNY === 'number' ? p.priceMaxCNY : undefined,
+          features: p.features || "N/A",
+          colors: p.colors || "N/A",
+          packaging: p.packaging || "N/A",
+          keywordMatch: !!p.keywordMatch,
+        };
+    }),
     marketTrends: aiResult.marketTrends || "N/A",
     decisionMakers: (aiResult.decisionMakers || [])
       .map((dm: any) => {
@@ -4182,22 +4226,26 @@ export const digProductIntelligence = async (
 
   const prompt = `
 Target company: "${companyName}" / domain: "${hasDomain ? canonicalDomain : rawInput}".
-Task: FULL PRODUCT CATALOG & PRICE DEEP-DIVE for Chinese exporters' matching database.
+Task: EVIDENCE-BASED SELL + PROCURE product intelligence for Chinese exporters' matching DB.
 ${searchKeyword ? `Discovery keyword (match AFTER full catalog): "${searchKeyword}".` : ''}
 ${searchCountry ? `Market: ${searchCountry}.` : ''}
 
-${productEvidence ? `=== WEB PRODUCT EVIDENCE ===\n${productEvidence}\n=== END ===` : 'Use web search on official shop/catalog/product pages AND other platforms (Amazon/Allegro/wholesale dirs if present).'}
+${productEvidence ? `=== WEB PRODUCT EVIDENCE ===\n${productEvidence}\n=== END ===` : 'Use web search on official shop/catalog/product/import pages AND platforms (Amazon/Allegro/wholesale dirs if present).'}
+
+CRITICAL ANTI-HALLUCINATION:
+- Only record products/categories/tags supported by evidence (site/nav/shop/customs mentions).
+- If unknown → "公开信息未找到". NEVER invent SKUs, prices, HS codes, or tags.
 
 Requirements (简体中文描述字段):
-1. FIRST inventory the company's ENTIRE assortment — all major categories from website nav + shop + other platforms. Do NOT only collect "${searchKeyword || 'keyword'}"-related items.
-2. websiteCategories: 5–15 real nav/catalog categories. EACH MUST include priceMinCNY, priceMaxCNY, priceBand (CNY terminal/retail band for that category).
-3. products[]: 8–15 concrete SKUs spanning MULTIPLE categories (breadth of full catalog). Each with name, category, retailPrice, retailPriceCNY, estimatedFOBPriceCNY, priceMinCNY, priceMaxCNY.
-4. AFTER full collection: keywordMatch=true only if clearly related to "${searchKeyword || ''}"; otherwise false. Never drop non-matching SKUs.
-5. Do NOT output or overwrite strategy / similarCompanies / marketTrends / decisionMakers — those stay on the existing report.
-5. businessScope.coreProducts = 全站主营品类；relevantProducts 可列与关键词相关项；priceSensitivity / brandPositioning / consumerGroup / productVariety.
-6. tradeIntelligence.importCategories + hsCodes (cover full lines, short).
-7. productSummary entirely in Simplified Chinese (全站定位 + 可选关键词机会).
-8. Do NOT invent customs IDs. Unknown → "公开信息未找到".
+1. SELL side (对方在售/分销): full assortment from website nav + shop + marketplace listings.
+2. PROCURE side (对方采购/进口需求): importCategories, buyer pages, wholesale sourcing, customs lines — what they BUY from factories.
+3. websiteCategories: 5–15 real sell-side nav categories with priceMinCNY/priceMaxCNY/priceBand.
+4. products[]: 8–15 concrete items. Each MUST set role = "sell" | "procure" | "both", plus tags[] (短标签：材质/年龄段/渠道等，须有据).
+5. productIntel: structured { sell, procure, matchTags, sourceNote } — both sides required when evidence exists.
+6. keywordMatch=true only if related to "${searchKeyword || ''}"; never drop non-matching SKUs.
+7. Do NOT overwrite strategy / similarCompanies / marketTrends / decisionMakers.
+8. businessScope.coreProducts = 在售主营；tradeIntelligence.importCategories = 采购/进口品类；hsCodes short.
+9. productSummary entirely Simplified Chinese.
 
 Output JSON only:
 {
@@ -4205,31 +4253,81 @@ Output JSON only:
   "businessScope": { "coreProducts": [], "relevantProducts": [], "brandPositioning": "", "consumerGroup": "", "productVariety": "Medium", "priceSensitivity": "", "websiteStructure": "" },
   "tradeIntelligence": { "hsCodes": [], "importCategories": [] },
   "productSummary": { "marketPreference": "", "recommendedProducts": "", "packagingAnalysis": "", "colorPreference": "", "featureAnalysis": "" },
-  "products": [{ "name": "", "category": "", "retailPrice": "", "retailPriceCNY": 0, "estimatedFOBPriceCNY": 0, "priceMinCNY": 0, "priceMaxCNY": 0, "pricingStrategy": "", "pitchPoint": "", "features": "", "colors": "", "packaging": "", "keywordMatch": false }]
+  "productIntel": {
+    "sell": { "categories": [], "items": [], "tags": [], "notes": "" },
+    "procure": { "categories": [], "items": [], "tags": [], "notes": "" },
+    "matchTags": [],
+    "sourceNote": "基于官网/公开证据整理，未编造"
+  },
+  "products": [{ "name": "", "category": "", "role": "sell", "tags": [], "retailPrice": "", "retailPriceCNY": 0, "estimatedFOBPriceCNY": 0, "priceMinCNY": 0, "priceMaxCNY": 0, "pricingStrategy": "", "pitchPoint": "", "features": "", "colors": "", "packaging": "", "keywordMatch": false }]
 }
 `;
 
   const text = await generateContentUnified('analysis', prompt, SYSTEM_INSTRUCTION, true);
   const ai = extractJson(text) || {};
 
-  const products = (Array.isArray(ai.products) ? ai.products : []).map((p: any) => ({
-    name: String(p.name || '').trim(),
-    category: String(p.category || '').trim(),
-    retailPrice: String(p.retailPrice || ''),
-    retailPriceCNY: Number(p.retailPriceCNY) || 0,
-    estimatedFOBPriceCNY: Number(p.estimatedFOBPriceCNY) || 0,
-    priceMinCNY: typeof p.priceMinCNY === 'number' ? p.priceMinCNY : undefined,
-    priceMaxCNY: typeof p.priceMaxCNY === 'number' ? p.priceMaxCNY : undefined,
-    pricingStrategy: p.pricingStrategy || '',
-    pitchPoint: p.pitchPoint || '',
-    techSpecs: p.techSpecs || '',
-    features: p.features || '',
-    colors: p.colors || '',
-    packaging: p.packaging || '',
-    imageUrl: p.imageUrl || '',
-    competitorLink: p.competitorLink || '',
-    keywordMatch: !!p.keywordMatch,
-  })).filter((p: { name: string }) => p.name);
+  const products = (Array.isArray(ai.products) ? ai.products : []).map((p: any) => {
+    const roleRaw = String(p.role || 'sell').toLowerCase();
+    const role =
+      roleRaw === 'procure' || roleRaw === 'buy' || roleRaw === 'import'
+        ? ('procure' as const)
+        : roleRaw === 'both'
+          ? ('both' as const)
+          : ('sell' as const);
+    const tags = Array.isArray(p.tags)
+      ? p.tags.map((t: unknown) => String(t || '').trim()).filter(Boolean).slice(0, 8)
+      : [];
+    return {
+      name: String(p.name || '').trim(),
+      category: String(p.category || '').trim(),
+      role,
+      tags,
+      retailPrice: String(p.retailPrice || ''),
+      retailPriceCNY: Number(p.retailPriceCNY) || 0,
+      estimatedFOBPriceCNY: Number(p.estimatedFOBPriceCNY) || 0,
+      priceMinCNY: typeof p.priceMinCNY === 'number' ? p.priceMinCNY : undefined,
+      priceMaxCNY: typeof p.priceMaxCNY === 'number' ? p.priceMaxCNY : undefined,
+      pricingStrategy: p.pricingStrategy || '',
+      pitchPoint: p.pitchPoint || '',
+      techSpecs: p.techSpecs || '',
+      features: p.features || '',
+      colors: p.colors || '',
+      packaging: p.packaging || '',
+      imageUrl: p.imageUrl || '',
+      competitorLink: p.competitorLink || '',
+      keywordMatch: !!p.keywordMatch,
+    };
+  }).filter((p: { name: string }) => p.name);
+
+  const sideFrom = (raw: any) => ({
+    categories: Array.isArray(raw?.categories)
+      ? raw.categories.map((x: unknown) => String(x || '').trim()).filter(Boolean).slice(0, 30)
+      : [],
+    items: Array.isArray(raw?.items)
+      ? raw.items.map((x: unknown) => String(x || '').trim()).filter(Boolean).slice(0, 40)
+      : [],
+    tags: Array.isArray(raw?.tags)
+      ? raw.tags.map((x: unknown) => String(x || '').trim()).filter(Boolean).slice(0, 24)
+      : [],
+    notes: String(raw?.notes || '').trim() || undefined,
+  });
+
+  const productIntel =
+    ai.productIntel && typeof ai.productIntel === 'object'
+      ? {
+          sell: sideFrom(ai.productIntel.sell),
+          procure: sideFrom(ai.productIntel.procure),
+          matchTags: Array.isArray(ai.productIntel.matchTags)
+            ? ai.productIntel.matchTags
+                .map((x: unknown) => String(x || '').trim())
+                .filter(Boolean)
+                .slice(0, 40)
+            : [],
+          sourceNote:
+            String(ai.productIntel.sourceNote || '').trim() ||
+            '基于公开证据整理，未编造',
+        }
+      : undefined;
 
   const base: AnalysisResult = existing
     ? { ...existing }
@@ -4340,6 +4438,7 @@ Output JSON only:
           featureAnalysis: ai.productSummary.featureAnalysis || base.productSummary?.featureAnalysis || '',
         }
       : base.productSummary,
+    productIntel: productIntel || base.productIntel,
     products: products.length ? products : base.products,
     searchKeyword: searchKeyword || base.searchKeyword,
     searchCountry: searchCountry || base.searchCountry,

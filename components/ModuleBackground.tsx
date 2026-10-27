@@ -364,12 +364,26 @@ export const ModuleBackground: React.FC<ModuleBackgroundProps> = ({
         <SectionCard title="业务模式与渠道" icon={<Target className="text-blue-600" />}>
           <div className="space-y-4">
             <div>
-              <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">核心产品</div>
+              <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">核心产品（在售）</div>
               <div className="flex flex-wrap gap-2">
-                {(businessScope.coreProducts?.length ? businessScope.coreProducts : ['暂无']).map((c, i) => (
+                {(data.productIntel?.sell?.categories?.length
+                  ? data.productIntel.sell.categories
+                  : businessScope.coreProducts?.length
+                    ? businessScope.coreProducts
+                    : ['暂无']
+                ).map((c, i) => (
                   <Pill key={i} tone="blue">{c}</Pill>
                 ))}
               </div>
+              {!!data.productIntel?.sell?.tags?.length && (
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {data.productIntel.sell.tags.slice(0, 12).map((t, i) => (
+                    <Pill key={`st-${i}`} tone="violet">
+                      {t}
+                    </Pill>
+                  ))}
+                </div>
+              )}
             </div>
             <div>
               <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">销售渠道</div>
@@ -412,6 +426,34 @@ export const ModuleBackground: React.FC<ModuleBackgroundProps> = ({
             <div><span className="font-black text-slate-400 text-[10px] uppercase tracking-widest block mb-1">角色</span>{supplyChain.role}</div>
             <div><span className="font-black text-slate-400 text-[10px] uppercase tracking-widest block mb-1">服务模式</span>{supplyChain.serviceType}</div>
             <div><span className="font-black text-slate-400 text-[10px] uppercase tracking-widest block mb-1">采购习惯</span>{businessModel.procurementInfo}</div>
+            {(data.productIntel?.procure?.categories?.length ||
+              trade?.importCategories?.length) ? (
+              <div>
+                <span className="font-black text-slate-400 text-[10px] uppercase tracking-widest block mb-2">
+                  采购/进口品类（入库匹配）
+                </span>
+                <div className="flex flex-wrap gap-2">
+                  {(data.productIntel?.procure?.categories?.length
+                    ? data.productIntel.procure.categories
+                    : trade?.importCategories || []
+                  ).map((c, i) => (
+                    <Pill key={`pc-${i}`} tone="amber">
+                      {c}
+                    </Pill>
+                  ))}
+                </div>
+                {!!data.productIntel?.procure?.tags?.length && (
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {data.productIntel.procure.tags.slice(0, 10).map((t, i) => (
+                      <Pill key={`pt-${i}`}>{t}</Pill>
+                    ))}
+                  </div>
+                )}
+                {data.productIntel?.sourceNote && (
+                  <p className="text-[10px] text-slate-400 font-medium mt-2">{data.productIntel.sourceNote}</p>
+                )}
+              </div>
+            ) : null}
             <div>
               <span className="font-black text-slate-400 text-[10px] uppercase tracking-widest block mb-2">目标客群</span>
               <div className="flex flex-wrap gap-2">

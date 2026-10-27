@@ -268,7 +268,10 @@ const tokenOverlap = (a: string, b: string): number => {
   return hit / Math.max(ta.size, 1);
 };
 
-/** CRM 客户启发式匹配 + 专业理由 */
+/**
+ * CRM 仅作「已背调客户」的联系人挂接，不凭空编匹配理由。
+ * 必须有产品库命中，或 CRM 标签里已有背调写入的「在售:/采购:」真标签。
+ */
 export const matchCrmClientsForProduct = (
   input: GtmProductInput,
   market: GtmMarketBrief,
@@ -280,45 +283,69 @@ export const matchCrmClientsForProduct = (
 
   const scored: GtmClientMatch[] = [];
   for (const c of crmClients) {
+    const tags = c.tags || [];
+    const realTagBlob = tags
+      .filter((t) => /^(在售|采购|关键词):/i.test(t) || tags.length > 0)
+      .join(' ');
+    // 无背调产品标签且无产品类型 → 跳过（避免纯公司名瞎配）
+    const hasRealProductSignal =
+      tags.some((t) => /^(在售|采购):/.test(t)) ||
+      (!!c.productType && c.productType !== 'N/A' && (c.hasBackgroundCheck || c.hasAnalyzed));
+    if (!hasRealProductSignal) continue;
+
     const reasons: string[] = [];
     let score = 0;
-    const blob = norm(
-      [c.productType, c.industry, c.searchKeyword, ...(c.tags || []), c.name].join(' ')
-    );
+    const blob = norm([c.productType, c.industry, c.searchKeyword, realTagBlob].join(' '));
     const ovName = tokenOverlap(name, blob);
     const ovCat = cat ? tokenOverlap(cat, blob) : 0;
-    if (ovName >= 0.15) {
-      score += Math.round(35 * Math.min(1, ovName * 2));
-      reasons.push('客户品类/关键词与新品语义接近');
+
+    const sellTags = tags.filter((t) => t.startsWith('在售:')).map((t) => t.slice(3));
+    const procureTags = tags.filter((t) => t.startsWith('采购:')).map((t) => t.slice(3));
+    for (const t of procureTags) {
+      if (cat && (norm(t).includes(cat) || cat.includes(norm(t)) || tokenOverlap(name, t) > 0.2)) {
+        score += 40;
+        reasons.push(`CRM 背调标签·采购品类「${t}」`);
+        break;
+      }
     }
-    if (ovCat >= 0.12) {
-      score += Math.round(25 * Math.min(1, ovCat * 2));
-      reasons.push(`品类线索匹配：${c.productType || c.industry || '标签'}`);
+    for (const t of sellTags) {
+      if (cat && (norm(t).includes(cat) || cat.includes(norm(t)) || tokenOverlap(name, t) > 0.2)) {
+        score += reasons.some((r) => r.includes('采购')) ? 14 : 36;
+        reasons.push(`CRM 背调标签·在售品类「${t}」`);
+        break;
+      }
     }
+
+    if (!reasons.length && ovCat >= 0.2) {
+      score += Math.round(22 * Math.min(1, ovCat * 2));
+      reasons.push(`CRM 已背调产品类型「${c.productType}」与新品品类重合`);
+    }
+    if (!reasons.length && ovName >= 0.25) {
+      score += Math.round(18 * Math.min(1, ovName * 2));
+      reasons.push(`CRM 背调关键词/标签与新品名称重合`);
+    }
+    if (!reasons.length) continue;
+
     const cCountry = norm(c.country);
     const countryHit = countryPool.some(
       (pc) => cCountry && (pc.includes(cCountry) || cCountry.includes(pc.split(' ')[0] || ''))
     );
     if (countryHit) {
-      score += 22;
-      reasons.push(`位于优先目标市场：${c.country}`);
-    }
-    if (c.hasBackgroundCheck || c.hasAnalyzed) {
-      score += 8;
-      reasons.push('已有背调/分析基础，便于个性化开发信');
+      score += 12;
+      reasons.push(`位于市调优先市场：${c.country}`);
     }
     if (c.status === '已成交' || c.status === '谈判中' || c.status === '已寄样') {
-      score += 10;
-      reasons.push(`漏斗阶段「${c.status}」，跟进价值高`);
+      score += 8;
+      reasons.push(`漏斗「${c.status}」`);
     }
-    if (score < 28) continue;
+    if (score < 30) continue;
     scored.push({
       clientId: c.id,
       companyName: c.name,
       country: c.country,
       website: c.website,
       score: Math.min(99, score),
-      reasons: reasons.length ? reasons : ['综合画像接近目标买家'],
+      reasons,
       source: 'crm',
       productType: c.productType,
     });
@@ -383,26 +410,42 @@ export const runGtmLaunchPack = async (opts: RunGtmLaunchOpts): Promise<GtmLaunc
   onProgress?.(35, '匹配目标市场与客户库…');
 
   const profiles = await loadProductCatalog();
+  // 只用背调入库的真实产品画像；无品类/SKU 的空壳不参与
+  const usableProfiles = profiles.filter(
+    (p) =>
+      (p.catalogQuality ?? 0) >= 8 &&
+      ((p.skus || []).length > 0 ||
+        (p.categories || []).length > 0 ||
+        (p.sellCategories || []).length > 0 ||
+        (p.procureCategories || []).length > 0)
+  );
   const profileRaw = matchOurProductToProfiles(
     {
       name: input.productName,
       category: input.category || market.categories[0],
       countries: market.countries.slice(0, 5).map((c) => c.name),
     },
-    profiles
+    usableProfiles
   ).map(
     (h): GtmClientMatch => ({
+      clientId: h.profile.crmClientId,
       companyName: h.profile.companyName,
       country: h.profile.country || '—',
       website: h.profile.website,
       score: h.score,
-      reasons: h.reasons?.length ? h.reasons : ['背调产品库品类命中'],
+      reasons: h.reasons,
       source: 'product_profile',
       historyId: h.profile.historyId,
-      productType: (h.matchedCategories || []).slice(0, 3).join(' / '),
+      productType: [
+        ...(h.matchedCategories || []).slice(0, 2),
+        ...(h.profile.procureCategories || []).slice(0, 1),
+      ]
+        .filter(Boolean)
+        .join(' / '),
     })
   );
 
+  // CRM 只补充「已有背调产品标签」的客户，不凭空匹配
   const crmHits = matchCrmClientsForProduct(input, market, crmClients);
   let matches = mergeMatches(crmHits, profileRaw);
 

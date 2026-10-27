@@ -186,8 +186,8 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
               市调 · 匹配 · 开发信
             </div>
             <p className="text-sm text-slate-500 font-medium mt-1 max-w-2xl leading-relaxed">
-              两位专家协同：全球市调定国家与趋势，产品经理定定位与设计要点；再匹配 CRM /
-              背调客户库，并生成可复制的专业开发信组。
+              两位专家协同出国家与定位；客户匹配只引用背调入库的「在售/采购」真数据与标签，不空编。请先完成客户背调（或 CRM
+              产品深挖）再匹配。
             </p>
           </div>
           <div className="flex flex-wrap gap-2 text-[10px] font-black">
@@ -279,6 +279,10 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
             CRM {crmClients.length} 家 · 背调历史 {history.length} 条
           </span>
         </div>
+        <p className="mt-3 text-[11px] text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 font-medium leading-relaxed">
+          匹配依据：背调报告写入的在售品类、采购/进口品类、SKU 与标签。若结果很少，请到 CRM
+          对客户做「产品深挖」或重新背调，从历史重建产品库后再跑。
+        </p>
         {error && (
           <p className="mt-3 text-sm font-bold text-rose-600 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2">
             {error}

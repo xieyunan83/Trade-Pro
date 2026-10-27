@@ -155,8 +155,39 @@ export const normalizeAnalysisResult = (raw: unknown): AnalysisResult => {
           featureAnalysis: asStr(ai.productSummary.featureAnalysis, 'N/A'),
         }
       : undefined,
+    productIntel: ai.productIntel
+      ? {
+          sell: {
+            categories: asStringList(ai.productIntel.sell?.categories),
+            items: asStringList(ai.productIntel.sell?.items),
+            tags: asStringList(ai.productIntel.sell?.tags),
+            notes: asStr(ai.productIntel.sell?.notes, '') || undefined,
+          },
+          procure: {
+            categories: asStringList(ai.productIntel.procure?.categories),
+            items: asStringList(ai.productIntel.procure?.items),
+            tags: asStringList(ai.productIntel.procure?.tags),
+            notes: asStr(ai.productIntel.procure?.notes, '') || undefined,
+          },
+          matchTags: asStringList(ai.productIntel.matchTags),
+          sourceNote: asStr(ai.productIntel.sourceNote, '基于公开证据整理，未编造'),
+        }
+      : undefined,
     socials: ai.socials && typeof ai.socials === 'object' ? ai.socials : {},
-    products: asArray(ai.products),
+    products: asArray(ai.products).map((p: any) => {
+      const roleRaw = String(p?.role || 'sell').toLowerCase();
+      const role =
+        roleRaw === 'procure' || roleRaw === 'buy' || roleRaw === 'import'
+          ? 'procure'
+          : roleRaw === 'both'
+            ? 'both'
+            : 'sell';
+      return {
+        ...p,
+        role,
+        tags: asStringList(p?.tags).slice(0, 8),
+      };
+    }),
     marketTrends: asStr(ai.marketTrends, 'N/A'),
     decisionMakers: asArray<DecisionMaker>(ai.decisionMakers).filter(
       (d) =>

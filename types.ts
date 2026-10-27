@@ -417,6 +417,13 @@ export interface ProductAnalysis {
   competitorLink?: string;
   /** 是否与搜索关键词强相关（产品分析优先展示） */
   keywordMatch?: boolean;
+  /**
+   * sell=对方在售/分销；procure=对方采购/进口需求；both=零售商自营既采又卖
+   * 匹配我方出口货时优先看 procure + sell 品类重合
+   */
+  role?: 'sell' | 'procure' | 'both';
+  /** 匹配用短标签（材质/年龄段/渠道等），须来自证据 */
+  tags?: string[];
 }
 
 /** 客户产品库中的单条 SKU / 品类线索 */
@@ -430,8 +437,30 @@ export interface CustomerProductSku {
   retailPrice?: string;
   retailPriceCNY?: number;
   estimatedFOBPriceCNY?: number;
-  source: 'sku' | 'category' | 'trade' | 'core' | 'website';
+  source: 'sku' | 'category' | 'trade' | 'core' | 'website' | 'procure';
   keywordMatch?: boolean;
+  role?: 'sell' | 'procure' | 'both';
+  tags?: string[];
+}
+
+/** 背调产品情报：在售 vs 采购（须有证据，禁止空编） */
+export interface ProductIntelSide {
+  /** 品类 */
+  categories: string[];
+  /** 具体品名/SKU 线索 */
+  items: string[];
+  /** 短标签 */
+  tags: string[];
+  notes?: string;
+}
+
+export interface ProductIntelBlock {
+  sell: ProductIntelSide;
+  procure: ProductIntelSide;
+  /** 统一匹配标签（去重） */
+  matchTags: string[];
+  /** 数据来源说明（中文） */
+  sourceNote?: string;
 }
 
 /** 按公司聚合的客户产品画像（背调入库） */
@@ -443,6 +472,12 @@ export interface CustomerProductProfile {
   historyId?: string;
   crmClientId?: string;
   categories: string[];
+  /** 对方在售/分销品类（来自官网/店铺证据） */
+  sellCategories?: string[];
+  /** 对方采购/进口品类（海关/采购页/贸易证据） */
+  procureCategories?: string[];
+  /** 匹配标签（真实入库，供新品匹配） */
+  productTags?: string[];
   priceMinCny?: number;
   priceMaxCny?: number;
   priceBand?: string;
@@ -451,6 +486,10 @@ export interface CustomerProductProfile {
   hsCodes?: string[];
   coreProducts?: string[];
   searchKeywords?: string[];
+  /** 0–100，SKU/品类完整度；匹配时应优先高质量画像 */
+  catalogQuality?: number;
+  /** 是否含可引用的在售+采购双边线索 */
+  hasSellProcureSplit?: boolean;
   updatedAt: number;
   ownerUsername?: string;
   departmentId?: string;
@@ -562,6 +601,8 @@ export interface AnalysisResult {
     colorPreference: string;
     featureAnalysis: string;
   };
+  /** 在售/采购双边产品情报（背调入库 → 新品匹配必须用真数据） */
+  productIntel?: ProductIntelBlock;
   socials: {
     linkedin?: string;
     facebook?: string;
