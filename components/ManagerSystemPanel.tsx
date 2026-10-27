@@ -161,7 +161,7 @@ export const ManagerSystemPanel: React.FC<ManagerSystemPanelProps> = ({
                   <input
                     value={qwenModelId}
                     onChange={(e) => setQwenModelId(e.target.value)}
-                    placeholder="可选，推荐 qwen3.7-plus（夜间自动 qwen3.8-max）"
+                    placeholder="可选，推荐 qwen3.7-plus（夜间自动 qwen3.8-flash）"
                     className="px-3 py-2.5 rounded-xl border border-slate-200 text-sm font-bold"
                     disabled={!deptId}
                   />

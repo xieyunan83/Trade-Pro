@@ -50,9 +50,11 @@ import {
 } from './apiKeyPool';
 import {
   describeQwenChatSchedule,
+  isHeavyReasoningQwenModel,
   isQwenModelUnavailableError,
   QWEN_CHAT_DAY_MODEL,
   QWEN_CHAT_NIGHT_MODEL,
+  QWEN_CHAT_NIGHT_MODEL_LEGACY_MAX,
   resolveScheduledQwenChatModel,
 } from './qwenModelSchedule';
 import {
@@ -2007,6 +2009,37 @@ const getDefaultAIModel = (): 'qwen' | 'gemini' | 'auto' => {
     return env.defaultAIModel;
 };
 
+/** 从 OpenAI 兼容响应取出可解析文本（含推理型号 reasoning_content / 多段 content） */
+const extractOpenAIChatContent = (data: any): string => {
+  const msg = data?.choices?.[0]?.message;
+  if (msg) {
+    const raw = msg.content;
+    if (typeof raw === 'string' && raw.trim()) return raw.trim();
+    if (Array.isArray(raw)) {
+      const joined = raw
+        .map((p: any) => {
+          if (typeof p === 'string') return p;
+          if (p?.text) return String(p.text);
+          if (p?.content) return typeof p.content === 'string' ? p.content : '';
+          if (p?.type === 'text' && p?.text) return String(p.text);
+          return '';
+        })
+        .join('')
+        .trim();
+      if (joined) return joined;
+    }
+    const reasoning = msg.reasoning_content ?? msg.reasoning;
+    if (typeof reasoning === 'string' && reasoning.trim()) {
+      // 推理耗尽 max_tokens 时 content 常为空；若 reasoning 里已有 JSON 则抢救
+      const t = reasoning.trim();
+      if (t.includes('{') || t.includes('[')) return t;
+    }
+  }
+  const geminiText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (typeof geminiText === 'string' && geminiText.trim()) return geminiText.trim();
+  return '';
+};
+
 // --- OpenAI Adapter for Relay Services (hiapi, nvidia, deepseek, openrouter etc) ---
 const callOpenAICompatible = async (
     config: ApiConfig,
@@ -2151,13 +2184,20 @@ const callOpenAICompatible = async (
             }
 
             const data = await response.json();
-            
-            // Handle different response structures
-            const content = data.choices?.[0]?.message?.content || data.candidates?.[0]?.content?.parts?.[0]?.text;
-            
+
+            // 兼容推理型号：content 可能为空，答案在 reasoning_content / 多段 parts
+            const content = extractOpenAIChatContent(data);
+
             if (!content) {
                 console.error("Empty Response Structure:", data);
-                throw new Error("Received empty response from API (Structure mismatch)");
+                const fr = data?.choices?.[0]?.finish_reason || data?.choices?.[0]?.finishReason || '';
+                throw new Error(
+                  `Received empty response from API (Structure mismatch)` +
+                    (fr ? `; finish_reason=${fr}` : '') +
+                    (isHeavyReasoningQwenModel(model)
+                      ? `。推理型号 ${model} 易把 Token 耗在思考上导致 content 为空，批量背调请用 qwen3.7-plus / qwen3.8-flash`
+                      : '')
+                );
             }
             return content; // Success!
 
@@ -2347,7 +2387,7 @@ const callQwenChat = async (
         ? Math.min(rawTimeout, 280_000)
         : rawTimeout;
   const searchPayload = qwenSearchPayload(!!options.enableSearch, !!options.forcedSearch);
-  const maxTokens =
+  let maxTokens =
     options.maxTokens ??
     (options.connectionTest
       ? 64
@@ -2363,11 +2403,33 @@ const callQwenChat = async (
             : 6144
           : 4096);
 
-  // 可在「夜间模型未开通」时回退到日间模型（避免批量背调整晚全军覆没）
+  // 可在「夜间模型未开通 / 空 content」时回退到日间模型（避免批量背调整晚全军覆没）
   let activeModelId = config.modelId;
+  // 背调/搜索：严禁重推理 max（Token 烧在 thinking，content 空 → 整晚 FAILED）
+  if (
+    (options.task === 'analysis' || options.task === 'search') &&
+    (isHeavyReasoningQwenModel(activeModelId) ||
+      activeModelId === QWEN_CHAT_NIGHT_MODEL_LEGACY_MAX)
+  ) {
+    console.warn(
+      `[Qwen] ${options.task} 任务避开推理型号「${activeModelId}」→「${QWEN_CHAT_DAY_MODEL}」`
+    );
+    activeModelId = QWEN_CHAT_DAY_MODEL;
+  }
+
+  if (isHeavyReasoningQwenModel(activeModelId)) {
+    maxTokens = Math.max(maxTokens, 8192);
+  }
 
   const runOnce = async (extraPayload: Record<string, unknown> | undefined) => {
     const runtime = { ...config, modelId: activeModelId };
+    // 3.8 系 JSON/背调：关掉思考链，避免 max_tokens 被 reasoning 吃光后 content 为空
+    const wantsNoThink =
+      (options.jsonMode || options.task === 'analysis' || options.task === 'search') &&
+      /qwen3\.8/i.test(activeModelId || '');
+    const payload = wantsNoThink
+      ? { ...(extraPayload || {}), enable_thinking: false }
+      : extraPayload;
     if (
       isQwenOpenAICompatible(config.baseUrl) ||
       config.baseUrl.startsWith('/qwen-api') ||
@@ -2385,7 +2447,7 @@ const callQwenChat = async (
         },
         messages,
         options.jsonMode ?? false,
-        { timeoutMs, extraPayload, maxTokens, proxyOrigin: runtime.proxyOrigin }
+        { timeoutMs, extraPayload: payload, maxTokens, proxyOrigin: runtime.proxyOrigin }
       );
     }
 
@@ -2411,13 +2473,17 @@ const callQwenChat = async (
       !isQuotaErr &&
       /请求过于频繁|rate\s*limit|429|Throttling|Too many requests|Rate Limit/i.test(msg0);
 
-    // 夜间自动切到 qwen3.8-max 但套餐未开通 → 立刻回退 qwen3.7-plus（批量背调必经）
-    if (
-      isQwenModelUnavailableError(err) &&
-      activeModelId === QWEN_CHAT_NIGHT_MODEL
-    ) {
+    // 夜间型号未开通 / 推理型号空 content → 立刻回退日间 plus（批量背调必经）
+    const shouldFallbackDay =
+      activeModelId !== QWEN_CHAT_DAY_MODEL &&
+      (activeModelId === QWEN_CHAT_NIGHT_MODEL ||
+        activeModelId === QWEN_CHAT_NIGHT_MODEL_LEGACY_MAX ||
+        isHeavyReasoningQwenModel(activeModelId)) &&
+      (isQwenModelUnavailableError(err) ||
+        /empty response|Structure mismatch/i.test(msg0));
+    if (shouldFallbackDay) {
       console.warn(
-        `[Qwen] 模型不可用「${activeModelId}」，回退「${QWEN_CHAT_DAY_MODEL}」`,
+        `[Qwen] 「${activeModelId}」失败，回退「${QWEN_CHAT_DAY_MODEL}」`,
         msg0.slice(0, 160)
       );
       activeModelId = QWEN_CHAT_DAY_MODEL;
@@ -2426,7 +2492,7 @@ const callQwenChat = async (
       } catch (fallbackErr: any) {
         const mFb = String(fallbackErr?.message || fallbackErr || '');
         throw new Error(
-          `千问夜间模型 ${QWEN_CHAT_NIGHT_MODEL} 不可用，且回退 ${QWEN_CHAT_DAY_MODEL} 仍失败：${mFb}`
+          `千问夜间/推理型号失败，且回退 ${QWEN_CHAT_DAY_MODEL} 仍失败：${mFb}`
         );
       }
     }
@@ -5211,7 +5277,7 @@ interface QwenRuntimeConfig {
 }
 
 const DEFAULT_QWEN_BASE = 'https://dashscope.aliyuncs.com/compatible-mode/v1';
-/** 默认走优惠时段调度：日间 qwen3.7-plus / 夜间 qwen3.8-max */
+/** 默认走优惠时段调度：日间 qwen3.7-plus / 夜间 qwen3.8-flash */
 const DEFAULT_QWEN_MODEL = 'qwen3.7-plus';
 
 const normalizeQwenBaseUrl = (raw: string): string => {
@@ -5315,7 +5381,7 @@ const resolveQwenConfig = async (override?: Partial<QwenRuntimeConfig>): Promise
     env.qwenModelId ||
     DEFAULT_QWEN_MODEL
   ).trim();
-  // 日间 qwen3.7-plus / 夜间 22:00–08:00（上海时区）qwen3.8-max
+  // 日间 qwen3.7-plus / 夜间 22:00–08:00（上海时区）qwen3.8-flash
   const modelId = resolveScheduledQwenChatModel(configuredModel);
 
   if (!apiKey) {

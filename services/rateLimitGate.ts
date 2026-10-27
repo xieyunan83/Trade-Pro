@@ -52,7 +52,7 @@ export const isTransientAnalysisError = (err: unknown): boolean => {
 export const shortErrorMessage = (err: unknown, max = 180): string => {
   let msg = String((err as any)?.message || err || '未知错误').replace(/\s+/g, ' ').trim();
   if (/model_not_found|ModelNotFound|不支持该模型|模型不存在|qwen3\.8-max/i.test(msg)) {
-    msg = `模型不可用（请确认 Token Plan 已开通对应型号；夜间若自动切到 qwen3.8-max 失败应已回退 qwen3.7-plus）：${msg}`;
+    msg = `模型不可用（请确认 Token Plan 已开通对应型号；夜间若自动切到 qwen3.8-flash 失败应已回退 qwen3.7-plus）：${msg}`;
   }
   return msg.length > max ? `${msg.slice(0, max)}…` : msg;
 };

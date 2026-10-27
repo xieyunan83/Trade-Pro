@@ -1,11 +1,18 @@
 /**
  * 千问对话模型优惠时段调度（Asia/Shanghai）：
- * 22:00–次日 08:00 → qwen3.8-max；其余时间 → qwen3.7-plus。
- * 仅接管「白天默认 / 夜间优惠」这对模型；其它型号（flash、max 旧版等）原样返回。
+ * 22:00–次日 08:00 → qwen3.8-flash（夜间折扣、适合批量 JSON）；
+ * 其余时间 → qwen3.7-plus。
+ *
+ * 注意：勿把夜间默认切到 qwen3.8-max（重推理）。背调会大量烧 Token，
+ * 且易返回空 content →「Structure mismatch」整晚 FAILED。
+ * 仅接管「白天默认 / 夜间优惠」这对；其它型号原样返回。
  */
 
 export const QWEN_CHAT_DAY_MODEL = 'qwen3.7-plus';
-export const QWEN_CHAT_NIGHT_MODEL = 'qwen3.8-max';
+/** 夜间优惠用 flash，不用 max（max 推理易空 content 且极耗 Token） */
+export const QWEN_CHAT_NIGHT_MODEL = 'qwen3.8-flash';
+/** 历史误配：仍识别，便于回退/告警 */
+export const QWEN_CHAT_NIGHT_MODEL_LEGACY_MAX = 'qwen3.8-max';
 
 /** 上海时区当前小时 0–23 */
 export const getShanghaiHour = (now = new Date()): number => {
@@ -35,8 +42,13 @@ export const isQwenNightPromoWindow = (now = new Date()): boolean => {
 const SCHEDULED_ALIASES = new Set([
   QWEN_CHAT_DAY_MODEL,
   QWEN_CHAT_NIGHT_MODEL,
+  QWEN_CHAT_NIGHT_MODEL_LEGACY_MAX,
   'qwen-plus',
 ]);
+
+/** 重推理型号：批量背调 / JSON 任务应避开或提高 max_tokens */
+export const isHeavyReasoningQwenModel = (modelId?: string | null): boolean =>
+  /qwen3\.8-max|qwen3\.7-max/i.test((modelId || '').trim());
 
 export const isScheduledQwenChatModel = (modelId?: string | null): boolean => {
   const id = (modelId || '').trim();
@@ -45,7 +57,7 @@ export const isScheduledQwenChatModel = (modelId?: string | null): boolean => {
 
 /**
  * 解析最终调用的千问对话模型。
- * 配置为空 / qwen3.7-plus / qwen3.8-max 时按优惠时段自动切换；其它配置不改动。
+ * 配置为空 / qwen3.7-plus / qwen3.8-flash / qwen3.8-max 时按优惠时段自动切换；其它配置不改动。
  */
 export const resolveScheduledQwenChatModel = (
   configured?: string | null,

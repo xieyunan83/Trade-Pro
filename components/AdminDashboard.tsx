@@ -1469,13 +1469,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         type="text"
                         value={qwenModelId}
                         onChange={e => setQwenModelId(e.target.value)}
-                        placeholder="qwen3.7-plus（推荐；夜间自动切 qwen3.8-max）"
+                        placeholder="qwen3.7-plus（推荐；夜间自动切 qwen3.8-flash）"
                         className="w-full bg-white border border-emerald-100 rounded-xl px-4 py-3 font-bold text-sm"
                       />
                     </div>
                     <div className="flex items-end text-[10px] font-bold text-slate-400 pb-2 leading-relaxed">
-                      填 qwen3.7-plus 或 qwen3.8-max 时：上海时区 22:00–08:00 优先 qwen3.8-max，其余时间
-                      qwen3.7-plus。若夜间型号未开通会自动回退 qwen3.7-plus，避免批量背调整晚全失败。其它型号不改。
+                      填 qwen3.7-plus / qwen3.8-flash / qwen3.8-max 时：上海时区 22:00–08:00 优先
+                      qwen3.8-flash（夜间折扣），其余时间 qwen3.7-plus。批量背调强制避开重推理
+                      qwen3.8-max，失败自动回退 plus。其它型号不改。
                     </div>
                     <div className="md:col-span-2">
                       <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Supabase Project URL</label>
