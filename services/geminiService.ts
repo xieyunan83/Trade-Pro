@@ -50,6 +50,9 @@ import {
 } from './apiKeyPool';
 import {
   describeQwenChatSchedule,
+  isQwenModelUnavailableError,
+  QWEN_CHAT_DAY_MODEL,
+  QWEN_CHAT_NIGHT_MODEL,
   resolveScheduledQwenChatModel,
 } from './qwenModelSchedule';
 import {
@@ -2360,7 +2363,11 @@ const callQwenChat = async (
             : 6144
           : 4096);
 
+  // 可在「夜间模型未开通」时回退到日间模型（避免批量背调整晚全军覆没）
+  let activeModelId = config.modelId;
+
   const runOnce = async (extraPayload: Record<string, unknown> | undefined) => {
+    const runtime = { ...config, modelId: activeModelId };
     if (
       isQwenOpenAICompatible(config.baseUrl) ||
       config.baseUrl.startsWith('/qwen-api') ||
@@ -2371,14 +2378,14 @@ const callQwenChat = async (
       return callOpenAICompatible(
         {
           id: 'qwen',
-          apiKey: config.apiKey,
-          baseUrl: config.baseUrl,
-          modelId: config.modelId,
+          apiKey: runtime.apiKey,
+          baseUrl: runtime.baseUrl,
+          modelId: runtime.modelId,
           taskAssignment: 'default',
         },
         messages,
         options.jsonMode ?? false,
-        { timeoutMs, extraPayload, maxTokens, proxyOrigin: config.proxyOrigin }
+        { timeoutMs, extraPayload, maxTokens, proxyOrigin: runtime.proxyOrigin }
       );
     }
 
@@ -2386,7 +2393,7 @@ const callQwenChat = async (
       .map(m => `${m.role}: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`)
       .join('\n\n');
     return callQwenNative(
-      config,
+      runtime,
       combined,
       options.jsonMode ?? false,
       !!options.enableSearch,
@@ -2403,6 +2410,26 @@ const callQwenChat = async (
     const isRateErr =
       !isQuotaErr &&
       /请求过于频繁|rate\s*limit|429|Throttling|Too many requests|Rate Limit/i.test(msg0);
+
+    // 夜间自动切到 qwen3.8-max 但套餐未开通 → 立刻回退 qwen3.7-plus（批量背调必经）
+    if (
+      isQwenModelUnavailableError(err) &&
+      activeModelId === QWEN_CHAT_NIGHT_MODEL
+    ) {
+      console.warn(
+        `[Qwen] 模型不可用「${activeModelId}」，回退「${QWEN_CHAT_DAY_MODEL}」`,
+        msg0.slice(0, 160)
+      );
+      activeModelId = QWEN_CHAT_DAY_MODEL;
+      try {
+        return await runOnce(searchPayload);
+      } catch (fallbackErr: any) {
+        const mFb = String(fallbackErr?.message || fallbackErr || '');
+        throw new Error(
+          `千问夜间模型 ${QWEN_CHAT_NIGHT_MODEL} 不可用，且回退 ${QWEN_CHAT_DAY_MODEL} 仍失败：${mFb}`
+        );
+      }
+    }
 
     // 连接测试：额度耗尽立即失败；瞬时限流则短退避重试（最多 2 次）
     if (options.connectionTest) {

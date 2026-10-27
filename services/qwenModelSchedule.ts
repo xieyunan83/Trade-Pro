@@ -61,3 +61,11 @@ export const describeQwenChatSchedule = (now = new Date()): string => {
   const window = isQwenNightPromoWindow(now) ? '夜间优惠时段（22:00–08:00）' : '日间时段（08:00–22:00）';
   return `${window} · 当前 ${active}`;
 };
+
+/** 模型未开通 / 名称错误（夜间自动切到 3.8-max 时最常见） */
+export const isQwenModelUnavailableError = (err: unknown): boolean => {
+  const msg = String((err as { message?: string })?.message || err || '');
+  return /model_not_found|ModelNotFound|Model\.NotExist|InvalidParameter.*[Mm]odel|Unknown model|does not exist|not.?support(ed)?.?model|模型不存在|不支持该模型|无权访问.*模型|AccessDenied.*model|invalid.?model|model.?unavailable|404.*model/i.test(
+    msg
+  );
+};
