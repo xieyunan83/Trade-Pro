@@ -199,7 +199,7 @@ export const SelectedRefsStrip: React.FC<{
   );
 };
 
-/** 创作流水线顶部导航条（平面 → 三维 → 视频 → 包装 → 市调匹配） */
+/** 创作流水线顶部导航条（平面 → 三维 → 视频 → 包装 → 产品匹配） */
 export const CreativePipelineBar: React.FC<{
   current: '2d' | '3d' | 'video' | 'packaging' | 'match';
   onNavigate?: (mod: ModuleType) => void;

@@ -76,7 +76,7 @@ export const PLATFORM_SECTIONS: PlatformSection[] = [
       { id: ModuleType.PRODUCTS, label: '产品分析', sub: 'Products', icon: PackageSearch },
       { id: ModuleType.DECISION_MAKERS, label: '决策人挖掘', sub: 'Contacts', icon: Users },
       { id: ModuleType.SIMILAR, label: '同类推荐', sub: 'Similar', icon: Network },
-      { id: ModuleType.PRODUCT_MATCH, label: '市调匹配', sub: 'GTM', icon: Target },
+      { id: ModuleType.PRODUCT_MATCH, label: '产品匹配', sub: '市调·客户', icon: Target },
     ],
   },
   {
@@ -121,6 +121,12 @@ export const PLATFORM_SECTIONS: PlatformSection[] = [
         label: '包装设计',
         sub: 'Packaging',
         icon: PackageOpen,
+      },
+      {
+        id: ModuleType.PRODUCT_MATCH,
+        label: '产品匹配',
+        sub: '定价·客户',
+        icon: Target,
       },
       {
         id: ModuleType.PRODUCT_3D_PRINT,
@@ -217,10 +223,24 @@ export const PLATFORM_SECTIONS: PlatformSection[] = [
   },
 ];
 
-export const findSectionByModule = (mod: ModuleType): PlatformSection | undefined =>
-  PLATFORM_SECTIONS.find((s) => s.items.some((i) => i.id === mod));
+export const findSectionByModule = (mod: ModuleType): PlatformSection | undefined => {
+  // 产品匹配在「产品」「商机」双入口；默认归产品板块（设计→匹配主路径）
+  if (mod === ModuleType.PRODUCT_MATCH) {
+    return (
+      PLATFORM_SECTIONS.find((s) => s.id === 'product') ||
+      PLATFORM_SECTIONS.find((s) => s.items.some((i) => i.id === mod))
+    );
+  }
+  return PLATFORM_SECTIONS.find((s) => s.items.some((i) => i.id === mod));
+};
 
 export const findNavItem = (mod: ModuleType): PlatformNavItem | undefined => {
+  // 双入口时优先产品板块文案
+  if (mod === ModuleType.PRODUCT_MATCH) {
+    const productSec = PLATFORM_SECTIONS.find((s) => s.id === 'product');
+    const hit = productSec?.items.find((i) => i.id === mod);
+    if (hit) return hit;
+  }
   for (const s of PLATFORM_SECTIONS) {
     const hit = s.items.find((i) => i.id === mod);
     if (hit) return hit;
@@ -228,5 +248,16 @@ export const findNavItem = (mod: ModuleType): PlatformNavItem | undefined => {
   return undefined;
 };
 
-/** 扁平列表（兼容旧 NAV_MODULE_DEFS 用法） */
-export const ALL_PLATFORM_NAV_ITEMS: PlatformNavItem[] = PLATFORM_SECTIONS.flatMap((s) => s.items);
+/** 扁平列表（按模块去重，兼容旧 NAV_MODULE_DEFS） */
+export const ALL_PLATFORM_NAV_ITEMS: PlatformNavItem[] = (() => {
+  const seen = new Set<ModuleType>();
+  const out: PlatformNavItem[] = [];
+  for (const s of PLATFORM_SECTIONS) {
+    for (const it of s.items) {
+      if (seen.has(it.id)) continue;
+      seen.add(it.id);
+      out.push(it);
+    }
+  }
+  return out;
+})();

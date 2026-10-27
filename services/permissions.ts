@@ -20,7 +20,7 @@ export const PERMISSION_CATALOG: Array<{
   { key: 'module.email_campaign', label: '邮件营销', group: '模块', description: '邮件群发/开发信' },
   { key: 'module.image_generator', label: '海报/生图', group: '模块', description: '海报与万相生图' },
   { key: 'module.promo_generator', label: '营销工具', group: '模块', description: '营销辅助工具' },
-  { key: 'module.product_match', label: '市调匹配', group: '模块', description: '市调专家+产品经理：国家/客户匹配与开发信组' },
+  { key: 'module.product_match', label: '产品匹配', group: '模块', description: '市调专家+产品经理：国家/客户匹配、定价参考与开发信组' },
   { key: 'module.buyer_library', label: '自有买家库（后台）', group: '模块', description: '后台数据库；客户搜索命中时优先调用，前台无独立入口' },
   { key: 'module.customs_intel', label: '海关情报（后台）', group: '模块', description: '后台海关/提单缓存；客户搜索命中时优先调用，前台无独立入口' },
   { key: 'module.product_catalog', label: '产品库', group: '模块', description: 'SKU 主数据；小竹熊/霄鸟云同步在管理后台' },

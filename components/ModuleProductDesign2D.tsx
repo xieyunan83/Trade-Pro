@@ -461,7 +461,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
         : target === 'packaging'
           ? '包装'
           : target === 'product_match'
-            ? '市调匹配'
+            ? '产品匹配'
             : '视频';
     const fallbackUrls =
       urls.length > 0
@@ -715,7 +715,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                         onClick={() => sendSelectedTo('product_match')}
                         className="text-[10px] font-black rounded-lg bg-emerald-600 text-white px-2.5 py-1.5"
                       >
-                        → 市调匹配
+                        → 产品匹配
                       </button>
                     </>
                   ) : null}

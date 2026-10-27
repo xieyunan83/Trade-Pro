@@ -175,8 +175,8 @@ export const CREATIVE_PIPELINE: Array<{
   },
   {
     id: 'match',
-    label: '5 市调匹配',
+    label: '5 产品匹配',
     module: ModuleType.PRODUCT_MATCH,
-    blurb: '国家 · 客户 · 开发信',
+    blurb: '定价 · 国家 · 客户 · 开发信',
   },
 ];
