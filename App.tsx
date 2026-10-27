@@ -27,6 +27,7 @@ import { isSupabaseConfigured, getKnowledgeFiles, getInvestigationHistory, saveI
 import {
   indexAnalysisIntoProductCatalog,
   rebuildProductCatalogFromHistory,
+  backfillProductCatalogFromHistory,
   loadProductCatalog,
   hasRichProductCatalog,
   removeProductProfile,
@@ -837,13 +838,18 @@ const App: React.FC = () => {
                 }
             }
 
-            // 产品库为空时，用本机背调历史静默重建一次
+            // 产品画像：空库则全量重建；已有库则从历史补包装/配色/价带等设计信号（零 Token）
             try {
               const existingProfiles = await loadProductCatalog();
-              if (existingProfiles.length === 0) {
-                const histNow = await getHistory();
-                if (histNow.length) {
+              const histNow = await getHistory();
+              if (histNow.length) {
+                if (existingProfiles.length === 0) {
                   await rebuildProductCatalogFromHistory(histNow, {
+                    ownerUsername: currentUser.username,
+                    departmentId: currentUser.departmentId,
+                  });
+                } else {
+                  await backfillProductCatalogFromHistory(histNow, {
                     ownerUsername: currentUser.username,
                     departmentId: currentUser.departmentId,
                   });
@@ -4710,6 +4716,8 @@ const App: React.FC = () => {
                     <ModuleProductMatch
                         history={history}
                         crmClients={crmClients}
+                        currentUser={currentUser}
+                        onCrmClientsChange={setCrmClients}
                         onOpenHistory={loadFromHistory}
                         onGoCrm={() => setActiveModule(ModuleType.CLIENT_CRM)}
                         onNavigateModule={setActiveModule}

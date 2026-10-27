@@ -88,6 +88,96 @@ const parseMoney = (v: unknown): number | undefined => {
 const skuId = (companyKey: string, name: string, idx: number) =>
   `${companyKey}__${idx}_${normalizeText(name).slice(0, 24).replace(/\s+/g, '_') || 'sku'}`;
 
+const EMPTY_SIGNAL = /^(n\/?a|未知|公开信息未找到|none|null|待补|暂无|-)?$/i;
+
+/** 把包装/配色原文拆成可匹配短标签 */
+export const splitDesignSignalTokens = (raw?: string, max = 12): string[] => {
+  if (!raw || EMPTY_SIGNAL.test(raw.trim())) return [];
+  const parts = raw
+    .split(/[,，、;/|+\n]+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length >= 2 && s.length <= 40 && !EMPTY_SIGNAL.test(s));
+  return [...new Set(parts)].slice(0, max);
+};
+
+const unionStrings = (...lists: Array<string[] | undefined>): string[] => {
+  const out = new Set<string>();
+  for (const list of lists) {
+    (list || []).forEach((x) => {
+      const t = (x || '').trim();
+      if (t) out.add(t);
+    });
+  }
+  return [...out];
+};
+
+const preferLongerText = (a?: string, b?: string): string | undefined => {
+  const aa = (a || '').trim();
+  const bb = (b || '').trim();
+  if (!aa || EMPTY_SIGNAL.test(aa)) return bb || undefined;
+  if (!bb || EMPTY_SIGNAL.test(bb)) return aa || undefined;
+  return bb.length > aa.length ? bb : aa;
+};
+
+/** 设计匹配信号是否够用（色/包/价/周期至少两类） */
+export const profileHasDesignSignals = (p?: CustomerProductProfile | null): boolean => {
+  if (!p) return false;
+  let n = 0;
+  if ((p.packagingStyles || []).length || (p.packagingSummary || '').trim()) n += 1;
+  if ((p.colorPalettes || []).length || (p.colorPreference || '').trim()) n += 1;
+  if (p.priceMinCny != null || p.priceMaxCny != null || p.buyCostMinCny != null) n += 1;
+  if ((p.procurementCycle || p.buyingSeasons || p.typicalMoq || '').trim()) n += 1;
+  return n >= 2;
+};
+
+export type CatalogGapKind =
+  | 'tags'
+  | 'packaging'
+  | 'colors'
+  | 'price'
+  | 'buyCost'
+  | 'cycle'
+  | 'volume';
+
+export type CatalogCoverageRow = {
+  id: string;
+  companyName: string;
+  website: string;
+  historyId?: string;
+  crmClientId?: string;
+  missing: CatalogGapKind[];
+  catalogQuality: number;
+  designSignalQuality: number;
+};
+
+export type CatalogCoverageReport = {
+  historyWithReport: number;
+  profilesTotal: number;
+  withTags: number;
+  withPackaging: number;
+  withColors: number;
+  withPrice: number;
+  withBuyCost: number;
+  withCycle: number;
+  withVolume: number;
+  designReady: number;
+  crmBlankProductTags: number;
+  /** 有背调但画像缺失或设计信号空白 */
+  gaps: CatalogCoverageRow[];
+};
+
+const missingKindsForProfile = (p: CustomerProductProfile): CatalogGapKind[] => {
+  const miss: CatalogGapKind[] = [];
+  if (!(p.productTags || []).length && !(p.sellCategories || []).length) miss.push('tags');
+  if (!(p.packagingStyles || []).length && !(p.packagingSummary || '').trim()) miss.push('packaging');
+  if (!(p.colorPalettes || []).length && !(p.colorPreference || '').trim()) miss.push('colors');
+  if (p.priceMinCny == null && p.priceMaxCny == null) miss.push('price');
+  if (p.buyCostMinCny == null && p.buyCostMaxCny == null) miss.push('buyCost');
+  if (!(p.procurementCycle || p.buyingSeasons || p.typicalMoq || '').trim()) miss.push('cycle');
+  if (!(p.volumeSignal || '').trim()) miss.push('volume');
+  return miss;
+};
+
 /** 从背调报告抽取客户产品画像 */
 export const buildProductProfileFromAnalysis = (
   analysis: AnalysisResult,
@@ -154,6 +244,16 @@ export const buildProductProfileFromAnalysis = (
     });
   };
 
+  const packagingStyleSet = new Set<string>();
+  const colorPaletteSet = new Set<string>();
+  let buyCostMin: number | undefined;
+  let buyCostMax: number | undefined;
+  const bumpBuyCost = (v?: number) => {
+    if (v == null || v <= 0) return;
+    buyCostMin = buyCostMin == null ? v : Math.min(buyCostMin, v);
+    buyCostMax = buyCostMax == null ? v : Math.max(buyCostMax, v);
+  };
+
   (analysis.products || []).forEach((p, idx) => {
     const name = (p.name || '').trim();
     if (!name || /公开信息未找到/i.test(name)) return;
@@ -163,8 +263,15 @@ export const buildProductProfileFromAnalysis = (
     if (role === 'sell' || role === 'both') sellCatSet.add(cat);
     if (role === 'procure' || role === 'both') procureCatSet.add(cat);
     addTags(p.tags);
+    const colors = (p.colors || '').trim();
+    const packaging = (p.packaging || '').trim();
+    splitDesignSignalTokens(colors).forEach((t) => colorPaletteSet.add(t));
+    splitDesignSignalTokens(packaging).forEach((t) => packagingStyleSet.add(t));
+    if (colors && !EMPTY_SIGNAL.test(colors)) addTags([`配色:${colors.slice(0, 28)}`]);
+    if (packaging && !EMPTY_SIGNAL.test(packaging)) addTags([`包装:${packaging.slice(0, 28)}`]);
     const retail = parseMoney(p.retailPriceCNY) ?? parseMoney(p.retailPrice);
     const fob = parseMoney(p.estimatedFOBPriceCNY);
+    bumpBuyCost(fob);
     const lo = parseMoney(p.priceMinCNY) ?? (retail != null && fob != null ? Math.min(retail, fob) : retail ?? fob);
     const hi = parseMoney(p.priceMaxCNY) ?? (retail != null && fob != null ? Math.max(retail, fob) : retail ?? fob);
     bumpPrice(lo, hi);
@@ -182,6 +289,8 @@ export const buildProductProfileFromAnalysis = (
       keywordMatch: !!p.keywordMatch,
       role,
       tags: (p.tags || []).filter(Boolean).slice(0, 8),
+      colors: colors && !EMPTY_SIGNAL.test(colors) ? colors : undefined,
+      packaging: packaging && !EMPTY_SIGNAL.test(packaging) ? packaging : undefined,
     });
   });
 
@@ -258,7 +367,38 @@ export const buildProductProfileFromAnalysis = (
 
   const sellCategories = [...sellCatSet];
   const procureCategories = [...procureCatSet];
-  const productTags = [...tagSet].slice(0, 40);
+
+  const packagingSummary = preferLongerText(
+    undefined,
+    analysis.productSummary?.packagingAnalysis
+  );
+  const colorPreference = preferLongerText(
+    undefined,
+    analysis.productSummary?.colorPreference
+  );
+  splitDesignSignalTokens(packagingSummary, 8).forEach((t) => packagingStyleSet.add(t));
+  splitDesignSignalTokens(colorPreference, 8).forEach((t) => colorPaletteSet.add(t));
+
+  const typicalMoq = (analysis.tradeIntelligence?.typicalMoq || '').trim();
+  const buyingSeasons = (analysis.tradeIntelligence?.buyingSeasons || '').trim();
+  const procureInfo = (analysis.businessModel?.procurementInfo || '').trim();
+  const volumeSignal = (analysis.tradeIntelligence?.estimatedAnnualImport || '').trim();
+  const procurementCycle = [buyingSeasons, typicalMoq, procureInfo]
+    .filter((s) => s && !EMPTY_SIGNAL.test(s))
+    .join(' · ')
+    .slice(0, 240);
+
+  if (typicalMoq && !EMPTY_SIGNAL.test(typicalMoq)) addTags([`MOQ:${typicalMoq.slice(0, 24)}`]);
+  if (buyingSeasons && !EMPTY_SIGNAL.test(buyingSeasons)) {
+    addTags([`旺季:${buyingSeasons.slice(0, 24)}`]);
+  }
+
+  const packagingStyles = [...packagingStyleSet].slice(0, 20);
+  const colorPalettes = [...colorPaletteSet].slice(0, 20);
+  packagingStyles.forEach((t) => tagSet.add(`包装:${t}`.slice(0, 32)));
+  colorPalettes.forEach((t) => tagSet.add(`配色:${t}`.slice(0, 32)));
+
+  const productTags = [...tagSet].slice(0, 48);
   const skuCount = skus.filter((s) => s.source === 'sku' || s.source === 'procure').length;
   const catalogQuality = Math.min(
     100,
@@ -270,6 +410,15 @@ export const buildProductProfileFromAnalysis = (
         Math.min(10, productTags.length * 2)
     )
   );
+
+  let designSignalQuality = 0;
+  if (packagingStyles.length || packagingSummary) designSignalQuality += 25;
+  if (colorPalettes.length || colorPreference) designSignalQuality += 25;
+  if (priceMin != null || priceMax != null) designSignalQuality += 20;
+  if (buyCostMin != null || buyCostMax != null) designSignalQuality += 15;
+  if (procurementCycle) designSignalQuality += 10;
+  if (volumeSignal && !EMPTY_SIGNAL.test(volumeSignal)) designSignalQuality += 5;
+  designSignalQuality = Math.min(100, designSignalQuality);
 
   return {
     id,
@@ -296,9 +445,123 @@ export const buildProductProfileFromAnalysis = (
     searchKeywords: [...new Set(searchKeywords)],
     catalogQuality,
     hasSellProcureSplit: sellCategories.length > 0 && procureCategories.length > 0,
+    packagingStyles,
+    colorPalettes,
+    packagingSummary: packagingSummary && !EMPTY_SIGNAL.test(packagingSummary) ? packagingSummary : undefined,
+    colorPreference: colorPreference && !EMPTY_SIGNAL.test(colorPreference) ? colorPreference : undefined,
+    buyCostMinCny: buyCostMin,
+    buyCostMaxCny: buyCostMax,
+    typicalMoq: typicalMoq && !EMPTY_SIGNAL.test(typicalMoq) ? typicalMoq : undefined,
+    buyingSeasons: buyingSeasons && !EMPTY_SIGNAL.test(buyingSeasons) ? buyingSeasons : undefined,
+    procurementCycle: procurementCycle || undefined,
+    volumeSignal: volumeSignal && !EMPTY_SIGNAL.test(volumeSignal) ? volumeSignal : undefined,
+    designSignalQuality,
     updatedAt: Date.now(),
     ownerUsername: meta?.ownerUsername,
     departmentId: meta?.departmentId,
+  };
+};
+
+/** 合并画像：保留更完整的设计信号与 SKU */
+export const mergeProductProfiles = (
+  prev: CustomerProductProfile,
+  built: CustomerProductProfile
+): CustomerProductProfile => {
+  const skuMap = new Map<string, CustomerProductSku>();
+  [...(prev.skus || []), ...(built.skus || [])].forEach((s) => {
+    const key = `${s.source}|${normalizeText(s.name)}|${s.category}`;
+    const old = skuMap.get(key);
+    if (!old) {
+      skuMap.set(key, s);
+      return;
+    }
+    skuMap.set(key, {
+      ...old,
+      ...s,
+      tags: unionStrings(old.tags, s.tags).slice(0, 8),
+      colors: preferLongerText(old.colors, s.colors),
+      packaging: preferLongerText(old.packaging, s.packaging),
+      priceMinCny:
+        old.priceMinCny != null && s.priceMinCny != null
+          ? Math.min(old.priceMinCny, s.priceMinCny)
+          : old.priceMinCny ?? s.priceMinCny,
+      priceMaxCny:
+        old.priceMaxCny != null && s.priceMaxCny != null
+          ? Math.max(old.priceMaxCny, s.priceMaxCny)
+          : old.priceMaxCny ?? s.priceMaxCny,
+      retailPriceCNY: s.retailPriceCNY ?? old.retailPriceCNY,
+      estimatedFOBPriceCNY: s.estimatedFOBPriceCNY ?? old.estimatedFOBPriceCNY,
+    });
+  });
+
+  const priceMin =
+    prev.priceMinCny != null && built.priceMinCny != null
+      ? Math.min(prev.priceMinCny, built.priceMinCny)
+      : prev.priceMinCny ?? built.priceMinCny;
+  const priceMax =
+    prev.priceMaxCny != null && built.priceMaxCny != null
+      ? Math.max(prev.priceMaxCny, built.priceMaxCny)
+      : prev.priceMaxCny ?? built.priceMaxCny;
+  const buyMin =
+    prev.buyCostMinCny != null && built.buyCostMinCny != null
+      ? Math.min(prev.buyCostMinCny, built.buyCostMinCny)
+      : prev.buyCostMinCny ?? built.buyCostMinCny;
+  const buyMax =
+    prev.buyCostMaxCny != null && built.buyCostMaxCny != null
+      ? Math.max(prev.buyCostMaxCny, built.buyCostMaxCny)
+      : prev.buyCostMaxCny ?? built.buyCostMaxCny;
+
+  const packagingStyles = unionStrings(prev.packagingStyles, built.packagingStyles).slice(0, 20);
+  const colorPalettes = unionStrings(prev.colorPalettes, built.colorPalettes).slice(0, 20);
+  const productTags = unionStrings(prev.productTags, built.productTags).slice(0, 48);
+  const sellCategories = unionStrings(prev.sellCategories, built.sellCategories);
+  const procureCategories = unionStrings(prev.procureCategories, built.procureCategories);
+  const categories = unionStrings(prev.categories, built.categories);
+  const catalogQuality = Math.max(prev.catalogQuality || 0, built.catalogQuality || 0);
+  const designSignalQuality = Math.max(
+    prev.designSignalQuality || 0,
+    built.designSignalQuality || 0
+  );
+
+  return {
+    ...prev,
+    ...built,
+    companyName: built.companyName || prev.companyName,
+    website: built.website || prev.website,
+    country: built.country || prev.country,
+    historyId: built.historyId || prev.historyId,
+    crmClientId: built.crmClientId || prev.crmClientId,
+    categories,
+    sellCategories,
+    procureCategories,
+    productTags,
+    priceMinCny: priceMin,
+    priceMaxCny: priceMax,
+    priceBand:
+      priceMin != null || priceMax != null
+        ? `¥${priceMin ?? '?'}–${priceMax ?? '?'}`
+        : built.priceBand || prev.priceBand,
+    skus: [...skuMap.values()].slice(0, 100),
+    importCategories: unionStrings(prev.importCategories, built.importCategories),
+    hsCodes: unionStrings(prev.hsCodes, built.hsCodes),
+    coreProducts: unionStrings(prev.coreProducts, built.coreProducts),
+    searchKeywords: unionStrings(prev.searchKeywords, built.searchKeywords),
+    catalogQuality,
+    hasSellProcureSplit: sellCategories.length > 0 && procureCategories.length > 0,
+    packagingStyles,
+    colorPalettes,
+    packagingSummary: preferLongerText(prev.packagingSummary, built.packagingSummary),
+    colorPreference: preferLongerText(prev.colorPreference, built.colorPreference),
+    buyCostMinCny: buyMin,
+    buyCostMaxCny: buyMax,
+    typicalMoq: preferLongerText(prev.typicalMoq, built.typicalMoq),
+    buyingSeasons: preferLongerText(prev.buyingSeasons, built.buyingSeasons),
+    procurementCycle: preferLongerText(prev.procurementCycle, built.procurementCycle),
+    volumeSignal: preferLongerText(prev.volumeSignal, built.volumeSignal),
+    designSignalQuality,
+    updatedAt: Math.max(prev.updatedAt || 0, built.updatedAt || 0, Date.now()),
+    ownerUsername: built.ownerUsername || prev.ownerUsername,
+    departmentId: built.departmentId || prev.departmentId,
   };
 };
 
@@ -330,14 +593,32 @@ export const indexAnalysisIntoProductCatalog = async (
   return profile;
 };
 
-/** 从历史记录批量重建产品库（不覆盖更新时间更近的已有条目，除非 force） */
+const profileRicherThan = (built: CustomerProductProfile, prev: CustomerProductProfile): boolean => {
+  const designGain =
+    (built.designSignalQuality || 0) > (prev.designSignalQuality || 0) ||
+    (built.packagingStyles || []).length > (prev.packagingStyles || []).length ||
+    (built.colorPalettes || []).length > (prev.colorPalettes || []).length ||
+    ((built.buyCostMinCny != null || built.buyCostMaxCny != null) &&
+      prev.buyCostMinCny == null &&
+      prev.buyCostMaxCny == null) ||
+    (!!(built.procurementCycle || built.buyingSeasons || built.typicalMoq) &&
+      !(prev.procurementCycle || prev.buyingSeasons || prev.typicalMoq));
+  const catalogGain =
+    (built.catalogQuality || 0) > (prev.catalogQuality || 0) + 5 ||
+    (built.skus || []).length > (prev.skus || []).length ||
+    (built.productTags || []).length > (prev.productTags || []).length;
+  return designGain || catalogGain;
+};
+
+/** 从历史记录批量重建产品库（不覆盖更新时间更近的已有条目，除非 force；fillGaps 时合并更完整信号） */
 export const rebuildProductCatalogFromHistory = async (
   history: HistoryItem[],
-  opts?: { force?: boolean; ownerUsername?: string; departmentId?: string }
-): Promise<{ upserted: number; skipped: number }> => {
+  opts?: { force?: boolean; fillGaps?: boolean; ownerUsername?: string; departmentId?: string }
+): Promise<{ upserted: number; enriched: number; skipped: number }> => {
   const existing = await getProductProfiles();
   const map = new Map(existing.map((p) => [p.id, p]));
   let upserted = 0;
+  let enriched = 0;
   let skipped = 0;
   const batch: CustomerProductProfile[] = [];
 
@@ -356,18 +637,37 @@ export const rebuildProductCatalogFromHistory = async (
       continue;
     }
     const prev = map.get(built.id);
-    if (!opts?.force && prev && (prev.updatedAt || 0) > (h.timestamp || 0) && prev.skus.length >= built.skus.length) {
+    if (!prev) {
+      const next = {
+        ...built,
+        updatedAt: Math.max(built.updatedAt, h.timestamp || 0),
+        historyId: h.id,
+      };
+      map.set(next.id, next);
+      batch.push(next);
+      upserted += 1;
+      continue;
+    }
+
+    const richer = profileRicherThan(built, prev);
+    const stalePrev =
+      (prev.updatedAt || 0) <= (h.timestamp || 0) && prev.skus.length < built.skus.length;
+    const shouldWrite = opts?.force || opts?.fillGaps || richer || stalePrev;
+
+    if (!shouldWrite) {
       skipped += 1;
       continue;
     }
-    const next = {
+
+    const merged = mergeProductProfiles(prev, {
       ...built,
-      updatedAt: Math.max(built.updatedAt, h.timestamp || 0),
+      updatedAt: Math.max(built.updatedAt, h.timestamp || 0, prev.updatedAt || 0),
       historyId: h.id,
-    };
-    map.set(next.id, next);
-    batch.push(next);
-    upserted += 1;
+    });
+    map.set(merged.id, merged);
+    batch.push(merged);
+    if ((prev.skus || []).length || (prev.categories || []).length) enriched += 1;
+    else upserted += 1;
   }
 
   if (batch.length) {
@@ -376,7 +676,111 @@ export const rebuildProductCatalogFromHistory = async (
       console.warn('[productCatalog] bulk cloud sync failed', e)
     );
   }
-  return { upserted, skipped };
+  return { upserted, enriched, skipped };
+};
+
+/** A：从历史补洞（合并设计信号，不整库强刷） */
+export const backfillProductCatalogFromHistory = async (
+  history: HistoryItem[],
+  opts?: { ownerUsername?: string; departmentId?: string }
+) => rebuildProductCatalogFromHistory(history, { ...opts, fillGaps: true });
+
+/** 覆盖度报表：空白标签 / 缺色包价周期 */
+export const buildCatalogCoverageReport = (
+  history: HistoryItem[],
+  profiles: CustomerProductProfile[],
+  crmClients?: Array<{ id: string; name: string; website?: string; tags?: string[]; productType?: string }>
+): CatalogCoverageReport => {
+  const profileByDomain = new Map<string, CustomerProductProfile>();
+  const profileByHistory = new Map<string, CustomerProductProfile>();
+  for (const p of profiles) {
+    const d = domainKey(p.website) || p.id;
+    if (d) profileByDomain.set(d, p);
+    if (p.historyId) profileByHistory.set(p.historyId, p);
+  }
+
+  const gaps: CatalogCoverageRow[] = [];
+  let historyWithReport = 0;
+
+  for (const h of history) {
+    if (!h?.data) continue;
+    historyWithReport += 1;
+    const built = buildProductProfileFromAnalysis(h.data, { historyId: h.id });
+    const domain = domainKey(h.data.companyInfo?.website) || domainKey(h.domain) || '';
+    const existing =
+      (h.id && profileByHistory.get(h.id)) ||
+      (domain && profileByDomain.get(domain)) ||
+      null;
+
+    const probe = existing ? mergeProductProfiles(existing, built || existing) : built;
+    if (!probe) {
+      gaps.push({
+        id: h.id,
+        companyName: h.data.companyInfo?.name || h.domain || h.id,
+        website: domain,
+        historyId: h.id,
+        missing: ['tags', 'packaging', 'colors', 'price', 'buyCost', 'cycle', 'volume'],
+        catalogQuality: 0,
+        designSignalQuality: 0,
+      });
+      continue;
+    }
+    const missing = missingKindsForProfile(probe);
+    if (missing.length >= 2 || !profileHasDesignSignals(probe)) {
+      gaps.push({
+        id: probe.id,
+        companyName: probe.companyName,
+        website: probe.website,
+        historyId: h.id,
+        crmClientId: probe.crmClientId,
+        missing,
+        catalogQuality: probe.catalogQuality || 0,
+        designSignalQuality: probe.designSignalQuality || 0,
+      });
+    }
+  }
+
+  const withTags = profiles.filter((p) => (p.productTags || []).length > 0).length;
+  const withPackaging = profiles.filter(
+    (p) => (p.packagingStyles || []).length > 0 || !!(p.packagingSummary || '').trim()
+  ).length;
+  const withColors = profiles.filter(
+    (p) => (p.colorPalettes || []).length > 0 || !!(p.colorPreference || '').trim()
+  ).length;
+  const withPrice = profiles.filter((p) => p.priceMinCny != null || p.priceMaxCny != null).length;
+  const withBuyCost = profiles.filter((p) => p.buyCostMinCny != null || p.buyCostMaxCny != null).length;
+  const withCycle = profiles.filter(
+    (p) => !!(p.procurementCycle || p.buyingSeasons || p.typicalMoq || '').trim()
+  ).length;
+  const withVolume = profiles.filter((p) => !!(p.volumeSignal || '').trim()).length;
+  const designReady = profiles.filter((p) => profileHasDesignSignals(p)).length;
+
+  const crmBlankProductTags = (crmClients || []).filter((c) => {
+    const tags = c.tags || [];
+    const hasProductTag =
+      tags.some((t) => /^(在售:|采购:|包装:|配色:)/.test(t)) ||
+      tags.some((t) => (t || '').length > 0 && !t.startsWith('关键词:') && !t.startsWith('国家:'));
+    const hasType = !!(c.productType || '').trim() && c.productType !== 'N/A';
+    return !hasProductTag && !hasType;
+  }).length;
+
+  // 缺口按缺失数量排序，最多返回 80 条供看板
+  gaps.sort((a, b) => b.missing.length - a.missing.length || a.designSignalQuality - b.designSignalQuality);
+
+  return {
+    historyWithReport,
+    profilesTotal: profiles.length,
+    withTags,
+    withPackaging,
+    withColors,
+    withPrice,
+    withBuyCost,
+    withCycle,
+    withVolume,
+    designReady,
+    crmBlankProductTags,
+    gaps: gaps.slice(0, 80),
+  };
 };
 
 const tokensOf = (s: string) =>
@@ -519,6 +923,36 @@ export const matchOurProductToProfiles = (
       reasons.push(`价格区间重叠（库内 ${profile.priceBand || '有价位'}）`);
     }
 
+    // 采购成本带（FOB 推算）与我方报价重叠
+    const buyOverlap = priceRangesOverlap(
+      query.priceMinCny,
+      query.priceMaxCny,
+      profile.buyCostMinCny,
+      profile.buyCostMaxCny
+    );
+    if (buyOverlap) {
+      score += 10;
+      reasons.push(
+        `采购成本带贴近（库内 ¥${profile.buyCostMinCny ?? '?'}–${profile.buyCostMaxCny ?? '?'}）`
+      );
+    }
+
+    // 包装 / 配色：查询备注或品名中带关键词时加分
+    const packHits = (profile.packagingStyles || []).filter((t) =>
+      qTokens.some((tok) => normalizeText(t).includes(tok) || tok.includes(normalizeText(t)))
+    );
+    if (packHits.length) {
+      score += Math.min(12, packHits.length * 4);
+      reasons.push(`包装形态贴近（库内）：${packHits.slice(0, 2).join('、')}`);
+    }
+    const colorHits = (profile.colorPalettes || []).filter((t) =>
+      qTokens.some((tok) => normalizeText(t).includes(tok) || tok.includes(normalizeText(t)))
+    );
+    if (colorHits.length) {
+      score += Math.min(12, colorHits.length * 4);
+      reasons.push(`配色贴近（库内）：${colorHits.slice(0, 2).join('、')}`);
+    }
+
     if (profile.skus.some((s) => s.source === 'sku')) {
       score += 6;
       reasons.push(`含 ${profile.skus.filter((s) => s.source === 'sku').length} 条具体 SKU 记录`);
@@ -526,6 +960,10 @@ export const matchOurProductToProfiles = (
     if (profile.hasSellProcureSplit) {
       score += 8;
       reasons.push('背调已区分在售/采购双边数据');
+    }
+    if (profileHasDesignSignals(profile)) {
+      score += 4;
+      reasons.push('含包装/配色/价带等设计匹配信号');
     }
 
     // 无任何库内命中理由 → 丢弃（禁止空理由凑分）

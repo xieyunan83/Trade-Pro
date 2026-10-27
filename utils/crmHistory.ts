@@ -44,16 +44,50 @@ export const clientPatchFromAnalysis = (
     .map((t) => t.replace(/^关键词:/, '').trim())
     .filter(Boolean);
   const searchedKeywords = [...new Set([kw, ...tagKws].filter(Boolean))];
+  const packFromProducts = (data?.products || [])
+    .map((p) => (p.packaging || '').trim())
+    .filter((s) => s && !/公开信息未找到|^n\/?a$/i.test(s))
+    .slice(0, 3)
+    .map((s) => `包装:${s.slice(0, 24)}`);
+  const colorFromProducts = (data?.products || [])
+    .map((p) => (p.colors || '').trim())
+    .filter((s) => s && !/公开信息未找到|^n\/?a$/i.test(s))
+    .slice(0, 3)
+    .map((s) => `配色:${s.slice(0, 24)}`);
+  const sellFromProducts = (data?.products || [])
+    .filter((p) => p.role !== 'procure')
+    .map((p) => (p.category || p.name || '').trim())
+    .filter(Boolean)
+    .slice(0, 4)
+    .map((c) => `在售:${c.slice(0, 28)}`);
+  const procureFromProducts = (data?.products || [])
+    .filter((p) => p.role === 'procure' || p.role === 'both')
+    .map((p) => (p.category || p.name || '').trim())
+    .filter(Boolean)
+    .slice(0, 4)
+    .map((c) => `采购:${c.slice(0, 28)}`);
   const productTags = [
     ...(data?.productIntel?.matchTags || []),
     ...(data?.productIntel?.sell?.tags || []),
     ...(data?.productIntel?.procure?.tags || []),
+    ...(data?.productIntel?.sell?.categories || []).slice(0, 4).map((c) => `在售:${c}`),
+    ...(data?.productIntel?.procure?.categories || []).slice(0, 4).map((c) => `采购:${c}`),
     ...(data?.businessScope?.coreProducts || []).slice(0, 4).map((c) => `在售:${c}`),
     ...(data?.tradeIntelligence?.importCategories || []).slice(0, 4).map((c) => `采购:${c}`),
+    ...sellFromProducts,
+    ...procureFromProducts,
+    ...packFromProducts,
+    ...colorFromProducts,
+    ...(data?.productSummary?.packagingAnalysis
+      ? [`包装:${String(data.productSummary.packagingAnalysis).slice(0, 24)}`]
+      : []),
+    ...(data?.productSummary?.colorPreference
+      ? [`配色:${String(data.productSummary.colorPreference).slice(0, 24)}`]
+      : []),
   ]
     .map((t) => String(t || '').trim())
     .filter(Boolean);
-  const mergedTags = [...new Set([...(data?.searchTags || []), ...productTags])].slice(0, 40);
+  const mergedTags = [...new Set([...(data?.searchTags || []), ...productTags])].slice(0, 48);
   return {
     name: data?.companyInfo?.name || fallbackDomain || 'Unknown',
     website,

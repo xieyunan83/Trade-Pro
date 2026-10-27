@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import type { Client, HistoryItem, MailGroup } from '../types';
+import type { Client, HistoryItem, MailGroup, User } from '../types';
 import { ModuleType } from '../types';
 import {
   runGtmLaunchPack,
@@ -11,6 +11,7 @@ import {
   type GtmLaunchPack,
 } from '../services/gtmExpertStore';
 import { CreativePipelineBar } from './CreativeRefPicker';
+import { CatalogCoveragePanel } from './CatalogCoveragePanel';
 import {
   Search,
   Loader2,
@@ -28,6 +29,8 @@ import {
 interface ModuleProductMatchProps {
   history: HistoryItem[];
   crmClients: Client[];
+  currentUser?: User;
+  onCrmClientsChange?: (clients: Client[]) => void;
   onOpenHistory?: (item: HistoryItem) => void;
   onGoCrm?: () => void;
   onNavigateModule?: (mod: ModuleType) => void;
@@ -100,6 +103,8 @@ const MailGroupCard: React.FC<{ title: string; group: MailGroup }> = ({ title, g
 export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
   history,
   crmClients,
+  currentUser,
+  onCrmClientsChange,
   onOpenHistory,
   onGoCrm,
   onNavigateModule,
@@ -177,6 +182,14 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
           </button>
         )}
       </div>
+
+      <CatalogCoveragePanel
+        history={history}
+        crmClients={crmClients}
+        ownerUsername={currentUser?.username}
+        departmentId={currentUser?.departmentId}
+        onCrmPatched={onCrmClientsChange}
+      />
 
       <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-4 mb-5">

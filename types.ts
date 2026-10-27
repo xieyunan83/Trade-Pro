@@ -441,6 +441,10 @@ export interface CustomerProductSku {
   keywordMatch?: boolean;
   role?: 'sell' | 'procure' | 'both';
   tags?: string[];
+  /** 配色（来自背调 SKU，供设计匹配） */
+  colors?: string;
+  /** 包装方式（来自背调 SKU） */
+  packaging?: string;
 }
 
 /** 背调产品情报：在售 vs 采购（须有证据，禁止空编） */
@@ -490,6 +494,27 @@ export interface CustomerProductProfile {
   catalogQuality?: number;
   /** 是否含可引用的在售+采购双边线索 */
   hasSellProcureSplit?: boolean;
+  /** 包装形态标签（盒/吸塑/袋等），供设计匹配 */
+  packagingStyles?: string[];
+  /** 主配色 / 风格标签 */
+  colorPalettes?: string[];
+  /** 背调摘要：包装偏好（原文） */
+  packagingSummary?: string;
+  /** 背调摘要：配色偏好（原文） */
+  colorPreference?: string;
+  /** 推算采购/FOB 成本区间（人民币） */
+  buyCostMinCny?: number;
+  buyCostMaxCny?: number;
+  /** 典型起订量（原文线索） */
+  typicalMoq?: string;
+  /** 采购旺季（原文） */
+  buyingSeasons?: string;
+  /** 采购/补货周期综合线索 */
+  procurementCycle?: string;
+  /** 销量/进口额等弱信号（原文） */
+  volumeSignal?: string;
+  /** 设计匹配信号完整度 0–100（色/包/价/周期） */
+  designSignalQuality?: number;
   updatedAt: number;
   ownerUsername?: string;
   departmentId?: string;
