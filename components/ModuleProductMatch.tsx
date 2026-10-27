@@ -12,6 +12,7 @@ import {
 } from '../services/gtmExpertStore';
 import { CreativePipelineBar } from './CreativeRefPicker';
 import { CatalogCoveragePanel } from './CatalogCoveragePanel';
+import { DesignConstraintCardPanel } from './DesignConstraintCardPanel';
 import {
   Search,
   Loader2,
@@ -24,6 +25,7 @@ import {
   CheckCircle2,
   ExternalLink,
   Compass,
+  BadgeDollarSign,
 } from 'lucide-react';
 
 interface ModuleProductMatchProps {
@@ -216,6 +218,16 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
           </div>
         </div>
 
+        {(category || name) && (
+          <div className="mb-4">
+            <DesignConstraintCardPanel
+              categoryOrName={category || name}
+              priceBandText={priceBand}
+              skuCode={skuCode}
+            />
+          </div>
+        )}
+
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
           <label className="block sm:col-span-2">
             <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
@@ -296,8 +308,8 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
           </span>
         </div>
         <p className="mt-3 text-[11px] text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 font-medium leading-relaxed">
-          匹配依据：背调报告写入的在售品类、采购/进口品类、SKU 与标签。若结果很少，请到 CRM
-          对客户做「产品深挖」或重新背调，从历史重建产品库后再跑。
+          匹配依据：库内在售/采购品类、SKU、标签，以及包装/配色/价带重叠；完成后会给出定价参考与置信度。结果很少时，先「从历史同步」或「补全
+          CRM 空白」。
         </p>
         {error && (
           <p className="mt-3 text-sm font-bold text-rose-600 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2">
@@ -308,6 +320,51 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
 
       {pack && (
         <>
+          {(pack.pricingAdvice || pack.designCard) && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {pack.pricingAdvice && (
+                <section className="bg-white rounded-3xl border border-teal-100 shadow-sm p-5 space-y-3">
+                  <h3 className="font-black text-slate-900 flex items-center gap-2">
+                    <BadgeDollarSign className="text-teal-600" size={18} /> 定价参考
+                    <span className="text-[10px] font-black text-teal-700 bg-teal-50 px-2 py-0.5 rounded-full border border-teal-100">
+                      置信{pack.pricingAdvice.confidence} {pack.pricingAdvice.confidenceScore}
+                    </span>
+                  </h3>
+                  <div className="text-sm font-black text-teal-800">{pack.pricingAdvice.verdict}</div>
+                  {pack.pricingAdvice.suggestedFactory && (
+                    <div className="text-xs font-bold text-slate-700">
+                      建议出厂 ¥{pack.pricingAdvice.suggestedFactory.min}–
+                      {pack.pricingAdvice.suggestedFactory.max}
+                      {pack.pricingAdvice.ourFactoryCny != null
+                        ? ` · 我方约 ¥${Math.round(pack.pricingAdvice.ourFactoryCny)}`
+                        : ''}
+                    </div>
+                  )}
+                  <ul className="space-y-1">
+                    {pack.pricingAdvice.reasons.map((r) => (
+                      <li key={r} className="text-[11px] font-medium text-slate-600 leading-relaxed">
+                        · {r}
+                      </li>
+                    ))}
+                  </ul>
+                  {pack.pricingAdvice.assumptions[0] && (
+                    <p className="text-[10px] font-bold text-slate-400">
+                      {pack.pricingAdvice.assumptions[0]}
+                    </p>
+                  )}
+                </section>
+              )}
+              {pack.designCard && (
+                <DesignConstraintCardPanel
+                  categoryOrName={pack.category || pack.productName}
+                  targetMarket={pack.market.countries[0]?.name}
+                  priceBandText={pack.priceBand}
+                  skuCode={pack.skuCode}
+                />
+              )}
+            </div>
+          )}
+
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <section className="bg-white rounded-3xl border border-cyan-100 shadow-sm p-5 space-y-3">
               <h3 className="font-black text-slate-900 flex items-center gap-2">

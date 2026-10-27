@@ -813,7 +813,17 @@ export const matchOurProductToProfiles = (
 ): ProductMatchHit[] => {
   const name = (query.name || '').trim();
   const category = normalizeCategoryLabel(query.category) || normalizeCategoryLabel(name);
-  const qTokens = [...new Set([...tokensOf(name), ...tokensOf(query.category || '')])];
+  const qTokens = [
+    ...new Set([
+      ...tokensOf(name),
+      ...tokensOf(query.category || ''),
+      ...tokensOf(query.notes || ''),
+      ...(query.packagingHints || []).flatMap((h) => tokensOf(h)),
+      ...(query.colorHints || []).flatMap((h) => tokensOf(h)),
+    ]),
+  ];
+  const packHints = (query.packagingHints || []).map((h) => normalizeText(h)).filter(Boolean);
+  const colorHints = (query.colorHints || []).map((h) => normalizeText(h)).filter(Boolean);
   const countries = (query.countries || []).map((c) => c.trim().toLowerCase()).filter(Boolean);
 
   const hits: ProductMatchHit[] = [];
@@ -937,19 +947,27 @@ export const matchOurProductToProfiles = (
       );
     }
 
-    // 包装 / 配色：查询备注或品名中带关键词时加分
-    const packHits = (profile.packagingStyles || []).filter((t) =>
-      qTokens.some((tok) => normalizeText(t).includes(tok) || tok.includes(normalizeText(t)))
-    );
+    // 包装 / 配色：设计完成后的显式提示优先，其次备注/品名词元
+    const packHits = (profile.packagingStyles || []).filter((t) => {
+      const nt = normalizeText(t);
+      return (
+        packHints.some((h) => nt.includes(h) || h.includes(nt)) ||
+        qTokens.some((tok) => nt.includes(tok) || tok.includes(nt))
+      );
+    });
     if (packHits.length) {
-      score += Math.min(12, packHits.length * 4);
+      score += Math.min(packHints.length ? 18 : 12, packHits.length * 5);
       reasons.push(`包装形态贴近（库内）：${packHits.slice(0, 2).join('、')}`);
     }
-    const colorHits = (profile.colorPalettes || []).filter((t) =>
-      qTokens.some((tok) => normalizeText(t).includes(tok) || tok.includes(normalizeText(t)))
-    );
+    const colorHits = (profile.colorPalettes || []).filter((t) => {
+      const nt = normalizeText(t);
+      return (
+        colorHints.some((h) => nt.includes(h) || h.includes(nt)) ||
+        qTokens.some((tok) => nt.includes(tok) || tok.includes(nt))
+      );
+    });
     if (colorHits.length) {
-      score += Math.min(12, colorHits.length * 4);
+      score += Math.min(colorHints.length ? 18 : 12, colorHits.length * 5);
       reasons.push(`配色贴近（库内）：${colorHits.slice(0, 2).join('、')}`);
     }
 

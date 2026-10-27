@@ -39,6 +39,13 @@ import { loadCatalogSkus } from '../services/productCatalogTypes';
 import { compressImageDataUrl } from '../services/catalogExcelService';
 import { setCreativeHandoff } from '../services/creativeAssetBridge';
 import { CreativePipelineBar } from './CreativeRefPicker';
+import { DesignConstraintCardPanel } from './DesignConstraintCardPanel';
+import { loadProductCatalog } from '../services/productCatalog';
+import {
+  buildDesignConstraintCard,
+  designConstraintToPromptNote,
+} from '../services/designConstraintCard';
+import { loadTradeJourney } from '../services/tradeJourney';
 
 type Props = {
   currentUser: User;
@@ -163,16 +170,37 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     setPlanning(true);
     try {
       const skuMeta = resolveSkuMeta();
+      const skuRow = skus.find((s) => s.id === skuPick || s.skuCode === skuPick);
       const hasRefs =
-        refUploads.length > 0 ||
-        !!(skus.find((s) => s.id === skuPick || s.skuCode === skuPick)?.images?.length);
+        refUploads.length > 0 || !!(skuRow?.images?.length);
+      let marketNote = '';
+      try {
+        const profiles = await loadProductCatalog();
+        const journey = loadTradeJourney();
+        const card = buildDesignConstraintCard({
+          categoryOrName: skuRow?.category || skuMeta.name || prompt.trim() || '玩具',
+          targetMarket: journey.targetMarket || undefined,
+          profiles,
+          ourFactoryCny:
+            skuRow?.factoryPrice != null && skuRow.factoryPrice > 0
+              ? skuRow.currency === 'USD'
+                ? skuRow.factoryPrice * 7.2
+                : skuRow.currency === 'EUR'
+                  ? skuRow.factoryPrice * 7.8
+                  : skuRow.factoryPrice
+              : undefined,
+        });
+        marketNote = designConstraintToPromptNote(card);
+      } catch {
+        /* 约束卡失败不阻断设计 */
+      }
       const brief = await planCreativeBrief({
         domain: 'design_2d',
         skillId,
         skillLabel: skill.label,
         skillHint: skill.hint,
         skillDefaultPrompt: skill.defaultPrompt,
-        userBrief: prompt.trim(),
+        userBrief: [prompt.trim(), marketNote].filter(Boolean).join('\n'),
         skuCode: skuMeta.code,
         skuName: skuMeta.name,
         hasReferenceImages: hasRefs,
@@ -485,6 +513,20 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
           </button>
         </div>
       </div>
+
+      <DesignConstraintCardPanel
+        compact
+        categoryOrName={
+          skus.find((s) => s.id === skuPick || s.skuCode === skuPick)?.category ||
+          skus.find((s) => s.id === skuPick || s.skuCode === skuPick)?.name ||
+          active?.skuName ||
+          '玩具'
+        }
+        skuCode={
+          skus.find((s) => s.id === skuPick || s.skuCode === skuPick)?.skuCode ||
+          active?.skuCode
+        }
+      />
 
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-3 min-h-[32rem]">
         {/* 左：Projects / Skills / Assets */}

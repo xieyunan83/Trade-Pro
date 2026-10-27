@@ -26,6 +26,13 @@ import {
 } from './gtmExpertStore';
 import { peekCreativeHandoff } from './creativeAssetBridge';
 import { findSkuByIdOrCode } from './creativeAssetBridge';
+import { buildDesignConstraintCard } from './designConstraintCard';
+import {
+  buildPricingAdvice,
+  parsePriceBandNumbers,
+  toCnyApprox,
+} from './pricingAdvisor';
+import { loadTradeJourney } from './tradeJourney';
 
 export type GtmProductInput = {
   productName: string;
@@ -35,6 +42,11 @@ export type GtmProductInput = {
   notes?: string;
   /** 设计侧补充（卖点/形态） */
   designNotes?: string;
+  /** 设计完成后的包装关键词 */
+  packagingHints?: string[];
+  /** 设计完成后的配色关键词 */
+  colorHints?: string[];
+  targetMarket?: string;
 };
 
 export type RunGtmLaunchOpts = {
@@ -419,11 +431,65 @@ export const runGtmLaunchPack = async (opts: RunGtmLaunchOpts): Promise<GtmLaunc
         (p.sellCategories || []).length > 0 ||
         (p.procureCategories || []).length > 0)
   );
+
+  const categoryForMatch = input.category || market.categories[0] || input.productName;
+  const parsedBand = parsePriceBandNumbers(input.priceBand);
+  const cnyBand = toCnyApprox(parsedBand.lo, parsedBand.hi, parsedBand.currencyHint);
+  const noteBlob = [input.notes, input.designNotes].filter(Boolean).join(' ');
+  const packHints =
+    input.packagingHints?.length
+      ? input.packagingHints
+      : noteBlob
+        ? noteBlob.split(/[,，、/\s]+/).filter((t) => /盒|袋|吸塑|礼盒|窗|彩盒|blister|box|bag/i.test(t))
+        : [];
+  const colorHints =
+    input.colorHints?.length
+      ? input.colorHints
+      : noteBlob
+        ? noteBlob.split(/[,，、/\s]+/).filter((t) => /色|红|蓝|绿|粉|黑|白|金|银|彩|color|pink|blue|red/i.test(t))
+        : [];
+
+  const sku = input.skuCode ? findSkuByIdOrCode(input.skuCode) : undefined;
+  const ourFactoryCny =
+    sku?.factoryPrice != null && sku.factoryPrice > 0
+      ? sku.currency === 'USD'
+        ? sku.factoryPrice * 7.2
+        : sku.currency === 'EUR'
+          ? sku.factoryPrice * 7.8
+          : sku.factoryPrice
+      : cnyBand
+        ? (cnyBand.min + cnyBand.max) / 2
+        : undefined;
+
+  const journey = loadTradeJourney();
+  const designCard = buildDesignConstraintCard({
+    categoryOrName: categoryForMatch,
+    targetMarket:
+      input.targetMarket ||
+      market.countries[0]?.name ||
+      journey.targetMarket ||
+      undefined,
+    profiles: usableProfiles,
+    ourFactoryCny,
+    priceBandText: input.priceBand,
+  });
+  const pricingAdvice = buildPricingAdvice({
+    category: categoryForMatch,
+    profiles: usableProfiles,
+    ourFactoryCny,
+    priceBandText: input.priceBand,
+  });
+
   const profileRaw = matchOurProductToProfiles(
     {
       name: input.productName,
-      category: input.category || market.categories[0],
+      category: categoryForMatch,
       countries: market.countries.slice(0, 5).map((c) => c.name),
+      priceMinCny: cnyBand?.min,
+      priceMaxCny: cnyBand?.max,
+      packagingHints: packHints.length ? packHints : designCard.packagingStyles.slice(0, 4),
+      colorHints: colorHints.length ? colorHints : designCard.colorPalettes.slice(0, 4),
+      notes: noteBlob || undefined,
     },
     usableProfiles
   ).map(
@@ -554,6 +620,8 @@ export const runGtmLaunchPack = async (opts: RunGtmLaunchOpts): Promise<GtmLaunc
     pm,
     matches,
     batchMailGroup,
+    designCard,
+    pricingAdvice,
   };
   upsertGtmLaunchPack(pack);
   onProgress?.(100, '完成');
@@ -565,12 +633,22 @@ export const suggestGtmInputFromCreative = (): Partial<GtmProductInput> => {
   const handoff = peekCreativeHandoff();
   if (handoff?.skuCode) {
     const sku = findSkuByIdOrCode(handoff.skuCode);
+    const pack = (sku?.packing || '').trim();
+    const colors = (sku?.colors || '').trim();
     return {
       productName: handoff.skuName || sku?.name || handoff.skuCode,
       skuCode: handoff.skuCode,
       category: sku?.category,
-      notes: handoff.note,
+      notes: [handoff.note, pack && `包装:${pack}`, colors && `配色:${colors}`]
+        .filter(Boolean)
+        .join('；'),
       designNotes: handoff.note,
+      packagingHints: pack ? [pack] : undefined,
+      colorHints: colors ? colors.split(/[,，、/]+/).map((s) => s.trim()).filter(Boolean) : undefined,
+      priceBand:
+        sku?.factoryPrice != null
+          ? `${sku.currency || 'USD'} ${sku.factoryPrice}`
+          : undefined,
     };
   }
   if (handoff?.skuName) {

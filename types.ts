@@ -527,6 +527,12 @@ export interface OurProductMatchQuery {
   priceMinCny?: number;
   priceMaxCny?: number;
   countries?: string[];
+  /** 设计完成后的包装关键词 */
+  packagingHints?: string[];
+  /** 设计完成后的配色关键词 */
+  colorHints?: string[];
+  /** 卖点/备注（参与标签与形态匹配） */
+  notes?: string;
 }
 
 /** 新品 → 客户匹配结果 */

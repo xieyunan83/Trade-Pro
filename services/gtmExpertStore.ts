@@ -2,6 +2,8 @@
  * 市调专家 + 产品经理 · 投放包本地存档（不碰 CRM 主数据）
  */
 import type { MailGroup } from '../types';
+import type { DesignConstraintCard } from './designConstraintCard';
+import type { PricingAdvice } from './pricingAdvisor';
 
 export type GtmCountryRec = {
   name: string;
@@ -55,6 +57,10 @@ export type GtmLaunchPack = {
   matches: GtmClientMatch[];
   /** 可复用的批量开发信模板 */
   batchMailGroup?: MailGroup;
+  /** 设计适市约束卡（来自客户画像） */
+  designCard?: DesignConstraintCard;
+  /** 定价参考与置信度 */
+  pricingAdvice?: PricingAdvice;
 };
 
 const LS_PACKS = 'trade_scout_gtm_launch_packs_v1';
