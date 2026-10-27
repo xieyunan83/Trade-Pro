@@ -4807,6 +4807,8 @@ const App: React.FC = () => {
                         onBatchDelete={handleBatchDeleteClients}
                         onDeleteClient={handleDeleteClient}
                         onBatchProductDig={handleBatchProductDigFromCRM}
+                        onBatchDesignSignalFill={handleStartDesignFill}
+                        designSignalBusy={false}
                         onPurgeBeforeJune2026={handlePurgeCrmBeforeJune2026}
                         onPurgeNonToyJunk={async () => {
                           clearAutoPurgeNonToyJunkFlag();

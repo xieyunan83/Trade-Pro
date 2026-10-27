@@ -13,6 +13,8 @@ import {
   PackageSearch,
   Users,
   UserPlus,
+  Sparkles,
+  Loader2,
 } from 'lucide-react';
 import {
   buildHistoryLookupIndex,
@@ -27,6 +29,11 @@ import { PaginationBar } from './PaginationBar';
 import { DmStatusChip } from './DmStatusChip';
 import { CrmContactsEditor } from './CrmContactsEditor';
 import { appendClientActivity } from '../services/crmActivity';
+import {
+  listBlankCrmClientsForDesignFill,
+  loadProductCatalog,
+} from '../services/productCatalog';
+import { isDesignSignalQueueBusy } from '../services/designSignalQueue';
 
 interface ModuleClientCRMProps {
   clients: Client[];
@@ -38,6 +45,8 @@ interface ModuleClientCRMProps {
   /** 批量决策人邮箱深挖（后台队列） */
   onBatchDmSearch?: (clients: Client[]) => void;
   onBatchProductDig?: (clients: Client[]) => void | Promise<void>;
+  /** 阶段 C：补全 CRM 空白客户的设计信号（包装/配色/价带） */
+  onBatchDesignSignalFill?: (clients: Client[]) => void | Promise<void>;
   /** 手动清理 2026-06 前旧 CRM */
   onPurgeBeforeJune2026?: () => void | Promise<void>;
   /** 清理跨品类垃圾客户（IT/快递/食品等） */
@@ -50,6 +59,7 @@ interface ModuleClientCRMProps {
   /** 无 HistoryItem 时按客户打开报告（自动化队列等兜底） */
   onOpenClientReport?: (client: Client) => void;
   productDigBusy?: boolean;
+  designSignalBusy?: boolean;
   /** 当前筛选后的客户顺序（含可打开报告的），供报告页上一家/下一家 */
   onNavOrderChange?: (order: { clientId: string; historyId: string }[]) => void;
 }
@@ -295,6 +305,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   onDeleteClient: onDeleteClientProp,
   onBatchDmSearch,
   onBatchProductDig,
+  onBatchDesignSignalFill,
   onPurgeBeforeJune2026,
   onPurgeNonToyJunk,
   onRecoverCrm,
@@ -303,10 +314,29 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   onOpenHistory,
   onOpenClientReport,
   productDigBusy,
+  designSignalBusy,
   onNavOrderChange,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const debouncedSearch = useDebouncedValue(searchTerm);
+  const [blankDesignCount, setBlankDesignCount] = useState<number | null>(null);
+  const [blankDesignBusy, setBlankDesignBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const profiles = await loadProductCatalog();
+        if (cancelled) return;
+        setBlankDesignCount(listBlankCrmClientsForDesignFill(clients, profiles).length);
+      } catch {
+        if (!cancelled) setBlankDesignCount(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [clients]);
   const [filterCountry, setFilterCountry] = useState<string>('all');
   const [filterType, setFilterType] = useState<string>('all');
   const [filterIndustry, setFilterIndustry] = useState<string>('all');
@@ -890,6 +920,55 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
             </button>
           )}
         </div>
+
+        {onBatchDesignSignalFill && (
+          <div className="w-full rounded-2xl border border-cyan-200 bg-gradient-to-r from-cyan-50 to-teal-50 px-3 py-3 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-black text-cyan-950">补全 CRM 空白 · 设计信号</div>
+              <div className="text-[11px] font-bold text-cyan-800/80 leading-relaxed">
+                仅处理缺包装/配色/价带标签且有官网的客户；会消耗额度。通宵请保持本页打开、电脑勿睡眠。
+                {blankDesignCount != null ? ` 当前约 ${blankDesignCount} 家空白。` : ''}
+              </div>
+            </div>
+            <button
+              type="button"
+              disabled={
+                blankDesignBusy ||
+                designSignalBusy ||
+                isDesignSignalQueueBusy() ||
+                blankDesignCount === 0
+              }
+              onClick={async () => {
+                setBlankDesignBusy(true);
+                try {
+                  const profiles = await loadProductCatalog();
+                  const allBlank = listBlankCrmClientsForDesignFill(clients, profiles);
+                  const selectedBlank =
+                    selectedClientIds.size > 0
+                      ? allBlank.filter((c) => selectedClientIds.has(c.id))
+                      : allBlank;
+                  const targets = selectedBlank.length ? selectedBlank : allBlank;
+                  await onBatchDesignSignalFill(targets);
+                  setBlankDesignCount(
+                    listBlankCrmClientsForDesignFill(clients, await loadProductCatalog()).length
+                  );
+                } finally {
+                  setBlankDesignBusy(false);
+                }
+              }}
+              className="shrink-0 inline-flex items-center justify-center gap-2 bg-cyan-700 hover:bg-cyan-800 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl font-black text-sm"
+            >
+              {blankDesignBusy || designSignalBusy || isDesignSignalQueueBusy() ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : (
+                <Sparkles size={16} />
+              )}
+              {selectedClientIds.size > 0
+                ? `补全所选空白 (${selectedClientIds.size})`
+                : `补全全部空白${blankDesignCount != null ? ` (${blankDesignCount})` : ''}`}
+            </button>
+          </div>
+        )}
 
         {selectedClientIds.size > 0 && (
           <div className="flex flex-col sm:flex-row flex-wrap gap-2 w-full">
