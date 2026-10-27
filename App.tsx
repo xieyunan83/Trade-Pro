@@ -853,11 +853,12 @@ const App: React.FC = () => {
                 }
             }
 
-            // 产品画像：空库则全量重建；已有库则从历史补包装/配色/价带等设计信号（零 Token）
-            try {
-              const existingProfiles = await loadProductCatalog();
-              const histNow = await getHistory();
-              if (histNow.length) {
+            // 产品画像补洞：勿阻塞登录首屏（大历史会卡死主线程）
+            void (async () => {
+              try {
+                const existingProfiles = await loadProductCatalog();
+                const histNow = await getHistory();
+                if (!histNow.length) return;
                 if (existingProfiles.length === 0) {
                   await rebuildProductCatalogFromHistory(histNow, {
                     ownerUsername: currentUser.username,
@@ -869,10 +870,10 @@ const App: React.FC = () => {
                     departmentId: currentUser.departmentId,
                   });
                 }
+              } catch (e) {
+                console.warn('product catalog bootstrap failed', e);
               }
-            } catch (e) {
-              console.warn('product catalog bootstrap failed', e);
-            }
+            })();
 
             if (ghStatus.ok && currentUser) {
                 try {

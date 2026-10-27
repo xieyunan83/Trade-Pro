@@ -9,6 +9,8 @@ declare global {
     PptxGenJS: any;
     JSZip: any;
     saveAs: any;
+    XLSX?: any;
+    __TP_ENSURE_EXPORT_LIBS?: () => Promise<unknown>;
   }
 }
 
@@ -16,6 +18,26 @@ declare const PptxGenJS: any;
 declare const XLSX: any;
 declare const JSZip: any;
 declare const saveAs: any;
+
+/** 首屏不再预拉导出 CDN；导出前再确保加载 */
+const ensureExportLibs = async (): Promise<void> => {
+  try {
+    if (typeof window.__TP_ENSURE_EXPORT_LIBS === 'function') {
+      await window.__TP_ENSURE_EXPORT_LIBS();
+    }
+  } catch (e) {
+    console.warn('[export] ensure libs failed', e);
+  }
+};
+
+const getXLSX = (): any => {
+  try {
+    if (typeof XLSX !== 'undefined' && XLSX) return XLSX;
+  } catch {
+    /* ignore */
+  }
+  return window.XLSX;
+};
 
 const COLORS = { 
     DARK_BG: "0F172A", 
@@ -63,9 +85,11 @@ const formatExportTime = (ms?: number) => {
  * Export Clients to Excel (CRM) — one row per contact (company fields repeated).
  * Columns: company, type, industry, country, keyword source, contact, email, phone, title, etc.
  */
-export const exportClientsToExcel = (clients: Client[]) => {
-    if (typeof XLSX === 'undefined') {
-        alert("Excel engine not loaded. Please try again.");
+export const exportClientsToExcel = async (clients: Client[]) => {
+    await ensureExportLibs();
+    const X = getXLSX();
+    if (!X) {
+        alert("Excel 引擎加载中，请稍后再试。");
         return;
     }
 
@@ -129,13 +153,13 @@ export const exportClientsToExcel = (clients: Client[]) => {
         }
     }
 
-    const ws = XLSX.utils.json_to_sheet(rows);
+    const ws = X.utils.json_to_sheet(rows);
     const keys = Object.keys(rows[0] || {});
     ws['!cols'] = keys.map((k) => ({ wch: Math.min(36, Math.max(12, k.length + 4)) }));
 
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "客户资料");
-    XLSX.writeFile(wb, `CRM_客户资料_${Date.now()}.xlsx`);
+    const wb = X.utils.book_new();
+    X.utils.book_append_sheet(wb, ws, "客户资料");
+    X.writeFile(wb, `CRM_客户资料_${Date.now()}.xlsx`);
 };
 
 /**
@@ -177,9 +201,11 @@ export const exportAutomationResultsToExcel = (tasks: AutomationResult[]) => {
 /**
  * Export Contacts to Excel
  */
-export const exportContactsToExcel = (contacts: DecisionMaker[], companyName: string) => {
-    if (typeof XLSX === 'undefined') {
-        alert("Excel engine not loaded. Please try again.");
+export const exportContactsToExcel = async (contacts: DecisionMaker[], companyName: string) => {
+    await ensureExportLibs();
+    const X = getXLSX();
+    if (!X) {
+        alert("Excel 引擎加载中，请稍后再试。");
         return;
     }
 
@@ -195,20 +221,22 @@ export const exportContactsToExcel = (contacts: DecisionMaker[], companyName: st
         LinkedIn: c.linkedin || ''
     }));
 
-    const ws = XLSX.utils.json_to_sheet(data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Contacts");
+    const ws = X.utils.json_to_sheet(data);
+    const wb = X.utils.book_new();
+    X.utils.book_append_sheet(wb, ws, "Contacts");
     
     const safeName = companyName.replace(/[^a-z0-9\u4e00-\u9fa5]/gi, '_');
-    XLSX.writeFile(wb, `${safeName}_Contacts_${Date.now()}.xlsx`);
+    X.writeFile(wb, `${safeName}_Contacts_${Date.now()}.xlsx`);
 };
 
 /**
  * Export Keywords to Excel
  */
-export const exportKeywordsToExcel = (result: KeywordExtractionResult) => {
-    if (typeof XLSX === 'undefined') {
-        alert("Excel engine not loaded. Please try again.");
+export const exportKeywordsToExcel = async (result: KeywordExtractionResult) => {
+    await ensureExportLibs();
+    const X = getXLSX();
+    if (!X) {
+        alert("Excel 引擎加载中，请稍后再试。");
         return;
     }
 
@@ -222,20 +250,21 @@ export const exportKeywordsToExcel = (result: KeywordExtractionResult) => {
         });
     }
 
-    const ws = XLSX.utils.json_to_sheet(data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Keywords");
+    const ws = X.utils.json_to_sheet(data);
+    const wb = X.utils.book_new();
+    X.utils.book_append_sheet(wb, ws, "Keywords");
     
-    XLSX.writeFile(wb, `Keywords_Analysis_${Date.now()}.xlsx`);
+    X.writeFile(wb, `Keywords_Analysis_${Date.now()}.xlsx`);
 };
 
 /**
  * Standard Company Analysis PPT (Single)
  */
-export const exportToPPT = (data: AnalysisResult) => {
+export const exportToPPT = async (data: AnalysisResult) => {
   try {
+    await ensureExportLibs();
     if (!window.PptxGenJS) {
-        alert("PPT 引擎加载中... 请稍后重试。");
+        alert("PPT 引擎加载中，请稍后再试。");
         return;
     }
     const pptx = new PptxGenJS();
@@ -263,8 +292,9 @@ export const exportToPPT = (data: AnalysisResult) => {
  * Takes pure AnalysisResult objects.
  */
 export const exportBatchAnalysisToPPT = async (analyses: AnalysisResult[]) => {
+    await ensureExportLibs();
     if (!window.PptxGenJS || !window.JSZip || !window.saveAs) {
-        alert("Export engines (PptxGenJS/JSZip) loading... Please wait.");
+        alert("导出引擎加载中，请稍后再试。");
         return;
     }
 
@@ -337,9 +367,10 @@ export const exportBatchAnalysisToPPT = async (analyses: AnalysisResult[]) => {
 /**
  * AUTOMATION FULL REPORT PPT (Single)
  */
-export const exportAutomationReportToPPT = (result: AutomationResult) => {
+export const exportAutomationReportToPPT = async (result: AutomationResult) => {
+    await ensureExportLibs();
     if (!window.PptxGenJS) {
-        alert("PPT 引擎加载中... 请稍后重试。");
+        alert("PPT 引擎加载中，请稍后再试。");
         return;
     }
     

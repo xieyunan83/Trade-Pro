@@ -76,12 +76,23 @@
             },
             true
         );
-        // CDN（如 tailwind）若同步阻塞，主包永远进不来 → 一直「正在加载」
-        setTimeout(function () {
+        // 主包未执行才算启动失败。12s 对慢网/桌面种子过短会误杀；
+        // 主包一执行会调用 __TP_BOOT_MARK 取消计时。
+        window.__TP_BOOT_MARK = function (phase) {
+            try {
+                if (window.__TP_BOOT_TIMER) {
+                    clearTimeout(window.__TP_BOOT_TIMER);
+                    window.__TP_BOOT_TIMER = null;
+                }
+                var boot = document.getElementById('tp-boot');
+                if (boot && phase) boot.textContent = String(phase);
+            } catch (e) {}
+        };
+        window.__TP_BOOT_TIMER = setTimeout(function () {
             if (document.getElementById('tp-boot')) {
                 window.__TP_BOOT_FAIL('boot-timeout');
             }
-        }, 12000);
+        }, 45000);
     </script>
 
     <meta name="description" content="外贸智慧协同：客户背调、决策人挖掘、开发信与宣发协同，企业级外贸获客平台。">
@@ -132,17 +143,70 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Sora:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
-    <!-- Export Libraries -->
-    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js"></script>
-    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
-    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
-    <script
-      defer
-      src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"
-      onload="window.pdfjsLib&&(window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js')"
-    ></script>
+    <!--
+      导出类 CDN 改为首屏后按需注入，避免与主包抢连接导致 boot-timeout / 客户端假死。
+      window.__TP_ENSURE_EXPORT_LIBS() 供导出流程调用。
+    -->
+    <script>
+      window.__TP_ENSURE_EXPORT_LIBS = function () {
+        if (window.__TP_EXPORT_LIBS_PROMISE) return window.__TP_EXPORT_LIBS_PROMISE;
+        var specs = [
+          { src: 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js' },
+          { src: 'https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js' },
+          { src: 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js' },
+          { src: 'https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js' },
+          { src: 'https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js' },
+          {
+            src: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
+            onload: function () {
+              if (window.pdfjsLib) {
+                window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+                  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+              }
+            },
+          },
+        ];
+        window.__TP_EXPORT_LIBS_PROMISE = Promise.all(
+          specs.map(function (s) {
+            return new Promise(function (resolve) {
+              if (document.querySelector('script[data-tp-export="' + s.src + '"]')) {
+                resolve();
+                return;
+              }
+              var el = document.createElement('script');
+              el.src = s.src;
+              el.async = true;
+              el.dataset.tpExport = s.src;
+              el.onload = function () {
+                try {
+                  if (s.onload) s.onload();
+                } catch (e) {}
+                resolve();
+              };
+              el.onerror = function () {
+                resolve();
+              };
+              document.head.appendChild(el);
+            });
+          })
+        );
+        return window.__TP_EXPORT_LIBS_PROMISE;
+      };
+      // 空闲时预取，不堵启动
+      if (typeof requestIdleCallback === 'function') {
+        requestIdleCallback(function () {
+          try {
+            window.__TP_ENSURE_EXPORT_LIBS();
+          } catch (e) {}
+        }, { timeout: 8000 });
+      } else {
+        setTimeout(function () {
+          try {
+            window.__TP_ENSURE_EXPORT_LIBS();
+          } catch (e) {}
+        }, 4000);
+      }
+    </script>
     <style>
         :root {
           --tp-ink: #0b1220;
