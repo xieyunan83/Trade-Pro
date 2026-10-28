@@ -32,6 +32,9 @@ const QA_BY_DOMAIN: Record<CreativePlanInput['domain'], string[]> = {
 const buildToolPrompt = (input: CreativePlanInput): string => {
   const parts: string[] = [];
   if (input.skillDefaultPrompt.trim()) parts.push(input.skillDefaultPrompt.trim());
+  if (input.skillCraftNotes?.trim()) {
+    parts.push(`Craft / channel brief: ${input.skillCraftNotes.trim()}`);
+  }
   if (input.userBrief.trim()) {
     parts.push(`User creative direction: ${input.userBrief.trim()}`);
   }
@@ -51,6 +54,9 @@ const buildToolPrompt = (input: CreativePlanInput): string => {
   parts.push(
     'Commercial quality, sharp focus, no watermark, no random gibberish text, export-ready for China toy / gift trade.'
   );
+  if (input.skillNegativePrompt?.trim()) {
+    parts.push(`Avoid: ${input.skillNegativePrompt.trim()}`);
+  }
   return parts.join('\n');
 };
 
@@ -75,7 +81,10 @@ export const ruleCreativeBrain: CreativeBrainPort = {
       titleZh: `${input.skillLabel}方案`,
       summaryZh: buildSummaryZh(input),
       toolPrompt: buildToolPrompt(input),
-      qaChecklist: QA_BY_DOMAIN[input.domain] || QA_BY_DOMAIN.design_2d,
+      qaChecklist:
+        input.skillQaChecklist && input.skillQaChecklist.length >= 2
+          ? input.skillQaChecklist.slice(0, 8)
+          : QA_BY_DOMAIN[input.domain] || QA_BY_DOMAIN.design_2d,
       multiAngle,
       brainId: 'rule',
     };

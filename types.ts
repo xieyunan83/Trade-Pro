@@ -19,6 +19,8 @@ export enum ModuleType {
   BUYER_LIBRARY = 'buyer_library',
   /** 海关情报：提单/贸易伙伴关联公司档案 */
   CUSTOMS_INTEL = 'customs_intel',
+  /** 商机证据：线上货架 × 线下进口，支撑生产/销售建议 */
+  MARKET_EVIDENCE = 'market_evidence',
   /** —— 产品板块 —— */
   /** 产品库（小竹熊 / 霄鸟云同步在管理后台） */
   PRODUCT_CATALOG = 'product_catalog',
@@ -65,6 +67,7 @@ export type PermissionKey =
   | 'module.product_match'
   | 'module.buyer_library'
   | 'module.customs_intel'
+  | 'module.market_evidence'
   | 'module.product_catalog'
   | 'module.product_quote'
   | 'module.product_design_2d'
@@ -186,7 +189,15 @@ export interface HistoryItem {
   /** 目标国家 */
   country?: string;
   /** 来源标记 */
-  source?: 'single' | 'batch' | 'discovery' | 'crm' | 'recover' | 'product_redig' | 'design_signal_fill';
+  source?:
+    | 'single'
+    | 'batch'
+    | 'discovery'
+    | 'crm'
+    | 'recover'
+    | 'product_redig'
+    | 'design_signal_fill'
+    | 'analysis_enrichment';
   /** 操作者用户名（用于权限隔离） */
   ownerUsername?: string;
   /** 操作者当时所属部门 */
@@ -668,6 +679,25 @@ export interface AnalysisResult {
   evidenceConfidence?: number;
   /** 证据说明（一句话） */
   evidenceSummary?: string;
+  /**
+   * 决策模型再处理：渠道分型 / 适市打分 / 是否需补品类与设计信号
+   * （由「背调补全」批量写入，非聊天生成）
+   */
+  decisionEnrichment?: {
+    channelKind: string;
+    channelConfidence: number;
+    isToyRelevant: number;
+    productFitScore: number;
+    productFitConfidence: number;
+    matchReady: number;
+    needsProductDig: number;
+    needsDesignFill: number;
+    evidenceStrength: number;
+    evidenceConfidence: number;
+    modelId: string;
+    updatedAt: number;
+    summaryZh: string;
+  };
 }
 
 export interface SimilarCompany {

@@ -11,6 +11,13 @@ import {
 import { ModuleLandingHub } from './ModuleLandingHub';
 import { getAllFilesFromDB, saveFileToDB, deleteFileFromDB } from '../services/db';
 import { testApiKey, testQwenApiKey, testAnymailFinderApiKey, testHunterApiKey, testAnysearchApiKey, getTaskAIModels, saveTaskAIModels, describeTaskAIRouting, sanitizeApiKey, hydrateApiConfigsFromCloud, type TaskAIModels, type AIEngineChoice } from '../services/geminiService';
+import {
+  DECISION_MODEL_OPTIONS,
+  DEFAULT_DECISION_MODEL,
+  getDecisionModelId,
+  setDecisionModelId,
+  testDecisionModel,
+} from '../services/decisionModelService';
 import { testTavilyKeyPool, listTavilyKeys, setTavilyKeyPool, mergeTavilyKeyPool, getTavilyKeyStatuses, clearTavilyExhausted } from '../services/tavilyService';
 import { testWanImageApi } from '../services/wanImageService';
 import { saveApiConfig, getApiConfig, isSupabaseConfigured, saveKnowledgeFile, getKnowledgeFiles, deleteKnowledgeFile, resetSupabaseClient, testSupabaseConnection } from '../services/supabase';
@@ -100,6 +107,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [qwenKeys, setQwenKeys] = useState<string[]>([]);
   const [qwenBaseUrl, setQwenBaseUrl] = useState('');
   const [qwenModelId, setQwenModelId] = useState('qwen3.7-plus');
+  const [decisionModelId, setDecisionModelIdState] = useState(DEFAULT_DECISION_MODEL);
+  const [decisionTestMsg, setDecisionTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [decisionTesting, setDecisionTesting] = useState(false);
   const [geminiKeys, setGeminiKeys] = useState<string[]>([]);
   const [geminiModelId, setGeminiModelId] = useState('gemini-2.0-flash');
   const [taskAIModels, setTaskAIModels] = useState<TaskAIModels>(() => getTaskAIModels());
@@ -249,6 +259,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         if (!localModel && !cloudConfig?.modelId && env.qwenModelId) {
           setQwenModelId(env.qwenModelId);
         }
+        setDecisionModelIdState(getDecisionModelId());
         const legacy = localStorage.getItem('trade_scout_qwen_api_key');
         if (!pooled.length && legacy?.trim() && !cloudConfig?.apiKey) {
           setQwenKeys(parseApiKeyPoolPayload(legacy).keys);
@@ -428,6 +439,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       setPoolKeys('gemini', geminiKeys.map(sanitizeApiKey), { modelId: geminiModelId.trim() });
       setPoolKeys('qwen', qwenKeys, { baseUrl: qwenBaseUrl.trim(), modelId: qwenModelId.trim() });
+      setDecisionModelId(decisionModelId.trim() || DEFAULT_DECISION_MODEL);
       setPoolKeys('wan', wanKeys.length ? wanKeys : qwenKeys, {
         baseUrl: (wanBaseUrl.trim() || qwenBaseUrl.trim()) || undefined,
         modelId: wanModelId.trim() || undefined,
@@ -1464,7 +1476,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Qwen 模型 ID</label>
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Qwen 对话模型 ID</label>
                       <input
                         type="text"
                         value={qwenModelId}
@@ -1477,6 +1489,78 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       填 qwen3.7-plus / qwen3.8-flash / qwen3.8-max 时：上海时区 22:00–08:00 优先
                       qwen3.8-flash（夜间折扣），其余时间 qwen3.7-plus。批量背调强制避开重推理
                       qwen3.8-max，失败自动回退 plus。其它型号不改。
+                    </div>
+                    <div className="md:col-span-2 rounded-xl border border-violet-100 bg-violet-50/60 p-4 space-y-3">
+                      <div className="text-xs font-black text-violet-900">结构化决策模型（背调补全 / 匹配打分）</div>
+                      <p className="text-[10px] text-violet-800/80 font-bold leading-relaxed">
+                        与上方对话模型分开：决策模型只做分类/是否/打分，不写长文。共用千问 Key 与 Base。默认
+                        decision-model-preview。
+                      </p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">
+                            决策模型（管理员可选）
+                          </label>
+                          <select
+                            value={
+                              DECISION_MODEL_OPTIONS.some((o) => o.id === decisionModelId)
+                                ? decisionModelId
+                                : '__custom__'
+                            }
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              if (v === '__custom__') return;
+                              setDecisionModelIdState(v);
+                            }}
+                            className="w-full bg-white border border-violet-100 rounded-xl px-3 py-2.5 text-sm font-bold"
+                          >
+                            {DECISION_MODEL_OPTIONS.map((o) => (
+                              <option key={o.id} value={o.id}>
+                                {o.label}
+                              </option>
+                            ))}
+                            <option value="__custom__">自定义（下方填写）</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">
+                            模型 ID（可手改）
+                          </label>
+                          <input
+                            type="text"
+                            value={decisionModelId}
+                            onChange={(e) => setDecisionModelIdState(e.target.value)}
+                            placeholder={DEFAULT_DECISION_MODEL}
+                            className="w-full bg-white border border-violet-100 rounded-xl px-3 py-2.5 text-sm font-mono font-bold"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={decisionTesting}
+                          onClick={async () => {
+                            setDecisionTesting(true);
+                            setDecisionTestMsg(null);
+                            setDecisionModelId(decisionModelId.trim() || DEFAULT_DECISION_MODEL);
+                            const r = await testDecisionModel();
+                            setDecisionTestMsg({ ok: r.ok, text: r.message });
+                            setDecisionTesting(false);
+                          }}
+                          className="bg-violet-700 hover:bg-violet-800 disabled:opacity-50 text-white text-xs font-black px-4 py-2 rounded-xl"
+                        >
+                          {decisionTesting ? '测试中…' : '测试决策模型'}
+                        </button>
+                        {decisionTestMsg && (
+                          <span
+                            className={`text-[11px] font-bold ${
+                              decisionTestMsg.ok ? 'text-emerald-700' : 'text-rose-600'
+                            }`}
+                          >
+                            {decisionTestMsg.text}
+                          </span>
+                        )}
+                      </div>
                     </div>
                     <div className="md:col-span-2">
                       <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Supabase Project URL</label>

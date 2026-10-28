@@ -2,8 +2,11 @@
  * 适市建议（行业通则启发式，非客户观察数据）。
  * 按品类关键词 × 目标市场给出包装/功能/认证提示，供选品兜底。
  * 设计约束卡在有库内观察时应优先库内；本模块输出须标注「待验证」。
+ * 接通商机证据层（线上货架 × 线下进口）后，硬数据应优先于本启发式。
  * 不调用外部供应商，不展示内部数据源名。
  */
+
+import { getMarketEvidenceReadiness } from './marketEvidenceService';
 
 export type MarketFitAdvice = {
   market: string;
@@ -15,6 +18,10 @@ export type MarketFitAdvice = {
   features: string[];
   compliance: string[];
   nextActions: string[];
+  /** 证据层就绪说明（中性文案，供 UI 角标） */
+  evidenceNote?: string;
+  /** true = 当前建议主要来自行业通则，待货架/进口证据补强 */
+  awaitingHardEvidence?: boolean;
 };
 
 type MarketProfile = {
@@ -145,12 +152,17 @@ export const buildMarketFitAdvice = (opts: {
           '建议先换关键词/类目，或改走细分渠道后再获客',
         ];
 
+  const readiness = getMarketEvidenceReadiness();
+  const awaitingHardEvidence = !readiness.adviceReady;
+
   return {
     market: profile.label,
     categoryHint: text,
     scoreLabel,
     scoreTone,
-    highlights,
+    highlights: awaitingHardEvidence
+      ? [...highlights, '当前以行业通则为参考；接入货架与进口证据后将升级为可核对建议']
+      : [...highlights, '已检测到本地商机证据缓存，后续版本将优先引用硬数据'],
     packaging: profile.packaging,
     features: profile.features,
     compliance: profile.compliance,
@@ -159,7 +171,12 @@ export const buildMarketFitAdvice = (opts: {
       '生成报价/选品单，标注适市包装建议',
       '用对应市场剧本启动自动化获客',
       '对意向客户做背调，核对品类与价位带',
+      ...(awaitingHardEvidence
+        ? ['管理员可在数据接入中配置货架/海关源，补齐生产与销售硬证据']
+        : ['结合商机证据包核对价带与进口行为后再扩产/报价']),
     ],
+    evidenceNote: readiness.statusLabel,
+    awaitingHardEvidence,
   };
 };
 

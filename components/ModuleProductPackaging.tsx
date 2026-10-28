@@ -152,8 +152,10 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
           })()
         : '';
     const skillBit = skill.defaultPrompt ? `${skill.defaultPrompt}. ` : '';
+    const craftBit = skill.craftNotes ? `Craft notes: ${skill.craftNotes}. ` : '';
     const channelBit = `Target retail channel: ${skill.channel}. Color direction: ${skill.palette}. `;
-    return `${sku}${channelBit}${skillBit}${userBit || 'Create a polished commercial toy packaging design visual.'}`.trim();
+    const avoidBit = skill.negativePrompt ? ` Avoid: ${skill.negativePrompt}.` : '';
+    return `${sku}${channelBit}${craftBit}${skillBit}${userBit || 'Create a polished commercial toy packaging design visual.'}${avoidBit}`.trim();
   };
 
   const requestGenerate = () => {

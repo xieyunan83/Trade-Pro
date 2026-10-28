@@ -34,6 +34,8 @@ export const llmCreativeBrain: CreativeBrainPort = {
       `skillLabel: ${input.skillLabel}`,
       `skillHint: ${input.skillHint}`,
       `skillDefaultPrompt: ${input.skillDefaultPrompt}`,
+      `skillNegativePrompt: ${input.skillNegativePrompt || ''}`,
+      `skillCraftNotes: ${input.skillCraftNotes || ''}`,
       `userBrief: ${input.userBrief || '(空，请按 Skill 默认强化)'}`,
       `sku: ${input.skuName || ''} ${input.skuCode || ''}`,
       `productNotes: ${input.productNotes || ''}`,

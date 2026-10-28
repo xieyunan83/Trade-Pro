@@ -32,6 +32,7 @@ import {
 import { loadDataProviderLocal, saveDataProvider } from '../services/dataProviders';
 import { consumeCreativeHandoff } from '../services/creativeAssetBridge';
 import { CreativePipelineBar, CreativeRefPicker } from './CreativeRefPicker';
+import { MODEL3D_SKILLS, type Model3dSkillId } from '../services/creativeSkills/model3dSkills';
 
 type Props = {
   currentUser: User;
@@ -44,6 +45,7 @@ type Props = {
 export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigateModule }) => {
   const [jobs, setJobs] = useState<Model3dJob[]>(() => loadModel3dJobs());
   const [mode, setMode] = useState<Model3dMode>('image');
+  const [modelSkillId, setModelSkillId] = useState<Model3dSkillId>('turntable_hero');
   const [quality, setQuality] = useState<Model3dQuality>('high_detail');
   const [prompt, setPrompt] = useState('');
   const [sourceImages, setSourceImages] = useState<string[]>([]);
@@ -218,10 +220,19 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         : '正在提交 3D 任务…'
     );
 
+    const skill =
+      MODEL3D_SKILLS.find((s) => s.id === modelSkillId) || MODEL3D_SKILLS[0];
+    const fullPrompt = [
+      prompt.trim() || skill.defaultPrompt,
+      skill.negativeHints ? `Avoid: ${skill.negativeHints}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
+
     try {
       const result = await generateModel3d({
         mode,
-        prompt: prompt.trim(),
+        prompt: fullPrompt,
         sourceImage: sourceImages[0],
         sourceImages,
         quality,
@@ -364,6 +375,36 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                   <m.icon size={14} /> {m.label}
                 </button>
               ))}
+            </div>
+
+            <div>
+              <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5 flex items-center gap-1">
+                <Sparkles size={12} /> Skills
+              </div>
+              <div className="space-y-1.5 max-h-44 overflow-y-auto custom-scrollbar">
+                {MODEL3D_SKILLS.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => {
+                      setModelSkillId(s.id);
+                      if (s.defaultPrompt) setPrompt(s.defaultPrompt);
+                      setQuality(s.qualityHint);
+                    }}
+                    className={`w-full text-left rounded-xl border px-2.5 py-2 ${
+                      modelSkillId === s.id
+                        ? 'border-indigo-400 bg-indigo-50'
+                        : 'border-slate-100 hover:border-slate-200 bg-white'
+                    }`}
+                  >
+                    <div className="flex justify-between gap-2">
+                      <span className="text-xs font-black text-slate-800">{s.label}</span>
+                      <span className="text-[9px] font-bold text-indigo-600/80">{s.category}</span>
+                    </div>
+                    <p className="text-[10px] text-slate-500 font-medium mt-0.5">{s.hint}</p>
+                  </button>
+                ))}
+              </div>
             </div>
 
             {mode === 'image' ? (

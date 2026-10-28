@@ -9,6 +9,7 @@ export type DataProviderId =
   | 'toysbear'
   | 'skybird'
   | 'customs'
+  | 'marketplace_intel'
   | 'yellow_pages'
   | 'tripo'
   | 'hunyuan3d'
@@ -51,8 +52,15 @@ export const DATA_PROVIDER_DEFS: DataProviderDef[] = [
   {
     id: 'customs',
     label: '海关数据',
-    description: 'ImportGenius / 国内海关数据商 API 或批量库',
+    description: 'ImportGenius / 国内海关数据商 API 或批量库（线下进口行为）',
     docsHint: 'Enterprise API / 年费合同',
+  },
+  {
+    id: 'marketplace_intel',
+    label: '线上货架情报',
+    description:
+      'Amazon / TikTok / Walmart 等品类趋势、价带、热度（可接选品类 API 或批量库）。与海关对齐后支撑生产/销售建议。',
+    docsHint: '类目趋势 / ASIN·店铺情报 API 或年费数据合同',
   },
   {
     id: 'yellow_pages',

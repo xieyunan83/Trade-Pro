@@ -47,6 +47,9 @@ interface ModuleClientCRMProps {
   onBatchProductDig?: (clients: Client[]) => void | Promise<void>;
   /** 阶段 C：补全 CRM 空白客户的设计信号（包装/配色/价带） */
   onBatchDesignSignalFill?: (clients: Client[]) => void | Promise<void>;
+  /** 背调补全：品类/设计信号 + 决策模型（渠道·适市·匹配） */
+  onBatchAnalysisEnrichment?: (clients: Client[]) => void | Promise<void>;
+  analysisEnrichmentBusy?: boolean;
   /** 手动清理 2026-06 前旧 CRM */
   onPurgeBeforeJune2026?: () => void | Promise<void>;
   /** 清理跨品类垃圾客户（IT/快递/食品等） */
@@ -306,6 +309,8 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   onBatchDmSearch,
   onBatchProductDig,
   onBatchDesignSignalFill,
+  onBatchAnalysisEnrichment,
+  analysisEnrichmentBusy,
   onPurgeBeforeJune2026,
   onPurgeNonToyJunk,
   onRecoverCrm,
@@ -921,6 +926,38 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
           )}
         </div>
 
+        {onBatchAnalysisEnrichment && (
+          <div className="w-full rounded-2xl border border-violet-200 bg-gradient-to-r from-violet-50 to-indigo-50 px-3 py-3 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-black text-violet-950">背调补全 · 产品 / 市场 / 客户匹配</div>
+              <div className="text-[11px] font-bold text-violet-800/80 leading-relaxed">
+                对已有背调客户：按需补采品类与设计信号，再用结构化决策判定渠道与适市，回写标签与画像。请保持本页打开。
+              </div>
+            </div>
+            <button
+              type="button"
+              disabled={!!analysisEnrichmentBusy}
+              onClick={async () => {
+                const targets =
+                  selectedClientIds.size > 0
+                    ? clients.filter((c) => selectedClientIds.has(c.id))
+                    : clients.filter((c) => c.hasBackgroundCheck || c.hasAnalyzed);
+                await onBatchAnalysisEnrichment(targets);
+              }}
+              className="shrink-0 inline-flex items-center justify-center gap-2 bg-violet-700 hover:bg-violet-800 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl font-black text-sm"
+            >
+              {analysisEnrichmentBusy ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : (
+                <Sparkles size={16} />
+              )}
+              {selectedClientIds.size > 0
+                ? `补全所选背调 (${selectedClientIds.size})`
+                : '补全全部已背调'}
+            </button>
+          </div>
+        )}
+
         {onBatchDesignSignalFill && (
           <div className="w-full rounded-2xl border border-cyan-200 bg-gradient-to-r from-cyan-50 to-teal-50 px-3 py-3 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
             <div className="min-w-0 flex-1">
@@ -1002,6 +1039,18 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                 {productDigBusy
                   ? `继续补做品类 (${selectedClientIds.size})`
                   : `补做产品品类 (${selectedClientIds.size})`}
+              </button>
+            )}
+            {onBatchAnalysisEnrichment && (
+              <button
+                type="button"
+                onClick={() => void onBatchAnalysisEnrichment(selectedClients)}
+                disabled={!!analysisEnrichmentBusy}
+                className="w-full sm:w-auto bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-xl font-bold text-sm touch-manipulation inline-flex items-center justify-center gap-2"
+                title="品类/设计信号补全 + 结构化决策（渠道·适市·匹配）"
+              >
+                <Sparkles size={16} />
+                背调补全 ({selectedClientIds.size})
               </button>
             )}
             {onBatchDelete && (

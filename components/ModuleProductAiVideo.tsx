@@ -29,6 +29,7 @@ import {
 import { humanizeCreativeProviderError } from '../services/providerErrorMessage';
 import { consumeCreativeHandoff } from '../services/creativeAssetBridge';
 import { CreativePipelineBar, CreativeRefPicker } from './CreativeRefPicker';
+import { VIDEO_SKILLS, type VideoSkillId } from '../services/creativeSkills/videoSkills';
 
 type Props = {
   currentUser: User;
@@ -41,6 +42,7 @@ type Props = {
 export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateModule }) => {
   const [jobs, setJobs] = useState<VideoJob[]>(() => loadVideoJobs());
   const [mode, setMode] = useState<VideoMode>('image');
+  const [videoSkillId, setVideoSkillId] = useState<VideoSkillId>('hero_orbit');
   const [prompt, setPrompt] = useState('');
   const [storyboard, setStoryboard] = useState('');
   const [durationSec, setDurationSec] = useState<4 | 5 | 8 | 10>(5);
@@ -123,11 +125,17 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
     });
   };
 
+  const activeVideoSkill =
+    VIDEO_SKILLS.find((s) => s.id === videoSkillId) || VIDEO_SKILLS[0];
+
   const buildFullPrompt = () => {
-    const base = prompt.trim();
+    const base = prompt.trim() || activeVideoSkill.defaultPrompt;
     const board = storyboard.trim();
-    if (!board) return base;
-    return `${base}\n分镜：${board}`;
+    const avoid = activeVideoSkill.negativeHints
+      ? `\nAvoid: ${activeVideoSkill.negativeHints}`
+      : '';
+    if (!board) return `${base}${avoid}`.trim();
+    return `${base}\n分镜：${board}${avoid}`.trim();
   };
 
   const createDraft = async () => {
@@ -341,6 +349,41 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
                   <m.icon size={14} /> {m.label}
                 </button>
               ))}
+            </div>
+
+            <div>
+              <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">
+                Skills
+              </div>
+              <div className="space-y-1.5 max-h-48 overflow-y-auto custom-scrollbar pr-0.5">
+                {VIDEO_SKILLS.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => {
+                      setVideoSkillId(s.id);
+                      if (s.defaultPrompt) setPrompt(s.defaultPrompt);
+                      if (s.storyboardZh) setStoryboard(s.storyboardZh);
+                      if (s.aspectHint.includes('9:16')) setAspect('9:16');
+                      else if (s.aspectHint.includes('1:1')) setAspect('1:1');
+                      else if (s.aspectHint.includes('16:9')) setAspect('16:9');
+                    }}
+                    className={`w-full text-left rounded-xl border px-2.5 py-2 transition-colors ${
+                      videoSkillId === s.id
+                        ? 'border-rose-400 bg-rose-50'
+                        : 'border-slate-100 hover:border-slate-200 bg-white'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-black text-slate-800">{s.label}</span>
+                      <span className="text-[9px] font-bold text-rose-600/80">{s.category}</span>
+                    </div>
+                    <p className="text-[10px] text-slate-500 font-medium mt-0.5 leading-snug">
+                      {s.hint}
+                    </p>
+                  </button>
+                ))}
+              </div>
             </div>
 
             {(mode === 'image' || mode === 'reference') && (

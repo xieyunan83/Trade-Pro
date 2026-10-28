@@ -225,6 +225,10 @@ export const normalizeAnalysisResult = (raw: unknown): AnalysisResult => {
     evidenceConfidence:
       typeof ai.evidenceConfidence === 'number' ? ai.evidenceConfidence : undefined,
     evidenceSummary: ai.evidenceSummary ? asStr(ai.evidenceSummary) : undefined,
+    decisionEnrichment:
+      ai.decisionEnrichment && typeof ai.decisionEnrichment === 'object'
+        ? ai.decisionEnrichment
+        : undefined,
   };
 };
 

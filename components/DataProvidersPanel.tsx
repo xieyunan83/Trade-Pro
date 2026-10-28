@@ -17,9 +17,14 @@ import {
   saveDataProvider,
 } from '../services/dataProviders';
 import { syncCatalogFromProvider } from '../services/productCatalogTypes';
-import { CRM_ENHANCEMENT_ROADMAP, PHASE_LABEL } from '../services/upgradeRoadmap';
+import {
+  CRM_ENHANCEMENT_ROADMAP,
+  MARKET_EVIDENCE_ROADMAP,
+  PHASE_LABEL,
+} from '../services/upgradeRoadmap';
 import { ModuleBuyerLibrary } from './ModuleBuyerLibrary';
 import { ModuleCustomsIntel } from './ModuleCustomsIntel';
+import { ModuleMarketEvidence } from './ModuleMarketEvidence';
 
 const blank = (): DataProviderMeta => ({
   enabled: false,
@@ -144,6 +149,21 @@ export const DataProvidersPanel: React.FC<Props> = ({ currentUser }) => {
         </ul>
       </div>
 
+      <div className="rounded-2xl border border-indigo-100 bg-indigo-50/50 p-4 sm:p-5">
+        <div className="text-xs font-black text-indigo-800 uppercase tracking-widest mb-1">
+          商机证据 · {MARKET_EVIDENCE_ROADMAP.phase} ·{' '}
+          {PHASE_LABEL[MARKET_EVIDENCE_ROADMAP.phase]}
+        </div>
+        <p className="text-sm text-indigo-900/80 font-medium">{MARKET_EVIDENCE_ROADMAP.summary}</p>
+        <ul className="mt-2 grid sm:grid-cols-2 gap-1">
+          {MARKET_EVIDENCE_ROADMAP.bullets.map((b) => (
+            <li key={b} className="text-xs text-indigo-800/90 font-semibold">
+              · {b}
+            </li>
+          ))}
+        </ul>
+      </div>
+
       <div className="space-y-4 rounded-2xl border border-teal-100 bg-teal-50/40 p-4 sm:p-5">
         <div>
           <div className="text-xs font-black text-teal-800 uppercase tracking-widest">
@@ -155,6 +175,7 @@ export const DataProvidersPanel: React.FC<Props> = ({ currentUser }) => {
         </div>
         <ModuleBuyerLibrary currentUser={currentUser} history={[]} />
         <ModuleCustomsIntel currentUser={currentUser} />
+        <ModuleMarketEvidence currentUser={currentUser} />
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">

@@ -26,6 +26,7 @@ import {
   ShieldCheck,
   FileSpreadsheet,
   PackageSearch,
+  Sparkles,
 } from 'lucide-react';
 import { ContinentCountryMultiSelect } from './ContinentCountryMultiSelect';
 import { findCountryByEn } from '../data/countriesByContinent';
@@ -76,6 +77,10 @@ interface ModulePromoGeneratorProps {
   onBatchAddToCrm?: (tasks: AutomationResult[]) => void;
   /** 批量补做品类 */
   onBatchProductDig?: (rows: PromoListRow[]) => void;
+  /** 背调补全：品类/设计 + 决策模型 */
+  canAnalysisEnrichment?: boolean;
+  onBatchAnalysisEnrichment?: (rows: PromoListRow[]) => void;
+  analysisEnrichmentBusy?: boolean;
   /** 普通员工邮箱脱敏 */
   canViewEmails?: boolean;
 }
@@ -141,6 +146,9 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   onBatchDmSearch,
   onBatchAddToCrm,
   onBatchProductDig,
+  canAnalysisEnrichment = false,
+  onBatchAnalysisEnrichment,
+  analysisEnrichmentBusy = false,
   canViewEmails = false,
 }) => {
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -466,6 +474,23 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
       return;
     }
     onBatchProductDig(selectedRows);
+  };
+
+  const handleBatchEnrichment = () => {
+    if (!onBatchAnalysisEnrichment) return;
+    const rows =
+      selectedRows.length > 0
+        ? selectedRows
+        : allRows.filter(
+            (r) =>
+              (r.source === 'queue' && r.task?.status === 'completed' && r.task.analysis) ||
+              (r.source === 'crm' && r.intel?.hasBg)
+          );
+    if (!rows.length) {
+      alert('请勾选已完成背调的行，或确保列表中有已完成背调任务');
+      return;
+    }
+    onBatchAnalysisEnrichment(rows);
   };
 
   const patchDraft = (partial: Partial<AutomationPipelineConfig>) => {
@@ -1174,6 +1199,17 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                   title="补做缺品类的背调"
                 >
                   <PackageSearch size={12} /> 批量补做品类
+                </button>
+              )}
+              {canAnalysisEnrichment && onBatchAnalysisEnrichment && (
+                <button
+                  type="button"
+                  onClick={handleBatchEnrichment}
+                  disabled={isAutomating || analysisEnrichmentBusy}
+                  className="inline-flex items-center gap-1 text-xs font-bold text-violet-700 hover:underline disabled:opacity-50"
+                  title="背调补全：品类/设计信号 + 结构化决策（渠道·适市·匹配）"
+                >
+                  <Sparkles size={12} /> 背调补全
                 </button>
               )}
               {canCrmImport && onBatchAddToCrm && (

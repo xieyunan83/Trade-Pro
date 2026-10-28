@@ -1,6 +1,6 @@
 /**
  * 包装设计 Agent · 项目 / 资产 / 玩具包装 Skills（独立存储）
- * Skills 内置：包装形态 × 卖场适配 × 色彩气质，确认后出图到画布。
+ * Skills 内置：包装形态 × 卖场适配 × 色彩气质（行业最佳实践，非联网抓取私有库）
  */
 
 export type PackagingSkillId =
@@ -53,10 +53,7 @@ export type PackagingProject = {
 const LS_PROJECTS = 'trade_scout_packaging_projects_v1';
 const LS_ASSETS = 'trade_scout_packaging_assets_v1';
 
-/**
- * 澄海玩具外贸常见包装形态 → 卖场 → 色彩气质（内置 Skill）
- */
-export const PACKAGING_SKILLS: Array<{
+export type PackagingSkillDef = {
   id: PackagingSkillId;
   label: string;
   category: string;
@@ -64,8 +61,13 @@ export const PACKAGING_SKILLS: Array<{
   palette: string;
   hint: string;
   defaultPrompt: string;
+  negativePrompt: string;
+  craftNotes: string;
+  qaChecklist: string[];
   aspectHint: string;
-}> = [
+};
+
+export const PACKAGING_SKILLS: PackagingSkillDef[] = [
   {
     id: 'window_box',
     label: '开窗彩盒',
@@ -74,7 +76,11 @@ export const PACKAGING_SKILLS: Array<{
     palette: '高饱和品牌色 + 白色开窗框，正面层次清晰',
     hint: 'PVC/PET 开窗见真品，货架 halfline 主推',
     defaultPrompt:
-      'Toy product retail window box packaging mockup, clear PET window showing the toy inside, vibrant CMYK print panels, brand logo area top, age grade and CE icons tasteful, supermarket shelf lighting, photorealistic packaging design, no watermark',
+      'Photorealistic toy retail window box packaging mockup, crystal-clear PET window revealing the actual toy, CMYK print panels with clear brand lockup zone top, age-grade and compliance icon safe areas as empty placeholders only, accurate die-cut, supermarket shelf eye-level lighting, half-line facing',
+    negativePrompt:
+      'fraudulent readable certification text, watermark, warped die-lines, toy floating incorrectly outside box',
+    craftNotes: '开窗见真品、留 Logo/年龄标区；勿生成可辨伪造认证全文。',
+    qaChecklist: ['开窗见物清晰', '货架朝向正确', '有品牌与年龄标安全区', '无乱码认证字'],
     aspectHint: '3:4 立盒',
   },
   {
@@ -85,7 +91,10 @@ export const PACKAGING_SKILLS: Array<{
     palette: '克制双色或三色，烫金/哑光质感，留白高级',
     hint: '不露产品，靠插画与质感卖故事',
     defaultPrompt:
-      'Premium closed color box for toy gift, no window, elegant illustration of product, foil-stamp feel accents, soft matte finish, boutique retail lighting, sophisticated composition, photorealistic packaging mockup, no watermark',
+      'Premium closed color box for toy gift, no window, elegant product illustration, soft-touch matte with restrained foil-stamp accents, boutique retail lighting, generous whitespace, luxury gift hierarchy, photorealistic pack shot',
+    negativePrompt: 'cheap glossy clutter, rainbow sticker bomb, watermark, crowded typography soup',
+    craftNotes: '闭窗精品：故事插画+质感，少即是多。',
+    qaChecklist: ['无开窗', '质感高级', '插画聚焦', '留白足够'],
     aspectHint: '3:4',
   },
   {
@@ -96,7 +105,10 @@ export const PACKAGING_SKILLS: Array<{
     palette: '黄红蓝高对比，大字卖点，挂孔明确',
     hint: '卡头 + 透明泡壳，peghook 陈列',
     defaultPrompt:
-      'Toy blister card packaging with hang hole, clear plastic clamshell over cardboard header card, bold high-contrast graphics, peghook retail display ready, dollar-store friendly, photorealistic, no watermark',
+      'Toy blister card with euro-slot hang hole, clear clamshell over printed header card, high-contrast header graphics, peghook merchandising ready, value-retail clarity, photorealistic packaging',
+    negativePrompt: 'missing hang hole, cloudy plastic, watermark, unreadable header',
+    craftNotes: '挂卡必须有挂孔与泡壳逻辑；卡头信息区干净。',
+    qaChecklist: ['挂孔可见', '泡壳透明合理', '卡头对比强', '适合挂钩墙'],
     aspectHint: '2:3 竖卡',
   },
   {
@@ -107,7 +119,10 @@ export const PACKAGING_SKILLS: Array<{
     palette: '酒红或香槟金 + 奶白内托，节日但不廉价',
     hint: '开盖见内托分格，适合多件套',
     defaultPrompt:
-      'Open gift set box with molded tray holding toy accessories, festive but premium burgundy and champagne palette, soft tissue feel, department store gift packaging, photorealistic unboxing view, no watermark',
+      'Open gift-set box with custom molded tray organizing toy accessories, festive burgundy/champagne palette without looking cheap, tissue-paper softness, department-store gift unboxing view, photorealistic',
+    negativePrompt: 'messy foam crumbs, mismatched items, watermark, gaudy overprint',
+    craftNotes: '开盖内托分格清楚，配件各归其位。',
+    qaChecklist: ['内托分格清晰', '配件摆放整齐', '开盖构图完整', '不廉价'],
     aspectHint: '4:3 开盖',
   },
   {
@@ -118,7 +133,10 @@ export const PACKAGING_SKILLS: Array<{
     palette: '荧光黄橙 + 大号品名，成本感但整齐',
     hint: 'OPP/PE 袋 + 纸卡头，低成本快销',
     defaultPrompt:
-      'Polybag toy packaging with printed header card sealed on top, bright neon promotional colors, large product name, low-cost retail dump bin style, clean studio photo, no watermark',
+      'Polybag toy pack with sealed printed header card, neon promotional colors, large product name area, tidy low-cost dump-bin merchandising, clean studio photo',
+    negativePrompt: 'wrinkled dirty bag, watermark, luxury foil mismatch',
+    craftNotes: '低成本但整齐：卡头大字、袋装平整。',
+    qaChecklist: ['卡头+袋结构正确', '促销感明确', '不脏乱'],
     aspectHint: '2:3',
   },
   {
@@ -129,7 +147,10 @@ export const PACKAGING_SKILLS: Array<{
     palette: '大色块品牌色 + 清晰 SKU 面与层数',
     hint: '可撕开即陈列的托盘盒，多件装',
     defaultPrompt:
-      'PDQ display tray of toy retail packs, ready for warehouse club endcap, bold brand color blocks, multiple units visible, corrugated tray base, photorealistic retail merchandising shot, no watermark',
+      'PDQ corrugated display tray filled with identical toy retail packs, warehouse-club endcap ready, bold brand color blocks, multiple facings visible, tear-away shipper logic implied, photorealistic merchandising',
+    negativePrompt: 'single loose product only, watermark, collapsed tray',
+    craftNotes: 'PDQ=可陈列托盘+多件装；强调端架堆头逻辑。',
+    qaChecklist: ['多件陈列可见', '托盘结构清楚', '适合 Club/地堆'],
     aspectHint: '16:9 陈列',
   },
   {
@@ -140,7 +161,10 @@ export const PACKAGING_SKILLS: Array<{
     palette: '深底金属质感 + 少量荧光点缀',
     hint: '马口铁或铝感，适合限量与复古',
     defaultPrompt:
-      'Collectible metal tin packaging for toys, deep navy or black base with metallic print highlights, limited edition feel, premium collectible shelf, photorealistic, no watermark',
+      'Collectible metal tin for toys, deep navy/black base, metallic print highlights, limited-edition shelf presence, emboss/deboss suggestion, photorealistic',
+    negativePrompt: 'plastic looking tin, watermark, cheap sticker wrap only',
+    craftNotes: '金属收藏感、限量气质。',
+    qaChecklist: ['金属质感可信', '收藏柜气质', '图案克制'],
     aspectHint: '1:1',
   },
   {
@@ -151,7 +175,10 @@ export const PACKAGING_SKILLS: Array<{
     palette: '牛皮纸大地色 + 植物绿点缀，油墨克制',
     hint: '可回收材质气质，适合出口欧盟环保卖点',
     defaultPrompt:
-      'Eco kraft paper toy packaging, recycled cardboard texture, botanical green accents, minimal ink coverage, EU eco-retail shelf aesthetic, soft daylight, photorealistic, no watermark',
+      'Eco kraft paper toy packaging, visible recycled board texture, botanical green accents, low ink coverage, EU natural retail shelf aesthetic, soft daylight, photorealistic',
+    negativePrompt: 'plastic gloss overload, fake greenwashing badges with dense text, watermark',
+    craftNotes: '欧盟自然渠道：牛皮纸、少油墨；勿伪造有机认证全文。',
+    qaChecklist: ['牛皮纸纹理可见', '油墨克制', '欧系货架可信'],
     aspectHint: '3:4',
   },
   {
@@ -162,7 +189,10 @@ export const PACKAGING_SKILLS: Array<{
     palette: '撞色渐变 + 神秘开窗或角色剪影',
     hint: '悬念感强，适合盲抽与胶囊系列',
     defaultPrompt:
-      'Blind box style toy packaging, mysterious silhouette window, vibrant clash gradient colors, collectible series numbering, kiosk impulse display, photorealistic, no watermark',
+      'Blind-box toy packaging, mysterious silhouette window, vibrant clash gradients, series number zone, kiosk impulse display, photorealistic collectible pack',
+    negativePrompt: 'fully revealing the secret toy, watermark, dull corporate palette',
+    craftNotes: '悬念开窗/剪影，系列编号区。',
+    qaChecklist: ['悬念感足够', '系列编号区存在', '适合潮玩柜'],
     aspectHint: '3:4',
   },
   {
@@ -173,7 +203,10 @@ export const PACKAGING_SKILLS: Array<{
     palette: '环绕条纹或渐变立面，顶盖品牌色',
     hint: '圆柱罐/纸筒，适合卷状与长件',
     defaultPrompt:
-      'Cylindrical tube packaging for puzzle or rolled toy, spiral stripe or gradient wrap, branded lid top, standing on retail surface, photorealistic packaging mockup, no watermark',
+      'Cylindrical tube packaging for puzzle/rolled toy, spiral stripe or gradient wrap, branded lid, standing retail hero, correct cylinder perspective, photorealistic',
+    negativePrompt: 'squashed ellipse ignoring perspective, watermark',
+    craftNotes: '圆柱透视正确，顶盖品牌色。',
+    qaChecklist: ['圆柱透视正确', '顶盖清晰', '立放稳定'],
     aspectHint: '9:16 立筒',
   },
   {
@@ -184,7 +217,10 @@ export const PACKAGING_SKILLS: Array<{
     palette: '莫兰迪或高级灰 + 内衬撞色惊喜',
     hint: '层层打开的体验感，适合短视频开箱',
     defaultPrompt:
-      'Premium unboxing experience gift box for toy brand, layered open flaps, contrasting liner color, Morandi outer palette, influencer unboxing aesthetic, soft studio light, photorealistic, no watermark',
+      'Premium layered unboxing gift box for toy DTC brand, open flaps revealing contrasting liner, Morandi outer palette, influencer unboxing composition, soft studio light, photorealistic',
+    negativePrompt: 'flat single-lid only, watermark, messy kraft peanuts dominance',
+    craftNotes: '多层开箱体验，外敛内亮，服务短视频。',
+    qaChecklist: ['层级打开可见', '内外撞色惊喜', '适合开箱镜头'],
     aspectHint: '4:5 开箱',
   },
   {
@@ -195,7 +231,10 @@ export const PACKAGING_SKILLS: Array<{
     palette: '牛皮外箱 + 简洁唛头黑字，警示标规范',
     hint: '外箱唛头与易碎标，偏物流观感',
     defaultPrompt:
-      'E-commerce shipper carton for toys, kraft corrugated box with clean shipping marks, fragile icons, simple brand stamp, warehouse lighting, photorealistic logistics packaging, no watermark',
+      'Kraft corrugated e-commerce shipper for toys, clean shipping marks, fragile icons as simple pictograms, subtle brand stamp, warehouse lighting, logistics packaging realism',
+    negativePrompt: 'luxury gift wrap mismatch, watermark, unreadable dense fake addresses',
+    craftNotes: '物流外箱：唛头简洁、易碎标示意，非零售彩盒。',
+    qaChecklist: ['牛皮瓦楞质感', '唛头区清楚', '仓储光可信'],
     aspectHint: '4:3',
   },
   {
@@ -206,7 +245,10 @@ export const PACKAGING_SKILLS: Array<{
     palette: '企业蓝灰 + LOGO 安全区，信息层级清楚',
     hint: '主唛/侧唛气质，适合买家验货照',
     defaultPrompt:
-      'Export master carton brand panel for toy factory, corporate blue-gray palette, clear logo safe zone, SKU and quantity info hierarchy, B2B wholesale warehouse, photorealistic, no watermark',
+      'Export master carton brand panel for toy factory, corporate blue-gray palette, clear logo safe zone, SKU and quantity info hierarchy as blank layout zones, B2B wholesale warehouse, photorealistic',
+    negativePrompt: 'consumer gift wrap look, watermark, fake barcode spam',
+    craftNotes: 'B2B 外箱品牌面：信息层级与 Logo 安全区，验货照气质。',
+    qaChecklist: ['企业气质', 'Logo 安全区', '信息层级清楚'],
     aspectHint: '16:9',
   },
   {
@@ -217,6 +259,9 @@ export const PACKAGING_SKILLS: Array<{
     channel: '自定义渠道',
     palette: '按你的描述搭配',
     defaultPrompt: '',
+    negativePrompt: 'watermark, garbled text, broken packaging structure',
+    craftNotes: '严格按用户描述的形态与卖场执行。',
+    qaChecklist: ['符合描述', '结构可读', '无水印乱码'],
     aspectHint: '自定义',
   },
 ];

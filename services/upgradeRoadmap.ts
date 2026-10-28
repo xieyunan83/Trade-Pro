@@ -26,6 +26,7 @@ export const JOURNEY_ROADMAP_NOTE = {
     '设计完成后匹配 CRM / 背调客户库，并输出专业匹配理由',
     '一键生成可复制的 3 封开发信组（单客 + 批量模板）',
     '与产品库、创作流水线、CRM 联动「下一步」',
+    '接通商机证据后：生产/销售建议带货架价带与进口行为硬支撑',
   ],
 };
 
@@ -55,6 +56,20 @@ export const MODULE_ROADMAP: Partial<Record<ModuleType, ModuleRoadmap>> = {
     ],
     inspiredBy: ['网易外贸通 · 海关', '腾道 / ImportGenius'],
     providers: ['customs'],
+  },
+  [ModuleType.MARKET_EVIDENCE]: {
+    phase: 'P1',
+    summary:
+      '商机证据层（后台）：线上货架品类机会 × 线下进口行为，对齐后驱动生产与销售建议。',
+    bullets: [
+      '前台无独立导航；管理入口在「系统管理 → 数据接入」',
+      '线上：平台类目价带 / 需求热度 / 评论痛点（可接选品类 API）',
+      '线下：海关进口频次 / HS / 来源国，与公司域名对齐',
+      '证据分级 A/B/C；仅硬证据进入匹配理由与适市建议',
+      '输出「机会卡 + 买家行为 + 我方 SKU」三件套',
+    ],
+    inspiredBy: ['卖家精灵 / Keepa（站内切片）', '腾道 / ImportGenius（贸易行为）'],
+    providers: ['marketplace_intel', 'customs'],
   },
   [ModuleType.PRODUCT_CATALOG]: {
     phase: 'P0',
@@ -184,6 +199,21 @@ export const CRM_ENHANCEMENT_ROADMAP: ModuleRoadmap = {
     '与背调、邮件时间线打通',
   ],
   inspiredBy: ['小满 OKKI · CRM'],
+};
+
+/** 商机证据增强（挂数据接入；非独立前台导航） */
+export const MARKET_EVIDENCE_ROADMAP: ModuleRoadmap = {
+  phase: 'P1',
+  summary:
+    '把「线上货架机会」与「线下进口/批发零售行为」对齐，让生产与销售建议有可核对的数据支撑。',
+  bullets: [
+    '对齐键：公司名 / 域名 / 品牌 / HS / 平台商品 ID',
+    '线上机会卡 + 进口行为卡 → 商机证据包',
+    '证据分级：结构化源优先于公开页，公开页优先于推断',
+    '接通后回写适市建议、产品匹配理由与开发信卖点',
+  ],
+  inspiredBy: ['卖家精灵（站内）', '海关数据商（贸易）'],
+  providers: ['marketplace_intel', 'customs'],
 };
 
 export const PHASE_LABEL: Record<RoadmapPhase, string> = {

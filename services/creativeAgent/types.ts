@@ -12,6 +12,12 @@ export type CreativePlanInput = {
   skillHint: string;
   /** Skill 内置底稿（英文为主，供生图） */
   skillDefaultPrompt: string;
+  /** 负向约束 */
+  skillNegativePrompt?: string;
+  /** 工艺 / 渠道说明，供编排大脑 */
+  skillCraftNotes?: string;
+  /** Skill 自带质检；缺省用领域默认 */
+  skillQaChecklist?: string[];
   /** 用户自然语言需求 */
   userBrief: string;
   /** 产品语境（可选） */

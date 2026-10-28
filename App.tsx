@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, startTransition, Suspense, lazy } from 'react';
 import { analyzeCompany, hasApiKeyConfigured, checkApiKeyAvailability, hydrateApiConfigsFromCloud, searchPotentialClients, enableTavilyGeminiQwenCascade, enableGeminiQwenParallelMerge, synthesizeInsightsFallback } from './services/geminiService';
 import {
   subscribeCooldown,
@@ -60,6 +60,7 @@ import { ModuleDecisionMakers } from './components/ModuleDecisionMakers';
 import { DmEmailSearchPanel } from './components/DmEmailSearchPanel';
 import { ProductDigPanel } from './components/ProductDigPanel';
 import { DesignSignalPanel } from './components/DesignSignalPanel';
+import { EnrichmentPanel } from './components/EnrichmentPanel';
 import {
   applyDmPersistToHistory,
   mergeHistoryPreferDmRich,
@@ -84,6 +85,15 @@ import {
   setDesignSignalOnComplete,
   type DesignSignalCompletePayload,
 } from './services/designSignalQueue';
+import {
+  enqueueEnrichmentBatch,
+  hydrateEnrichmentQueue,
+  isEnrichmentQueueBusy,
+  setEnrichmentHistoryResolver,
+  setEnrichmentOnComplete,
+  type EnrichmentCompletePayload,
+} from './services/analysisEnrichmentQueue';
+import { crmTagsFromDecision } from './services/analysisDecisionEnrich';
 import { ManagerSystemPanel } from './components/ManagerSystemPanel';
 import {
   hydrateDeptApiKeysFromCloud,
@@ -117,26 +127,59 @@ import { ReportEnrichmentPanel } from './components/ReportEnrichmentPanel';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { extractHistoryAnalysis, normalizeAnalysisResult, websiteHref } from './services/analysisNormalize';
 import { ModuleSimilar } from './components/ModuleSimilar';
-import { ModulePromoGenerator } from './components/ModulePromoGenerator';
 import type { PromoListRow } from './utils/promoListRows';
-import { ModuleClientCRM } from './components/ModuleClientCRM';
-import { ModuleProductMatch } from './components/ModuleProductMatch';
-import { ModuleEmailCampaign } from './components/ModuleEmailCampaign'; 
-import { ModuleImageGenerator } from './components/ModuleImageGenerator';
 import { ModuleComingSoon } from './components/ModuleComingSoon';
-import { ModuleContactTools } from './components/ModuleContactTools';
-import { ModuleProductCatalog } from './components/ModuleProductCatalog';
-import { ModuleProductQuote } from './components/ModuleProductQuote';
-import { ModuleProductDesign2D } from './components/ModuleProductDesign2D';
-import { ModuleProductDesign3D } from './components/ModuleProductDesign3D';
-import { ModuleProductAiVideo } from './components/ModuleProductAiVideo';
-import { ModuleProductPackaging } from './components/ModuleProductPackaging';
-import { ModuleSiteBuilder } from './components/ModuleSiteBuilder';
-import { ModuleSocialContent } from './components/ModuleSocialContent';
 import { ModuleLandingHub } from './components/ModuleLandingHub';
+import { ModulePane } from './components/ModulePane';
 import { loadCatalogSkus } from './services/productCatalogTypes';
 import { SphereNav, type SphereNavPhase } from './components/SphereNav';
-import { ClientFinder } from './components/ClientFinder';
+
+/** 重模块按需加载，减轻首屏与切换时主线程压力 */
+const ModulePromoGenerator = lazy(() =>
+  import('./components/ModulePromoGenerator').then((m) => ({ default: m.ModulePromoGenerator }))
+);
+const ModuleClientCRM = lazy(() =>
+  import('./components/ModuleClientCRM').then((m) => ({ default: m.ModuleClientCRM }))
+);
+const ModuleProductMatch = lazy(() =>
+  import('./components/ModuleProductMatch').then((m) => ({ default: m.ModuleProductMatch }))
+);
+const ModuleEmailCampaign = lazy(() =>
+  import('./components/ModuleEmailCampaign').then((m) => ({ default: m.ModuleEmailCampaign }))
+);
+const ModuleImageGenerator = lazy(() =>
+  import('./components/ModuleImageGenerator').then((m) => ({ default: m.ModuleImageGenerator }))
+);
+const ModuleContactTools = lazy(() =>
+  import('./components/ModuleContactTools').then((m) => ({ default: m.ModuleContactTools }))
+);
+const ModuleProductCatalog = lazy(() =>
+  import('./components/ModuleProductCatalog').then((m) => ({ default: m.ModuleProductCatalog }))
+);
+const ModuleProductQuote = lazy(() =>
+  import('./components/ModuleProductQuote').then((m) => ({ default: m.ModuleProductQuote }))
+);
+const ModuleProductDesign2D = lazy(() =>
+  import('./components/ModuleProductDesign2D').then((m) => ({ default: m.ModuleProductDesign2D }))
+);
+const ModuleProductDesign3D = lazy(() =>
+  import('./components/ModuleProductDesign3D').then((m) => ({ default: m.ModuleProductDesign3D }))
+);
+const ModuleProductAiVideo = lazy(() =>
+  import('./components/ModuleProductAiVideo').then((m) => ({ default: m.ModuleProductAiVideo }))
+);
+const ModuleProductPackaging = lazy(() =>
+  import('./components/ModuleProductPackaging').then((m) => ({ default: m.ModuleProductPackaging }))
+);
+const ModuleSiteBuilder = lazy(() =>
+  import('./components/ModuleSiteBuilder').then((m) => ({ default: m.ModuleSiteBuilder }))
+);
+const ModuleSocialContent = lazy(() =>
+  import('./components/ModuleSocialContent').then((m) => ({ default: m.ModuleSocialContent }))
+);
+const ClientFinder = lazy(() =>
+  import('./components/ClientFinder').then((m) => ({ default: m.ClientFinder }))
+);
 import { BatchBackgroundExcelPanel } from './components/BatchBackgroundExcelPanel';
 import { batchBgQueueTarget, type ClassifiedBatchBgRow } from './services/batchBackgroundExcel';
 import { RecordsPanel, archiveToDiscoveryState } from './components/RecordsPanel';
@@ -175,13 +218,19 @@ const App: React.FC = () => {
   
   const [domainInput, setDomainInput] = useState('');
   const [activeModule, setActiveModule] = useState<ModuleType>(ModuleType.HOME);
+  /** 切换模块用 transition，避免整树同步卡死导航点击 */
+  const navigateModule = useCallback((m: ModuleType) => {
+    startTransition(() => {
+      setActiveModule(m);
+    });
+  }, []);
   const [workspaceSyncStatus, setWorkspaceSyncStatus] = useState<string | null>(null);
   const [workspaceSyncing, setWorkspaceSyncing] = useState(false);
   /** 管理员进入与业务员相同的工作台（含今日看板） */
   const [adminInWorkspace, setAdminInWorkspace] = useState(false);
   /** 指挥舱任务流 → 营销工具剧本注入 */
   const [pendingPlaybookId, setPendingPlaybookId] = useState<string | null>(null);
-  useModuleHashRoute(activeModule, setActiveModule);
+  useModuleHashRoute(activeModule, navigateModule);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [analysisData, setAnalysisData] = useState<AnalysisResult | null>(null);
@@ -323,15 +372,38 @@ const App: React.FC = () => {
         return historyRef.current.find((h) => h.id === hid);
       }
       const client = crmClientsRef.current.find((c) => c.id === clientId);
-      if (!client) return undefined;
-      return findHistoryForClient(client, historyRef.current);
+      if (client) return findHistoryForClient(client, historyRef.current);
+      // 营销工具临时 Client（id=任务 id）
+      const task = automationResultsRef.current.find((t) => t.id === clientId);
+      if (task?.analysis) {
+        const byDomain = historyRef.current.find(
+          (h) =>
+            (h.domain || '').toLowerCase() === (task.website || '').toLowerCase() ||
+            (h.data?.companyInfo?.website || '').toLowerCase() ===
+              (task.analysis?.companyInfo?.website || '').toLowerCase()
+        );
+        if (byDomain) return byDomain;
+        return {
+          id: `task_${task.id}`,
+          type: ModuleType.BACKGROUND,
+          data: task.analysis,
+          timestamp: task.completedAt || task.createdAt || Date.now(),
+          domain: task.website || task.analysis.companyInfo?.website,
+          keyword: task.keyword,
+          country: task.country,
+        } as HistoryItem;
+      }
+      return historyRef.current.find((h) => h.id === clientId);
     };
     setProductDigHistoryResolver(resolveHist);
     setDesignSignalHistoryResolver(resolveHist);
+    setEnrichmentHistoryResolver(resolveHist);
     hydrateDesignSignalQueue();
+    hydrateEnrichmentQueue();
     return () => {
       setProductDigHistoryResolver(null);
       setDesignSignalHistoryResolver(null);
+      setEnrichmentHistoryResolver(null);
     };
   }, []);
 
@@ -3013,6 +3085,152 @@ const App: React.FC = () => {
     }
   };
 
+  /** 背调补全：品类/设计信号 + 决策模型 → 写历史 / 画像 / CRM */
+  const handleEnrichmentComplete = async (payload: EnrichmentCompletePayload) => {
+    const { clientId, domain, result, previousHistoryId } = payload;
+    const client = crmClientsRef.current.find((c) => c.id === clientId);
+    const hist = client
+      ? findHistoryForClient(client, historyRef.current)
+      : previousHistoryId
+        ? historyRef.current.find((h) => h.id === previousHistoryId)
+        : undefined;
+    const historyItem: HistoryItem = stampOwnership({
+      id: hist?.id || previousHistoryId || `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+      type: ModuleType.BACKGROUND,
+      data: result,
+      timestamp: Date.now(),
+      domain: result.companyInfo?.website || domain,
+      keyword: result.searchKeyword || hist?.keyword,
+      country: result.searchCountry || hist?.country || client?.country,
+      source: 'analysis_enrichment',
+    });
+    try {
+      await persistHistoryItem(historyItem);
+      setHistory((prev) => {
+        const rest = prev.filter((h) => h.id !== historyItem.id);
+        return [historyItem, ...rest];
+      });
+      await indexAnalysisIntoProductCatalog(result, {
+        historyId: historyItem.id,
+        crmClientId: clientId,
+        ownerUsername: historyItem.ownerUsername,
+        departmentId: historyItem.departmentId,
+      });
+      const patch = clientPatchFromAnalysis(result, domain, Date.now());
+      const decisionTags = crmTagsFromDecision(result.decisionEnrichment);
+      setCrmClients((prev) =>
+        prev.map((c) => {
+          if (c.id !== clientId) return c;
+          const tags = [...new Set([...(c.tags || []), ...(patch.tags || []), ...decisionTags])].slice(
+            0,
+            48
+          );
+          return {
+            ...c,
+            ...patch,
+            tags,
+            productType:
+              !c.productType || c.productType === 'N/A'
+                ? patch.productType || c.productType
+                : c.productType,
+            hasBackgroundCheck: true,
+            hasAnalyzed: true,
+          };
+        })
+      );
+      // 同步更新自动化队列里同域名任务的 analysis（若有）
+      setAutomationResults((prev) =>
+        prev.map((t) => {
+          if (t.status !== 'completed' || !t.analysis) return t;
+          const same =
+            (t.website || '').toLowerCase().includes((domain || '').toLowerCase()) ||
+            (t.analysis.companyInfo?.website || '').toLowerCase() ===
+              (result.companyInfo?.website || '').toLowerCase();
+          if (!same) return t;
+          return { ...t, analysis: result, completedAt: Date.now() };
+        })
+      );
+    } catch (e) {
+      console.error('[enrichment] persist failed', domain, e);
+    }
+  };
+
+  const handleBatchAnalysisEnrichmentFromCRM = (clients: Client[]) => {
+    if (!clients?.length) {
+      alert('没有可补全的客户（请选择已背调客户，或确保库中有已背调记录）');
+      return;
+    }
+    const authorized =
+      hasPermission(currentUser, 'feature.product_redig') ||
+      hasPermission(currentUser, 'feature.analyze_company');
+    if (!authorized) {
+      alert('你没有背调补全权限，请联系管理员开通。');
+      return;
+    }
+    const withSite = clients.filter((c) => (c.website || c.name || '').trim());
+    if (!withSite.length) {
+      alert('所选客户缺少官网或公司名');
+      return;
+    }
+    if (
+      !confirm(
+        `将对 ${withSite.length} 家客户做「背调补全」：按需补采品类与设计信号，并用结构化决策判定渠道/适市/匹配就绪度。\n请保持本页打开。继续？`
+      )
+    ) {
+      return;
+    }
+    const { queued, skipped, reasons } = enqueueEnrichmentBatch(withSite, { authorized: true });
+    if (queued === 0) {
+      alert(reasons[0] || '没有任务可加入队列');
+      return;
+    }
+    alert(
+      skipped > 0
+        ? `已加入背调补全 ${queued} 家（跳过 ${skipped}）。左下角可看进度。`
+        : `已加入背调补全 ${queued} 家。左下角可看进度。`
+    );
+  };
+
+  const handleBatchAnalysisEnrichmentFromPromo = (rows: PromoListRow[]) => {
+    const clients: Client[] = [];
+    for (const r of rows) {
+      if (r.client) {
+        clients.push(r.client);
+        continue;
+      }
+      if (r.task?.analysis || r.intel?.crmClient) {
+        const c = r.intel.crmClient;
+        if (c) {
+          clients.push(c);
+          continue;
+        }
+        // 仅队列任务：构造临时 Client 以便入队（完成时写历史）
+        clients.push({
+          id: r.task?.id || r.id,
+          name: r.clientName,
+          website: r.website === '—' ? '' : r.website,
+          country: r.country,
+          type: '进口商',
+          status: '新建/潜在',
+          productType: r.keywords[0] || '',
+          industry: r.industry,
+          priceRange: '',
+          isSampleNeeded: false,
+          hasBackgroundCheck: true,
+          hasAnalyzed: true,
+          lastOrderDate: '',
+          lastContactSent: '',
+          lastContactReceived: '',
+          nextFollowUpDate: '',
+          activityLog: '',
+          contacts: [],
+          searchKeyword: r.keywords[0],
+        });
+      }
+    }
+    handleBatchAnalysisEnrichmentFromCRM(clients);
+  };
+
   /** 阶段 C：设计信号轻量补全完成 → 写历史 / 画像 / CRM */
   const handleDesignSignalComplete = async (payload: DesignSignalCompletePayload) => {
     const { clientId, domain, result, previousHistoryId } = payload;
@@ -3104,7 +3322,11 @@ const App: React.FC = () => {
 
   useEffect(() => {
     setDesignSignalOnComplete(handleDesignSignalComplete);
-    return () => setDesignSignalOnComplete(null);
+    setEnrichmentOnComplete(handleEnrichmentComplete);
+    return () => {
+      setDesignSignalOnComplete(null);
+      setEnrichmentOnComplete(null);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUser?.username, currentUser?.departmentId]);
 
@@ -4444,7 +4666,7 @@ const App: React.FC = () => {
             historyOpen={historyOpen}
             onPhaseChange={setSphereNavPhase}
             onSelectModule={(m) => {
-              setActiveModule(m);
+              navigateModule(m);
               setMobileMenuOpen(false);
             }}
             onOpenRecords={() => setHistoryOpen((v) => !v)}
@@ -4710,6 +4932,14 @@ const App: React.FC = () => {
           )}
 
           {!loading && !errorMsg && (
+            <Suspense
+              fallback={
+                <div className="flex flex-col items-center justify-center py-24 text-slate-500 gap-3">
+                  <Loader2 className="animate-spin text-cyan-600" size={28} />
+                  <span className="text-sm font-bold">加载模块…</span>
+                </div>
+              }
+            >
             <>
                 {activeModule === ModuleType.HOME && (
                   <ErrorBoundary label="今日看板">
@@ -4717,7 +4947,7 @@ const App: React.FC = () => {
                       currentUser={currentUser}
                       syncStatus={workspaceSyncStatus}
                       syncing={workspaceSyncing}
-                      onEnterWorkspace={() => setActiveModule(ModuleType.DISCOVERY)}
+                      onEnterWorkspace={() => navigateModule(ModuleType.DISCOVERY)}
                       onNavigateModule={(mod) => {
                         // 报告类模块依赖当前 analysisData；未打开报告时改走作业列表，避免空白页
                         const needsReport = (
@@ -4729,17 +4959,17 @@ const App: React.FC = () => {
                           ] as ModuleType[]
                         ).includes(mod);
                         if (needsReport && !analysisData) {
-                          setActiveModule(ModuleType.PROMO_GENERATOR);
+                          navigateModule(ModuleType.PROMO_GENERATOR);
                           setSystemNotice(
                             '请先在「营销工具 / 背调作业」打开一条已完成报告，再查看背调详情。'
                           );
                           return;
                         }
-                        setActiveModule(mod);
+                        navigateModule(mod);
                       }}
                       onStartPlaybook={(playbookId) => {
                         setPendingPlaybookId(playbookId);
-                        setActiveModule(ModuleType.PROMO_GENERATOR);
+                        navigateModule(ModuleType.PROMO_GENERATOR);
                       }}
                       journeyProgress={{
                         skuCount: loadCatalogSkus().length,
@@ -4809,6 +5039,8 @@ const App: React.FC = () => {
                         onDeleteClient={handleDeleteClient}
                         onBatchProductDig={handleBatchProductDigFromCRM}
                         onBatchDesignSignalFill={handleStartDesignFill}
+                        onBatchAnalysisEnrichment={handleBatchAnalysisEnrichmentFromCRM}
+                        analysisEnrichmentBusy={isEnrichmentQueueBusy()}
                         designSignalBusy={false}
                         onPurgeBeforeJune2026={handlePurgeCrmBeforeJune2026}
                         onPurgeNonToyJunk={async () => {
@@ -4833,8 +5065,8 @@ const App: React.FC = () => {
                         onCrmClientsChange={setCrmClients}
                         onStartDesignFill={handleStartDesignFill}
                         onOpenHistory={loadFromHistory}
-                        onGoCrm={() => setActiveModule(ModuleType.CLIENT_CRM)}
-                        onNavigateModule={setActiveModule}
+                        onGoCrm={() => navigateModule(ModuleType.CLIENT_CRM)}
+                        onNavigateModule={navigateModule}
                     />
                 )}
                 {activeModule === ModuleType.EMAIL_CAMPAIGN && (
@@ -4883,29 +5115,49 @@ const App: React.FC = () => {
                 {activeModule === ModuleType.PRODUCT_QUOTE && currentUser && (
                     <ModuleProductQuote currentUser={currentUser} />
                 )}
-                {activeModule === ModuleType.PRODUCT_DESIGN_2D && currentUser && (
-                    <ModuleProductDesign2D
-                      currentUser={currentUser}
-                      onNavigateModule={(mod) => setActiveModule(mod)}
-                    />
-                )}
-                {activeModule === ModuleType.PRODUCT_DESIGN_3D && currentUser && (
-                    <ModuleProductDesign3D
-                      currentUser={currentUser}
-                      onNavigateModule={(mod) => setActiveModule(mod)}
-                    />
-                )}
-                {activeModule === ModuleType.PRODUCT_AI_VIDEO && currentUser && (
-                    <ModuleProductAiVideo
-                      currentUser={currentUser}
-                      onNavigateModule={(mod) => setActiveModule(mod)}
-                    />
-                )}
-                {activeModule === ModuleType.PRODUCT_PACKAGING && currentUser && (
-                    <ModuleProductPackaging
-                      currentUser={currentUser}
-                      onNavigateModule={(mod) => setActiveModule(mod)}
-                    />
+                {currentUser && (
+                  <>
+                    <ModulePane
+                      id={ModuleType.PRODUCT_DESIGN_2D}
+                      activeId={activeModule}
+                      maxAlive={4}
+                    >
+                      <ModuleProductDesign2D
+                        currentUser={currentUser}
+                        onNavigateModule={navigateModule}
+                      />
+                    </ModulePane>
+                    <ModulePane
+                      id={ModuleType.PRODUCT_DESIGN_3D}
+                      activeId={activeModule}
+                      maxAlive={4}
+                    >
+                      <ModuleProductDesign3D
+                        currentUser={currentUser}
+                        onNavigateModule={navigateModule}
+                      />
+                    </ModulePane>
+                    <ModulePane
+                      id={ModuleType.PRODUCT_AI_VIDEO}
+                      activeId={activeModule}
+                      maxAlive={4}
+                    >
+                      <ModuleProductAiVideo
+                        currentUser={currentUser}
+                        onNavigateModule={navigateModule}
+                      />
+                    </ModulePane>
+                    <ModulePane
+                      id={ModuleType.PRODUCT_PACKAGING}
+                      activeId={activeModule}
+                      maxAlive={4}
+                    >
+                      <ModuleProductPackaging
+                        currentUser={currentUser}
+                        onNavigateModule={navigateModule}
+                      />
+                    </ModulePane>
+                  </>
                 )}
                 {activeModule === ModuleType.SITE_BUILDER && currentUser && (
                     <ModuleSiteBuilder currentUser={currentUser} />
@@ -4954,6 +5206,12 @@ const App: React.FC = () => {
                         onBatchDmSearch={handleBatchDmSearchFromPromo}
                         onBatchAddToCrm={handleBatchAddToCrmFromPromo}
                         onBatchProductDig={handleBatchProductDigFromPromo}
+                        canAnalysisEnrichment={
+                          hasPermission(currentUser, 'feature.product_redig') ||
+                          hasPermission(currentUser, 'feature.analyze_company')
+                        }
+                        onBatchAnalysisEnrichment={handleBatchAnalysisEnrichmentFromPromo}
+                        analysisEnrichmentBusy={isEnrichmentQueueBusy()}
                         onClearCompleted={handleClearCompletedTasks}
                         onClearAll={handleClearAllTasks}
                         onReloadQueue={handleReloadAutomationQueue}
@@ -5303,6 +5561,7 @@ const App: React.FC = () => {
                     </ErrorBoundary>
                 )}
             </>
+            </Suspense>
           )}
         </div>
       </main>
@@ -5358,6 +5617,7 @@ const App: React.FC = () => {
         {hasPermission(currentUser, 'feature.dm_email_search') && <DmEmailSearchPanel />}
         <DesignSignalPanel />
         <ProductDigPanel />
+        <EnrichmentPanel />
       </div>
 
       {reportConfirm && (
