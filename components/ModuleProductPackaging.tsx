@@ -35,8 +35,11 @@ import {
 import { loadCatalogSkus } from '../services/productCatalogTypes';
 import { compressImageDataUrl } from '../services/catalogExcelService';
 import { consumeCreativeHandoff } from '../services/creativeAssetBridge';
+import { persistPackagingAssets } from '../services/creativeAssetPersist';
 import { CreativePipelineBar, CreativeRefPicker } from './CreativeRefPicker';
 import { DesignConstraintCardPanel } from './DesignConstraintCardPanel';
+import { CreativeStorageBadge } from './CreativeStorageBadge';
+import { VaultImg } from './VaultMedia';
 import { loadProductCatalog } from '../services/productCatalog';
 import {
   buildDesignConstraintCard,
@@ -107,6 +110,24 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
     setAssets(next);
     savePackagingAssets(next);
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = loadPackagingAssets();
+        const migrated = await persistPackagingAssets(raw);
+        if (cancelled) return;
+        savePackagingAssets(migrated);
+        setAssets(migrated);
+      } catch (e) {
+        console.warn('packaging assets migrate', e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const skill = PACKAGING_SKILLS.find((s) => s.id === skillId) || PACKAGING_SKILLS[0];
 
@@ -292,7 +313,7 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
         referenceImages: refImages.length ? refImages : undefined,
       });
       const now = Date.now();
-      const newAssets: PackagingAsset[] = result.images.map((url) => ({
+      const newAssetsRaw: PackagingAsset[] = result.images.map((url) => ({
         id: newPackagingId('pa'),
         projectId: proj.id,
         url,
@@ -300,14 +321,18 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
         skillId,
         createdAt: now,
       }));
+      const newAssets = await persistPackagingAssets(newAssetsRaw);
       const agentMsg = {
         id: newPackagingId('m'),
         role: 'agent' as const,
-        text: `已生成 ${newAssets.length} 张「${skill.label}」包装视觉并放到画布。可换 Skill 再出一版，或改配色描述继续改稿。`,
+        text: `已生成 ${newAssets.length} 张「${skill.label}」包装视觉并放到画布（已存本机）。可换 Skill 再出一版，或改配色描述继续改稿。`,
         at: now,
         assetIds: newAssets.map((a) => a.id),
       };
-      persistAssets([...newAssets, ...loadPackagingAssets()]);
+      persistAssets([
+        ...newAssets,
+        ...loadPackagingAssets().filter((a) => !newAssets.some((n) => n.id === a.id)),
+      ]);
       const latest = loadPackagingProjects();
       persistProjects(
         latest.map((p) =>
@@ -500,7 +525,7 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
                       onClick={() => setActiveId(a.projectId)}
                       className="aspect-square rounded-lg overflow-hidden border border-slate-100"
                     >
-                      <img src={a.url} alt="" className="w-full h-full object-cover" />
+                      <VaultImg src={a.url} alt="" className="w-full h-full object-cover" />
                     </button>
                   ))}
                 </div>
@@ -509,11 +534,14 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
         </aside>
 
         <section className="xl:col-span-6 rounded-2xl border border-slate-200 bg-slate-50/80 flex flex-col min-h-[22rem] overflow-hidden">
-          <div className="px-3 py-2 border-b border-slate-200/80 bg-white/80 flex items-center justify-between gap-2">
+          <div className="px-3 py-2 border-b border-slate-200/80 bg-white/80 flex flex-wrap items-center justify-between gap-2">
             <div className="text-xs font-black text-slate-700 truncate">
               {active ? `画布 · ${active.title}` : '画布 · 新建或选择项目'}
             </div>
-            <div className="text-[10px] font-bold text-slate-400">{canvasAssets.length} 张</div>
+            <div className="flex items-center gap-2">
+              <CreativeStorageBadge compact />
+              <div className="text-[10px] font-bold text-slate-400">{canvasAssets.length} 张</div>
+            </div>
           </div>
           <div className="flex-1 overflow-y-auto p-3 custom-scrollbar">
             {canvasAssets.length === 0 ? (
@@ -533,7 +561,7 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
                     key={a.id}
                     className="rounded-xl overflow-hidden border border-white shadow-sm bg-white group relative"
                   >
-                    <img src={a.url} alt="" className="w-full aspect-square object-contain bg-slate-50" />
+                    <VaultImg src={a.url} alt="" className="w-full aspect-square object-contain bg-slate-50" />
                     <div className="absolute bottom-2 left-2 right-2 flex flex-wrap gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                       <button
                         type="button"

@@ -21,6 +21,10 @@ import {
   saveVideoJobs,
   newCreativeId,
 } from '../services/creativeStudioStore';
+import { persistVideoJob } from '../services/creativeAssetPersist';
+import { tryPersistMediaUrl } from '../services/creativeAssetVault';
+import { CreativeStorageBadge } from './CreativeStorageBadge';
+import { VaultImg, useVaultUrl } from './VaultMedia';
 import {
   generateProductVideo,
   getVideoProviderStatus,
@@ -62,6 +66,17 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
     let cancelled = false;
     (async () => {
       const st = await hydrateVideoProvider();
+      try {
+        const raw = loadVideoJobs();
+        const migrated: VideoJob[] = [];
+        for (const j of raw) migrated.push(await persistVideoJob(j));
+        if (!cancelled) {
+          saveVideoJobs(migrated);
+          setJobs(migrated);
+        }
+      } catch (e) {
+        console.warn('video jobs migrate', e);
+      }
       if (!cancelled) setProvider(st);
     })();
     return () => {
@@ -73,7 +88,12 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
     const handoff = consumeCreativeHandoff('ai_video');
     if (!handoff?.images?.length) return;
     setMode(handoff.images.length > 1 ? 'reference' : 'image');
-    setImages(handoff.images.slice(0, 6));
+    void (async () => {
+      const imgs = await Promise.all(
+        handoff.images.slice(0, 6).map((u) => tryPersistMediaUrl(u, 'image'))
+      );
+      setImages(imgs);
+    })();
     if (handoff.skuCode) setSkuPick(handoff.skuCode);
     if (handoff.skuName) setSkuName(handoff.skuName);
     if (!prompt.trim()) {
@@ -206,15 +226,25 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
           setMsg(`样片生成中 ${Math.round(pct)}%`);
         },
       });
-      patchJob(job.id, {
+      const vaulted = await persistVideoJob({
+        ...job,
         status: 'draft',
         progress: 100,
         providerTaskId: result.taskId,
         draftVideoUrl: result.videoUrl,
-        previewHint: '样片已就绪。确认后进入正片。',
+        previewHint: '样片已就绪（已存本机）。确认后进入正片。',
+        error: undefined,
+        updatedAt: Date.now(),
+      });
+      patchJob(job.id, {
+        status: 'draft',
+        progress: 100,
+        providerTaskId: vaulted.providerTaskId,
+        draftVideoUrl: vaulted.draftVideoUrl,
+        previewHint: vaulted.previewHint,
         error: undefined,
       });
-      setMsg('样片已完成 — 确认后再出正片以控制成本');
+      setMsg('样片已完成并写入本机 — 确认后再出正片以控制成本');
     } catch (e: any) {
       const errText = humanizeCreativeProviderError(e?.message || e);
       patchJob(job.id, {
@@ -264,16 +294,28 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
           setMsg(`正片生成中 ${Math.round(pct)}%`);
         },
       });
-      patchJob(active.id, {
+      const vaulted = await persistVideoJob({
+        ...active,
         status: 'ready',
         progress: 100,
         draftConfirmed: true,
         providerTaskId: result.taskId,
         videoUrl: result.videoUrl,
-        previewHint: '正片已完成，可下载成片',
+        previewHint: '正片已完成（已存本机），可下载成片',
+        error: undefined,
+        updatedAt: Date.now(),
+      });
+      patchJob(active.id, {
+        status: 'ready',
+        progress: 100,
+        draftConfirmed: true,
+        providerTaskId: vaulted.providerTaskId,
+        videoUrl: vaulted.videoUrl,
+        draftVideoUrl: vaulted.draftVideoUrl,
+        previewHint: vaulted.previewHint,
         error: undefined,
       });
-      setMsg('正片已完成');
+      setMsg('正片已完成并写入本机');
     } catch (e: any) {
       const errText = humanizeCreativeProviderError(e?.message || e);
       patchJob(active.id, {
@@ -295,7 +337,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
     if (activeId === id) setActiveId(next[0]?.id || null);
   };
 
-  const playUrl = active?.videoUrl || active?.draftVideoUrl;
+  const playUrl = useVaultUrl(active?.videoUrl || active?.draftVideoUrl);
 
   return (
     <div className="max-w-[96rem] mx-auto space-y-4 animate-fade-in px-1">
@@ -538,8 +580,9 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
         </div>
 
         <div className="lg:col-span-5 rounded-2xl border border-slate-200 bg-slate-950 overflow-hidden min-h-[360px] flex flex-col">
-          <div className="px-4 py-2.5 border-b border-white/10 flex justify-between text-xs font-bold text-slate-300">
+          <div className="px-4 py-2.5 border-b border-white/10 flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-slate-300">
             <span>预览台</span>
+            <CreativeStorageBadge compact className="!bg-white/10 !border-white/20 !text-slate-200" />
             {active && (
               <span className="text-rose-300 text-[10px] uppercase tracking-wider">
                 {active.aspect} · {active.durationSec}s · {active.status}
@@ -586,7 +629,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
                 }`}
               >
                 {active.sourceImages[0] ? (
-                  <img
+                  <VaultImg
                     src={active.sourceImages[0]}
                     alt=""
                     className="absolute inset-0 w-full h-full object-cover rounded-2xl opacity-50"

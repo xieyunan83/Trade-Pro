@@ -7,6 +7,7 @@ import {
   type CreativeRefItem,
 } from '../services/creativeAssetBridge';
 import type { ModuleType } from '../types';
+import { VaultImg } from './VaultMedia';
 
 type Props = {
   /** 已选图片 URL */
@@ -125,7 +126,7 @@ export const CreativeRefPicker: React.FC<Props> = ({
                   selected ? ring : 'border-slate-200 hover:border-slate-300'
                 }`}
               >
-                <img src={item.url} alt="" className="w-full h-full object-contain p-0.5" />
+                <VaultImg src={item.url} alt="" className="w-full h-full object-contain p-0.5" />
                 {selected && (
                   <span className="absolute top-0.5 right-0.5 rounded-full bg-slate-900 text-white p-0.5">
                     <Check size={10} />
@@ -182,7 +183,7 @@ export const SelectedRefsStrip: React.FC<{
             key={`${i}-${src.slice(-32)}`}
             className="relative w-14 h-14 rounded-lg overflow-hidden border border-slate-200 bg-slate-50 group"
           >
-            <img src={src} alt="" className="w-full h-full object-contain" />
+            <VaultImg src={src} alt="" className="w-full h-full object-contain" />
             <button
               type="button"
               aria-label="移除此图"

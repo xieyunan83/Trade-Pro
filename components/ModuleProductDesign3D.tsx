@@ -31,9 +31,13 @@ import {
 } from '../services/model3dService';
 import { loadDataProviderLocal, saveDataProvider } from '../services/dataProviders';
 import { consumeCreativeHandoff } from '../services/creativeAssetBridge';
+import { persistModel3dJob } from '../services/creativeAssetPersist';
+import { tryPersistMediaUrl } from '../services/creativeAssetVault';
 import { CreativePipelineBar, CreativeRefPicker } from './CreativeRefPicker';
 import { MODEL3D_SKILLS, type Model3dSkillId } from '../services/creativeSkills/model3dSkills';
 import { Model3dOrbitViewer } from './Model3dOrbitViewer';
+import { CreativeStorageBadge } from './CreativeStorageBadge';
+import { VaultImg, useVaultUrl } from './VaultMedia';
 
 type Props = {
   currentUser: User;
@@ -70,6 +74,20 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     (async () => {
       setHydrating(true);
       const st = await hydrateModel3dProvider();
+      // 把历史任务里的临时 GLB/预览图迁入本机库
+      try {
+        const raw = loadModel3dJobs();
+        const migrated: Model3dJob[] = [];
+        for (const j of raw) {
+          migrated.push(await persistModel3dJob(j));
+        }
+        if (!cancelled) {
+          saveModel3dJobs(migrated);
+          setJobs(migrated);
+        }
+      } catch (e) {
+        console.warn('3d jobs migrate', e);
+      }
       if (!cancelled) {
         setProvider(st);
         setHydrating(false);
@@ -88,7 +106,12 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     const handoff = consumeCreativeHandoff('design_3d');
     if (!handoff?.images?.[0]) return;
     setMode('image');
-    setSourceImages(handoff.images.slice(0, 4));
+    void (async () => {
+      const imgs = await Promise.all(
+        handoff.images.slice(0, 4).map((u) => tryPersistMediaUrl(u, 'image'))
+      );
+      setSourceImages(imgs);
+    })();
     if (handoff.skuCode) setSkuPick(handoff.skuCode);
     if (handoff.skuName) setSkuName(handoff.skuName);
     setMsgTone('ok');
@@ -260,7 +283,8 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
           setMsg(`${label} ${Math.round(pct)}%`);
         },
       });
-      patchJob(job.id, {
+      const vaulted = await persistModel3dJob({
+        ...job,
         status: 'ready',
         progress: 100,
         providerTaskId: result.taskId,
@@ -268,11 +292,23 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         pbrModelUrl: result.pbrModelUrl,
         baseModelUrl: result.baseModelUrl,
         previewImageUrl: result.previewImageUrl,
-        previewHint: '模型已就绪 · 可拖动环视 · 可下载 GLB',
+        previewHint: '模型已就绪 · 已存本机 · 可拖动环视',
+        error: undefined,
+        updatedAt: Date.now(),
+      });
+      patchJob(job.id, {
+        status: vaulted.status,
+        progress: 100,
+        providerTaskId: vaulted.providerTaskId,
+        modelUrl: vaulted.modelUrl,
+        pbrModelUrl: vaulted.pbrModelUrl,
+        baseModelUrl: vaulted.baseModelUrl,
+        previewImageUrl: vaulted.previewImageUrl,
+        previewHint: vaulted.previewHint,
         error: undefined,
       });
       setMsgTone('ok');
-      setMsg('3D 模型已生成：右侧可拖动旋转查看，也可下载 GLB');
+      setMsg('3D 已生成并写入本机素材库，刷新后仍可预览；也可下载 GLB');
     } catch (e: any) {
       const { humanizeCreativeProviderError } = await import('../services/providerErrorMessage');
       const errText = humanizeCreativeProviderError(e?.message || e);
@@ -300,7 +336,9 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     if (activeId === id) setActiveId(next[0]?.id || null);
   };
 
-  const downloadUrl = active?.pbrModelUrl || active?.modelUrl || active?.baseModelUrl;
+  const rawDownloadUrl = active?.pbrModelUrl || active?.modelUrl || active?.baseModelUrl;
+  const downloadUrl = useVaultUrl(rawDownloadUrl);
+  const previewPoster = useVaultUrl(active?.previewImageUrl || active?.sourceImage);
 
   return (
     <div className="max-w-[96rem] mx-auto space-y-4 animate-fade-in px-1">
@@ -571,10 +609,11 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         </div>
 
         <div className="lg:col-span-5 rounded-2xl border border-slate-200 bg-slate-950 text-white overflow-hidden min-h-[400px] flex flex-col">
-          <div className="px-4 py-2.5 border-b border-white/10 flex items-center justify-between text-xs font-bold text-slate-300">
+          <div className="px-4 py-2.5 border-b border-white/10 flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-slate-300">
             <span>
               {active?.status === 'ready' && downloadUrl ? '3D 环视预览' : '视口预览'}
             </span>
+            <CreativeStorageBadge compact className="!bg-white/10 !border-white/20 !text-slate-200" />
             {active && (
               <span className="uppercase tracking-wider text-[10px] text-indigo-300">
                 {active.status}
@@ -604,12 +643,12 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
             ) : active?.status === 'ready' && downloadUrl ? (
               <Model3dOrbitViewer
                 src={downloadUrl}
-                poster={active.previewImageUrl || active.sourceImage}
+                poster={previewPoster || undefined}
                 className="flex-1"
               />
             ) : active?.previewImageUrl ? (
               <div className="flex-1 flex items-center justify-center p-6">
-                <img
+                <VaultImg
                   src={active.previewImageUrl}
                   alt=""
                   className="max-h-72 rounded-2xl shadow-2xl shadow-indigo-500/20 object-contain"
@@ -618,7 +657,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
             ) : active?.sourceImage ? (
               <div className="flex-1 flex items-center justify-center p-6">
                 <div className="relative">
-                  <img
+                  <VaultImg
                     src={active.sourceImage}
                     alt=""
                     className="relative max-h-64 rounded-2xl object-contain opacity-80"

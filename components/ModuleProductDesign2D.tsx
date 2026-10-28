@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Sparkles,
   Plus,
@@ -38,8 +38,11 @@ import type { CreativeBrief } from '../services/creativeAgent/types';
 import { loadCatalogSkus } from '../services/productCatalogTypes';
 import { compressImageDataUrl } from '../services/catalogExcelService';
 import { setCreativeHandoff } from '../services/creativeAssetBridge';
+import { persistDesignAssets } from '../services/creativeAssetPersist';
 import { CreativePipelineBar } from './CreativeRefPicker';
 import { DesignConstraintCardPanel } from './DesignConstraintCardPanel';
+import { CreativeStorageBadge } from './CreativeStorageBadge';
+import { VaultImg } from './VaultMedia';
 import { loadProductCatalog } from '../services/productCatalog';
 import {
   buildDesignConstraintCard,
@@ -104,6 +107,25 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     setAssets(next);
     saveDesignAssets(next);
   };
+
+  /** 启动时：把仍挂临时外链 / dataURL 的图迁入本机 IndexedDB */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = loadDesignAssets();
+        const migrated = await persistDesignAssets(raw);
+        if (cancelled) return;
+        saveDesignAssets(migrated);
+        setAssets(migrated);
+      } catch (e) {
+        console.warn('design assets migrate', e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const skill = DESIGN_SKILLS.find((s) => s.id === skillId) || DESIGN_SKILLS[0];
 
@@ -334,7 +356,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             referenceImages: refImages.length ? refImages : undefined,
           });
       const now = Date.now();
-      const newAssets: DesignAsset[] = result.images.map((url, i) => ({
+      const newAssetsRaw: DesignAsset[] = result.images.map((url, i) => ({
         id: newDesignId('da'),
         projectId: proj.id,
         url,
@@ -343,6 +365,8 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
         angle: result.angles?.[i],
         createdAt: now,
       }));
+      // 立刻落本机素材库，避免供应商临时链过期后画布裂图
+      const newAssets = await persistDesignAssets(newAssetsRaw);
       const agentMsg = {
         id: newDesignId('m'),
         role: 'agent' as const,
@@ -352,7 +376,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
         at: now,
         assetIds: newAssets.map((a) => a.id),
       };
-      persistAssets([...newAssets, ...loadDesignAssets()]);
+      persistAssets([...newAssets, ...loadDesignAssets().filter((a) => !newAssets.some((n) => n.id === a.id))]);
       const latest = loadDesignProjects();
       persistProjects(
         latest.map((p) =>
@@ -618,7 +642,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                         onClick={() => setActiveId(a.projectId)}
                         className="w-full h-full"
                       >
-                        <img src={a.url} alt="" className="w-full h-full object-cover" />
+                        <VaultImg src={a.url} alt="" className="w-full h-full object-cover" />
                       </button>
                       <button
                         type="button"
@@ -640,13 +664,16 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
 
         {/* 中：Canvas */}
         <section className="xl:col-span-6 rounded-2xl border border-slate-200 bg-slate-50/80 flex flex-col min-h-[22rem] overflow-hidden">
-          <div className="px-3 py-2 border-b border-slate-200/80 bg-white/80 flex items-center justify-between gap-2">
+          <div className="px-3 py-2 border-b border-slate-200/80 bg-white/80 flex flex-wrap items-center justify-between gap-2">
             <div className="text-xs font-black text-slate-700 truncate">
               {active ? `画布 · ${active.title}` : '画布 · 新建或选择项目'}
             </div>
-            <div className="text-[10px] font-bold text-slate-400">
-              {canvasAssets.length} 张
-              {selectedIds.length ? ` · 已选 ${selectedIds.length}` : ''}
+            <div className="flex items-center gap-2 flex-wrap">
+              <CreativeStorageBadge compact />
+              <div className="text-[10px] font-bold text-slate-400">
+                {canvasAssets.length} 张
+                {selectedIds.length ? ` · 已选 ${selectedIds.length}` : ''}
+              </div>
             </div>
           </div>
           <div className="flex-1 overflow-y-auto p-3 custom-scrollbar">
@@ -747,7 +774,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                             : 'border-white hover:border-violet-200'
                         }`}
                       >
-                        <img
+                        <VaultImg
                           src={a.url}
                           alt=""
                           className="w-full aspect-square object-contain bg-slate-50 pointer-events-none"
