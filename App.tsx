@@ -133,6 +133,7 @@ import { ModuleLandingHub } from './components/ModuleLandingHub';
 import { ModulePane } from './components/ModulePane';
 import { loadCatalogSkus } from './services/productCatalogTypes';
 import { SphereNav, type SphereNavPhase } from './components/SphereNav';
+import { prefetchCoreModules, prefetchModule } from './services/modulePrefetch';
 
 /** 重模块按需加载，减轻首屏与切换时主线程压力 */
 const ModulePromoGenerator = lazy(() =>
@@ -218,8 +219,9 @@ const App: React.FC = () => {
   
   const [domainInput, setDomainInput] = useState('');
   const [activeModule, setActiveModule] = useState<ModuleType>(ModuleType.HOME);
-  /** 切换模块用 transition，避免整树同步卡死导航点击 */
+  /** 切换模块用 transition，避免整树同步卡死导航点击；并预热目标 chunk */
   const navigateModule = useCallback((m: ModuleType) => {
+    prefetchModule(m);
     startTransition(() => {
       setActiveModule(m);
     });
@@ -4560,7 +4562,10 @@ const App: React.FC = () => {
       <Login
         onLogin={(u) => {
           setUsageScope(u.username);
-          setCurrentUser(u);
+          prefetchCoreModules();
+          startTransition(() => {
+            setCurrentUser(u);
+          });
         }}
         onUsersChange={(next) => setUsers(next)}
       />
@@ -4934,14 +4939,14 @@ const App: React.FC = () => {
           {!loading && !errorMsg && (
             <Suspense
               fallback={
-                <div className="flex flex-col items-center justify-center py-24 text-slate-500 gap-3">
-                  <Loader2 className="animate-spin text-cyan-600" size={28} />
-                  <span className="text-sm font-bold">加载模块…</span>
+                <div className="flex items-center justify-center py-16 text-slate-400 gap-2">
+                  <Loader2 className="animate-spin text-cyan-600" size={20} />
+                  <span className="text-xs font-bold">片刻…</span>
                 </div>
               }
             >
             <>
-                {activeModule === ModuleType.HOME && (
+                <ModulePane id={ModuleType.HOME} activeId={activeModule} maxAlive={10}>
                   <ErrorBoundary label="今日看板">
                     <ModuleLandingHub
                       currentUser={currentUser}
@@ -4982,8 +4987,8 @@ const App: React.FC = () => {
                       }}
                     />
                   </ErrorBoundary>
-                )}
-                {activeModule === ModuleType.DISCOVERY && (
+                </ModulePane>
+                <ModulePane id={ModuleType.DISCOVERY} activeId={activeModule} maxAlive={10}>
                     <ClientFinder 
                         state={discoveryState} 
                         onStateChange={handleDiscoveryStateChange}
@@ -5028,8 +5033,8 @@ const App: React.FC = () => {
                         onBatchAddToCRM={handleBatchAddToCRM}
                         onBatchAnalyze={handleBatchAnalyzeExisting}
                     />
-                )}
-                {activeModule === ModuleType.CLIENT_CRM && (
+                </ModulePane>
+                <ModulePane id={ModuleType.CLIENT_CRM} activeId={activeModule} maxAlive={10}>
                     <ModuleClientCRM 
                         clients={crmClients} 
                         setClients={setCrmClients} 
@@ -5056,8 +5061,8 @@ const App: React.FC = () => {
                         onOpenClientReport={openCrmClientReport}
                         onNavOrderChange={setCrmNavOrder}
                     />
-                )}
-                {activeModule === ModuleType.PRODUCT_MATCH && (
+                </ModulePane>
+                <ModulePane id={ModuleType.PRODUCT_MATCH} activeId={activeModule} maxAlive={10}>
                     <ModuleProductMatch
                         history={history}
                         crmClients={crmClients}
@@ -5068,8 +5073,8 @@ const App: React.FC = () => {
                         onGoCrm={() => navigateModule(ModuleType.CLIENT_CRM)}
                         onNavigateModule={navigateModule}
                     />
-                )}
-                {activeModule === ModuleType.EMAIL_CAMPAIGN && (
+                </ModulePane>
+                <ModulePane id={ModuleType.EMAIL_CAMPAIGN} activeId={activeModule} maxAlive={10}>
                     <ModuleEmailCampaign
                       crmClients={crmClients}
                       onAddClients={handleAddClients}
@@ -5105,68 +5110,52 @@ const App: React.FC = () => {
                         });
                       }}
                     />
-                )}
-                {activeModule === ModuleType.IMAGE_GENERATOR && (
+                </ModulePane>
+                <ModulePane id={ModuleType.IMAGE_GENERATOR} activeId={activeModule} maxAlive={10}>
                     <ModuleImageGenerator />
-                )}
-                {activeModule === ModuleType.PRODUCT_CATALOG && currentUser && (
-                    <ModuleProductCatalog currentUser={currentUser} />
-                )}
-                {activeModule === ModuleType.PRODUCT_QUOTE && currentUser && (
-                    <ModuleProductQuote currentUser={currentUser} />
-                )}
+                </ModulePane>
                 {currentUser && (
                   <>
-                    <ModulePane
-                      id={ModuleType.PRODUCT_DESIGN_2D}
-                      activeId={activeModule}
-                      maxAlive={4}
-                    >
+                    <ModulePane id={ModuleType.PRODUCT_CATALOG} activeId={activeModule} maxAlive={10}>
+                      <ModuleProductCatalog currentUser={currentUser} />
+                    </ModulePane>
+                    <ModulePane id={ModuleType.PRODUCT_QUOTE} activeId={activeModule} maxAlive={10}>
+                      <ModuleProductQuote currentUser={currentUser} />
+                    </ModulePane>
+                    <ModulePane id={ModuleType.PRODUCT_DESIGN_2D} activeId={activeModule} maxAlive={10}>
                       <ModuleProductDesign2D
                         currentUser={currentUser}
                         onNavigateModule={navigateModule}
                       />
                     </ModulePane>
-                    <ModulePane
-                      id={ModuleType.PRODUCT_DESIGN_3D}
-                      activeId={activeModule}
-                      maxAlive={4}
-                    >
+                    <ModulePane id={ModuleType.PRODUCT_DESIGN_3D} activeId={activeModule} maxAlive={10}>
                       <ModuleProductDesign3D
                         currentUser={currentUser}
                         onNavigateModule={navigateModule}
                       />
                     </ModulePane>
-                    <ModulePane
-                      id={ModuleType.PRODUCT_AI_VIDEO}
-                      activeId={activeModule}
-                      maxAlive={4}
-                    >
+                    <ModulePane id={ModuleType.PRODUCT_AI_VIDEO} activeId={activeModule} maxAlive={10}>
                       <ModuleProductAiVideo
                         currentUser={currentUser}
                         onNavigateModule={navigateModule}
                       />
                     </ModulePane>
-                    <ModulePane
-                      id={ModuleType.PRODUCT_PACKAGING}
-                      activeId={activeModule}
-                      maxAlive={4}
-                    >
+                    <ModulePane id={ModuleType.PRODUCT_PACKAGING} activeId={activeModule} maxAlive={10}>
                       <ModuleProductPackaging
                         currentUser={currentUser}
                         onNavigateModule={navigateModule}
                       />
                     </ModulePane>
+                    <ModulePane id={ModuleType.SITE_BUILDER} activeId={activeModule} maxAlive={10}>
+                      <ModuleSiteBuilder currentUser={currentUser} />
+                    </ModulePane>
+                    <ModulePane id={ModuleType.SOCIAL_CONTENT} activeId={activeModule} maxAlive={10}>
+                      <ModuleSocialContent currentUser={currentUser} />
+                    </ModulePane>
+                    <ModulePane id={ModuleType.WHATSAPP} activeId={activeModule} maxAlive={10}>
+                      <ModuleContactTools currentUser={currentUser} crmClients={crmClients} />
+                    </ModulePane>
                   </>
-                )}
-                {activeModule === ModuleType.SITE_BUILDER && currentUser && (
-                    <ModuleSiteBuilder currentUser={currentUser} />
-                )}
-                {activeModule === ModuleType.SOCIAL_CONTENT && currentUser && (
-                    <ModuleSocialContent currentUser={currentUser} />
-                )}
-                {activeModule === ModuleType.WHATSAPP && currentUser && (
-                    <ModuleContactTools currentUser={currentUser} crmClients={crmClients} />
                 )}
                 {(
                   [
@@ -5178,7 +5167,7 @@ const App: React.FC = () => {
                     ModuleType.ECO_DELIVERY,
                   ] as ModuleType[]
                 ).includes(activeModule) && <ModuleComingSoon module={activeModule} />}
-                {activeModule === ModuleType.PROMO_GENERATOR && (
+                <ModulePane id={ModuleType.PROMO_GENERATOR} activeId={activeModule} maxAlive={10}>
                     <ModulePromoGenerator 
                         onStartAutomation={handleStartQueueGeneration}
                         initialPlaybookId={pendingPlaybookId}
@@ -5217,7 +5206,7 @@ const App: React.FC = () => {
                         onReloadQueue={handleReloadAutomationQueue}
                         canViewEmails={canViewFullDecisionMakerEmails(currentUser)}
                     />
-                )}
+                </ModulePane>
                 {activeModule === ModuleType.STRATEGY && (
                     <div className="animate-fade-in max-w-7xl mx-auto pb-10">
                         {analysisData && (

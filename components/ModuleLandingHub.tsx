@@ -106,7 +106,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
               <span className="font-bold text-slate-300 text-xs ml-2">你好，{currentUser.username}</span>
             </div>
             <p className="text-[10px] text-slate-400 font-medium truncate">
-              选品适市 → 获客背调 → 开发成交
+              赋能澄海玩具产业升级 · 选品适市 → 获客背调 → 开发成交
               {data?.fetchedAt ? ` · 情报 ${fmtTime(data.fetchedAt)}` : ''}
             </p>
           </div>

@@ -242,8 +242,125 @@ export function aliyunDevProxyPlugin(
       server.middlewares.use('/api/directmail', (req, res) => {
         void handleLocalDirectMail(req, res, opts?.directMailEnv);
       });
+
+      // 本地百炼临时图上传（与生产 /api/dashscope-upload 对齐）
+      server.middlewares.use('/api/dashscope-upload', (req, res) => {
+        void handleLocalDashscopeUpload(req, res);
+      });
     },
   };
+}
+
+async function handleLocalDashscopeUpload(req: IncomingMessage, res: ServerResponse) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'authorization, content-type');
+  res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS');
+  if (req.method === 'OPTIONS') {
+    res.statusCode = 204;
+    res.end();
+    return;
+  }
+  if (req.method !== 'POST') {
+    res.statusCode = 405;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ error: 'Only POST' }));
+    return;
+  }
+  try {
+    const raw = await readReqBody(req);
+    const body = JSON.parse(raw || '{}') as {
+      model?: string;
+      origin?: string;
+      contentType?: string;
+      contentBase64?: string;
+      filename?: string;
+    };
+    const apiKey = String(req.headers.authorization || '')
+      .replace(/^Bearer\s+/i, '')
+      .replace(/\s+/g, '')
+      .trim();
+    if (!apiKey) {
+      res.statusCode = 401;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ error: 'Missing Authorization' }));
+      return;
+    }
+    const model = (body.model || 'Tripo/Tripo-H3.1').trim();
+    const b64 = String(body.contentBase64 || '').replace(/^data:[^;]+;base64,/, '');
+    if (!b64) {
+      res.statusCode = 400;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ error: 'contentBase64 required' }));
+      return;
+    }
+    const contentType = body.contentType || 'image/jpeg';
+    const filename =
+      body.filename ||
+      `ref_${Date.now()}.${contentType.includes('png') ? 'png' : 'jpg'}`;
+    const origins = [
+      body.origin,
+      'https://dashscope.aliyuncs.com',
+    ].filter(Boolean) as string[];
+    const unique = [...new Set(origins.map((o) => {
+      try {
+        return new URL(o).origin;
+      } catch {
+        return o;
+      }
+    }))];
+
+    let lastErr = '';
+    for (const origin of unique) {
+      try {
+        const policyUrl = `${origin}/api/v1/uploads?action=getPolicy&model=${encodeURIComponent(model)}`;
+        const polRes = await fetch(policyUrl, {
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+        });
+        const polJson: any = await polRes.json().catch(() => ({}));
+        if (!polRes.ok) {
+          lastErr = polJson.message || polJson.code || `getPolicy HTTP ${polRes.status}`;
+          continue;
+        }
+        const data = polJson.data || polJson;
+        if (!data?.upload_host || !data?.policy) {
+          lastErr = 'policy missing fields';
+          continue;
+        }
+        const key = `${String(data.upload_dir).replace(/\/$/, '')}/${filename}`;
+        const buf = Buffer.from(b64, 'base64');
+        const form = new FormData();
+        form.append('OSSAccessKeyId', data.oss_access_key_id);
+        form.append('Signature', data.signature);
+        form.append('policy', data.policy);
+        form.append('x-oss-object-acl', data.x_oss_object_acl);
+        form.append('x-oss-forbid-overwrite', data.x_oss_forbid_overwrite);
+        form.append('key', key);
+        form.append('success_action_status', '200');
+        form.append('file', new Blob([buf], { type: contentType }), filename);
+        const up = await fetch(data.upload_host, { method: 'POST', body: form });
+        if (!up.ok) {
+          lastErr = `OSS upload HTTP ${up.status}`;
+          continue;
+        }
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ url: `oss://${key}` }));
+        return;
+      } catch (e: any) {
+        lastErr = e?.message || String(e);
+      }
+    }
+    res.statusCode = 502;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ error: lastErr || 'upload failed' }));
+  } catch (e: any) {
+    res.statusCode = 500;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ error: e?.message || 'upload crashed' }));
+  }
 }
 
 type DirectMailEnv = {

@@ -33,6 +33,7 @@ import { loadDataProviderLocal, saveDataProvider } from '../services/dataProvide
 import { consumeCreativeHandoff } from '../services/creativeAssetBridge';
 import { CreativePipelineBar, CreativeRefPicker } from './CreativeRefPicker';
 import { MODEL3D_SKILLS, type Model3dSkillId } from '../services/creativeSkills/model3dSkills';
+import { Model3dOrbitViewer } from './Model3dOrbitViewer';
 
 type Props = {
   currentUser: User;
@@ -102,17 +103,23 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     const key = quickKey.replace(/^\uFEFF/, '').replace(/^Bearer\s+/i, '').replace(/\s+/g, '').trim();
     if (!key) {
       setMsgTone('error');
-      setMsg('请粘贴图生 3D API Key（主路径或备选均可）');
+      setMsg('请粘贴图生 3D API Key（千问 sk-… / Tripo tsk_… / 备选均可）');
       return;
     }
     setSavingKey(true);
-    // tsk_ → 主路径；其余视为混元 TokenHub 备选（试用）
-    const target = /^tsk_/i.test(key) ? 'tripo' : 'hunyuan3d';
+    // sk- → 千问 MaaS · Tripo；tsk_ → Tripo 官方；其余 → 混元备选
+    const target = /^sk-/i.test(key) ? 'qwen_tripo' : /^tsk_/i.test(key) ? 'tripo' : 'hunyuan3d';
     const prev = loadDataProviderLocal(target);
     await saveDataProvider(target, {
       ...prev,
       enabled: true,
       apiKey: key,
+      ...(target === 'qwen_tripo'
+        ? {
+            apiBase: prev.apiBase?.trim() || 'https://cn-beijing.maas.qianwenaiapi.com',
+            extra: { ...(prev.extra || {}), modelId: prev.extra?.modelId || 'Tripo/Tripo-H3.1' },
+          }
+        : {}),
     });
     const st = getModel3dProviderStatus();
     setProvider(st);
@@ -121,9 +128,11 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     setMsgTone(st.ready ? 'ok' : 'error');
     setMsg(
       st.ready
-        ? target === 'hunyuan3d'
-          ? '3D 备选 Key 已保存并启用，可以开始生成'
-          : '3D API 已保存并启用，可以开始生成'
+        ? target === 'qwen_tripo'
+          ? '千问通道 Key 已保存并启用，可以开始生成'
+          : target === 'hunyuan3d'
+            ? '3D 备选 Key 已保存并启用，可以开始生成'
+            : '3D API 已保存并启用，可以开始生成'
         : st.detail
     );
   };
@@ -237,12 +246,18 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         sourceImages,
         quality,
         onProgress: (pct, status) => {
+          const label =
+            status === 'uploading' || status === 'uploaded'
+              ? '上传参考图'
+              : status === 'running'
+                ? '重建网格'
+                : status;
           patchJob(job.id, {
             progress: Math.round(pct),
-            previewHint: `生成中 ${Math.round(pct)}% · ${status}`,
+            previewHint: `${label} ${Math.round(pct)}%`,
           });
           setMsgTone('info');
-          setMsg(`生成中 ${Math.round(pct)}%`);
+          setMsg(`${label} ${Math.round(pct)}%`);
         },
       });
       patchJob(job.id, {
@@ -253,11 +268,11 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         pbrModelUrl: result.pbrModelUrl,
         baseModelUrl: result.baseModelUrl,
         previewImageUrl: result.previewImageUrl,
-        previewHint: '模型已就绪，可下载 GLB',
+        previewHint: '模型已就绪 · 可拖动环视 · 可下载 GLB',
         error: undefined,
       });
       setMsgTone('ok');
-      setMsg('3D 模型已生成，可在下方下载 GLB');
+      setMsg('3D 模型已生成：右侧可拖动旋转查看，也可下载 GLB');
     } catch (e: any) {
       const { humanizeCreativeProviderError } = await import('../services/providerErrorMessage');
       const errText = humanizeCreativeProviderError(e?.message || e);
@@ -325,7 +340,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                 <KeyRound size={14} /> 尚未配置图生 3D API
               </div>
               <p className="text-[11px] text-rose-800/90 font-medium leading-relaxed">
-                未配置 Key 时点击「生成」不会创建任务。请管理员在「系统管理 → 数据接入 → 图生 3D API」启用并填写
+                未配置 Key 时点击「生成」不会创建任务。请管理员在「系统管理 → 数据接入 → 千问通道 · Tripo 3D」启用并填写
                 Key（格式通常以 tsk_ 开头）。
               </p>
               {isAdmin && (
@@ -555,9 +570,11 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
           </div>
         </div>
 
-        <div className="lg:col-span-5 rounded-2xl border border-slate-200 bg-slate-950 text-white overflow-hidden min-h-[360px] flex flex-col">
+        <div className="lg:col-span-5 rounded-2xl border border-slate-200 bg-slate-950 text-white overflow-hidden min-h-[400px] flex flex-col">
           <div className="px-4 py-2.5 border-b border-white/10 flex items-center justify-between text-xs font-bold text-slate-300">
-            <span>视口预览</span>
+            <span>
+              {active?.status === 'ready' && downloadUrl ? '3D 环视预览' : '视口预览'}
+            </span>
             {active && (
               <span className="uppercase tracking-wider text-[10px] text-indigo-300">
                 {active.status}
@@ -568,11 +585,15 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
               </span>
             )}
           </div>
-          <div className="flex-1 relative flex items-center justify-center p-6">
+          <div className="flex-1 relative flex items-stretch justify-center min-h-[300px]">
             {active?.status === 'running' ? (
-              <div className="text-center space-y-3">
+              <div className="flex-1 flex flex-col items-center justify-center space-y-3 p-6">
                 <Loader2 className="mx-auto animate-spin text-indigo-400" size={36} />
-                <p className="text-sm font-bold text-slate-300">正在重建网格…</p>
+                <p className="text-sm font-bold text-slate-300">
+                  {(active.previewHint || '').includes('upload') || (active.progress ?? 0) < 12
+                    ? '正在上传参考图并重建网格…'
+                    : '正在重建网格…'}
+                </p>
                 <div className="w-48 h-1.5 rounded-full bg-white/10 mx-auto overflow-hidden">
                   <div
                     className="h-full bg-indigo-500 transition-all"
@@ -580,30 +601,42 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                   />
                 </div>
               </div>
-            ) : active?.previewImageUrl ? (
-              <img
-                src={active.previewImageUrl}
-                alt=""
-                className="max-h-72 rounded-2xl shadow-2xl shadow-indigo-500/20 object-contain"
+            ) : active?.status === 'ready' && downloadUrl ? (
+              <Model3dOrbitViewer
+                src={downloadUrl}
+                poster={active.previewImageUrl || active.sourceImage}
+                className="flex-1"
               />
-            ) : active?.sourceImage ? (
-              <div className="relative">
+            ) : active?.previewImageUrl ? (
+              <div className="flex-1 flex items-center justify-center p-6">
                 <img
-                  src={active.sourceImage}
+                  src={active.previewImageUrl}
                   alt=""
-                  className="relative max-h-64 rounded-2xl object-contain opacity-80"
+                  className="max-h-72 rounded-2xl shadow-2xl shadow-indigo-500/20 object-contain"
                 />
-                <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 text-[10px] font-black bg-indigo-500/90 px-2 py-1 rounded-lg whitespace-nowrap">
-                  {active.status === 'ready' ? '模型已就绪' : '参考图'}
+              </div>
+            ) : active?.sourceImage ? (
+              <div className="flex-1 flex items-center justify-center p-6">
+                <div className="relative">
+                  <img
+                    src={active.sourceImage}
+                    alt=""
+                    className="relative max-h-64 rounded-2xl object-contain opacity-80"
+                  />
+                  <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 text-[10px] font-black bg-indigo-500/90 px-2 py-1 rounded-lg whitespace-nowrap">
+                    参考图
+                  </div>
                 </div>
               </div>
             ) : active ? (
-              <div className="text-center space-y-2 px-4">
+              <div className="flex-1 flex flex-col items-center justify-center space-y-2 px-4">
                 <p className="text-sm font-bold text-slate-300">{active.title}</p>
                 <p className="text-xs text-slate-500">{active.error || active.previewHint}</p>
               </div>
             ) : (
-              <p className="text-sm text-slate-500 font-medium">从左侧创建任务后在此预览</p>
+              <p className="flex-1 flex items-center justify-center text-sm text-slate-500 font-medium">
+                从左侧创建任务后在此预览；生成完成后可拖动旋转查看
+              </p>
             )}
           </div>
           {active?.status === 'ready' && downloadUrl && (
@@ -624,7 +657,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                   rel="noreferrer"
                   className="inline-flex items-center gap-1 rounded-lg bg-white/10 hover:bg-white/15 text-[11px] font-black px-3 py-2"
                 >
-                  <ExternalLink size={12} /> 预览图
+                  <ExternalLink size={12} /> 平面渲染图
                 </a>
               )}
             </div>

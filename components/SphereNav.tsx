@@ -9,6 +9,7 @@ import {
   findSectionByModule,
 } from '../services/platformSections';
 import { ALWAYS_ACTIVE_MODULES } from '../services/moduleNav';
+import { prefetchModule } from '../services/modulePrefetch';
 
 export type SphereNavPhase = 'start' | 'sections' | 'submenu';
 
@@ -70,6 +71,7 @@ export const SphereNav: React.FC<Props> = ({
   const pickSection = (sec: PlatformSection) => {
     setSectionId(sec.id);
     setPhase('submenu');
+    sec.items.forEach((it) => prefetchModule(it.id));
     // 指挥舱仅一项：点板块直接进入今日看板
     if (sec.id === 'home' && sec.items[0]) {
       onSelectModule(sec.items[0].id);
@@ -82,7 +84,12 @@ export const SphereNav: React.FC<Props> = ({
       alert('请先完成客户搜索或背调，再进入该模块。');
       return;
     }
+    prefetchModule(mod);
     onSelectModule(mod);
+  };
+
+  const warmModule = (mod: ModuleType) => {
+    prefetchModule(mod);
   };
 
   const backToSections = () => setPhase('sections');
@@ -238,6 +245,8 @@ export const SphereNav: React.FC<Props> = ({
                   type="button"
                   disabled={locked}
                   onClick={() => pickModule(item.id)}
+                  onMouseEnter={() => warmModule(item.id)}
+                  onFocus={() => warmModule(item.id)}
                   className={`tp-sphere-leaf w-full flex items-center gap-2 px-2 py-2 rounded-xl text-left transition-all disabled:opacity-35 ${
                     active ? 'is-active' : ''
                   }`}

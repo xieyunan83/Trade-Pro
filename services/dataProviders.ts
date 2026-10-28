@@ -11,6 +11,7 @@ export type DataProviderId =
   | 'customs'
   | 'marketplace_intel'
   | 'yellow_pages'
+  | 'qwen_tripo'
   | 'tripo'
   | 'hunyuan3d'
   | 'wan_video'
@@ -68,10 +69,17 @@ export const DATA_PROVIDER_DEFS: DataProviderDef[] = [
     description: '海外企业名录批量入库（买家库）',
   },
   {
-    id: 'tripo',
-    label: '图生 3D API',
+    id: 'qwen_tripo',
+    label: '千问通道 · Tripo 3D',
     description:
-      '产品图/文 → 真实 GLB 网格。在供应商控制台创建 API Key（Bearer），启用后「产品设计 · 3D」即可生成并下载模型。',
+      '经千问 MaaS 调用 Tripo/Tripo-H3.1（文生/图生 3D，异步）。只需填写「按量付费」API Key（sk-…），默认网关 cn-beijing.maas.qianwenaiapi.com；启用后「产品设计 · 3D」优先走此通道。',
+    docsHint: 'https://www.qianwenai.com/models/Tripo/Tripo-H3.1',
+  },
+  {
+    id: 'tripo',
+    label: '图生 3D API（官方直连）',
+    description:
+      '产品图/文 → 真实 GLB 网格。在 Tripo 控制台创建 API Key（tsk_…），启用后可作千问通道之外的直连路径。',
     docsHint: 'https://platform.tripo3d.ai/docs',
   },
   {

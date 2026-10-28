@@ -95,8 +95,8 @@
         }, 45000);
     </script>
 
-    <meta name="description" content="外贸智慧协同：客户背调、决策人挖掘、开发信与宣发协同，企业级外贸获客平台。">
-    <meta property="og:title" content="外贸智慧协同">
+    <meta name="description" content="外贸智慧协同：赋能澄海玩具产业升级——选品适市、客户背调、开发触达与协同成交。">
+    <meta property="og:title" content="外贸智慧协同 · 赋能澄海玩具产业升级">
     <meta property="og:description" content="深度背调、决策人挖掘、竞品分析与团队协同，企业级外贸获客平台。">
     <meta property="og:image" content="https://images.unsplash.com/photo-1557804506-669a67965ba0?q=80&w=1974&auto=format&fit=crop">
     <meta property="og:type" content="website">
@@ -272,6 +272,7 @@
         /* Main stage：与侧栏同一画布，仅多一层轻雾让卡片浮起 */
         .tp-main-stage {
           background: transparent;
+          content-visibility: auto;
         }
         .tp-main-stage::before {
           content: '';
@@ -526,10 +527,17 @@
           background: linear-gradient(135deg, #0284c7, #0891b2) !important;
         }
 
-        .animate-fade-in { animation: fadeIn 0.45s cubic-bezier(0.22, 1, 0.36, 1); }
+        /* 更快切入：模块切换几乎无感知延迟 */
+        .animate-fade-in { animation: fadeIn 0.16s cubic-bezier(0.22, 1, 0.36, 1); }
         @keyframes fadeIn {
-          from { opacity: 0; transform: translateY(12px); }
+          from { opacity: 0; transform: translateY(4px); }
           to { opacity: 1; transform: translateY(0); }
+        }
+        .tp-login-hero { animation: fadeIn 0.28s cubic-bezier(0.22, 1, 0.36, 1); }
+        .tp-login-card { animation: fadeIn 0.32s cubic-bezier(0.22, 1, 0.36, 1) 0.04s both; }
+        /* 保活面板切换：去掉进场动画，瞬时显示 */
+        [data-module-pane][data-active="1"] .animate-fade-in {
+          animation: none;
         }
         @keyframes tpPulse {
           0%, 100% { opacity: 0.55; transform: scale(1); }
@@ -775,8 +783,9 @@
         .tp-login {
           min-height: 100dvh;
           background:
-            radial-gradient(900px 500px at 20% 10%, rgba(6, 182, 212, 0.22), transparent 55%),
-            radial-gradient(700px 400px at 90% 80%, rgba(14, 165, 233, 0.18), transparent 50%),
+            radial-gradient(900px 500px at 20% 10%, rgba(6, 182, 212, 0.26), transparent 55%),
+            radial-gradient(700px 400px at 90% 80%, rgba(14, 165, 233, 0.2), transparent 50%),
+            radial-gradient(500px 280px at 50% 100%, rgba(8, 145, 178, 0.12), transparent 60%),
             linear-gradient(160deg, #070b14 0%, #0b1220 40%, #101a2e 100%);
           color: #e2e8f0;
         }

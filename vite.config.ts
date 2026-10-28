@@ -75,6 +75,9 @@ export default defineConfig(({ mode }) => {
       sourcemap: false,
       minify: 'esbuild',
     },
+    optimizeDeps: {
+      include: ['@google/model-viewer', 'three'],
+    },
     // 不再使用 server.proxy 的 router（不可靠）；改由 aliyunDevProxyPlugin 处理 /qwen-api
     define: {
       'process.env.API_KEY': JSON.stringify(pick('API_KEY', 'REACT_APP_GEMINI_API_KEY')),

@@ -71,7 +71,20 @@ export const DataProvidersPanel: React.FC<Props> = ({ currentUser }) => {
   const onSave = async (id: DataProviderId) => {
     setSavingId(id);
     setMsg(null);
-    const meta = map[id] || blank();
+    let meta = map[id] || blank();
+    // 千问 Tripo：填 Key 即默认启用 + 写入官方 curl 网关与模型
+    if (id === 'qwen_tripo' && (meta.apiKey || '').trim()) {
+      meta = {
+        ...meta,
+        enabled: true,
+        apiBase: (meta.apiBase || '').trim() || 'https://cn-beijing.maas.qianwenaiapi.com',
+        extra: {
+          ...(meta.extra || {}),
+          modelId: (meta.extra?.modelId || '').trim() || 'Tripo/Tripo-H3.1',
+        },
+      };
+      setMap((prev) => ({ ...prev, [id]: meta }));
+    }
     const ok = await saveDataProvider(id, meta);
     setSavingId(null);
     const label = DATA_PROVIDER_DEFS.find((d) => d.id === id)?.label || id;
@@ -227,15 +240,17 @@ export const DataProvidersPanel: React.FC<Props> = ({ currentUser }) => {
                   value={meta.apiKey || ''}
                   onChange={(e) => patch(def.id, { apiKey: e.target.value })}
                   placeholder={
-                    def.id === 'tripo'
-                      ? 'tsk_…（图生 3D 控制台 API Key）'
-                      : def.id === 'hunyuan3d'
-                        ? 'TokenHub API Key（图生 3D 备选）'
-                        : def.id === 'wan_video'
-                          ? 'sk-… / sk-sp-…（可与千问同账号）'
-                          : def.id === 'design_agent'
-                            ? '图像 API Key'
-                            : 'API Key / Token'
+                    def.id === 'qwen_tripo'
+                      ? 'sk-…（千问按量付费 API Key，填好即可）'
+                      : def.id === 'tripo'
+                        ? 'tsk_…（Tripo 官方控制台 API Key）'
+                        : def.id === 'hunyuan3d'
+                          ? 'TokenHub API Key（图生 3D 备选）'
+                          : def.id === 'wan_video'
+                            ? 'sk-… / sk-sp-…（可与千问同账号）'
+                            : def.id === 'design_agent'
+                              ? '图像 API Key'
+                              : 'API Key / Token'
                   }
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-mono"
                 />
@@ -248,11 +263,13 @@ export const DataProvidersPanel: React.FC<Props> = ({ currentUser }) => {
                   value={meta.apiBase || ''}
                   onChange={(e) => patch(def.id, { apiBase: e.target.value })}
                   placeholder={
-                    def.id === 'wan_video'
-                      ? 'https://token-plan.cn-beijing.maas.aliyuncs.com（可选）'
-                      : def.id === 'tripo' || def.id === 'hunyuan3d'
-                        ? '默认即可，无需填写'
-                        : 'https://…'
+                    def.id === 'qwen_tripo'
+                      ? '默认 https://cn-beijing.maas.qianwenaiapi.com（一般不用改）'
+                      : def.id === 'wan_video'
+                        ? 'https://token-plan.cn-beijing.maas.aliyuncs.com（可选）'
+                        : def.id === 'tripo' || def.id === 'hunyuan3d'
+                          ? '默认即可，无需填写'
+                          : 'https://…'
                   }
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
                 />
@@ -269,11 +286,13 @@ export const DataProvidersPanel: React.FC<Props> = ({ currentUser }) => {
                     })
                   }
                   placeholder={
-                    def.id === 'design_agent'
-                      ? '模型 ID（可选）'
-                      : def.id === 'wan_video'
-                        ? '默认 wan3.0-video'
-                        : '可选'
+                    def.id === 'qwen_tripo'
+                      ? '默认 Tripo/Tripo-H3.1'
+                      : def.id === 'design_agent'
+                        ? '模型 ID（可选）'
+                        : def.id === 'wan_video'
+                          ? '默认 wan3.0-video'
+                          : '可选'
                   }
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-mono"
                 />

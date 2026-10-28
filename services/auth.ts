@@ -353,8 +353,30 @@ export async function authenticateUser(username: string, password: string): Prom
   const trimmedPwd = password.trim();
   if (!trimmedUser || !trimmedPwd) return null;
 
-  // 登录前先拉云端，避免手机/电脑仍用各自旧密码
+  // 快路径：本机已有账号且密码正确 → 立即登录，云端同步放到后台（消除登录等待感）
   let users = loadUsersFromStorage();
+  const localHit = findUserByName(users, trimmedUser);
+  if (localHit?.password?.trim() && !localHit.disabled) {
+    const localOk = await verifyPassword(trimmedPwd, localHit.password);
+    if (localOk) {
+      void syncUsersAcrossDevices().catch(() => undefined);
+      let nextUsers = users;
+      if (!localHit.password.startsWith(PBKDF2_PREFIX)) {
+        nextUsers = await upgradePasswordHashIfNeeded(users, trimmedUser, trimmedPwd);
+      }
+      const freshLocal = findUserByName(nextUsers, trimmedUser) || localHit;
+      const mustChangePassword =
+        freshLocal.isFirstLogin ||
+        (await isPasswordDefault(freshLocal.password, 'admin123')) ||
+        (await isPasswordDefault(freshLocal.password, 'user123'));
+      return normalizeUser({
+        ...freshLocal,
+        isFirstLogin: mustChangePassword ? true : freshLocal.isFirstLogin,
+      });
+    }
+  }
+
+  // 慢路径：本机无匹配 → 拉云端再验（换机 / 改密后）
   try {
     users = await syncUsersAcrossDevices();
   } catch (e) {

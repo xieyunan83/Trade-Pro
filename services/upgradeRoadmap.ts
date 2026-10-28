@@ -123,14 +123,14 @@ export const MODULE_ROADMAP: Partial<Record<ModuleType, ModuleRoadmap>> = {
     phase: 'P0',
     summary: '图/文生 3D 工作室：高细节与引擎就绪两档，导出 GLB/OBJ/STL；后台配置供应商 API。',
     bullets: ['图生 / 文生', '品质分档', '项目库与产品库挂接', 'API 接通后下载真实网格'],
-    providers: ['tripo', 'hunyuan3d'],
+    providers: ['qwen_tripo', 'tripo', 'hunyuan3d'],
   },
   [ModuleType.PRODUCT_3D_PRINT]: {
     phase: 'P2',
     summary: '3D 模型转打印交付（STL / 工艺说明）。',
     bullets: ['从 3D 资产导出打印文件', '对接本地打印服务商（生态）'],
     inspiredBy: ['产业带打印服务'],
-    providers: ['tripo'],
+    providers: ['qwen_tripo', 'tripo'],
   },
   [ModuleType.PRODUCT_AI_VIDEO]: {
     phase: 'P0',

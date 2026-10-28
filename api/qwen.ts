@@ -19,7 +19,7 @@ const applyCors = (res: { setHeader: (k: string, v: string) => void }) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader(
     'Access-Control-Allow-Headers',
-    'authorization, content-type, x-qwen-origin, x-upstream-authorization, x-upstream-path, apikey, x-goog-api-key, x-dashscope-async'
+    'authorization, content-type, x-qwen-origin, x-upstream-authorization, x-upstream-path, apikey, x-goog-api-key, x-dashscope-async, x-dashscope-ossresourceresolve'
   );
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
 };
@@ -140,6 +140,13 @@ export default async function handler(req: any, res: any) {
           req.headers['x-dashscope-async'] || req.headers['X-DashScope-Async'];
         if (typeof dashAsync === 'string' && dashAsync.trim()) {
           headers['X-DashScope-Async'] = dashAsync.trim();
+        }
+        // 临时 oss:// 素材解析（百炼上传后图生 3D）
+        const ossResolve =
+          req.headers['x-dashscope-ossresourceresolve'] ||
+          req.headers['X-DashScope-OssResourceResolve'];
+        if (typeof ossResolve === 'string' && ossResolve.trim()) {
+          headers['X-DashScope-OssResourceResolve'] = ossResolve.trim();
         }
       }
 
