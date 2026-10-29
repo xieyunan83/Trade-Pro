@@ -121,7 +121,8 @@ function createWindow() {
     minWidth: 1024,
     minHeight: 680,
     title: '外贸智慧协同',
-    backgroundColor: '#0f172a',
+    // 与登录页 .tp-login 底色一致；避免网页未绘制时出现「假死深蓝空窗」
+    backgroundColor: '#070b14',
     show: false,
     autoHideMenuBar: process.platform !== 'darwin',
     webPreferences: {

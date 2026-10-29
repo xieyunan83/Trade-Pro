@@ -585,8 +585,9 @@
           from { opacity: 0; transform: translateY(4px); }
           to { opacity: 1; transform: translateY(0); }
         }
-        .tp-login-hero { animation: fadeIn 0.28s cubic-bezier(0.22, 1, 0.36, 1); }
-        .tp-login-card { animation: fadeIn 0.32s cubic-bezier(0.22, 1, 0.36, 1) 0.04s both; }
+        /* 登录首屏禁止依赖 opacity 动画 / both 填充：Electron 下易卡在 opacity:0 只剩深蓝底 */
+        .tp-login-hero,
+        .tp-login-card { animation: none !important; opacity: 1 !important; transform: none !important; }
         /* 保活面板切换：去掉进场动画，瞬时显示 */
         [data-module-pane][data-active="1"] .animate-fade-in {
           animation: none;
@@ -846,8 +847,9 @@
 </head>
 <body>
     <div id="root">
-      <div id="tp-boot" style="min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:system-ui,sans-serif;color:#64748b;background:#f8fafc;">
-        正在加载…
+      <div id="tp-boot" style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;font-family:system-ui,sans-serif;color:#94a3b8;background:#070b14;">
+        <div style="font-size:15px;font-weight:700;color:#e2e8f0;">外贸智慧协同</div>
+        <div style="font-size:13px;">正在加载登录界面…</div>
       </div>
     </div>
     <script type="module" src="./index.tsx"></script>

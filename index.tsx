@@ -6,6 +6,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 declare global {
   interface Window {
     __TP_BOOT_MARK?: (phase?: string) => void;
+    __TP_BOOT_FAIL?: (reason?: string) => void;
     __BW_SEED_DONE?: boolean;
   }
 }
@@ -18,7 +19,7 @@ if (!rootElement) {
   throw new Error("Could not find root element to mount to");
 }
 
-/** 桌面客户端：等安装包种子写入 localStorage 后再挂载，避免空账号抢先登录 */
+/** 桌面客户端：尽量等种子，但绝不为等种子挡住登录首屏 */
 const waitDesktopSeed = (): Promise<void> => {
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
   if (!/TradeCollabClient\/|BabyWorldClient\//i.test(ua)) return Promise.resolve();
@@ -32,23 +33,30 @@ const waitDesktopSeed = (): Promise<void> => {
       resolve();
     };
     window.addEventListener('bw-seed-done', done, { once: true });
-    // 种子应很快写入；过长等待只会让用户以为卡死
-    window.setTimeout(done, 800);
+    // 首屏优先：最多等 300ms，超时照样挂载登录页
+    window.setTimeout(done, 300);
   });
 };
 
-void waitDesktopSeed().then(() => {
+const mountApp = () => {
   try {
     sessionStorage.removeItem('tp_boot_reload_v1');
   } catch {
     /* ignore */
   }
   window.__TP_BOOT_MARK?.('正在渲染界面…');
-  ReactDOM.createRoot(rootElement).render(
-    <React.StrictMode>
-      <ErrorBoundary label="应用">
-        <App />
-      </ErrorBoundary>
-    </React.StrictMode>
-  );
-});
+  try {
+    ReactDOM.createRoot(rootElement).render(
+      <React.StrictMode>
+        <ErrorBoundary label="应用">
+          <App />
+        </ErrorBoundary>
+      </React.StrictMode>
+    );
+  } catch (e) {
+    console.error('[boot] mount failed', e);
+    window.__TP_BOOT_FAIL?.('mount-failed');
+  }
+};
+
+void waitDesktopSeed().then(mountApp).catch(() => mountApp());

@@ -4605,7 +4605,14 @@ const App: React.FC = () => {
   };
 
   if (!currentUser) {
-    if (!authReady) return <div className="h-screen flex items-center justify-center bg-slate-50"><Loader2 className="animate-spin text-blue-600" size={40} /></div>;
+    if (!authReady) {
+      return (
+        <div className="tp-login h-screen min-h-[100dvh] flex flex-col items-center justify-center gap-3 text-slate-200">
+          <Loader2 className="animate-spin text-cyan-300" size={36} />
+          <p className="text-sm font-bold text-slate-300">正在准备登录…</p>
+        </div>
+      );
+    }
     return (
       <Login
         onLogin={(u) => {

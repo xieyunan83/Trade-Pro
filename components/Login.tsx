@@ -287,7 +287,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
         </p>
       </div>
 
-      <div className="relative z-10 bg-white/[0.97] backdrop-blur-xl p-6 sm:p-8 md:p-10 rounded-[1.75rem] sm:rounded-[2rem] shadow-signal w-full max-w-md border border-white/30 tp-login-card">
+      <div className="relative z-10 bg-white p-6 sm:p-8 md:p-10 rounded-[1.75rem] sm:rounded-[2rem] shadow-signal w-full max-w-md border border-slate-200/80 tp-login-card">
         <div className="flex items-center gap-3 mb-7 sm:mb-8">
           <div className="text-cyan-600 bg-gradient-to-br from-cyan-50 to-sky-50 p-2.5 rounded-xl border border-cyan-100/80">
             {pendingUser ? (
