@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useRef, useCallback, startTransition, Suspense, lazy } from 'react';
+import React, { useState, useEffect, useRef, useCallback, startTransition, Suspense } from 'react';
 import { analyzeCompany, hasApiKeyConfigured, checkApiKeyAvailability, hydrateApiConfigsFromCloud, searchPotentialClients, enableTavilyGeminiQwenCascade, enableGeminiQwenParallelMerge, synthesizeInsightsFallback } from './services/geminiService';
 import {
   subscribeCooldown,
@@ -134,52 +134,68 @@ import { ModulePane } from './components/ModulePane';
 import { loadCatalogSkus } from './services/productCatalogTypes';
 import { SphereNav, type SphereNavPhase } from './components/SphereNav';
 import { prefetchCoreModules, prefetchModule } from './services/modulePrefetch';
+import { lazyWithRetry } from './utils/lazyWithRetry';
 
-/** 重模块按需加载，减轻首屏与切换时主线程压力 */
-const ModulePromoGenerator = lazy(() =>
-  import('./components/ModulePromoGenerator').then((m) => ({ default: m.ModulePromoGenerator }))
+/** 重模块按需加载；部署后旧 chunk 404 时自动强刷一次 */
+const ModulePromoGenerator = lazyWithRetry(
+  () => import('./components/ModulePromoGenerator').then((m) => ({ default: m.ModulePromoGenerator })),
+  'promo'
 );
-const ModuleClientCRM = lazy(() =>
-  import('./components/ModuleClientCRM').then((m) => ({ default: m.ModuleClientCRM }))
+const ModuleClientCRM = lazyWithRetry(
+  () => import('./components/ModuleClientCRM').then((m) => ({ default: m.ModuleClientCRM })),
+  'crm'
 );
-const ModuleProductMatch = lazy(() =>
-  import('./components/ModuleProductMatch').then((m) => ({ default: m.ModuleProductMatch }))
+const ModuleProductMatch = lazyWithRetry(
+  () => import('./components/ModuleProductMatch').then((m) => ({ default: m.ModuleProductMatch })),
+  'match'
 );
-const ModuleEmailCampaign = lazy(() =>
-  import('./components/ModuleEmailCampaign').then((m) => ({ default: m.ModuleEmailCampaign }))
+const ModuleEmailCampaign = lazyWithRetry(
+  () => import('./components/ModuleEmailCampaign').then((m) => ({ default: m.ModuleEmailCampaign })),
+  'email'
 );
-const ModuleImageGenerator = lazy(() =>
-  import('./components/ModuleImageGenerator').then((m) => ({ default: m.ModuleImageGenerator }))
+const ModuleImageGenerator = lazyWithRetry(
+  () => import('./components/ModuleImageGenerator').then((m) => ({ default: m.ModuleImageGenerator })),
+  'imggen'
 );
-const ModuleContactTools = lazy(() =>
-  import('./components/ModuleContactTools').then((m) => ({ default: m.ModuleContactTools }))
+const ModuleContactTools = lazyWithRetry(
+  () => import('./components/ModuleContactTools').then((m) => ({ default: m.ModuleContactTools })),
+  'contact'
 );
-const ModuleProductCatalog = lazy(() =>
-  import('./components/ModuleProductCatalog').then((m) => ({ default: m.ModuleProductCatalog }))
+const ModuleProductCatalog = lazyWithRetry(
+  () => import('./components/ModuleProductCatalog').then((m) => ({ default: m.ModuleProductCatalog })),
+  'catalog'
 );
-const ModuleProductQuote = lazy(() =>
-  import('./components/ModuleProductQuote').then((m) => ({ default: m.ModuleProductQuote }))
+const ModuleProductQuote = lazyWithRetry(
+  () => import('./components/ModuleProductQuote').then((m) => ({ default: m.ModuleProductQuote })),
+  'quote'
 );
-const ModuleProductDesign2D = lazy(() =>
-  import('./components/ModuleProductDesign2D').then((m) => ({ default: m.ModuleProductDesign2D }))
+const ModuleProductDesign2D = lazyWithRetry(
+  () => import('./components/ModuleProductDesign2D').then((m) => ({ default: m.ModuleProductDesign2D })),
+  'design2d'
 );
-const ModuleProductDesign3D = lazy(() =>
-  import('./components/ModuleProductDesign3D').then((m) => ({ default: m.ModuleProductDesign3D }))
+const ModuleProductDesign3D = lazyWithRetry(
+  () => import('./components/ModuleProductDesign3D').then((m) => ({ default: m.ModuleProductDesign3D })),
+  'design3d'
 );
-const ModuleProductAiVideo = lazy(() =>
-  import('./components/ModuleProductAiVideo').then((m) => ({ default: m.ModuleProductAiVideo }))
+const ModuleProductAiVideo = lazyWithRetry(
+  () => import('./components/ModuleProductAiVideo').then((m) => ({ default: m.ModuleProductAiVideo })),
+  'aivideo'
 );
-const ModuleProductPackaging = lazy(() =>
-  import('./components/ModuleProductPackaging').then((m) => ({ default: m.ModuleProductPackaging }))
+const ModuleProductPackaging = lazyWithRetry(
+  () => import('./components/ModuleProductPackaging').then((m) => ({ default: m.ModuleProductPackaging })),
+  'packaging'
 );
-const ModuleSiteBuilder = lazy(() =>
-  import('./components/ModuleSiteBuilder').then((m) => ({ default: m.ModuleSiteBuilder }))
+const ModuleSiteBuilder = lazyWithRetry(
+  () => import('./components/ModuleSiteBuilder').then((m) => ({ default: m.ModuleSiteBuilder })),
+  'site'
 );
-const ModuleSocialContent = lazy(() =>
-  import('./components/ModuleSocialContent').then((m) => ({ default: m.ModuleSocialContent }))
+const ModuleSocialContent = lazyWithRetry(
+  () => import('./components/ModuleSocialContent').then((m) => ({ default: m.ModuleSocialContent })),
+  'social'
 );
-const ClientFinder = lazy(() =>
-  import('./components/ClientFinder').then((m) => ({ default: m.ClientFinder }))
+const ClientFinder = lazyWithRetry(
+  () => import('./components/ClientFinder').then((m) => ({ default: m.ClientFinder })),
+  'finder'
 );
 import { BatchBackgroundExcelPanel } from './components/BatchBackgroundExcelPanel';
 import { batchBgQueueTarget, type ClassifiedBatchBgRow } from './services/batchBackgroundExcel';

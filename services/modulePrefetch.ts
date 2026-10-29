@@ -2,6 +2,7 @@
  * 空闲 / 悬停时预拉取模块 chunk，切换时几乎零等待。
  */
 import { ModuleType } from '../types';
+import { isChunkLoadError } from '../utils/lazyWithRetry';
 
 const loaders: Partial<Record<ModuleType, () => Promise<unknown>>> = {
   [ModuleType.DISCOVERY]: () => import('../components/ClientFinder'),
@@ -28,8 +29,15 @@ export const prefetchModule = (mod: ModuleType): void => {
   const load = loaders[mod];
   if (!load) return;
   warmed.add(mod);
-  void load().catch(() => {
+  void load().catch((err) => {
     warmed.delete(mod);
+    if (typeof window !== 'undefined' && isChunkLoadError(err)) {
+      const flag = 'tp_chunk_reload_prefetch';
+      if (!sessionStorage.getItem(flag)) {
+        sessionStorage.setItem(flag, '1');
+        window.location.reload();
+      }
+    }
   });
 };
 
