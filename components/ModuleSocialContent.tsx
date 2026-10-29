@@ -38,6 +38,8 @@ import {
   publishWithToken,
   loadSocialConnections,
 } from '../services/socialPublishService';
+import { CreativeRefPicker } from './CreativeRefPicker';
+import { VaultImg } from './VaultMedia';
 
 type Props = { currentUser: User };
 
@@ -64,6 +66,8 @@ export const ModuleSocialContent: React.FC<Props> = ({ currentUser }) => {
   const [productImage, setProductImage] = useState<string>('');
   const refInputRef = useRef<HTMLInputElement>(null);
   const productInputRef = useRef<HTMLInputElement>(null);
+  /** 从平面设计 / 产品库点选时，填入哪一侧 */
+  const [libraryTarget, setLibraryTarget] = useState<'ref' | 'product'>('product');
   const [showConnect, setShowConnect] = useState(false);
   const [tokenDraft, setTokenDraft] = useState('');
   const [accountIdDraft, setAccountIdDraft] = useState('');
@@ -369,7 +373,7 @@ export const ModuleSocialContent: React.FC<Props> = ({ currentUser }) => {
                   className="w-full rounded-xl border border-dashed border-slate-300 hover:border-fuchsia-400 bg-slate-50 hover:bg-fuchsia-50/50 min-h-[5.5rem] flex flex-col items-center justify-center gap-1 overflow-hidden"
                 >
                   {referenceImage ? (
-                    <img src={referenceImage} alt="参考" className="max-h-20 object-contain" />
+                    <VaultImg src={referenceImage} alt="参考" className="max-h-20 object-contain" />
                   ) : (
                     <>
                       <ImagePlus size={16} className="text-slate-400" />
@@ -411,7 +415,7 @@ export const ModuleSocialContent: React.FC<Props> = ({ currentUser }) => {
                   className="w-full rounded-xl border border-dashed border-slate-300 hover:border-fuchsia-400 bg-slate-50 hover:bg-fuchsia-50/50 min-h-[5.5rem] flex flex-col items-center justify-center gap-1 overflow-hidden"
                 >
                   {productImage ? (
-                    <img src={productImage} alt="产品" className="max-h-20 object-contain" />
+                    <VaultImg src={productImage} alt="产品" className="max-h-20 object-contain" />
                   ) : (
                     <>
                       <ImagePlus size={16} className="text-slate-400" />
@@ -432,6 +436,84 @@ export const ModuleSocialContent: React.FC<Props> = ({ currentUser }) => {
                   </button>
                 ) : null}
               </div>
+            </div>
+
+            <div className="rounded-xl border border-fuchsia-100 bg-fuchsia-50/40 p-2 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-[10px] font-black text-fuchsia-900">从平面设计 / 产品库调用</div>
+                <div className="flex rounded-lg overflow-hidden border border-fuchsia-200 text-[10px] font-black">
+                  <button
+                    type="button"
+                    onClick={() => setLibraryTarget('ref')}
+                    className={`px-2 py-1 ${
+                      libraryTarget === 'ref' ? 'bg-fuchsia-600 text-white' : 'bg-white text-slate-600'
+                    }`}
+                  >
+                    填入参考图
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLibraryTarget('product')}
+                    className={`px-2 py-1 ${
+                      libraryTarget === 'product' ? 'bg-fuchsia-600 text-white' : 'bg-white text-slate-600'
+                    }`}
+                  >
+                    填入产品图
+                  </button>
+                </div>
+              </div>
+              <p className="text-[9px] text-fuchsia-800/80 font-medium leading-snug">
+                当前点选将写入「
+                {libraryTarget === 'ref' ? '参考图片（成稿形态）' : '产品图片（实拍主图）'}
+                」。也可上方本地上传。
+              </p>
+              <CreativeRefPicker
+                title="选用已有出图"
+                accent="violet"
+                multiple={false}
+                max={1}
+                value={
+                  libraryTarget === 'ref'
+                    ? referenceImage
+                      ? [referenceImage]
+                      : []
+                    : productImage
+                      ? [productImage]
+                      : []
+                }
+                onChange={(urls) => {
+                  const u = urls[0] || '';
+                  if (libraryTarget === 'ref') {
+                    setReferenceImage(u);
+                  } else {
+                    setProductImage(u);
+                    if (u.startsWith('http') || u.startsWith('data:') || u.startsWith('blob:')) {
+                      setImageUrl(u);
+                    } else if (u.startsWith('vault:')) {
+                      setImageUrl('');
+                    } else {
+                      setImageUrl(u);
+                    }
+                  }
+                  if (u) {
+                    setMsg(
+                      libraryTarget === 'ref'
+                        ? '已从素材库填入参考图'
+                        : '已从素材库填入产品图'
+                    );
+                  }
+                }}
+                onSkuMeta={(metaSku) => {
+                  if (!metaSku) return;
+                  if (metaSku.skuName && !productName.trim()) {
+                    setProductName(metaSku.skuName);
+                  }
+                  if (metaSku.skuCode) {
+                    const hit = skus.find((s) => s.skuCode === metaSku.skuCode);
+                    if (hit) setSkuPick(hit.id);
+                  }
+                }}
+              />
             </div>
 
             <button
@@ -476,7 +558,7 @@ export const ModuleSocialContent: React.FC<Props> = ({ currentUser }) => {
                 <div className="grid grid-cols-2 gap-2">
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 aspect-video max-h-36 flex flex-col items-center justify-center overflow-hidden">
                     {active.referenceImageDataUrl ? (
-                      <img
+                      <VaultImg
                         src={active.referenceImageDataUrl}
                         alt="参考"
                         className="max-h-full max-w-full object-contain"
@@ -487,7 +569,7 @@ export const ModuleSocialContent: React.FC<Props> = ({ currentUser }) => {
                   </div>
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 aspect-video max-h-36 flex flex-col items-center justify-center overflow-hidden">
                     {active.productImageDataUrl ? (
-                      <img
+                      <VaultImg
                         src={active.productImageDataUrl}
                         alt="产品"
                         className="max-h-full max-w-full object-contain"
