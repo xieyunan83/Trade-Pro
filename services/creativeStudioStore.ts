@@ -80,6 +80,18 @@ export type SiteProject = {
   locale: 'zh' | 'en' | 'es' | 'ar';
   /** 内置模板 id，见 siteBuilderTemplates */
   templateId?: string;
+  /** 参考站 URL（提示词粘贴解析） */
+  referenceUrl?: string;
+  referenceNotes?: string;
+  /** 技术选型 */
+  frontendId?: string;
+  backendId?: string;
+  databaseId?: string;
+  /** 部署目标 */
+  deployId?: string;
+  /** HTML 已写入本机站点库（IndexedDB） */
+  htmlPersisted?: boolean;
+  lastPublishedAt?: number;
   skuCodes: string[];
   sections: SiteSection[];
   messages: Array<{ id: string; role: 'user' | 'agent'; text: string; at: number }>;
