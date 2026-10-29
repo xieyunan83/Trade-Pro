@@ -34,7 +34,7 @@ import {
 import { loadDataProviderLocal, saveDataProvider } from '../services/dataProviders';
 import { consumeCreativeHandoff } from '../services/creativeAssetBridge';
 import { persistModel3dJob } from '../services/creativeAssetPersist';
-import { isVaultRef, tryPersistMediaUrl } from '../services/creativeAssetVault';
+import { isVaultRef, putBlobInVault, tryPersistMediaUrl } from '../services/creativeAssetVault';
 import { CreativePipelineBar, CreativeRefPicker } from './CreativeRefPicker';
 import { MODEL3D_SKILLS, type Model3dSkillId } from '../services/creativeSkills/model3dSkills';
 import { Model3dOrbitViewer } from './Model3dOrbitViewer';
@@ -722,6 +722,38 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                 src={downloadUrl}
                 poster={previewPoster || undefined}
                 className="flex-1"
+                downloadHref={downloadUrl}
+                onLocalBlob={(blob) => {
+                  if (!activeId) return;
+                  if (
+                    isVaultRef(active?.modelUrl) ||
+                    isVaultRef(active?.pbrModelUrl) ||
+                    isVaultRef(active?.baseModelUrl)
+                  ) {
+                    return;
+                  }
+                  void (async () => {
+                    try {
+                      const vaultRef = await putBlobInVault({
+                        blob,
+                        kind: 'model3d',
+                        sourceHint: active?.providerTaskId || activeId,
+                        mime: blob.type || 'model/gltf-binary',
+                      });
+                      patchJob(activeId, {
+                        modelUrl: vaultRef,
+                        pbrModelUrl: active?.pbrModelUrl?.startsWith('http')
+                          ? vaultRef
+                          : active?.pbrModelUrl,
+                        previewHint: '模型已就绪 · 已存本机 · 可拖动环视',
+                      });
+                      setMsgTone('ok');
+                      setMsg('3D 已写入本机素材库，刷新后仍可预览；也可下载 GLB');
+                    } catch (e) {
+                      console.warn('[3d] vault from preview blob failed', e);
+                    }
+                  })();
+                }}
               />
             ) : active?.previewImageUrl ? (
               <div className="flex-1 flex items-center justify-center p-6">
@@ -756,15 +788,15 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
             )}
           </div>
           {active?.status === 'ready' && downloadUrl && (
-            <div className="px-4 py-3 border-t border-white/10 flex flex-wrap gap-2">
+            <div className="px-4 py-3 border-t border-white/10 flex flex-wrap gap-2 items-center">
               <a
                 href={downloadUrl}
                 target="_blank"
                 rel="noreferrer"
-                download
-                className="inline-flex items-center gap-1 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-[11px] font-black px-3 py-2 text-white"
+                download={`${(active.title || 'model').replace(/\s+/g, '_')}.glb`}
+                className="inline-flex items-center gap-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-[11px] font-black px-3 py-2.5 text-white shadow-lg shadow-emerald-500/30"
               >
-                <Download size={12} /> 下载 GLB
+                <Download size={12} /> 立即下载 GLB（已生成，请先保存）
               </a>
               {active.previewImageUrl && (
                 <a

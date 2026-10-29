@@ -214,7 +214,7 @@ const fetchBlobWithTimeout = async (url: string, timeoutMs: number): Promise<Blo
 };
 
 const persistTimeoutMs = (kind: VaultKind): number => {
-  if (kind === 'model3d') return 90_000;
+  if (kind === 'model3d') return 180_000;
   if (kind === 'video') return 120_000;
   return 30_000;
 };
@@ -236,8 +236,16 @@ export const persistMediaUrl = async (
   let blob: Blob;
   if (raw.startsWith('data:')) {
     blob = await dataUrlToBlob(raw);
-  } else if (/^https?:\/\//i.test(raw) || raw.startsWith('blob:')) {
+  } else if (raw.startsWith('blob:')) {
     blob = await fetchBlobWithTimeout(raw, persistTimeoutMs(kind));
+  } else if (/^https?:\/\//i.test(raw)) {
+    // 大 GLB 用 XHR（超时更长）；失败则抛给 tryPersist 保留原链
+    if (kind === 'model3d') {
+      const { fetchRemoteBlob } = await import('./fetchRemoteBlob');
+      blob = await fetchRemoteBlob(raw, { timeoutMs: persistTimeoutMs(kind) });
+    } else {
+      blob = await fetchBlobWithTimeout(raw, persistTimeoutMs(kind));
+    }
   } else {
     throw new Error('无法识别的素材地址');
   }
