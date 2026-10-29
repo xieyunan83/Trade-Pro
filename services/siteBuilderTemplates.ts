@@ -3,6 +3,7 @@
  * 界面文案不暴露第三方建站产品名。
  */
 import { newCreativeId, type SiteSection } from './creativeStudioStore';
+import { planSiteCopyFromPrompt, type PlannedSiteCopy } from './siteBriefPlanner';
 
 export type SiteTemplateId =
   | 'trade_hero'
@@ -71,6 +72,8 @@ export type BuildSiteHtmlOpts = {
   locale: 'zh' | 'en' | 'es' | 'ar';
   productLabels: string[];
   sections?: SiteSection[];
+  /** 可选：规划好的文案（优先于 brief 切片） */
+  planned?: PlannedSiteCopy;
 };
 
 const copyByLocale = (locale: BuildSiteHtmlOpts['locale']) => {
@@ -79,19 +82,22 @@ const copyByLocale = (locale: BuildSiteHtmlOpts['locale']) => {
       navHome: '首页',
       navProducts: '产品',
       navWhy: '优势',
+      navAbout: '关于',
       navContact: '联系',
       cta: '获取报价',
       productsTitle: '精选产品',
       whyTitle: '为什么选择我们',
       contactTitle: '留下需求，我们尽快回复',
-      contactHint: '邮箱 / WhatsApp 将用于跟进（可回灌 CRM）',
+      contactHint: '邮箱 / WhatsApp 将用于跟进',
       trust: '工厂直达 · MOQ 灵活 · 证书齐全 · 专属跟单',
+      aboutTitle: '关于我们',
     };
   }
   return {
     navHome: 'Home',
     navProducts: 'Products',
     navWhy: 'Why us',
+    navAbout: 'About',
     navContact: 'Contact',
     cta: 'Request quote',
     productsTitle: 'Featured products',
@@ -99,6 +105,7 @@ const copyByLocale = (locale: BuildSiteHtmlOpts['locale']) => {
     contactTitle: 'Tell us what you need',
     contactHint: 'Email / WhatsApp for follow-up',
     trust: 'Factory-direct · Flexible MOQ · Certificates · Dedicated desk',
+    aboutTitle: 'About us',
   };
 };
 
@@ -109,62 +116,51 @@ const esc = (s: string) =>
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 
-/** 从对话简报生成区块 */
+/** 从对话简报生成区块（先规划文案，禁止整段 prompt 进标题） */
 export const buildSectionsFromPrompt = (
   brief: string,
   productLabels: string[],
   templateId: SiteTemplateId
 ): SiteSection[] => {
-  const b = brief.trim() || 'Professional export landing page';
-  const productsLine =
-    productLabels.length > 0
-      ? productLabels.slice(0, 8).join(' · ')
-      : 'Attach SKUs from your catalog to showcase here';
-  const heroExtra =
-    templateId === 'inquiry_first'
-      ? 'Leave your target market and quantity — we reply within 24h.'
-      : templateId === 'brand_story'
-        ? 'Crafted with care. Built for importers who care about consistency.'
-        : 'Reliable supply · Fast sampling · Global shipping.';
-
+  const plan = planSiteCopyFromPrompt(brief, productLabels, templateId);
   return [
     {
       id: newCreativeId('sec'),
       kind: 'hero',
-      title: b.slice(0, 72),
-      body: heroExtra,
+      title: plan.heroTitle,
+      body: plan.heroBody,
     },
     {
       id: newCreativeId('sec'),
       kind: 'products',
-      title: 'Featured line',
-      body: productsLine,
+      title: plan.productsTitle,
+      body: plan.productCards.join(' · '),
     },
     {
       id: newCreativeId('sec'),
       kind: 'features',
-      title: 'Why partner with us',
-      body: 'Factory-direct · Flexible MOQ · Full certificates · Dedicated merchandiser.',
+      title: plan.featuresTitle,
+      body: plan.featuresBody,
     },
     {
       id: newCreativeId('sec'),
       kind: 'cta',
-      title: 'Get a quote',
-      body: 'Share destination market and volume — we respond fast.',
+      title: plan.ctaTitle,
+      body: plan.ctaBody,
     },
     {
       id: newCreativeId('sec'),
       kind: 'contact',
-      title: 'Contact',
-      body: 'Email / WhatsApp form can sync back to CRM after go-live.',
+      title: plan.aboutTitle,
+      body: plan.aboutBody,
     },
   ];
 };
 
 /** Vibe Coding 气质：氛围底、表现力标题字体、克制动效 */
-const themeCss = (id: SiteTemplateId, accent: string): string => {
+const themeCss = (id: SiteTemplateId, accent: string, fashion: boolean): string => {
   const dark = id !== 'minimal_clean';
-  const bg = dark ? '#06080f' : '#f6f7fb';
+  const bg = dark ? (fashion ? '#07060c' : '#06080f') : '#f6f7fb';
   const fg = dark ? '#e8edf7' : '#0f172a';
   const muted = dark ? '#9aa8c0' : '#64748b';
   const card = dark ? 'rgba(255,255,255,0.045)' : '#ffffff';
@@ -174,38 +170,61 @@ const themeCss = (id: SiteTemplateId, accent: string): string => {
 :root{--bg:${bg};--fg:${fg};--muted:${muted};--accent:${accent};--card:${card};--border:${border}}
 *{box-sizing:border-box}html{scroll-behavior:smooth}
 body{margin:0;font-family:Manrope,ui-sans-serif,system-ui,sans-serif;background:
-  radial-gradient(900px 420px at 12% -10%, color-mix(in srgb,var(--accent) 22%, transparent), transparent 60%),
-  radial-gradient(700px 380px at 92% 8%, color-mix(in srgb,var(--accent) 12%, transparent), transparent 55%),
-  var(--bg);color:var(--fg);line-height:1.55}
+  radial-gradient(1000px 480px at 8% -8%, color-mix(in srgb,var(--accent) 26%, transparent), transparent 62%),
+  radial-gradient(720px 400px at 96% 4%, color-mix(in srgb,var(--accent) 14%, transparent), transparent 55%),
+  ${fashion && dark ? 'linear-gradient(180deg,#0a0812 0%,#06080f 40%,#06080f 100%),' : ''}var(--bg);color:var(--fg);line-height:1.55}
 a{color:inherit;text-decoration:none}
-.wrap{max-width:1100px;margin:0 auto;padding:0 1.25rem}
+.wrap{max-width:1120px;margin:0 auto;padding:0 1.25rem}
 .nav{display:flex;align-items:center;justify-content:space-between;padding:1.05rem 0;border-bottom:1px solid var(--border);position:sticky;top:0;backdrop-filter:blur(14px);background:color-mix(in srgb,var(--bg) 78%,transparent);z-index:5}
 .brand{font-family:Syne,Manrope,sans-serif;font-weight:800;letter-spacing:-0.04em;font-size:1.08rem}
-.nav-links{display:flex;gap:1rem;font-size:.78rem;font-weight:700;color:var(--muted)}
+.nav-links{display:flex;gap:1rem;font-size:.78rem;font-weight:700;color:var(--muted);flex-wrap:wrap}
 .btn{display:inline-flex;align-items:center;gap:.4rem;background:var(--accent);color:${dark ? '#041016' : '#fff'};font-weight:800;font-size:.85rem;padding:.75rem 1.15rem;border-radius:999px;border:none;cursor:pointer;box-shadow:0 10px 30px color-mix(in srgb,var(--accent) 35%, transparent);transition:transform .2s ease}
 .btn:hover{transform:translateY(-1px)}
-.hero{padding:4.8rem 0 3.6rem;display:grid;gap:1.15rem;animation:rise .7s ease both}
-.hero h1{font-family:Syne,Manrope,sans-serif;font-size:clamp(2rem,4.4vw,3.25rem);line-height:1.05;letter-spacing:-0.045em;margin:0;max-width:15ch}
-.hero p{color:var(--muted);max-width:44ch;margin:0;font-size:1.05rem}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:1rem;padding:2.5rem 0}
-.card{background:var(--card);border:1px solid var(--border);border-radius:1.2rem;padding:1.2rem;min-height:7.5rem;backdrop-filter:blur(8px);transition:border-color .2s ease, transform .2s ease}
+.btn-ghost{background:transparent;color:var(--fg);border:1px solid var(--border);box-shadow:none}
+.hero{padding:4.5rem 0 2.8rem;display:grid;gap:1.1rem;animation:rise .7s ease both}
+.hero h1{font-family:Syne,Manrope,sans-serif;font-size:clamp(2.1rem,4.6vw,3.4rem);line-height:1.08;letter-spacing:-0.045em;margin:0;max-width:16ch}
+.hero p{color:var(--muted);max-width:48ch;margin:0;font-size:1.05rem}
+.hero-actions{display:flex;flex-wrap:wrap;gap:.75rem;margin-top:.35rem}
+.trust{display:flex;flex-wrap:wrap;gap:.55rem;padding:.35rem 0 1.5rem}
+.trust span{font-size:.72rem;font-weight:700;color:var(--muted);border:1px solid var(--border);border-radius:999px;padding:.35rem .7rem;background:var(--card)}
+.cats{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 1.25rem}
+.cats span{font-size:.75rem;font-weight:800;padding:.4rem .75rem;border-radius:.7rem;background:color-mix(in srgb,var(--accent) 16%, transparent);color:var(--fg)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:1rem;padding:.5rem 0 2.5rem}
+.card{background:var(--card);border:1px solid var(--border);border-radius:1.2rem;padding:0;min-height:9.5rem;overflow:hidden;backdrop-filter:blur(8px);transition:border-color .2s ease, transform .2s ease;display:flex;flex-direction:column}
 .card:hover{border-color:color-mix(in srgb,var(--accent) 45%, var(--border));transform:translateY(-2px)}
-.card h3{margin:0 0 .4rem;font-family:Syne,sans-serif;font-size:.95rem;letter-spacing:-0.02em}
-.card p{margin:0;font-size:.8rem;color:var(--muted)}
-.section{padding:2.85rem 0;border-top:1px solid var(--border)}
+.card-visual{height:88px;background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 35%,#111),#1a1f2e);position:relative}
+.card-visual::after{content:'';position:absolute;inset:auto 12px 10px auto;width:36px;height:36px;border-radius:10px;background:rgba(255,255,255,.12)}
+.card-body{padding:1rem 1.1rem 1.15rem}
+.card h3{margin:0 0 .35rem;font-family:Syne,sans-serif;font-size:.95rem;letter-spacing:-0.02em}
+.card p{margin:0;font-size:.78rem;color:var(--muted)}
+.section{padding:2.4rem 0;border-top:1px solid var(--border)}
 .section h2{margin:0 0 .75rem;font-family:Syne,sans-serif;font-size:1.4rem;letter-spacing:-0.03em}
-.section p{margin:0;color:var(--muted);max-width:52ch}
-.cta-band{margin:2rem 0 3rem;padding:2.1rem;border-radius:1.6rem;background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 30%,transparent),transparent);border:1px solid var(--border)}
-.footer{padding:2rem 0 3rem;color:var(--muted);font-size:.75rem;border-top:1px solid var(--border)}
-.pill{display:inline-block;font-size:.65rem;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-bottom:.75rem}
+.section p{margin:0;color:var(--muted);max-width:56ch}
+.split{display:grid;gap:1.5rem}
+@media(min-width:800px){.split{grid-template-columns:1.2fr .8fr;align-items:center}}
+.panel{background:var(--card);border:1px solid var(--border);border-radius:1.35rem;padding:1.35rem}
+.cta-band{margin:1.5rem 0 2.5rem;padding:2.1rem;border-radius:1.6rem;background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 30%,transparent),transparent);border:1px solid var(--border)}
+.footer{padding:2rem 0 3rem;color:var(--muted);font-size:.75rem;border-top:1px solid var(--border);display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap}
+.pill{display:inline-block;font-size:.65rem;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-bottom:.55rem}
+.form-mock{display:grid;gap:.65rem;margin-top:1rem}
+.form-mock input,.form-mock textarea{width:100%;border-radius:.8rem;border:1px solid var(--border);background:color-mix(in srgb,var(--bg) 70%,transparent);color:var(--fg);padding:.7rem .85rem;font:inherit}
+.form-mock textarea{min-height:72px;resize:vertical}
 @keyframes rise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
 `;
 };
 
 /** 生成可放入 iframe 的完整 HTML */
 export const buildSitePreviewHtml = (opts: BuildSiteHtmlOpts): string => {
-  const meta = SITE_TEMPLATES.find((t) => t.id === opts.templateId) || SITE_TEMPLATES[0];
-  const copy = copyByLocale(opts.locale);
+  const plan =
+    opts.planned ||
+    planSiteCopyFromPrompt(
+      opts.brief || opts.title,
+      opts.productLabels,
+      opts.templateId
+    );
+  const meta = SITE_TEMPLATES.find((t) => t.id === (opts.templateId || plan.templateId)) || SITE_TEMPLATES[0];
+  const locale = (opts.locale === 'zh' || plan.locale === 'zh' ? 'zh' : 'en') as 'zh' | 'en';
+  const copy = copyByLocale(locale);
   const sections =
     opts.sections && opts.sections.length
       ? opts.sections
@@ -214,33 +233,48 @@ export const buildSitePreviewHtml = (opts: BuildSiteHtmlOpts): string => {
   const products = sections.find((s) => s.kind === 'products');
   const features = sections.find((s) => s.kind === 'features');
   const cta = sections.find((s) => s.kind === 'cta');
-  const contact = sections.find((s) => s.kind === 'contact');
+  const about = sections.find((s) => s.kind === 'contact');
+
+  const productNames =
+    opts.productLabels.length > 0
+      ? opts.productLabels.slice(0, 8)
+      : plan.productCards.length
+        ? plan.productCards
+        : (products?.body || '')
+            .split(/[·|,，]/)
+            .map((x) => x.trim())
+            .filter(Boolean)
+            .slice(0, 8);
 
   const productCards =
-    opts.productLabels.length > 0
-      ? opts.productLabels
-          .slice(0, 8)
-          .map(
-            (p) =>
-              `<article class="card"><h3>${esc(p.split(' ').slice(0, 6).join(' '))}</h3><p>${esc(copy.trust)}</p></article>`
-          )
-          .join('')
-      : (products?.body || '')
-          .split(/[·|,，]/)
-          .map((x) => x.trim())
-          .filter(Boolean)
-          .slice(0, 6)
-          .map((p) => `<article class="card"><h3>${esc(p)}</h3><p>${esc(copy.trust)}</p></article>`)
-          .join('') ||
-        `<article class="card"><h3>SKU showcase</h3><p>${esc(products?.body || copy.trust)}</p></article>`;
+    productNames
+      .map(
+        (p, i) =>
+          `<article class="card"><div class="card-visual" style="filter:hue-rotate(${i * 28}deg)"></div><div class="card-body"><h3>${esc(p.split(' ').slice(0, 8).join(' '))}</h3><p>${esc(plan.trustLine || copy.trust)}</p></div></article>`
+      )
+      .join('') ||
+    `<article class="card"><div class="card-visual"></div><div class="card-body"><h3>SKU showcase</h3><p>${esc(copy.trust)}</p></div></article>`;
+
+  const catHtml = (plan.categories || [])
+    .map((c) => `<span>${esc(c)}</span>`)
+    .join('');
+
+  const trustBits = (plan.trustLine || copy.trust)
+    .split(/[·|]/)
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .map((t) => `<span>${esc(t)}</span>`)
+    .join('');
 
   const dir = opts.locale === 'ar' ? 'rtl' : 'ltr';
-  const brand = esc((opts.title || 'Studio Site').slice(0, 28));
+  const brand = esc((plan.brandName || opts.title || 'Studio Site').slice(0, 28));
+  const heroTitle = esc((hero?.title || plan.heroTitle).slice(0, 64));
+  const heroBody = esc(hero?.body || plan.heroBody || '');
 
-  return `<!DOCTYPE html><html lang="${esc(opts.locale)}" dir="${dir}"><head>
+  return `<!DOCTYPE html><html lang="${esc(locale)}" dir="${dir}"><head>
 <meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>${brand}</title>
-<style>${themeCss(opts.templateId, meta.accent)}</style>
+<style>${themeCss(meta.id, meta.accent, plan.styleHint === 'fashion' || plan.styleHint === 'playful')}</style>
 </head><body>
 <div class="wrap">
   <header class="nav">
@@ -249,34 +283,62 @@ export const buildSitePreviewHtml = (opts: BuildSiteHtmlOpts): string => {
       <a href="#top">${esc(copy.navHome)}</a>
       <a href="#products">${esc(copy.navProducts)}</a>
       <a href="#why">${esc(copy.navWhy)}</a>
+      <a href="#about">${esc(copy.navAbout)}</a>
       <a href="#contact">${esc(copy.navContact)}</a>
     </nav>
   </header>
 
   <section class="hero" id="top">
     <div class="pill">${esc(meta.labelEn)}</div>
-    <h1>${esc(hero?.title || opts.brief || opts.title)}</h1>
-    <p>${esc(hero?.body || '')}</p>
-    <div><a class="btn" href="#contact">${esc(copy.cta)}</a></div>
+    <h1>${heroTitle}</h1>
+    <p>${heroBody}</p>
+    <div class="hero-actions">
+      <a class="btn" href="#contact">${esc(cta?.title || plan.ctaTitle || copy.cta)}</a>
+      <a class="btn btn-ghost" href="#products">${esc(copy.navProducts)}</a>
+    </div>
   </section>
 
-  <section class="section" id="products">
-    <h2>${esc(products?.title || copy.productsTitle)}</h2>
+  <div class="trust">${trustBits}</div>
+
+  <section class="section" id="products" style="border-top:none;padding-top:0">
+    <h2>${esc(products?.title || plan.productsTitle || copy.productsTitle)}</h2>
+    <div class="cats">${catHtml}</div>
     <div class="grid">${productCards}</div>
   </section>
 
   <section class="section" id="why">
-    <h2>${esc(features?.title || copy.whyTitle)}</h2>
-    <p>${esc(features?.body || copy.trust)}</p>
+    <h2>${esc(features?.title || plan.featuresTitle || copy.whyTitle)}</h2>
+    <p>${esc(features?.body || plan.featuresBody || copy.trust)}</p>
+  </section>
+
+  <section class="section" id="about">
+    <div class="split">
+      <div>
+        <h2>${esc(about?.title || plan.aboutTitle || copy.aboutTitle)}</h2>
+        <p>${esc(about?.body || plan.aboutBody || '')}</p>
+      </div>
+      <div class="panel">
+        <div class="pill">OEM / ODM</div>
+        <p style="margin:0;color:var(--muted);font-size:.9rem">${esc(plan.trustLine)}</p>
+      </div>
+    </div>
   </section>
 
   <section class="cta-band" id="contact">
-    <h2 style="margin:0 0 .5rem;letter-spacing:-0.03em">${esc(cta?.title || contact?.title || copy.contactTitle)}</h2>
-    <p style="margin:0 0 1rem;color:var(--muted)">${esc(cta?.body || contact?.body || copy.contactHint)}</p>
-    <a class="btn" href="mailto:sales@example.com">${esc(copy.cta)}</a>
+    <h2 style="margin:0 0 .5rem;letter-spacing:-0.03em">${esc(cta?.title || plan.ctaTitle || copy.contactTitle)}</h2>
+    <p style="margin:0;color:var(--muted)">${esc(cta?.body || plan.ctaBody || copy.contactHint)}</p>
+    <div class="form-mock">
+      <input placeholder="${locale === 'zh' ? '公司 / 市场' : 'Company / market'}" />
+      <input placeholder="Email / WhatsApp" />
+      <textarea placeholder="${locale === 'zh' ? '目标产品与数量' : 'Target products & quantity'}"></textarea>
+      <div><a class="btn" href="mailto:sales@example.com">${esc(copy.cta)}</a></div>
+    </div>
   </section>
 
-  <footer class="footer">Web Studio · Vibe preview · Ready to publish</footer>
+  <footer class="footer">
+    <span>${brand} · Web Studio preview</span>
+    <span>${esc(plan.trustLine)}</span>
+  </footer>
 </div>
 </body></html>`;
 };

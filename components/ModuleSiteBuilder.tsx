@@ -47,10 +47,11 @@ import {
   type DeployOption,
   type StackOption,
 } from '../services/siteStackCatalog';
+import { analyzeReferenceFromPrompt } from '../services/siteReferenceAnalyze';
 import {
-  analyzeReferenceFromPrompt,
-  applyChatEditsToBrief,
-} from '../services/siteReferenceAnalyze';
+  planSiteCopyFromPrompt,
+  plannedCopyToBrief,
+} from '../services/siteBriefPlanner';
 import { deleteSiteHtml, getSiteHtml, putSiteHtml } from '../services/siteProjectVault';
 
 type Props = { currentUser: User };
@@ -61,8 +62,6 @@ const LOCALE_LABEL: Record<SiteProject['locale'], string> = {
   es: 'Español',
   ar: 'العربية',
 };
-
-const URL_RE_STRIP = /https?:\/\/[^\s]+/gi;
 
 const OptionCard: React.FC<{
   opt: StackOption | DeployOption;
@@ -155,32 +154,39 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
       .filter((s) => codes.includes(s.skuCode))
       .map((s) => `${s.skuCode} ${s.nameEn || s.name}`);
 
-  const buildHtmlFor = (proj: SiteProject, codes: string[]) =>
-    buildSitePreviewHtml({
-      templateId: (proj.templateId as SiteTemplateId) || 'trade_hero',
-      title: proj.title,
-      brief: proj.brief,
-      locale: proj.locale,
-      productLabels: productLabelsFor(codes),
+  const buildHtmlFor = (proj: SiteProject, codes: string[], sourcePrompt?: string) => {
+    const labels = productLabelsFor(codes);
+    const tpl = (proj.templateId as SiteTemplateId) || 'trade_hero';
+    const seed = sourcePrompt || proj.brief || proj.title;
+    const planned = planSiteCopyFromPrompt(seed, labels, tpl);
+    return buildSitePreviewHtml({
+      templateId: tpl,
+      title: proj.title || planned.brandName,
+      brief: seed,
+      locale: proj.locale === 'zh' || planned.locale === 'zh' ? 'zh' : 'en',
+      productLabels: labels,
       sections: proj.sections,
+      planned,
     });
+  };
 
   const createFromPrompt = async (prompt: string, tpl?: SiteTemplateId) => {
     const text = prompt.trim();
     if (!text) return;
     const ref = analyzeReferenceFromPrompt(text);
-    const useTpl = tpl || ref.suggestedTemplate || templateId;
-    const now = Date.now();
     const labels = productLabelsFor(skuCodes);
-    const brief = [text, ref.briefAugment].filter(Boolean).join('\n');
-    const sections = buildSectionsFromPrompt(brief, labels, useTpl);
+    const plan = planSiteCopyFromPrompt(text, labels, tpl || ref.suggestedTemplate || templateId);
+    const useTpl = tpl || plan.templateId || ref.suggestedTemplate || templateId;
+    const now = Date.now();
+    const brief = [plannedCopyToBrief(plan, text), ref.briefAugment].filter(Boolean).join('\n');
+    const sections = buildSectionsFromPrompt(text, labels, useTpl);
     const meta = getTemplateMeta(useTpl);
     const id = newCreativeId('site');
     const proj: SiteProject = {
       id,
-      title: (ref.host ? `${ref.host} · ` : '') + text.replace(URL_RE_STRIP, '').trim().slice(0, 36) || meta.label,
+      title: plan.brandName || meta.label,
       brief,
-      locale: 'en',
+      locale: plan.locale,
       templateId: useTpl,
       referenceUrl: ref.url || undefined,
       referenceNotes: ref.styleNotes.join('；') || undefined,
@@ -195,16 +201,16 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
         {
           id: newCreativeId('m'),
           role: 'agent',
-          text: `Vibe 初稿已生成（模板「${meta.label}」）。${
-            ref.url ? `已参考 ${ref.host || ref.url}。` : ''
-          }像聊天一样告诉我要改什么；满意后点「推送上线」。站点会写入本机备份，不会因刷新突然消失。`,
+          text: `已按你的建站指令搭好「${plan.brandName}」初稿（模板「${meta.label}」· ${plan.locale === 'zh' ? '中文' : 'English'}）。${
+            ref.url ? `版式节奏参考 ${ref.host || ref.url}，文案已换成你的货盘。` : ''
+          }右侧是完整落地页预览（首屏/货盘/优势/询盘）。继续说改动，或点「推送上线」。`,
           at: now,
         },
         { id: newCreativeId('m'), role: 'user', text, at: now + 1 },
         {
           id: newCreativeId('m'),
           role: 'agent',
-          text: `选型：前端 ${getStackOption(FRONTEND_OPTIONS, frontendId)?.label} · 后台 ${getStackOption(BACKEND_OPTIONS, backendId)?.label} · 数据库 ${getStackOption(DATABASE_OPTIONS, databaseId)?.label} · 部署 ${getDeployOption(deployId)?.label}`,
+          text: `选型：前端 ${getStackOption(FRONTEND_OPTIONS, frontendId)?.label} · 后台 ${getStackOption(BACKEND_OPTIONS, backendId)?.label} · 数据库 ${getStackOption(DATABASE_OPTIONS, databaseId)?.label} · 部署 ${getDeployOption(deployId)?.label}。预览为可交付 HTML 骨架；推送上线后可挂真实后台与数据库。`,
           at: now + 2,
         },
       ],
@@ -213,7 +219,15 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
       createdAt: now,
       updatedAt: now,
     };
-    const html = buildHtmlFor(proj, proj.skuCodes);
+    const html = buildSitePreviewHtml({
+      templateId: useTpl,
+      title: proj.title,
+      brief: text,
+      locale: proj.locale,
+      productLabels: labels,
+      sections,
+      planned: plan,
+    });
     const ok = await persistProjectHtml(proj, html);
     proj.htmlPersisted = ok;
     persistMeta([proj, ...projects]);
@@ -239,10 +253,7 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
     const userMsg = { id: newCreativeId('m'), role: 'user' as const, text, at: Date.now() };
     const codes = skuCodes.length ? skuCodes : active.skuCodes;
     const labels = productLabelsFor(codes);
-    let nextLocale = active.locale;
     let nextTpl = (active.templateId as SiteTemplateId) || templateId;
-    if (/中文|chinese/i.test(text)) nextLocale = 'zh';
-    if (/english|英文/i.test(text)) nextLocale = 'en';
     for (const t of SITE_TEMPLATES) {
       if (text.includes(t.label) || new RegExp(t.labelEn, 'i').test(text)) {
         nextTpl = t.id;
@@ -251,24 +262,32 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
     }
     const ref = analyzeReferenceFromPrompt(text);
     if (ref.url && ref.suggestedTemplate) nextTpl = ref.suggestedTemplate;
-    const mergedBrief = applyChatEditsToBrief(
-      active.brief,
-      text,
-      ref.briefAugment || active.referenceNotes
-    );
-    const sections = buildSectionsFromPrompt(mergedBrief.slice(-600), labels, nextTpl);
+    // 合并历史意图 + 本轮改口，再重新规划页面（不把指令贴进标题）
+    const seed = [active.brief, text, ref.briefAugment || active.referenceNotes]
+      .filter(Boolean)
+      .join('\n');
+    const planned = planSiteCopyFromPrompt(seed, labels, nextTpl);
+    const nextLocale: SiteProject['locale'] = /中文|chinese/i.test(text)
+      ? 'zh'
+      : /english|英文/i.test(text)
+        ? 'en'
+        : planned.locale;
+    const planLocale: 'zh' | 'en' = nextLocale === 'zh' ? 'zh' : 'en';
+    const plan = { ...planned, locale: planLocale };
+    const sections = buildSectionsFromPrompt(seed, labels, nextTpl);
+    const mergedBrief = plannedCopyToBrief(plan, seed);
     await new Promise((r) => setTimeout(r, 280));
     const agentMsg = {
       id: newCreativeId('m'),
       role: 'agent' as const,
-      text: `已按你的说明改好预览（${getTemplateMeta(nextTpl).label} · ${LOCALE_LABEL[nextLocale]}）。${
-        ref.url ? `并纳入参考 ${ref.host || '链接'}。` : ''
+      text: `已按你的说明改好整站预览（${getTemplateMeta(nextTpl).label} · ${LOCALE_LABEL[nextLocale]}）。主标题：「${plan.heroTitle}」。${
+        ref.url ? `已纳入参考 ${ref.host || '链接'}。` : ''
       }继续说改动，或点「推送上线」。`,
       at: Date.now(),
     };
     const next: SiteProject = {
       ...active,
-      title: text.replace(URL_RE_STRIP, '').trim().slice(0, 40) || active.title,
+      title: plan.brandName || active.title,
       brief: mergedBrief,
       locale: nextLocale,
       templateId: nextTpl,
@@ -281,7 +300,7 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
       messages: [...active.messages, userMsg, agentMsg],
       updatedAt: Date.now(),
     };
-    const html = buildHtmlFor(next, codes);
+    const html = buildHtmlFor(next, codes, seed);
     next.htmlPersisted = await persistProjectHtml(next, html);
     persistMeta(projects.map((p) => (p.id === active.id ? next : p)));
     setVaultHtml(html);
