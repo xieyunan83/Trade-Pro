@@ -305,12 +305,20 @@ export const generateProductVideo = async (input: VideoGenerateInput): Promise<V
     if (!imgs.length) throw new Error('请至少上传一张参考图');
 
     input.onProgress?.(4, 'preparing');
+    const { resolveToUploadableImage } = await import('./creativeAssetVault');
     const prepared: string[] = [];
     for (const img of imgs.slice(0, input.mode === 'reference' ? 5 : 1)) {
-      if (!/^https?:\/\//i.test(img) && !/^data:image\//i.test(img)) {
-        throw new Error('参考图格式无效');
+      let resolved: string;
+      try {
+        // vault: / blob: → data:image；产品库与平面设计落库后常为 vault:
+        resolved = await resolveToUploadableImage(img);
+      } catch {
+        throw new Error('参考图格式无效，请重新选择或上传 JPG/PNG');
       }
-      prepared.push(await prepareVideoImage(img));
+      if (!/^https?:\/\//i.test(resolved) && !/^data:image\//i.test(resolved)) {
+        throw new Error('参考图格式无效，请重新选择或上传 JPG/PNG');
+      }
+      prepared.push(await prepareVideoImage(resolved));
     }
 
     // first_frame 与 reference_image 互斥，不可同请求

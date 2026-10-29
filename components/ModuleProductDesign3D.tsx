@@ -70,6 +70,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
   const [quickKey, setQuickKey] = useState('');
   const [savingKey, setSavingKey] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const glbFileRef = useRef<HTMLInputElement>(null);
   const skus = useMemo(() => loadCatalogSkus(), []);
   const active = jobs.find((j) => j.id === activeId) || null;
   const isAdmin = currentUser.role === 'admin' || currentUser.role === 'director';
@@ -224,6 +225,68 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         setSourceImages((prev) => [...prev, String(reader.result || '')].slice(0, 4));
       reader.readAsDataURL(file);
     });
+  };
+
+  /** 导入已有 GLB：本机预览 / 下载后进切片软件做 3D 打印 */
+  const onPickGlb = async (files: FileList | null) => {
+    const file = files?.[0];
+    if (!file) return;
+    const lower = file.name.toLowerCase();
+    const okExt = lower.endsWith('.glb') || lower.endsWith('.gltf');
+    const okMime =
+      file.type === 'model/gltf-binary' ||
+      file.type === 'model/gltf+json' ||
+      file.type === 'application/octet-stream' ||
+      !file.type;
+    if (!okExt && !okMime) {
+      setMsgTone('error');
+      setMsg('请上传 .glb 或 .gltf 文件');
+      return;
+    }
+    if (file.size > 120 * 1024 * 1024) {
+      setMsgTone('error');
+      setMsg('GLB 过大（上限约 120MB）');
+      return;
+    }
+    setBusy(true);
+    setMsgTone('info');
+    setMsg('正在导入本地 GLB…');
+    try {
+      const vaultRef = await putBlobInVault({
+        blob: file,
+        kind: 'model3d',
+        sourceHint: file.name,
+        mime:
+          file.type ||
+          (lower.endsWith('.gltf') ? 'model/gltf+json' : 'model/gltf-binary'),
+      });
+      const now = Date.now();
+      const job: Model3dJob = {
+        id: newCreativeId('m3d'),
+        title: `本地导入 · ${file.name.replace(/\.(glb|gltf)$/i, '')}`,
+        mode: 'image',
+        quality: 'engine_ready',
+        prompt: '',
+        status: 'ready',
+        progress: 100,
+        modelUrl: vaultRef,
+        exportFormats: ['GLB'],
+        previewHint: '本地 GLB · 可环视预览 · 下载后可导入切片软件做 3D 打印',
+        ownerUsername: currentUser.username,
+        createdAt: now,
+        updatedAt: now,
+      };
+      persist([job, ...jobs.filter((j) => j.id !== job.id)]);
+      setActiveId(job.id);
+      setMsgTone('ok');
+      setMsg('本地 GLB 已导入，右侧可环视；下载后可用切片软件做 3D 打印');
+    } catch (e: any) {
+      setMsgTone('error');
+      setMsg(e?.message || '导入 GLB 失败');
+      window.alert(e?.message || '导入 GLB 失败');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const runGenerate = async () => {
@@ -667,6 +730,33 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                   ? '生成 3D 模型'
                   : '生成 3D 模型（需先配置 Key）'}
             </button>
+
+            <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-3 space-y-2">
+              <div className="text-[10px] font-black text-slate-500 uppercase tracking-wider">
+                本地 GLB · 预览 / 3D 打印
+              </div>
+              <p className="text-[10px] text-slate-500 font-medium leading-relaxed">
+                已有模型可直接导入环视预览；下载 GLB 后用切片软件（如 Cura）做 3D 打印，无需再次生成。
+              </p>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => glbFileRef.current?.click()}
+                className="w-full inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-slate-800 text-xs font-black py-2.5 disabled:opacity-50"
+              >
+                <Upload size={14} /> 导入本地 GLB / GLTF
+              </button>
+              <input
+                ref={glbFileRef}
+                type="file"
+                accept=".glb,.gltf,model/gltf-binary,model/gltf+json"
+                className="hidden"
+                onChange={(e) => {
+                  void onPickGlb(e.target.files);
+                  e.target.value = '';
+                }}
+              />
+            </div>
             {msg && (
               <p
                 className={`text-xs font-bold rounded-xl px-3 py-2 border ${
