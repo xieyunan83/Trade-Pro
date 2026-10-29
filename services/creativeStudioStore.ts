@@ -126,6 +126,8 @@ export type SocialPiece = {
   referenceImageDataUrl?: string;
   /** 产品实拍/主图 */
   productImageDataUrl?: string;
+  /** 模型生成的渠道配图 / 封面 */
+  coverImageDataUrl?: string;
   ownerUsername?: string;
   createdAt: number;
   updatedAt: number;
@@ -224,7 +226,9 @@ export const draftSiteSectionsFromBrief = (
   ];
 };
 
-/** 发文文案模板（本地；后续可接整理模型） */
+/**
+ * @deprecated 仅作离线兜底；正式生成请走 socialCopyAgent.generateSocialCopyWithLlm
+ */
 export const draftSocialCopy = (opts: {
   platform: SocialPlatform;
   productName: string;

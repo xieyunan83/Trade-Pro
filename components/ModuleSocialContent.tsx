@@ -25,7 +25,6 @@ import {
   loadSocialPieces,
   saveSocialPieces,
   newCreativeId,
-  draftSocialCopy,
 } from '../services/creativeStudioStore';
 import {
   type PublishablePlatform,
@@ -38,6 +37,11 @@ import {
   publishWithToken,
   loadSocialConnections,
 } from '../services/socialPublishService';
+import {
+  getSocialLlmStatus,
+  generateSocialCopyWithLlm,
+  generateSocialCoverImage,
+} from '../services/socialCopyAgent';
 import { CreativeRefPicker } from './CreativeRefPicker';
 import { VaultImg } from './VaultMedia';
 
@@ -59,6 +63,7 @@ export const ModuleSocialContent: React.FC<Props> = ({ currentUser }) => {
   const [copied, setCopied] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [generating, setGenerating] = useState(false);
   const [linkUrl, setLinkUrl] = useState('');
   const [imageUrl, setImageUrl] = useState('');
   /** 参考图 = 成稿形态/版式；产品图 = 实拍主图 */
@@ -75,6 +80,7 @@ export const ModuleSocialContent: React.FC<Props> = ({ currentUser }) => {
   const skus = useMemo(() => loadCatalogSkus(), []);
   const meta = SOCIAL_PLATFORM_META.find((p) => p.id === platform) || SOCIAL_PLATFORM_META[0];
   const active = pieces.find((p) => p.id === activeId) || null;
+  const llmStatus = getSocialLlmStatus();
 
   const connections = useMemo(() => {
     void connTick;
@@ -127,42 +133,83 @@ export const ModuleSocialContent: React.FC<Props> = ({ currentUser }) => {
     reader.readAsDataURL(file);
   };
 
-  const generate = () => {
+  const generate = async () => {
     const sku = skus.find((s) => s.id === skuPick);
     const name = productName.trim() || sku?.name || '';
     if (!name) {
       setMsg('请填写品名或选择产品库 SKU');
       return;
     }
-    const draft = draftSocialCopy({
-      platform,
-      productName: name,
-      highlight: highlight.trim(),
-      locale,
-    });
-    const now = Date.now();
-    const piece: SocialPiece = {
-      id: newCreativeId('soc'),
-      platform,
-      title: `${meta.label} · ${name.slice(0, 28)}`,
-      caption: draft.caption,
-      hashtags: draft.hashtags,
-      cta: draft.cta,
-      size: meta.size,
-      skuCode: sku?.skuCode,
-      skuName: sku?.name,
-      imageHint: referenceImage
-        ? `${meta.size} · 已含参考形态图`
-        : `${meta.size} 配图位 · 可上传参考图 / 产品图`,
-      referenceImageDataUrl: referenceImage || undefined,
-      productImageDataUrl: productImage || undefined,
-      ownerUsername: currentUser.username,
-      createdAt: now,
-      updatedAt: now,
-    };
-    persist([piece, ...pieces]);
-    setActiveId(piece.id);
-    setMsg(`已生成 ${meta.label} 素材${productImage || referenceImage ? '（已附带上传图片）' : ''}`);
+    const status = getSocialLlmStatus();
+    if (!status.ready) {
+      setMsg(status.detail);
+      return;
+    }
+    if (generating) return;
+    setGenerating(true);
+    setMsg('正在按渠道要求生成文案…');
+    try {
+      const draft = await generateSocialCopyWithLlm({
+        platform,
+        productName: name,
+        highlight: highlight.trim() || undefined,
+        locale,
+        skuCode: sku?.skuCode,
+        hasProductImage: !!productImage,
+        hasReferenceImage: !!referenceImage,
+        onProgress: (m) => setMsg(m),
+      });
+
+      const refs = [productImage, referenceImage].filter(Boolean);
+      const cover = await generateSocialCoverImage({
+        platform,
+        productName: name,
+        highlight: highlight.trim() || undefined,
+        locale,
+        referenceImages: refs.length ? refs : undefined,
+        onProgress: (m) => setMsg(m),
+      });
+
+      const now = Date.now();
+      const piece: SocialPiece = {
+        id: newCreativeId('soc'),
+        platform,
+        title: draft.titleLine || `${meta.label} · ${name.slice(0, 28)}`,
+        caption: draft.caption,
+        hashtags: draft.hashtags,
+        cta: draft.cta,
+        size: meta.size,
+        skuCode: sku?.skuCode,
+        skuName: sku?.name,
+        imageHint: cover
+          ? `${meta.size} · 已生成渠道配图`
+          : referenceImage
+            ? `${meta.size} · 已含参考形态图`
+            : `${meta.size} 配图位 · 可上传参考图 / 产品图`,
+        referenceImageDataUrl: referenceImage || undefined,
+        productImageDataUrl: productImage || undefined,
+        coverImageDataUrl: cover || undefined,
+        ownerUsername: currentUser.username,
+        createdAt: now,
+        updatedAt: now,
+      };
+      persist([piece, ...pieces]);
+      setActiveId(piece.id);
+      setMsg(
+        cover
+          ? `已完成 ${meta.label} 文案与配图`
+          : `已完成 ${meta.label} 文案${productImage || referenceImage ? '（已附带上传图片）' : ''}`
+      );
+    } catch (e: unknown) {
+      const raw = e instanceof Error ? e.message : String(e);
+      setMsg(
+        raw
+          .replace(/千问|通义|DashScope|Qwen|Gemini|Tavily/gi, '文案服务')
+          .slice(0, 200) || '生成失败，请稍后重试'
+      );
+    } finally {
+      setGenerating(false);
+    }
   };
 
   const updateActive = (patch: Partial<SocialPiece>) => {
@@ -516,12 +563,30 @@ export const ModuleSocialContent: React.FC<Props> = ({ currentUser }) => {
               />
             </div>
 
+            <p
+              className={`text-[11px] font-bold px-2 py-1.5 rounded-lg ${
+                llmStatus.ready
+                  ? 'text-emerald-800 bg-emerald-50 border border-emerald-100'
+                  : 'text-amber-800 bg-amber-50 border border-amber-100'
+              }`}
+            >
+              {llmStatus.detail}
+            </p>
             <button
               type="button"
-              onClick={generate}
-              className="w-full rounded-xl bg-fuchsia-600 hover:bg-fuchsia-700 text-white text-sm font-black py-3 inline-flex items-center justify-center gap-2"
+              onClick={() => void generate()}
+              disabled={generating || !llmStatus.ready}
+              className="w-full rounded-xl bg-fuchsia-600 hover:bg-fuchsia-700 disabled:opacity-60 disabled:cursor-not-allowed text-white text-sm font-black py-3 inline-flex items-center justify-center gap-2"
             >
-              <Sparkles size={16} /> 生成素材
+              {generating ? (
+                <>
+                  <Loader2 size={16} className="animate-spin" /> 生成中…
+                </>
+              ) : (
+                <>
+                  <Sparkles size={16} /> 生成素材
+                </>
+              )}
             </button>
             {msg && (
               <p className="text-xs font-bold text-fuchsia-900 bg-fuchsia-50 border border-fuchsia-100 rounded-xl px-3 py-2">
@@ -555,6 +620,18 @@ export const ModuleSocialContent: React.FC<Props> = ({ currentUser }) => {
               </div>
 
               <div className="p-4 space-y-3 flex-1 overflow-y-auto">
+                {active.coverImageDataUrl && (
+                  <div className="rounded-2xl border border-fuchsia-100 bg-fuchsia-50/40 overflow-hidden">
+                    <div className="text-[10px] font-black text-fuchsia-700/80 px-3 pt-2">渠道配图</div>
+                    <div className="flex items-center justify-center max-h-52 p-2">
+                      <VaultImg
+                        src={active.coverImageDataUrl}
+                        alt="渠道配图"
+                        className="max-h-48 max-w-full object-contain rounded-xl"
+                      />
+                    </div>
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-2">
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 aspect-video max-h-36 flex flex-col items-center justify-center overflow-hidden">
                     {active.referenceImageDataUrl ? (
