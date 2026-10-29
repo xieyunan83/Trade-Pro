@@ -196,9 +196,33 @@ export const putBlobInVault = async (opts: {
   return `${VAULT_PREFIX}${id}`;
 };
 
+const fetchBlobWithTimeout = async (url: string, timeoutMs: number): Promise<Blob> => {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) throw new Error(`拉取素材失败 HTTP ${res.status}`);
+    return await res.blob();
+  } catch (e: any) {
+    if (e?.name === 'AbortError') {
+      throw new Error(`拉取素材超时（${Math.round(timeoutMs / 1000)} 秒）`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+const persistTimeoutMs = (kind: VaultKind): number => {
+  if (kind === 'model3d') return 90_000;
+  if (kind === 'video') return 120_000;
+  return 30_000;
+};
+
 /**
  * 把远程临时链 / dataURL 拉取进本地库，返回 vault:id。
  * 已是 vault: 则原样返回；失败时抛错（调用方可保留原 URL）。
+ * 远程拉取带超时，避免 3D GLB 永久卡住「生成中 100%」。
  */
 export const persistMediaUrl = async (
   url: string,
@@ -212,13 +236,8 @@ export const persistMediaUrl = async (
   let blob: Blob;
   if (raw.startsWith('data:')) {
     blob = await dataUrlToBlob(raw);
-  } else if (/^https?:\/\//i.test(raw)) {
-    const res = await fetch(raw);
-    if (!res.ok) throw new Error(`拉取素材失败 HTTP ${res.status}`);
-    blob = await res.blob();
-  } else if (raw.startsWith('blob:')) {
-    const res = await fetch(raw);
-    blob = await res.blob();
+  } else if (/^https?:\/\//i.test(raw) || raw.startsWith('blob:')) {
+    blob = await fetchBlobWithTimeout(raw, persistTimeoutMs(kind));
   } else {
     throw new Error('无法识别的素材地址');
   }

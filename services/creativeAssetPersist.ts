@@ -54,19 +54,42 @@ export const persistPackagingAssets = async (
   return out;
 };
 
+/**
+ * 3D 落库：只优先缓存「主网格」一份（PBR > model > base），避免高细节多文件串行下载卡死。
+ * 失败/超时保留原临时链，不阻断预览与下载。
+ */
 export const persistModel3dJob = async (job: Model3dJob): Promise<Model3dJob> => {
-  const sourceImages = job.sourceImages?.length
-    ? await Promise.all(job.sourceImages.map((u) => persistUrlField(u, 'image').then((x) => x || u)))
-    : job.sourceImages;
+  const primary =
+    (job.pbrModelUrl || job.modelUrl || job.baseModelUrl || '').trim() || undefined;
+
+  const [sourceImage, sourceImages, primaryVault, previewImageUrl] = await Promise.all([
+    persistUrlField(job.sourceImage, 'image'),
+    job.sourceImages?.length
+      ? Promise.all(job.sourceImages.map((u) => persistUrlField(u, 'image').then((x) => x || u)))
+      : Promise.resolve(job.sourceImages),
+    primary ? persistUrlField(primary, 'model3d') : Promise.resolve(undefined),
+    persistUrlField(job.previewImageUrl, 'image'),
+  ]);
+
+  let modelUrl = job.modelUrl;
+  let pbrModelUrl = job.pbrModelUrl;
+  let baseModelUrl = job.baseModelUrl;
+  if (primary && primaryVault) {
+    if (job.pbrModelUrl === primary) pbrModelUrl = primaryVault;
+    else if (job.modelUrl === primary) modelUrl = primaryVault;
+    else if (job.baseModelUrl === primary) baseModelUrl = primaryVault;
+    // 预览优先用已落库主网格
+    if (!modelUrl || modelUrl === primary) modelUrl = primaryVault;
+  }
+
   return {
     ...job,
-    sourceImage: (await persistUrlField(job.sourceImage, 'image')) || job.sourceImage,
+    sourceImage: sourceImage || job.sourceImage,
     sourceImages,
-    modelUrl: (await persistUrlField(job.modelUrl, 'model3d')) || job.modelUrl,
-    pbrModelUrl: (await persistUrlField(job.pbrModelUrl, 'model3d')) || job.pbrModelUrl,
-    baseModelUrl: (await persistUrlField(job.baseModelUrl, 'model3d')) || job.baseModelUrl,
-    previewImageUrl:
-      (await persistUrlField(job.previewImageUrl, 'image')) || job.previewImageUrl,
+    modelUrl,
+    pbrModelUrl,
+    baseModelUrl,
+    previewImageUrl: previewImageUrl || job.previewImageUrl,
   };
 };
 

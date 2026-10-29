@@ -32,7 +32,7 @@ import {
 import { loadDataProviderLocal, saveDataProvider } from '../services/dataProviders';
 import { consumeCreativeHandoff } from '../services/creativeAssetBridge';
 import { persistModel3dJob } from '../services/creativeAssetPersist';
-import { tryPersistMediaUrl } from '../services/creativeAssetVault';
+import { isVaultRef, tryPersistMediaUrl } from '../services/creativeAssetVault';
 import { CreativePipelineBar, CreativeRefPicker } from './CreativeRefPicker';
 import { MODEL3D_SKILLS, type Model3dSkillId } from '../services/creativeSkills/model3dSkills';
 import { Model3dOrbitViewer } from './Model3dOrbitViewer';
@@ -269,12 +269,17 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         sourceImages,
         quality,
         onProgress: (pct, status) => {
+          const s = (status || '').toLowerCase();
           const label =
-            status === 'uploading' || status === 'uploaded'
+            s === 'uploading' || s === 'uploaded'
               ? '上传参考图'
-              : status === 'running'
+              : s === 'running' || s === 'queued'
                 ? '重建网格'
-                : status;
+                : s === 'succeeded' || s === 'success' || s === 'completed'
+                  ? '云端已完成'
+                  : s === 'fallback'
+                    ? '切换通道'
+                    : status || '处理中';
           patchJob(job.id, {
             progress: Math.round(pct),
             previewHint: `${label} ${Math.round(pct)}%`,
@@ -283,7 +288,9 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
           setMsg(`${label} ${Math.round(pct)}%`);
         },
       });
-      const vaulted = await persistModel3dJob({
+
+      // 云端成功后立刻可预览/下载，不再阻塞等待本机落库（大 GLB 曾导致卡在 100% 半小时）
+      const readyNow: Model3dJob = {
         ...job,
         status: 'ready',
         progress: 100,
@@ -292,23 +299,56 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         pbrModelUrl: result.pbrModelUrl,
         baseModelUrl: result.baseModelUrl,
         previewImageUrl: result.previewImageUrl,
-        previewHint: '模型已就绪 · 已存本机 · 可拖动环视',
+        previewHint: '模型已就绪 · 可拖动环视 · 正在写入本机缓存…',
         error: undefined,
         updatedAt: Date.now(),
-      });
+      };
       patchJob(job.id, {
-        status: vaulted.status,
+        status: 'ready',
         progress: 100,
-        providerTaskId: vaulted.providerTaskId,
-        modelUrl: vaulted.modelUrl,
-        pbrModelUrl: vaulted.pbrModelUrl,
-        baseModelUrl: vaulted.baseModelUrl,
-        previewImageUrl: vaulted.previewImageUrl,
-        previewHint: vaulted.previewHint,
+        providerTaskId: readyNow.providerTaskId,
+        modelUrl: readyNow.modelUrl,
+        pbrModelUrl: readyNow.pbrModelUrl,
+        baseModelUrl: readyNow.baseModelUrl,
+        previewImageUrl: readyNow.previewImageUrl,
+        previewHint: readyNow.previewHint,
         error: undefined,
       });
+      setBusy(false);
       setMsgTone('ok');
-      setMsg('3D 已生成并写入本机素材库，刷新后仍可预览；也可下载 GLB');
+      setMsg('3D 已生成，可预览 / 下载；本机缓存写入中…');
+
+      void (async () => {
+        try {
+          const vaulted = await persistModel3dJob(readyNow);
+          const cached = [vaulted.modelUrl, vaulted.pbrModelUrl, vaulted.baseModelUrl].some(
+            (u) => u && isVaultRef(u)
+          );
+          patchJob(job.id, {
+            modelUrl: vaulted.modelUrl,
+            pbrModelUrl: vaulted.pbrModelUrl,
+            baseModelUrl: vaulted.baseModelUrl,
+            previewImageUrl: vaulted.previewImageUrl,
+            sourceImage: vaulted.sourceImage,
+            sourceImages: vaulted.sourceImages,
+            previewHint: cached
+              ? '模型已就绪 · 已存本机 · 可拖动环视'
+              : '模型已就绪 · 请尽快下载（本机缓存未写入，临时链可能过期）',
+            updatedAt: Date.now(),
+          });
+          setMsgTone('ok');
+          setMsg(
+            cached
+              ? '3D 已生成并写入本机素材库，刷新后仍可预览；也可下载 GLB'
+              : '3D 已生成。本机缓存未写入，请尽快下载 GLB，避免临时链过期'
+          );
+        } catch {
+          patchJob(job.id, {
+            previewHint: '模型已就绪 · 请尽快下载（本机缓存失败，临时链可能过期）',
+            updatedAt: Date.now(),
+          });
+        }
+      })();
     } catch (e: any) {
       const { humanizeCreativeProviderError } = await import('../services/providerErrorMessage');
       const errText = humanizeCreativeProviderError(e?.message || e);
@@ -631,7 +671,9 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                 <p className="text-sm font-bold text-slate-300">
                   {(active.previewHint || '').includes('upload') || (active.progress ?? 0) < 12
                     ? '正在上传参考图并重建网格…'
-                    : '正在重建网格…'}
+                    : (active.progress ?? 0) >= 100
+                      ? '云端已完成，正在准备预览…'
+                      : '正在重建网格…'}
                 </p>
                 <div className="w-48 h-1.5 rounded-full bg-white/10 mx-auto overflow-hidden">
                   <div
