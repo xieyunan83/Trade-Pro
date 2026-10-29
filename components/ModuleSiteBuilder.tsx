@@ -13,6 +13,10 @@ import {
   Smartphone,
   Sparkles,
   ArrowRight,
+  BookOpen,
+  X,
+  Globe2,
+  Server,
 } from 'lucide-react';
 import type { User } from '../types';
 import { loadCatalogSkus } from '../services/productCatalogTypes';
@@ -29,6 +33,7 @@ import {
   buildSitePreviewHtml,
   getTemplateMeta,
 } from '../services/siteBuilderTemplates';
+import { SiteTemplateThumb } from './SiteTemplateThumb';
 
 type Props = { currentUser: User };
 
@@ -51,8 +56,85 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
   const [skuCodes, setSkuCodes] = useState<string[]>([]);
   const [templateId, setTemplateId] = useState<SiteTemplateId>('trade_hero');
   const [viewport, setViewport] = useState<'desktop' | 'mobile'>('desktop');
+  const [deployOpen, setDeployOpen] = useState(false);
   const skus = useMemo(() => loadCatalogSkus(), []);
   const active = projects.find((p) => p.id === activeId) || null;
+
+  const deployGuide = (
+    <div
+      className="fixed inset-0 z-[80] flex items-end sm:items-center justify-center bg-ink-950/50 backdrop-blur-sm p-3"
+      role="dialog"
+      aria-label="网站部署教程"
+      onClick={() => setDeployOpen(false)}
+    >
+      <div
+        className="w-full max-w-lg max-h-[85vh] overflow-y-auto rounded-2xl bg-white shadow-2xl border border-slate-200"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="sticky top-0 flex items-center justify-between gap-2 px-4 py-3 border-b border-slate-100 bg-white">
+          <div className="flex items-center gap-2">
+            <BookOpen size={16} className="text-teal-600" />
+            <div>
+              <div className="text-sm font-extrabold text-slate-900">部署教程</div>
+              <p className="text-[10px] text-slate-500 font-medium">导出 HTML 后如何上线</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setDeployOpen(false)}
+            className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400"
+            aria-label="关闭"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        <div className="px-4 py-4 space-y-4 text-sm text-slate-700 leading-relaxed">
+          <p className="text-xs text-slate-500">
+            本模块会生成<strong className="text-slate-700">完整单页 HTML</strong>
+            （含样式）。导出后即可托管到任意静态站点服务，无需本平台持续在线。
+          </p>
+          <section className="space-y-1.5">
+            <h3 className="text-xs font-black text-slate-900 flex items-center gap-1.5">
+              <Download size={12} className="text-teal-600" /> ① 导出文件
+            </h3>
+            <ol className="list-decimal pl-4 text-xs space-y-1 text-slate-600">
+              <li>在预览满意后点击「导出 HTML」。</li>
+              <li>得到一个 .html 文件；可改名为 index.html。</li>
+              <li>若有产品图，把图片与 HTML 放同目录，并在页面里用相对路径引用。</li>
+            </ol>
+          </section>
+          <section className="space-y-1.5">
+            <h3 className="text-xs font-black text-slate-900 flex items-center gap-1.5">
+              <Globe2 size={12} className="text-teal-600" /> ② 免费/快速上线（推荐演示）
+            </h3>
+            <ul className="text-xs space-y-2 text-slate-600">
+              <li>
+                <strong className="text-slate-800">Netlify Drop / Cloudflare Pages</strong>
+                ：把含 index.html 的文件夹拖上去，几分钟得到 https 链接，适合展会临时页。
+              </li>
+              <li>
+                <strong className="text-slate-800">GitHub Pages</strong>
+                ：新建仓库上传 index.html，开启 Pages，适合长期公开页。
+              </li>
+            </ul>
+          </section>
+          <section className="space-y-1.5">
+            <h3 className="text-xs font-black text-slate-900 flex items-center gap-1.5">
+              <Server size={12} className="text-teal-600" /> ③ 国内对象存储 / 主机
+            </h3>
+            <ul className="text-xs space-y-2 text-slate-600">
+              <li>阿里云 OSS / 腾讯云 COS：开启「静态网站托管」，默认首页设为 index.html，绑定自定义域名与 HTTPS。</li>
+              <li>自有虚拟主机：用 FTP/面板上传 index.html 到站点根目录即可。</li>
+            </ul>
+          </section>
+          <section className="rounded-xl bg-teal-50 border border-teal-100 px-3 py-2.5 text-xs text-teal-900">
+            <strong>小提示：</strong>
+            建站预览与导出以本地模板合成为主，一般不额外消耗对话额度。迭代文案时可在左侧继续描述改动。
+          </section>
+        </div>
+      </div>
+    </div>
+  );
 
   const persist = (next: SiteProject[]) => {
     setProjects(next);
@@ -222,10 +304,11 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
     persist(projects.map((p) => (p.id === active.id ? next : p)));
   };
 
-  /* —— Lovable 式空态：大提示词 + 模板墙 —— */
+  /* —— 空态：大提示词 + 模板墙 —— */
   if (!active) {
     return (
       <div className="max-w-[96rem] mx-auto animate-fade-in px-1 space-y-6">
+        {deployOpen && deployGuide}
         <div className="relative overflow-hidden rounded-[2rem] border border-slate-800 bg-[#070b14] text-slate-100 shadow-xl">
           <div
             className="pointer-events-none absolute inset-0 opacity-60"
@@ -235,14 +318,24 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
             }}
           />
           <div className="relative px-5 sm:px-10 pt-10 pb-8 sm:pt-14 sm:pb-12 text-center space-y-5">
-            <div className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-teal-200/90">
-              <Sparkles size={12} /> Web Studio
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <div className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-teal-200/90">
+                <Sparkles size={12} /> Web Studio
+              </div>
+              <button
+                type="button"
+                onClick={() => setDeployOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-full border border-teal-400/30 bg-teal-400/10 px-3 py-1 text-[10px] font-black text-teal-200 hover:bg-teal-400/20"
+              >
+                <BookOpen size={11} /> 部署教程
+              </button>
             </div>
             <h2 className="text-3xl sm:text-4xl md:text-5xl font-extrabold tracking-tight text-white max-w-3xl mx-auto leading-[1.1]">
               网站设计开发
             </h2>
             <p className="text-sm sm:text-base text-slate-400 font-medium max-w-xl mx-auto leading-relaxed">
               用自然语言描述你想要的站点。选一个内置模板，实时预览，迭代到满意后导出 HTML。
+              <span className="block mt-1 text-teal-300/80 text-xs">预览与导出以本地模板合成为主，一般不额外消耗对话额度。</span>
             </p>
 
             <div className="max-w-2xl mx-auto text-left rounded-2xl border border-white/10 bg-white/5 backdrop-blur-md p-2 sm:p-2.5 shadow-2xl">
@@ -278,15 +371,24 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
           <div className="flex items-end justify-between gap-3 mb-3 px-1">
             <div>
               <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">内置模板</div>
-              <p className="text-sm font-bold text-slate-700 mt-0.5">先选风格，再描述需求</p>
+              <p className="text-sm font-bold text-slate-700 mt-0.5">先选风格，再描述需求 · 点击可选中或直接开建</p>
             </div>
-            <button
-              type="button"
-              onClick={createBlank}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white text-xs font-black px-3 py-2 hover:bg-slate-50"
-            >
-              <Plus size={14} /> 空白项目
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setDeployOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50 text-teal-800 text-xs font-black px-3 py-2 hover:bg-teal-100"
+              >
+                <BookOpen size={14} /> 部署教程
+              </button>
+              <button
+                type="button"
+                onClick={createBlank}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white text-xs font-black px-3 py-2 hover:bg-slate-50"
+              >
+                <Plus size={14} /> 空白项目
+              </button>
+            </div>
           </div>
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
             {SITE_TEMPLATES.map((t) => (
@@ -297,14 +399,14 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
                   setTemplateId(t.id);
                   if (homePrompt.trim()) createFromPrompt(homePrompt, t.id);
                 }}
-                className={`text-left rounded-2xl border overflow-hidden transition-all ${
+                className={`text-left rounded-2xl border overflow-hidden transition-all bg-white ${
                   templateId === t.id
-                    ? 'border-teal-500 ring-2 ring-teal-100'
-                    : 'border-slate-200 hover:border-slate-300'
+                    ? 'border-teal-500 ring-2 ring-teal-100 shadow-md'
+                    : 'border-slate-200 hover:border-slate-300 hover:shadow-sm'
                 }`}
               >
-                <div className="h-24" style={{ background: t.swatch }} />
-                <div className="p-3 bg-white">
+                <SiteTemplateThumb id={t.id} accent={t.accent} />
+                <div className="p-3 border-t border-slate-100">
                   <div className="text-xs font-black text-slate-900">{t.label}</div>
                   <div className="text-[10px] text-slate-400 font-bold mt-0.5">{t.labelEn}</div>
                   <p className="text-[11px] text-slate-500 font-medium mt-1.5 leading-snug">{t.blurb}</p>
@@ -342,6 +444,7 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
   /* —— 对话 + 预览分栏 —— */
   return (
     <div className="max-w-[96rem] mx-auto space-y-3 animate-fade-in px-1">
+      {deployOpen && deployGuide}
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3">
         <div className="flex items-center gap-3 min-w-0">
           <div className="hidden sm:flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-teal-300">
@@ -378,6 +481,13 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
             className="rounded-lg border border-slate-200 text-xs font-black px-2.5 py-1.5 hover:bg-slate-50"
           >
             <Plus size={12} className="inline mr-1" /> 新项目
+          </button>
+          <button
+            type="button"
+            onClick={() => setDeployOpen(true)}
+            className="inline-flex items-center gap-1 text-[10px] font-black px-2.5 py-1.5 rounded-lg border border-teal-200 bg-teal-50 text-teal-800 hover:bg-teal-100"
+          >
+            <BookOpen size={12} /> 部署教程
           </button>
           <button
             type="button"

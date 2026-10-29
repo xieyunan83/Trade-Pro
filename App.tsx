@@ -186,6 +186,7 @@ import { batchBgQueueTarget, type ClassifiedBatchBgRow } from './services/batchB
 import { RecordsPanel, archiveToDiscoveryState } from './components/RecordsPanel';
 import { Login } from './components/Login';
 import { AccessGate } from './components/AccessGate';
+import { XiaoYuanAssistant } from './components/XiaoYuanAssistant';
 import { loadUsersWithMigration, loadUsersFromStorage, saveUsersToStorage, getUsersUpdatedAt } from './services/auth';
 import { AdminDashboard } from './components/AdminDashboard';
 import { 
@@ -5657,6 +5658,8 @@ const App: React.FC = () => {
           onClose={() => setTeamManageOpen(false)}
         />
       )}
+
+      <XiaoYuanAssistant visible />
 
     </div>{/* .tp-app */}
     </AccessGate>
