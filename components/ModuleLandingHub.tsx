@@ -91,24 +91,51 @@ export const ModuleLandingHub: React.FC<Props> = ({
   const products = withShowcaseProducts(data?.products?.items).slice(0, 6);
   const goCatalog = () => onNavigateModule?.(ModuleType.PRODUCT_CATALOG);
 
+  const jp = journeyProgress || {
+    skuCount: 0,
+    pendingTasks: 0,
+    failedTasks: 0,
+    completedBg: 0,
+    crmCount: 0,
+  };
+
   return (
-    <div className="tp-landing relative -mx-1 sm:mx-0 space-y-2.5">
-      {/* 顶栏 */}
-      <section className="relative rounded-2xl border border-cyan-200/60 bg-gradient-to-r from-slate-950 via-slate-900 to-cyan-950 text-white overflow-hidden">
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_right,rgba(34,211,238,0.15),transparent_55%)] pointer-events-none" />
-        <div className="relative px-3 sm:px-4 py-2 flex flex-wrap items-center gap-2 sm:gap-3">
-          <div className="inline-flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.18em] text-cyan-300/90">
-            <Radio size={11} className="animate-pulse" /> Hub
+    <div className="tp-landing relative -mx-1 sm:mx-0 space-y-3">
+      <section className="tp-hub-hero text-white">
+        <div className="relative px-3.5 sm:px-5 py-3.5 sm:py-4 flex flex-wrap items-center gap-3">
+          <div className="inline-flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.2em] text-cyan-300/95">
+            <Radio size={11} className="tp-live-dot text-emerald-400" /> Command Hub
           </div>
           <div className="min-w-0 flex-1">
-            <div className="text-sm font-black tracking-tight truncate">
+            <div className="text-base sm:text-lg font-black tracking-tight truncate">
               外贸智慧协同
-              <span className="font-bold text-slate-300 text-xs ml-2">你好，{currentUser.username}</span>
+              <span className="font-semibold text-slate-300 text-xs sm:text-sm ml-2">
+                {currentUser.username}
+              </span>
             </div>
-            <p className="text-[10px] text-slate-400 font-medium truncate">
+            <p className="text-[11px] text-slate-400 font-medium truncate mt-0.5">
               赋能澄海玩具产业升级 · 选品适市 → 获客背调 → 开发成交
               {data?.fetchedAt ? ` · 情报 ${fmtTime(data.fetchedAt)}` : ''}
             </p>
+            <div className="tp-kpi mt-2.5">
+              <span className="tp-kpi-pill">
+                产品库 <strong>{jp.skuCount}</strong>
+              </span>
+              <span className="tp-kpi-pill">
+                待背调 <strong>{jp.pendingTasks}</strong>
+              </span>
+              <span className="tp-kpi-pill">
+                已背调 <strong>{jp.completedBg}</strong>
+              </span>
+              <span className="tp-kpi-pill">
+                CRM <strong>{jp.crmCount}</strong>
+              </span>
+              {jp.failedTasks > 0 ? (
+                <span className="tp-kpi-pill">
+                  失败 <strong className="!text-rose-300">{jp.failedTasks}</strong>
+                </span>
+              ) : null}
+            </div>
           </div>
           <div className="flex flex-wrap gap-1.5">
             <button
@@ -124,7 +151,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={onEnterWorkspace}
-                className="inline-flex items-center gap-1 rounded-lg bg-cyan-400 hover:bg-cyan-300 text-slate-950 px-2.5 py-1.5 text-[11px] font-extrabold"
+                className="inline-flex items-center gap-1 rounded-lg bg-cyan-400 hover:bg-cyan-300 text-slate-950 px-3 py-1.5 text-[11px] font-extrabold shadow-[0_8px_24px_-10px_rgba(34,211,238,0.8)]"
               >
                 客户搜索
               </button>
@@ -148,10 +175,17 @@ export const ModuleLandingHub: React.FC<Props> = ({
         </div>
       )}
 
-      {/* 首屏三联：新闻 | 新品 | 汇率 —— 同屏可见 */}
+      {onNavigateModule ? (
+        <TradeJourneyPanel
+          progressHint={jp}
+          onNavigate={onNavigateModule}
+          onStartPlaybook={onStartPlaybook}
+        />
+      ) : null}
+
+      {/* 情报三联：新闻 | 新品 | 汇率 */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 items-stretch">
-        {/* 行业新闻 */}
-        <section className="lg:col-span-3 rounded-2xl border border-slate-200/80 bg-white shadow-sm overflow-hidden flex flex-col min-h-[220px] max-h-[320px] lg:max-h-[300px]">
+        <section className="tp-surface lg:col-span-3 overflow-hidden flex flex-col min-h-[220px] max-h-[320px] lg:max-h-[300px]">
           <header className="px-3 py-2 border-b border-slate-100 flex items-center gap-2 shrink-0">
             <div className="h-7 w-7 rounded-lg bg-slate-900 text-cyan-300 flex items-center justify-center">
               <Newspaper size={13} />
@@ -199,8 +233,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
           </div>
         </section>
 
-        {/* 新品推荐：白底 contain，避免大图拉伸发糊 */}
-        <section className="lg:col-span-6 rounded-2xl border border-slate-200/80 bg-white shadow-sm overflow-hidden flex flex-col min-h-[220px] max-h-[320px] lg:max-h-[300px]">
+        <section className="tp-surface lg:col-span-6 overflow-hidden flex flex-col min-h-[220px] max-h-[320px] lg:max-h-[300px]">
           <header className="px-3 py-2 border-b border-slate-100 flex items-center justify-between gap-2 shrink-0 bg-gradient-to-r from-slate-50 to-cyan-50/50">
             <div className="flex items-center gap-2 min-w-0">
               <div className="h-7 w-7 rounded-lg bg-slate-900 text-amber-300 flex items-center justify-center shrink-0">
@@ -267,8 +300,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
           </div>
         </section>
 
-        {/* 即时汇率 */}
-        <section className="lg:col-span-3 rounded-2xl border border-slate-200/80 bg-white shadow-sm overflow-hidden flex flex-col min-h-[220px] max-h-[320px] lg:max-h-[300px]">
+        <section className="tp-surface lg:col-span-3 overflow-hidden flex flex-col min-h-[220px] max-h-[320px] lg:max-h-[300px]">
           <header className="px-3 py-2 border-b border-slate-100 flex items-center gap-2 shrink-0">
             <div className="h-7 w-7 rounded-lg bg-slate-900 text-emerald-300 flex items-center justify-center">
               <LineChart size={13} />
@@ -329,21 +361,6 @@ export const ModuleLandingHub: React.FC<Props> = ({
         </section>
       </div>
 
-      {onNavigateModule ? (
-        <TradeJourneyPanel
-          progressHint={
-            journeyProgress || {
-              skuCount: 0,
-              pendingTasks: 0,
-              failedTasks: 0,
-              completedBg: 0,
-              crmCount: 0,
-            }
-          }
-          onNavigate={onNavigateModule}
-          onStartPlaybook={onStartPlaybook}
-        />
-      ) : null}
     </div>
   );
 };

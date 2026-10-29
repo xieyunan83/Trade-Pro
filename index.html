@@ -213,11 +213,14 @@
           --tp-ink-soft: #121a2b;
           --tp-signal: #06b6d4;
           --tp-signal-soft: rgba(6, 182, 212, 0.14);
-          --tp-canvas: #e8f0f7;
-          --tp-card: rgba(255, 255, 255, 0.88);
-          --tp-line: rgba(15, 23, 42, 0.07);
+          --tp-canvas: #e6eef5;
+          /* Linear/Vercel 式：实心底 + 细边，避免全站毛玻璃拖慢滚动 */
+          --tp-card: #ffffff;
+          --tp-card-elevated: #ffffff;
+          --tp-line: rgba(15, 23, 42, 0.08);
           --tp-text: #0f172a;
           --tp-muted: #64748b;
+          --tp-shadow-panel: 0 0 0 1px rgba(15, 23, 42, 0.05), 0 1px 0 rgba(255,255,255,0.9) inset, 0 18px 40px -28px rgba(15, 23, 42, 0.28);
         }
 
         html, body, #root { min-height: 100%; min-height: 100dvh; }
@@ -229,16 +232,25 @@
           text-rendering: optimizeLegibility;
         }
 
-        /* ——— Unified world canvas：左右共用同一层科技氛围 ——— */
+        @media (prefers-reduced-motion: reduce) {
+          .animate-fade-in,
+          .tp-login-hero,
+          .tp-login-card,
+          .tp-sphere-core,
+          .tp-sphere-ring,
+          .tp-live-dot { animation: none !important; }
+          .tp-btn-primary:hover:not(:disabled) { transform: none; }
+        }
+
+        /* ——— Unified world canvas：安静指挥台（参考 Linear / Vercel 克制氛围） ——— */
         .tp-app {
           position: relative;
           isolation: isolate;
           background:
-            radial-gradient(1100px 520px at 0% 12%, rgba(6, 182, 212, 0.22), transparent 55%),
-            radial-gradient(900px 480px at 12% 88%, rgba(99, 102, 241, 0.08), transparent 50%),
-            radial-gradient(780px 380px at 96% 4%, rgba(14, 165, 233, 0.12), transparent 52%),
-            radial-gradient(640px 360px at 78% 108%, rgba(8, 145, 178, 0.10), transparent 48%),
-            linear-gradient(168deg, #f1f7fb 0%, #e8f0f7 42%, #dde9f3 100%);
+            radial-gradient(1000px 480px at 0% 10%, rgba(6, 182, 212, 0.16), transparent 58%),
+            radial-gradient(720px 360px at 100% 0%, rgba(14, 165, 233, 0.10), transparent 55%),
+            radial-gradient(640px 320px at 70% 100%, rgba(8, 145, 178, 0.08), transparent 50%),
+            linear-gradient(165deg, #eef4f9 0%, #e6eef5 48%, #dce7f0 100%);
         }
         .tp-app::before {
           content: '';
@@ -291,17 +303,17 @@
           background:
             linear-gradient(
               180deg,
-              rgba(8, 16, 32, 0.92) 0%,
-              rgba(10, 22, 40, 0.88) 45%,
-              rgba(7, 14, 28, 0.94) 100%
+              rgba(7, 12, 24, 0.97) 0%,
+              rgba(9, 18, 34, 0.96) 50%,
+              rgba(6, 12, 24, 0.98) 100%
             ) !important;
-          border-right: 1px solid rgba(34, 211, 238, 0.22) !important;
+          border-right: 1px solid rgba(34, 211, 238, 0.18) !important;
           box-shadow:
-            1px 0 0 rgba(103, 232, 249, 0.08) inset,
-            16px 0 48px -20px rgba(0, 0, 0, 0.55),
-            0 0 60px -24px rgba(6, 182, 212, 0.45);
-          backdrop-filter: blur(24px) saturate(1.4);
-          -webkit-backdrop-filter: blur(24px) saturate(1.4);
+            1px 0 0 rgba(103, 232, 249, 0.06) inset,
+            18px 0 40px -22px rgba(0, 0, 0, 0.5);
+          /* 侧栏轻模糊即可；过重会拖累整页合成 */
+          backdrop-filter: blur(12px) saturate(1.2);
+          -webkit-backdrop-filter: blur(12px) saturate(1.2);
         }
         .tp-sidebar::before {
           content: '';
@@ -352,10 +364,10 @@
 
         /* ——— Header / scan bar — 与玻璃导航坞同一材质 ——— */
         .tp-header {
-          background: rgba(255, 255, 255, 0.55) !important;
-          border-bottom: 1px solid rgba(6, 182, 212, 0.10) !important;
-          backdrop-filter: blur(18px) saturate(1.25);
-          box-shadow: 0 10px 30px -24px rgba(15, 23, 42, 0.18);
+          background: rgba(255, 255, 255, 0.82) !important;
+          border-bottom: 1px solid rgba(15, 23, 42, 0.06) !important;
+          backdrop-filter: blur(10px) saturate(1.1);
+          box-shadow: 0 8px 24px -22px rgba(15, 23, 42, 0.16);
         }
         .tp-scan-input {
           background: rgba(255, 255, 255, 0.92) !important;
@@ -429,18 +441,53 @@
         }
         .tp-btn-primary:disabled { filter: grayscale(0.2); transform: none; }
 
-        /* ——— Elevate common white cards across modules (no structure change) ——— */
+        /* ——— Elevate cards：实心面板（无 backdrop-filter，保模块滚动/切换流畅） ——— */
         .tp-app main .bg-white {
-          background: var(--tp-card) !important;
-          backdrop-filter: blur(16px) saturate(1.15);
-          box-shadow:
-            0 0 0 1px rgba(6, 182, 212, 0.06),
-            0 1px 0 rgba(255,255,255,0.75) inset,
-            0 16px 40px -24px rgba(15, 23, 42, 0.22);
+          background: var(--tp-card-elevated) !important;
+          box-shadow: var(--tp-shadow-panel);
         }
         .tp-app main .border-slate-200,
         .tp-app main .border-slate-100 {
-          border-color: rgba(15, 23, 42, 0.07) !important;
+          border-color: var(--tp-line) !important;
+        }
+        /* 着陆页表面：投资人一眼能感到「产品级」层次 */
+        .tp-landing .tp-surface {
+          background: #fff;
+          border: 1px solid var(--tp-line);
+          box-shadow: var(--tp-shadow-panel);
+          border-radius: 1.15rem;
+        }
+        .tp-landing .tp-hub-hero {
+          position: relative;
+          overflow: hidden;
+          border-radius: 1.25rem;
+          border: 1px solid rgba(34, 211, 238, 0.22);
+          background:
+            radial-gradient(ellipse 80% 120% at 100% 0%, rgba(34, 211, 238, 0.22), transparent 55%),
+            linear-gradient(115deg, #05080f 0%, #0b1524 48%, #0c2a32 100%);
+          box-shadow: 0 24px 48px -28px rgba(8, 24, 48, 0.55);
+        }
+        .tp-landing .tp-kpi {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 0.5rem;
+        }
+        .tp-landing .tp-kpi-pill {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.35rem;
+          padding: 0.35rem 0.7rem;
+          border-radius: 999px;
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: 0.02em;
+          color: rgba(226, 232, 240, 0.92);
+          background: rgba(255, 255, 255, 0.06);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .tp-landing .tp-kpi-pill strong {
+          color: #67e8f9;
+          font-variant-numeric: tabular-nums;
         }
         /* Soften dead grey wells → cool mist panels */
         .tp-app main .bg-slate-50,
