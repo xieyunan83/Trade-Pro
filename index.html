@@ -460,12 +460,19 @@
         .tp-landing .tp-hub-hero {
           position: relative;
           overflow: hidden;
-          border-radius: 1.25rem;
-          border: 1px solid rgba(34, 211, 238, 0.22);
+          border-radius: 0.95rem;
+          border: 1px solid rgba(34, 211, 238, 0.2);
           background:
-            radial-gradient(ellipse 80% 120% at 100% 0%, rgba(34, 211, 238, 0.22), transparent 55%),
+            radial-gradient(ellipse 70% 140% at 100% 0%, rgba(34, 211, 238, 0.18), transparent 55%),
             linear-gradient(115deg, #05080f 0%, #0b1524 48%, #0c2a32 100%);
-          box-shadow: 0 24px 48px -28px rgba(8, 24, 48, 0.55);
+          box-shadow: 0 12px 28px -20px rgba(8, 24, 48, 0.5);
+        }
+        /* 小媛贴左侧「开始」球下方，不挡主区 */
+        .tp-xiaoyuan-fab {
+          pointer-events: auto;
+        }
+        .tp-app.is-nav-submenu .tp-xiaoyuan-fab {
+          left: 0.35rem;
         }
         .tp-landing .tp-kpi {
           display: flex;

@@ -100,58 +100,38 @@ export const ModuleLandingHub: React.FC<Props> = ({
   };
 
   return (
-    <div className="tp-landing relative -mx-1 sm:mx-0 space-y-3">
+    <div className="tp-landing relative -mx-1 sm:mx-0 space-y-2.5">
+      {/* 单行顶栏 */}
       <section className="tp-hub-hero text-white">
-        <div className="relative px-3.5 sm:px-5 py-3.5 sm:py-4 flex flex-wrap items-center gap-3">
-          <div className="inline-flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.2em] text-cyan-300/95">
-            <Radio size={11} className="tp-live-dot text-emerald-400" /> Command Hub
+        <div className="relative px-3 sm:px-4 py-2 flex flex-nowrap items-center gap-2 sm:gap-3 min-h-[2.75rem]">
+          <div className="hidden sm:inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-[0.16em] text-cyan-300/90 shrink-0">
+            <Radio size={10} className="tp-live-dot text-emerald-400" /> Hub
           </div>
-          <div className="min-w-0 flex-1">
-            <div className="text-base sm:text-lg font-black tracking-tight truncate">
+          <div className="min-w-0 flex-1 flex items-center gap-2 truncate">
+            <span className="text-[13px] sm:text-sm font-black tracking-tight truncate">
               外贸智慧协同
-              <span className="font-semibold text-slate-300 text-xs sm:text-sm ml-2">
-                {currentUser.username}
-              </span>
-            </div>
-            <p className="text-[11px] text-slate-400 font-medium truncate mt-0.5">
-              赋能澄海玩具产业升级 · 选品适市 → 获客背调 → 开发成交
-              {data?.fetchedAt ? ` · 情报 ${fmtTime(data.fetchedAt)}` : ''}
-            </p>
-            <div className="tp-kpi mt-2.5">
-              <span className="tp-kpi-pill">
-                产品库 <strong>{jp.skuCount}</strong>
-              </span>
-              <span className="tp-kpi-pill">
-                待背调 <strong>{jp.pendingTasks}</strong>
-              </span>
-              <span className="tp-kpi-pill">
-                已背调 <strong>{jp.completedBg}</strong>
-              </span>
-              <span className="tp-kpi-pill">
-                CRM <strong>{jp.crmCount}</strong>
-              </span>
-              {jp.failedTasks > 0 ? (
-                <span className="tp-kpi-pill">
-                  失败 <strong className="!text-rose-300">{jp.failedTasks}</strong>
-                </span>
-              ) : null}
-            </div>
+              <span className="font-semibold text-slate-300 text-[11px] ml-1.5">{currentUser.username}</span>
+            </span>
+            <span className="hidden md:inline text-[10px] text-slate-400 font-medium truncate">
+              · 库 {jp.skuCount} · 待调 {jp.pendingTasks} · 已调 {jp.completedBg} · CRM {jp.crmCount}
+              {data?.fetchedAt ? ` · ${fmtTime(data.fetchedAt)}` : ''}
+            </span>
           </div>
-          <div className="flex flex-wrap gap-1.5">
+          <div className="flex flex-nowrap gap-1.5 shrink-0">
             <button
               type="button"
               onClick={() => void load(true)}
               disabled={loading}
-              className="inline-flex items-center gap-1 rounded-lg bg-white/10 hover:bg-white/15 border border-white/20 px-2.5 py-1.5 text-[11px] font-extrabold disabled:opacity-50"
+              className="inline-flex items-center gap-1 rounded-lg bg-white/10 hover:bg-white/15 border border-white/20 px-2 py-1 text-[10px] font-extrabold disabled:opacity-50"
             >
-              {loading ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+              {loading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
               刷新
             </button>
             {onEnterWorkspace && (
               <button
                 type="button"
                 onClick={onEnterWorkspace}
-                className="inline-flex items-center gap-1 rounded-lg bg-cyan-400 hover:bg-cyan-300 text-slate-950 px-3 py-1.5 text-[11px] font-extrabold shadow-[0_8px_24px_-10px_rgba(34,211,238,0.8)]"
+                className="inline-flex items-center gap-1 rounded-lg bg-cyan-400 hover:bg-cyan-300 text-slate-950 px-2.5 py-1 text-[10px] font-extrabold"
               >
                 客户搜索
               </button>
@@ -160,7 +140,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={() => onNavigateModule(ModuleType.PROMO_GENERATOR)}
-                className="inline-flex items-center gap-1 rounded-lg bg-white/10 hover:bg-white/15 border border-white/20 px-2.5 py-1.5 text-[11px] font-extrabold"
+                className="inline-flex items-center gap-1 rounded-lg bg-white/10 hover:bg-white/15 border border-white/20 px-2 py-1 text-[10px] font-extrabold"
               >
                 自动化获客
               </button>
@@ -175,15 +155,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
         </div>
       )}
 
-      {onNavigateModule ? (
-        <TradeJourneyPanel
-          progressHint={jp}
-          onNavigate={onNavigateModule}
-          onStartPlaybook={onStartPlaybook}
-        />
-      ) : null}
-
-      {/* 情报三联：新闻 | 新品 | 汇率 */}
+      {/* 情报三联上移 */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 items-stretch">
         <section className="tp-surface lg:col-span-3 overflow-hidden flex flex-col min-h-[220px] max-h-[320px] lg:max-h-[300px]">
           <header className="px-3 py-2 border-b border-slate-100 flex items-center gap-2 shrink-0">
@@ -241,7 +213,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
               </div>
               <div className="min-w-0">
                 <h2 className="text-[13px] font-black text-slate-900 leading-tight">新品推荐</h2>
-                <p className="text-[9px] text-slate-500 font-medium truncate">澄海优选 · 清晰主图 · 点击进产品库</p>
+                <p className="text-[9px] text-slate-500 font-medium truncate">有图才展示 · 点击进产品库</p>
               </div>
             </div>
             {onNavigateModule ? (
@@ -260,7 +232,18 @@ export const ModuleLandingHub: React.FC<Props> = ({
                 <Loader2 className="animate-spin" size={14} /> 加载中…
               </div>
             ) : products.length === 0 ? (
-              <p className="text-xs text-slate-500 font-medium py-8 text-center">暂无推荐</p>
+              <div className="flex flex-col items-center justify-center gap-2 py-10 px-4 text-center">
+                <p className="text-xs text-slate-500 font-medium">暂无带图新品（演示期已隐藏失效外链图）</p>
+                {onNavigateModule ? (
+                  <button
+                    type="button"
+                    onClick={goCatalog}
+                    className="text-[11px] font-black text-cyan-800 bg-cyan-50 border border-cyan-200 px-3 py-1.5 rounded-lg"
+                  >
+                    去产品库维护 SKU
+                  </button>
+                ) : null}
+              </div>
             ) : (
               <div className="grid grid-cols-3 sm:grid-cols-3 gap-2">
                 {products.map((p) => (
@@ -270,18 +253,17 @@ export const ModuleLandingHub: React.FC<Props> = ({
                     onClick={goCatalog}
                     className="group text-left rounded-xl border border-slate-200 hover:border-cyan-300 hover:shadow-sm bg-white overflow-hidden transition-all"
                   >
-                    <div className="relative aspect-square bg-white border-b border-slate-100 flex items-center justify-center p-1.5">
-                      {p.image ? (
-                        <img
-                          src={p.image}
-                          alt=""
-                          className="max-h-full max-w-full w-auto h-auto object-contain"
-                          loading="lazy"
-                          decoding="async"
-                        />
-                      ) : (
-                        <Sparkles size={18} className="text-slate-300" />
-                      )}
+                    <div className="relative aspect-square bg-slate-50 border-b border-slate-100 flex items-center justify-center p-1.5">
+                      <img
+                        src={p.image}
+                        alt=""
+                        className="max-h-full max-w-full w-auto h-auto object-contain"
+                        loading="lazy"
+                        decoding="async"
+                        onError={(e) => {
+                          (e.currentTarget as HTMLImageElement).style.display = 'none';
+                        }}
+                      />
                     </div>
                     <div className="px-1.5 py-1.5">
                       <p className="text-[10px] font-black text-slate-800 leading-snug line-clamp-2 group-hover:text-cyan-900">
@@ -361,6 +343,14 @@ export const ModuleLandingHub: React.FC<Props> = ({
         </section>
       </div>
 
+      {/* 任务流置底 */}
+      {onNavigateModule ? (
+        <TradeJourneyPanel
+          progressHint={jp}
+          onNavigate={onNavigateModule}
+          onStartPlaybook={onStartPlaybook}
+        />
+      ) : null}
     </div>
   );
 };

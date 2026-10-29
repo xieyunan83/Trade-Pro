@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Loader2, Send, Sparkles, X } from 'lucide-react';
+import { Loader2, Send, X } from 'lucide-react';
 import {
   askXiaoYuan,
   XIAOYUAN_AVATAR,
@@ -21,7 +21,7 @@ const WELCOME: XiaoYuanMsg = {
   at: Date.now(),
 };
 
-/** 右下角浮动助手：ChatGPT 式对话 */
+/** 左侧「开始」球附近浮动助手，不挡主操作区 */
 export const XiaoYuanAssistant: React.FC<Props> = ({ visible = true }) => {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState('');
@@ -72,28 +72,27 @@ export const XiaoYuanAssistant: React.FC<Props> = ({ visible = true }) => {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="fixed z-[70] bottom-5 right-5 sm:bottom-6 sm:right-6 group flex items-center gap-2 rounded-full shadow-2xl shadow-teal-900/30 ring-2 ring-white/80 hover:scale-[1.03] active:scale-[0.98] transition-transform"
+        className="tp-xiaoyuan-fab fixed z-[70] left-[0.4rem] top-[5.15rem] md:left-[0.45rem] group flex flex-col items-center gap-0.5"
         aria-label={`打开${XIAOYUAN_NAME}助手`}
         title={`${XIAOYUAN_NAME} · 操作助手`}
       >
-        <span className="relative w-14 h-14 rounded-full overflow-hidden bg-slate-900">
+        <span className="relative w-11 h-11 rounded-full overflow-hidden bg-slate-900 ring-2 ring-cyan-300/70 shadow-lg shadow-cyan-900/25 group-hover:scale-105 transition-transform">
           <img
             src={XIAOYUAN_AVATAR}
             alt={XIAOYUAN_NAME}
             className="w-full h-full object-cover object-top"
             draggable={false}
           />
-          <span className="absolute bottom-0.5 right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-400 ring-2 ring-slate-900" />
+          <span className="absolute bottom-0.5 right-0.5 w-2 h-2 rounded-full bg-emerald-400 ring-2 ring-slate-900" />
         </span>
-        <span className="hidden sm:flex items-center gap-1.5 pr-4 pl-1 py-2 rounded-full bg-slate-900 text-white text-xs font-black tracking-wide">
-          <Sparkles size={12} className="text-teal-300" />
+        <span className="text-[9px] font-black text-cyan-100/90 bg-slate-950/80 px-1.5 py-0.5 rounded-md border border-cyan-400/25 leading-none">
           {XIAOYUAN_NAME}
         </span>
       </button>
 
       {open && (
         <div
-          className="fixed z-[71] bottom-[5.5rem] right-3 sm:right-6 w-[min(100vw-1.5rem,24rem)] h-[min(72vh,34rem)] flex flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden"
+          className="fixed z-[71] left-[3.85rem] sm:left-[4.35rem] top-[4.5rem] w-[min(calc(100vw-5rem),22rem)] h-[min(68vh,32rem)] flex flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden"
           role="dialog"
           aria-label={`${XIAOYUAN_NAME}对话`}
         >

@@ -886,13 +886,17 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             </select>
             {(() => {
               const s = skus.find((x) => x.id === skuPick);
-              if (!s?.images?.[0]) return null;
+              const img0 = s?.images?.[0];
+              if (!img0 || /toysbear\.net/i.test(img0)) return null;
               return (
                 <div className="mt-2 flex items-center gap-2">
                   <img
-                    src={s.images[0]}
+                    src={img0}
                     alt=""
                     className="w-12 h-12 rounded-lg object-cover border border-violet-100"
+                    onError={(e) => {
+                      (e.currentTarget as HTMLImageElement).style.display = 'none';
+                    }}
                   />
                   <span className="text-[10px] font-bold text-violet-700">
                     生成时将用此产品图作参考二次创作

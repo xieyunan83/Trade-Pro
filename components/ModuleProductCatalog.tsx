@@ -408,7 +408,7 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
                 {filtered.map((r) => (
                   <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50/80">
                     <td className="px-3 py-2">
-                      {r.images?.[0] ? (
+                      {r.images?.[0] && !/toysbear\.net/i.test(r.images[0]) ? (
                         <img
                           src={r.images[0]}
                           alt=""

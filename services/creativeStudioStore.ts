@@ -120,6 +120,10 @@ export type SocialPiece = {
   skuCode?: string;
   skuName?: string;
   imageHint?: string;
+  /** 最终成稿形态参考图（版式/风格） */
+  referenceImageDataUrl?: string;
+  /** 产品实拍/主图 */
+  productImageDataUrl?: string;
   ownerUsername?: string;
   createdAt: number;
   updatedAt: number;

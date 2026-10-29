@@ -2,9 +2,8 @@
  * 着陆页客户端：拉取聚合接口 + stale-while-revalidate 缓存
  */
 import type { LandingPayload } from './landingDataCore';
-import { LANDING_SHOWCASE_PRODUCTS } from './landingShowcase';
 
-const CACHE_KEY = 'trade_scout_landing_hub_v2';
+const CACHE_KEY = 'trade_scout_landing_hub_v3';
 /** 新鲜期内直接用缓存，不打接口 */
 const FRESH_TTL_MS = 5 * 60 * 1000;
 /** 过期但仍可立刻展示，后台静默刷新 */
@@ -58,7 +57,7 @@ export const buildLandingSeed = (): LandingPayload => ({
     note: '买入/卖出为中行现汇价；中间价列为中行折算价。单位：人民币 / 100 外币。仅供参考。',
   },
   news: { items: [] },
-  products: { items: LANDING_SHOWCASE_PRODUCTS },
+  products: { items: [] },
 });
 
 const saveLandingCache = (payload: LandingPayload) => {

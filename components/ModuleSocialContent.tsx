@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   Share2,
   Sparkles,
@@ -13,6 +13,8 @@ import {
   Unplug,
   Loader2,
   ExternalLink,
+  ImagePlus,
+  LayoutTemplate,
 } from 'lucide-react';
 import type { User } from '../types';
 import { loadCatalogSkus } from '../services/productCatalogTypes';
@@ -57,6 +59,11 @@ export const ModuleSocialContent: React.FC<Props> = ({ currentUser }) => {
   const [busy, setBusy] = useState(false);
   const [linkUrl, setLinkUrl] = useState('');
   const [imageUrl, setImageUrl] = useState('');
+  /** 参考图 = 成稿形态/版式；产品图 = 实拍主图 */
+  const [referenceImage, setReferenceImage] = useState<string>('');
+  const [productImage, setProductImage] = useState<string>('');
+  const refInputRef = useRef<HTMLInputElement>(null);
+  const productInputRef = useRef<HTMLInputElement>(null);
   const [showConnect, setShowConnect] = useState(false);
   const [tokenDraft, setTokenDraft] = useState('');
   const [accountIdDraft, setAccountIdDraft] = useState('');
@@ -85,8 +92,35 @@ export const ModuleSocialContent: React.FC<Props> = ({ currentUser }) => {
     if (s) {
       setProductName(s.nameEn || s.name);
       if (s.specs) setHighlight(s.specs.slice(0, 80));
-      if (s.images?.[0]?.startsWith('http')) setImageUrl(s.images[0]);
+      const img = s.images?.[0];
+      if (img && (img.startsWith('http') || img.startsWith('data:') || img.startsWith('blob:'))) {
+        if (!/toysbear\.net/i.test(img)) {
+          setImageUrl(img);
+          setProductImage(img);
+        }
+      }
     }
+  };
+
+  const readImageFile = (file: File, kind: 'ref' | 'product') => {
+    if (!file.type.startsWith('image/')) {
+      setMsg('请上传图片文件');
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      setMsg('单张图片请小于 8MB');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = String(reader.result || '');
+      if (kind === 'ref') setReferenceImage(url);
+      else {
+        setProductImage(url);
+        setImageUrl(url);
+      }
+    };
+    reader.readAsDataURL(file);
   };
 
   const generate = () => {
@@ -113,14 +147,18 @@ export const ModuleSocialContent: React.FC<Props> = ({ currentUser }) => {
       size: meta.size,
       skuCode: sku?.skuCode,
       skuName: sku?.name,
-      imageHint: `${meta.size} 配图位 · 可从平面设计模块下载后替换`,
+      imageHint: referenceImage
+        ? `${meta.size} · 已含参考形态图`
+        : `${meta.size} 配图位 · 可上传参考图 / 产品图`,
+      referenceImageDataUrl: referenceImage || undefined,
+      productImageDataUrl: productImage || undefined,
       ownerUsername: currentUser.username,
       createdAt: now,
       updatedAt: now,
     };
     persist([piece, ...pieces]);
     setActiveId(piece.id);
-    setMsg(`已生成 ${meta.label} 素材`);
+    setMsg(`已生成 ${meta.label} 素材${productImage || referenceImage ? '（已附带上传图片）' : ''}`);
   };
 
   const updateActive = (patch: Partial<SocialPiece>) => {
@@ -306,6 +344,96 @@ export const ModuleSocialContent: React.FC<Props> = ({ currentUser }) => {
               />
             </div>
 
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase flex items-center gap-1">
+                  <LayoutTemplate size={10} /> 参考图片
+                </label>
+                <p className="text-[9px] text-slate-400 font-medium mt-0.5 mb-1 leading-snug">
+                  最终成稿形态 / 版式风格参考
+                </p>
+                <input
+                  ref={refInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) readImageFile(f, 'ref');
+                    e.target.value = '';
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => refInputRef.current?.click()}
+                  className="w-full rounded-xl border border-dashed border-slate-300 hover:border-fuchsia-400 bg-slate-50 hover:bg-fuchsia-50/50 min-h-[5.5rem] flex flex-col items-center justify-center gap-1 overflow-hidden"
+                >
+                  {referenceImage ? (
+                    <img src={referenceImage} alt="参考" className="max-h-20 object-contain" />
+                  ) : (
+                    <>
+                      <ImagePlus size={16} className="text-slate-400" />
+                      <span className="text-[10px] font-bold text-slate-500">上传参考图</span>
+                    </>
+                  )}
+                </button>
+                {referenceImage ? (
+                  <button
+                    type="button"
+                    onClick={() => setReferenceImage('')}
+                    className="mt-1 text-[9px] font-bold text-rose-500"
+                  >
+                    清除参考图
+                  </button>
+                ) : null}
+              </div>
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase flex items-center gap-1">
+                  <Package size={10} /> 产品图片
+                </label>
+                <p className="text-[9px] text-slate-400 font-medium mt-0.5 mb-1 leading-snug">
+                  产品实拍 / 主图（与参考图不同）
+                </p>
+                <input
+                  ref={productInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) readImageFile(f, 'product');
+                    e.target.value = '';
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => productInputRef.current?.click()}
+                  className="w-full rounded-xl border border-dashed border-slate-300 hover:border-fuchsia-400 bg-slate-50 hover:bg-fuchsia-50/50 min-h-[5.5rem] flex flex-col items-center justify-center gap-1 overflow-hidden"
+                >
+                  {productImage ? (
+                    <img src={productImage} alt="产品" className="max-h-20 object-contain" />
+                  ) : (
+                    <>
+                      <ImagePlus size={16} className="text-slate-400" />
+                      <span className="text-[10px] font-bold text-slate-500">上传产品图</span>
+                    </>
+                  )}
+                </button>
+                {productImage ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProductImage('');
+                      setImageUrl('');
+                    }}
+                    className="mt-1 text-[9px] font-bold text-rose-500"
+                  >
+                    清除产品图
+                  </button>
+                ) : null}
+              </div>
+            </div>
+
             <button
               type="button"
               onClick={generate}
@@ -345,8 +473,31 @@ export const ModuleSocialContent: React.FC<Props> = ({ currentUser }) => {
               </div>
 
               <div className="p-4 space-y-3 flex-1 overflow-y-auto">
-                <div className="rounded-2xl bg-gradient-to-br from-slate-800 to-fuchsia-900/80 aspect-video max-h-40 flex items-center justify-center text-white/80 text-xs font-bold px-4 text-center">
-                  {active.imageHint}
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 aspect-video max-h-36 flex flex-col items-center justify-center overflow-hidden">
+                    {active.referenceImageDataUrl ? (
+                      <img
+                        src={active.referenceImageDataUrl}
+                        alt="参考"
+                        className="max-h-full max-w-full object-contain"
+                      />
+                    ) : (
+                      <span className="text-[10px] font-bold text-slate-400 px-2 text-center">参考形态图</span>
+                    )}
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 aspect-video max-h-36 flex flex-col items-center justify-center overflow-hidden">
+                    {active.productImageDataUrl ? (
+                      <img
+                        src={active.productImageDataUrl}
+                        alt="产品"
+                        className="max-h-full max-w-full object-contain"
+                      />
+                    ) : (
+                      <span className="text-[10px] font-bold text-slate-400 px-2 text-center">
+                        {active.imageHint || '产品主图'}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div>
                   <label className="text-[10px] font-black text-slate-400 uppercase">正文</label>
