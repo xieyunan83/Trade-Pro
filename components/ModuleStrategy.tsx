@@ -57,7 +57,7 @@ interface Props {
   ) => void | Promise<void>;
 }
 
-type PickerKind = 'company' | 'keyword' | 'country' | null;
+type PickerKind = 'company' | 'keyword' | 'country' | 'offer' | null;
 
 const companyKey = (c: AnalysisResult) =>
   (c.companyInfo?.website || c.companyInfo?.name || '').toLowerCase().trim();
@@ -75,7 +75,7 @@ export const ModuleStrategy: React.FC<Props> = ({
       role: 'model',
       text: data
         ? `**Strategy Context Loaded** ✅\n\n已载入当前背调：**${data.companyInfo?.name || '该公司'}**。\n\n可引用平面产品图 / 包装图 / 发文素材，再叠加关键词与国家，由策略服务生成开发信组。`
-        : `**Strategy Assistant Ready** 🚀\n\n我是外贸策略顾问。请组合：\n- 创作素材（产品图 / 包装 / 发文）\n- 背调客户（单客户）\n- 关键词与国家（整市场）\n\n点「生成开发信」或说「写一组开发信」——会真正调用策略服务，短、多角度、末封带钩子。`,
+        : `**Strategy Assistant Ready** 🚀\n\n我是外贸策略顾问。请在输入框旁点「产品」选用平面/包装/发文素材，再选背调客户或关键词/国家。\n\n有背调客户时点顶部「生成开发信」，或直接说「写一组开发信」。`,
       timestamp: Date.now(),
     },
   ]);
@@ -98,7 +98,6 @@ export const ModuleStrategy: React.FC<Props> = ({
   const [selectedOfferIds, setSelectedOfferIds] = useState<string[]>(() =>
     pickDefaultStrategyOfferIds(listStrategyOfferAssets())
   );
-  const [showOfferPicker, setShowOfferPicker] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -590,6 +589,13 @@ export const ModuleStrategy: React.FC<Props> = ({
   });
   const filteredKeywords = keywordOptions.filter((k) => !q || k.toLowerCase().includes(q));
   const filteredCountries = countryOptions.filter((c) => !q || c.toLowerCase().includes(q));
+  const filteredOffers = offerAssets.filter((a) => {
+    if (!q) return true;
+    return `${a.label} ${a.skuCode || ''} ${a.skuName || ''} ${strategyOfferKindLabel(a.kind)}`
+      .toLowerCase()
+      .includes(q);
+  });
+  const selectedOffers = offerAssets.filter((a) => selectedOfferIds.includes(a.id));
 
   return (
     <div className="h-[calc(100dvh-120px)] sm:h-[calc(100vh-140px)] flex flex-col gap-4 sm:gap-6 max-w-7xl mx-auto animate-fade-in overflow-hidden px-0">
@@ -631,107 +637,10 @@ export const ModuleStrategy: React.FC<Props> = ({
             </button>
           </div>
 
-          <div className="mt-4 pt-3 border-t border-indigo-50 space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <div className="text-[10px] font-black text-slate-500 uppercase tracking-wider inline-flex items-center gap-1">
-                <ImagePlus size={11} /> 引用创作素材（产品图 / 包装 / 发文）
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={refreshOfferAssets}
-                  className="text-[10px] font-black text-slate-400 hover:text-indigo-600"
-                >
-                  刷新
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowOfferPicker((v) => !v)}
-                  className="text-[10px] font-black text-indigo-600 hover:text-indigo-800"
-                >
-                  {showOfferPicker ? '收起' : '选择素材'}
-                </button>
-              </div>
-            </div>
-            {selectedOfferIds.length === 0 ? (
-              <p className="text-[11px] text-slate-400 font-medium">
-                暂无素材。请先在平面设计 / 包装 / 发文模块生成，或点「选择素材」。
-              </p>
-            ) : (
-              <div className="flex flex-wrap gap-2">
-                {offerAssets
-                  .filter((a) => selectedOfferIds.includes(a.id))
-                  .map((a) => (
-                    <div
-                      key={a.id}
-                      className="relative w-14 h-14 rounded-lg overflow-hidden border border-indigo-200 bg-slate-50 group"
-                      title={`${strategyOfferKindLabel(a.kind)} · ${a.label}`}
-                    >
-                      {a.url ? (
-                        <VaultImg src={a.url} alt="" className="w-full h-full object-contain" />
-                      ) : (
-                        <span className="flex h-full items-center justify-center text-[9px] font-black text-slate-500 px-1 text-center">
-                          文案
-                        </span>
-                      )}
-                      <span className="absolute bottom-0 inset-x-0 bg-slate-900/70 text-white text-[8px] font-black text-center py-0.5">
-                        {strategyOfferKindLabel(a.kind)}
-                      </span>
-                      <button
-                        type="button"
-                        aria-label="移除"
-                        onClick={() => toggleOfferAsset(a.id)}
-                        className="absolute top-0.5 right-0.5 rounded-full bg-slate-900/85 text-white p-0.5 opacity-90"
-                      >
-                        <X size={10} />
-                      </button>
-                    </div>
-                  ))}
-              </div>
-            )}
-            {showOfferPicker && (
-              <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-2 max-h-48 overflow-y-auto">
-                {offerAssets.length === 0 ? (
-                  <p className="text-center text-slate-400 text-xs py-4 font-medium">
-                    创作库为空，请先生成产品图、包装或发文素材
-                  </p>
-                ) : (
-                  <div className="grid grid-cols-4 sm:grid-cols-6 gap-2">
-                    {offerAssets.slice(0, 36).map((a) => {
-                      const on = selectedOfferIds.includes(a.id);
-                      return (
-                        <button
-                          key={a.id}
-                          type="button"
-                          onClick={() => toggleOfferAsset(a.id)}
-                          className={`relative aspect-square rounded-lg overflow-hidden border bg-white ${
-                            on ? 'border-indigo-500 ring-1 ring-indigo-200' : 'border-slate-200'
-                          }`}
-                          title={a.label}
-                        >
-                          {a.url ? (
-                            <VaultImg src={a.url} alt="" className="w-full h-full object-contain" />
-                          ) : (
-                            <span className="flex h-full items-center justify-center text-[9px] font-bold text-slate-500 p-1">
-                              {a.label.slice(0, 18)}
-                            </span>
-                          )}
-                          {on && (
-                            <span className="absolute top-0.5 left-0.5 rounded-full bg-indigo-600 text-white p-0.5">
-                              <Check size={10} />
-                            </span>
-                          )}
-                          <span className="absolute bottom-0 inset-x-0 bg-black/55 text-white text-[8px] font-black text-center truncate px-0.5">
-                            {strategyOfferKindLabel(a.kind)}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+          <p className="mt-3 text-[11px] text-slate-500 font-medium">
+            产品素材请在下方输入栏点「产品」选择（平面 / 包装 / 发文 / 产品库）
+            {selectedOfferIds.length > 0 ? ` · 已选 ${selectedOfferIds.length}` : ''}
+          </p>
           {primaryCompany.generatedEmails && (
             <div className="mt-4 pt-4 border-t border-slate-100 space-y-3">
               {primaryCompany.generatedEmails.analysis && (
@@ -846,8 +755,30 @@ export const ModuleStrategy: React.FC<Props> = ({
           {(selectedCompanies.length > 0 ||
             selectedKeywords.length > 0 ||
             selectedCountries.length > 0 ||
+            selectedOffers.length > 0 ||
             currentAttachments.length > 0) && (
             <div className="flex flex-wrap gap-2 mb-3">
+              {selectedOffers.map((a) => (
+                <span
+                  key={a.id}
+                  className="inline-flex items-center gap-1.5 bg-fuchsia-50 text-fuchsia-900 pl-1 pr-2.5 py-1 rounded-lg text-[11px] font-bold border border-fuchsia-100"
+                >
+                  <span className="w-7 h-7 rounded-md overflow-hidden bg-white border border-fuchsia-100 shrink-0 flex items-center justify-center">
+                    {a.url ? (
+                      <VaultImg src={a.url} alt="" className="w-full h-full object-contain" />
+                    ) : (
+                      <ImagePlus size={12} className="text-fuchsia-500" />
+                    )}
+                  </span>
+                  <span className="max-w-[100px] truncate">
+                    {strategyOfferKindLabel(a.kind)}
+                    {a.skuName || a.skuCode ? ` · ${(a.skuName || a.skuCode || '').slice(0, 12)}` : ''}
+                  </span>
+                  <button type="button" onClick={() => toggleOfferAsset(a.id)} className="hover:text-red-500">
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
               {selectedCompanies.map((c) => (
                 <span
                   key={companyKey(c)}
@@ -898,13 +829,17 @@ export const ModuleStrategy: React.FC<Props> = ({
                   </button>
                 </span>
               ))}
-              {(selectedCompanies.length > 0 || selectedKeywords.length > 0 || selectedCountries.length > 0) && (
+              {(selectedCompanies.length > 0 ||
+                selectedKeywords.length > 0 ||
+                selectedCountries.length > 0 ||
+                selectedOfferIds.length > 0) && (
                 <button
                   type="button"
                   onClick={() => {
                     setSelectedCompanies(data ? [data] : []);
                     setSelectedKeywords([]);
                     setSelectedCountries([]);
+                    setSelectedOfferIds([]);
                   }}
                   className="text-[11px] font-bold text-slate-400 hover:text-red-500 px-2"
                 >
@@ -915,7 +850,11 @@ export const ModuleStrategy: React.FC<Props> = ({
           )}
 
           {picker && (
-            <div className="mb-3 rounded-2xl border border-slate-200 bg-white shadow-lg overflow-hidden max-h-64 flex flex-col">
+            <div
+              className={`mb-3 rounded-2xl border border-slate-200 bg-white shadow-lg overflow-hidden flex flex-col ${
+                picker === 'offer' ? 'max-h-80' : 'max-h-64'
+              }`}
+            >
               <div className="p-2 border-b border-slate-100 flex items-center gap-2">
                 <Search size={14} className="text-slate-400" />
                 <input
@@ -926,11 +865,22 @@ export const ModuleStrategy: React.FC<Props> = ({
                       ? '搜索背调客户…'
                       : picker === 'keyword'
                         ? '搜索关键词…'
-                        : '搜索国家…'
+                        : picker === 'offer'
+                          ? '搜索产品 / 包装 / 发文…'
+                          : '搜索国家…'
                   }
                   className="flex-1 text-sm font-medium outline-none"
                   autoFocus
                 />
+                {picker === 'offer' && (
+                  <button
+                    type="button"
+                    onClick={refreshOfferAssets}
+                    className="text-[10px] font-black text-indigo-600 px-2 shrink-0"
+                  >
+                    刷新
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => {
@@ -943,6 +893,47 @@ export const ModuleStrategy: React.FC<Props> = ({
                 </button>
               </div>
               <div className="overflow-y-auto flex-1 p-1">
+                {picker === 'offer' &&
+                  (filteredOffers.length === 0 ? (
+                    <p className="text-center text-slate-400 text-sm py-6 font-medium px-4">
+                      暂无可选产品素材。请先在平面设计 / 包装设计 / 发文素材 / 产品库生成后再点刷新。
+                    </p>
+                  ) : (
+                    <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2 p-2">
+                      {filteredOffers.slice(0, 40).map((a) => {
+                        const on = selectedOfferIds.includes(a.id);
+                        return (
+                          <button
+                            key={a.id}
+                            type="button"
+                            onClick={() => toggleOfferAsset(a.id)}
+                            className={`relative aspect-square rounded-xl overflow-hidden border bg-slate-50 text-left ${
+                              on
+                                ? 'border-fuchsia-500 ring-2 ring-fuchsia-200'
+                                : 'border-slate-200 hover:border-fuchsia-300'
+                            }`}
+                            title={a.label}
+                          >
+                            {a.url ? (
+                              <VaultImg src={a.url} alt="" className="w-full h-full object-contain" />
+                            ) : (
+                              <span className="flex h-full items-center justify-center text-[10px] font-bold text-slate-500 p-2 text-center">
+                                {a.label.slice(0, 24)}
+                              </span>
+                            )}
+                            {on && (
+                              <span className="absolute top-1 left-1 rounded-full bg-fuchsia-600 text-white p-0.5">
+                                <Check size={10} />
+                              </span>
+                            )}
+                            <span className="absolute bottom-0 inset-x-0 bg-slate-900/70 text-white text-[9px] font-black text-center truncate px-1 py-0.5">
+                              {strategyOfferKindLabel(a.kind)}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ))}
                 {picker === 'company' &&
                   (filteredCompanies.length === 0 ? (
                     <p className="text-center text-slate-400 text-sm py-6 font-medium">暂无背调记录，请先完成客户背调</p>
@@ -1034,13 +1025,13 @@ export const ModuleStrategy: React.FC<Props> = ({
             </div>
           )}
 
-          <div className="relative flex items-end gap-1 sm:gap-2 bg-slate-50 border border-slate-200 rounded-2xl p-2 focus-within:ring-2 focus-within:ring-blue-500 focus-within:bg-white transition-all shadow-inner">
+          <div className="relative flex flex-wrap items-end gap-1 sm:gap-2 bg-slate-50 border border-slate-200 rounded-2xl p-2 focus-within:ring-2 focus-within:ring-blue-500 focus-within:bg-white transition-all shadow-inner">
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={isProcessingFile}
               className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-colors"
-              title="上传附件（产品/报价参考）"
+              title="上传附件（额外报价/资料）"
             >
               {isProcessingFile ? <Loader2 size={20} className="animate-spin" /> : <Paperclip size={20} />}
             </button>
@@ -1052,6 +1043,26 @@ export const ModuleStrategy: React.FC<Props> = ({
               onChange={handleChatUpload}
               accept="image/*,application/pdf,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             />
+
+            <button
+              type="button"
+              onClick={() => {
+                refreshOfferAssets();
+                setPicker((p) => (p === 'offer' ? null : 'offer'));
+                setPickerFilter('');
+              }}
+              className={`inline-flex items-center gap-1 px-2.5 py-2 rounded-xl text-[11px] font-black transition-colors ${
+                picker === 'offer' || selectedOfferIds.length
+                  ? 'bg-fuchsia-100 text-fuchsia-900'
+                  : 'bg-fuchsia-50 text-fuchsia-800 hover:bg-fuchsia-100 border border-fuchsia-200'
+              }`}
+              title="从平面设计 / 包装 / 发文 / 产品库选择产品"
+            >
+              <ImagePlus size={16} />
+              <span>产品</span>
+              {selectedOfferIds.length > 0 && <span>{selectedOfferIds.length}</span>}
+              <ChevronDown size={12} className="opacity-60" />
+            </button>
 
             <button
               type="button"
@@ -1111,7 +1122,7 @@ export const ModuleStrategy: React.FC<Props> = ({
             </button>
 
             <textarea
-              className="flex-1 bg-transparent border-none focus:ring-0 text-slate-800 text-sm font-medium max-h-32 py-3 resize-none custom-scrollbar min-w-0"
+              className="flex-1 bg-transparent border-none focus:ring-0 text-slate-800 text-sm font-medium max-h-32 py-3 resize-none custom-scrollbar min-w-[120px]"
               placeholder="Ask me anything..."
               rows={1}
               value={inputValue}
@@ -1133,7 +1144,7 @@ export const ModuleStrategy: React.FC<Props> = ({
             </button>
           </div>
           <p className="mt-2 text-[10px] text-slate-400 font-bold px-1">
-            创作素材 + 附件 = 我方卖点 · 背调 = 单客户 · 关键词/国家 = 整市场（生成开发信会一并送入策略服务）
+            「产品」= 选用已有素材 · 回形针 = 临时上传 · 背调 / 关键词 / 国家可组合进开发信
           </p>
         </div>
       </div>
