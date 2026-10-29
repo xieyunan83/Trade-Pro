@@ -337,7 +337,9 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
     if (activeId === id) setActiveId(next[0]?.id || null);
   };
 
-  const playUrl = useVaultUrl(active?.videoUrl || active?.draftVideoUrl);
+  const draftUrl = useVaultUrl(active?.draftVideoUrl);
+  const fullUrl = useVaultUrl(active?.videoUrl);
+  const playUrl = fullUrl || draftUrl;
 
   return (
     <div className="max-w-[96rem] mx-auto space-y-4 animate-fade-in px-1">
@@ -650,13 +652,21 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
             <div className="px-4 py-3 border-t border-white/10 space-y-2">
               {active.draftVideoUrl && (
                 <a
-                  href={active.draftVideoUrl}
-                  target="_blank"
+                  href={draftUrl || undefined}
+                  target={draftUrl?.startsWith('http') ? '_blank' : undefined}
                   rel="noreferrer"
-                  download
-                  className="w-full rounded-xl bg-white/10 hover:bg-white/15 text-white text-sm font-black py-2.5 inline-flex items-center justify-center gap-2"
+                  download={`${(active.title || 'sample').replace(/\s+/g, '_')}-样片.mp4`}
+                  onClick={(e) => {
+                    if (!draftUrl) {
+                      e.preventDefault();
+                      window.alert('样片还在准备本机地址，请稍等再点下载');
+                    }
+                  }}
+                  className={`w-full rounded-xl text-white text-sm font-black py-2.5 inline-flex items-center justify-center gap-2 ${
+                    draftUrl ? 'bg-white/10 hover:bg-white/15' : 'bg-white/5 opacity-60 cursor-wait'
+                  }`}
                 >
-                  <Download size={16} /> 下载样片
+                  <Download size={16} /> {draftUrl ? '下载样片' : '准备下载…'}
                 </a>
               )}
               <button
@@ -673,13 +683,21 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
           {active?.status === 'ready' && active.videoUrl && (
             <div className="px-4 py-3 border-t border-white/10">
               <a
-                href={active.videoUrl}
-                target="_blank"
+                href={fullUrl || undefined}
+                target={fullUrl?.startsWith('http') ? '_blank' : undefined}
                 rel="noreferrer"
-                download
-                className="w-full rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white text-sm font-black py-2.5 inline-flex items-center justify-center gap-2"
+                download={`${(active.title || 'video').replace(/\s+/g, '_')}-正片.mp4`}
+                onClick={(e) => {
+                  if (!fullUrl) {
+                    e.preventDefault();
+                    window.alert('正片还在准备本机地址，请稍等再点下载');
+                  }
+                }}
+                className={`w-full rounded-xl text-white text-sm font-black py-2.5 inline-flex items-center justify-center gap-2 ${
+                  fullUrl ? 'bg-indigo-500 hover:bg-indigo-400' : 'bg-indigo-500/40 opacity-60 cursor-wait'
+                }`}
               >
-                <Download size={16} /> 下载正片
+                <Download size={16} /> {fullUrl ? '下载正片' : '准备下载…'}
               </a>
             </div>
           )}

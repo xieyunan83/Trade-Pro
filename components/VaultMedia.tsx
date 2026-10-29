@@ -58,18 +58,26 @@ export const VaultVideo: React.FC<VideoProps> = ({ src, ...rest }) => {
   return <video src={resolved} {...rest} />;
 };
 
-/** 给 model-viewer / 下载链接用 */
+/** 给 model-viewer / 下载链接用；vault: 会解成 blob:，不会把 vault: 塞进 <a href> */
 export const useVaultUrl = (src?: string): string => {
-  const [resolved, setResolved] = useState(src || '');
+  const [resolved, setResolved] = useState(() => {
+    const u = (src || '').trim();
+    // 勿把 vault: 当作可点击地址（系统会弹「未设定用来打开 URL」）
+    if (!u || u.startsWith('vault:')) return '';
+    return u;
+  });
   useEffect(() => {
     let cancelled = false;
-    const u = src || '';
+    const u = (src || '').trim();
     if (!u) {
       setResolved('');
       return;
     }
+    if (u.startsWith('vault:')) setResolved('');
     void resolveMediaUrl(u).then((r) => {
-      if (!cancelled) setResolved(r || u);
+      if (cancelled) return;
+      // 仍是 vault: 说明解析失败，留空避免误点
+      setResolved(r && !r.startsWith('vault:') ? r : '');
     });
     return () => {
       cancelled = true;
