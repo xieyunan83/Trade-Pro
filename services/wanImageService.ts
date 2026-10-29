@@ -153,7 +153,15 @@ const parseJson = async (res: Response): Promise<any> => {
   try {
     return text ? JSON.parse(text) : {};
   } catch {
-    throw new Error(`万相返回非 JSON: ${res.status} ${text.slice(0, 200)}`);
+    if (
+      res.status === 413 ||
+      /FUNCTION_PAYLOAD_TOO_LARGE|Request Entity Too Large|Payload Too Large/i.test(text)
+    ) {
+      throw new Error(
+        '参考图总大小超限（413）。请只保留 1～2 张较小产品图后重试。'
+      );
+    }
+    throw new Error(`生图服务返回非 JSON: ${res.status} ${text.slice(0, 200)}`);
   }
 };
 
@@ -172,7 +180,7 @@ const sanitizeRefImages = (imgs?: string[]): string[] =>
   (imgs || [])
     .map((s) => (s || '').trim())
     .filter((s) => /^https?:\/\//i.test(s) || s.startsWith('data:image/'))
-    .slice(0, 4);
+    .slice(0, 2);
 
 const extractImageUrls = (data: any): string[] => {
   const urls: string[] = [];

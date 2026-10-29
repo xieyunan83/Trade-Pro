@@ -230,7 +230,7 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
     try {
       const next = [...refUploads];
       for (const file of Array.from(files)) {
-        if (next.length >= 3) break;
+        if (next.length >= 2) break;
         if (!file.type.startsWith('image/')) continue;
         const raw = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader();
@@ -239,10 +239,10 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
           reader.readAsDataURL(file);
         });
         if (!raw.startsWith('data:image/')) continue;
-        const compressed = await compressImageDataUrl(raw);
+        const compressed = await compressImageDataUrl(raw, 1024, 0.72);
         next.push(compressed);
       }
-      setRefUploads(next.slice(0, 3));
+      setRefUploads(next.slice(0, 2));
     } catch (e: any) {
       setError(e?.message || '参考图处理失败');
     } finally {
@@ -257,10 +257,11 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
       skus.find((s) => s.skuCode === proj.skuCode);
     const fromSku = (boundSku?.images || []).filter(Boolean);
     const merged: string[] = [];
+    // 最多 2 张，避免多参考图 dataURL 触发云函数 413
     for (const u of [...refUploads, ...pickedRefs, ...fromSku]) {
       if (!u || merged.includes(u)) continue;
       merged.push(u);
-      if (merged.length >= 3) break;
+      if (merged.length >= 2) break;
     }
     return merged;
   };
@@ -637,9 +638,9 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
             value={pickedRefs}
             onChange={setPickedRefs}
             multiple
-            max={3}
+            max={2}
             accent="violet"
-            title="选用平面主图 / 产品库图（可点 × 移除推送图）"
+            title="选用平面主图 / 产品库图（最多 2 张，过大易失败）"
             onSkuMeta={(meta) => {
               if (!meta?.skuCode) return;
               const hit = skus.find((s) => s.skuCode === meta.skuCode);
@@ -675,7 +676,7 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
                   </button>
                 </div>
               ))}
-              {refUploads.length < 3 && (
+              {refUploads.length < 2 && (
                 <button
                   type="button"
                   disabled={refBusy || loading}

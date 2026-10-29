@@ -8,6 +8,7 @@ import { listPoolKeys } from './apiKeyPool';
 import { env } from './env';
 import { MULTI_ANGLE_VIEWS } from './creativeAssetBridge';
 import { resolveToDataUrlOrHttps } from './creativeAssetVault';
+import { compressImageDataUrl } from './catalogExcelService';
 
 export type DesignGenerateOpts = {
   prompt: string;
@@ -68,6 +69,9 @@ const toUserFacingDesignError = (raw: string): string => {
   if (/model|不支持|不可用/i.test(msg)) {
     return '当前生图模型不可用，请联系管理员调整配置后重试。';
   }
+  if (/413|Payload Too Large|FUNCTION_PAYLOAD_TOO_LARGE|Request Entity Too Large/i.test(msg)) {
+    return '参考图总大小超限。请只保留 1～2 张清晰产品图后重试。';
+  }
   return msg
     .replace(/万相|Token Plan|sk-sp-[\w-]*|阿里云|dashscope|wan2\.7[\w-]*/gi, '生图服务')
     .slice(0, 220);
@@ -85,17 +89,45 @@ const wanOverride = () => {
   return undefined;
 };
 
+/** 云函数 body 上限约 4.5MB；多张原图 dataURL 极易 413 FUNCTION_PAYLOAD_TOO_LARGE */
+const MAX_REF_IMAGES = 2;
+const MAX_REF_DATA_CHARS = 900_000; // 单张约 <0.9MB，两张留余量给 prompt
+
+const shrinkRefForUpload = async (url: string): Promise<string> => {
+  if (/^https?:\/\//i.test(url)) return url;
+  if (!url.startsWith('data:image/')) return url;
+  let out = url;
+  if (out.length > 280_000) out = await compressImageDataUrl(out, 1024, 0.72);
+  if (out.length > 450_000) out = await compressImageDataUrl(out, 768, 0.65);
+  if (out.length > MAX_REF_DATA_CHARS) out = await compressImageDataUrl(out, 640, 0.58);
+  return out;
+};
+
 const prepareReferenceImages = async (urls?: string[]): Promise<string[] | undefined> => {
   if (!urls?.length) return undefined;
   const out: string[] = [];
+  let dataBudget = MAX_REF_DATA_CHARS * MAX_REF_IMAGES;
   for (const u of urls) {
+    if (out.length >= MAX_REF_IMAGES) break;
     try {
-      const r = await resolveToDataUrlOrHttps(u);
-      if (r && (/^https?:\/\//i.test(r) || r.startsWith('data:image/'))) out.push(r);
+      const resolved = await resolveToDataUrlOrHttps(u);
+      if (!resolved) continue;
+      if (!/^https?:\/\//i.test(resolved) && !resolved.startsWith('data:image/')) continue;
+      const shrunk = await shrinkRefForUpload(resolved);
+      if (shrunk.startsWith('data:image/')) {
+        if (shrunk.length > dataBudget) {
+          const tighter = await compressImageDataUrl(shrunk, 512, 0.55);
+          if (tighter.length > dataBudget) continue;
+          out.push(tighter);
+          dataBudget -= tighter.length;
+          continue;
+        }
+        dataBudget -= shrunk.length;
+      }
+      out.push(shrunk);
     } catch {
       /* 跳过坏参考 */
     }
-    if (out.length >= 4) break;
   }
   return out.length ? out : undefined;
 };
@@ -137,7 +169,13 @@ export const generateDesignImages = async (
     );
     return { images: result.images, engine: 'design' };
   } catch (e: any) {
-    throw new Error(toUserFacingDesignError(e?.message || String(e)));
+    const raw = e?.message || String(e);
+    if (/413|Payload Too Large|FUNCTION_PAYLOAD_TOO_LARGE|Request Entity Too Large/i.test(raw)) {
+      throw new Error(
+        '参考图总大小超限。请只保留 1～2 张清晰产品图后重试（已自动压缩仍过大时请换更小图）。'
+      );
+    }
+    throw new Error(toUserFacingDesignError(raw));
   }
 };
 
