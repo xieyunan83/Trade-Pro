@@ -265,6 +265,50 @@ export const resolveMediaUrl = async (url: string | undefined | null): Promise<s
   return obj;
 };
 
+const blobToDataUrl = (blob: Blob): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('读取图片失败'));
+    reader.readAsDataURL(blob);
+  });
+
+/**
+ * 供上游 API 上传：vault: / blob: → data:image；http(s) / oss: / data: 原样。
+ * 避免「参考图须为本地上传或 HTTPS」因本机 vault 引用失败。
+ */
+export const resolveToUploadableImage = async (url: string): Promise<string> => {
+  const raw = (url || '').trim();
+  if (!raw) throw new Error('参考图为空');
+  if (raw.startsWith('data:image/')) return raw;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (/^oss:\/\//i.test(raw)) return raw;
+
+  if (isVaultRef(raw)) {
+    const id = vaultIdFromRef(raw);
+    const row = await getRow(id);
+    if (!row?.blob) throw new Error('本地素材库中找不到该参考图，请重新选择或上传');
+    void touchAccess(id);
+    const dataUrl = await blobToDataUrl(row.blob);
+    if (!dataUrl.startsWith('data:image/')) {
+      throw new Error('参考图不是可用的图片格式');
+    }
+    return dataUrl;
+  }
+
+  if (raw.startsWith('blob:')) {
+    const res = await fetch(raw);
+    if (!res.ok) throw new Error('读取本地参考图失败');
+    const dataUrl = await blobToDataUrl(await res.blob());
+    if (!dataUrl.startsWith('data:image/')) {
+      throw new Error('参考图不是可用的图片格式');
+    }
+    return dataUrl;
+  }
+
+  throw new Error('参考图须为本地上传图片或公网 HTTPS 地址');
+};
+
 const touchAccess = async (id: string) => {
   try {
     const row = await getRow(id);

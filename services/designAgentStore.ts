@@ -165,20 +165,20 @@ export const DESIGN_SKILLS: DesignSkillDef[] = [
     id: 'multi_angle',
     label: '多角度套图',
     category: '三维预备',
-    hint: '同一产品正面/45°/侧面/背面，供 3D 与视频复用',
+    hint: '同一产品正面/45°/侧面/背面各一张，供 3D 与视频复用',
     defaultPrompt:
-      'Orthographic-consistent multi-angle product set on identical pure white seamless, same camera height and scale: front, three-quarter, side, back. Identical materials colors and tooling details across views, softbox lighting locked, turntable-reference quality for 3D/video pipelines',
+      'Single commercial product on pure white seamless studio, softbox lighting, sharp focus, locked materials colors tooling and proportions. One product only in frame — never collage, contact sheet, 2x2 grid, split screen, or multiple angles in one image',
     negativePrompt:
-      'changing colors between angles, different SKUs, textured floors, props, watermark, text labels baked in',
+      'multi-panel, collage, contact sheet, 2x2 grid, four views in one image, split screen, changing colors between angles, different SKUs, textured floors, props, watermark, text labels baked in',
     craftNotes:
-      '四视图身份锁死：比例、颜色、开模线一致。供图生 3D / 视频多参考。每张单独白底。',
+      '四视角分四张图输出：正面、45°、侧面、背面各一张整图。禁止一张图里拼多个角度。比例、颜色、开模线一致。',
     qaChecklist: [
+      '每张图只有一个视角',
       '四视角为同一产品',
       '缩放与地平线一致',
-      '白底统一',
-      '可直接丢进 3D/视频多参考',
+      '白底统一，可直接丢进 3D/视频多参考',
     ],
-    aspectHint: '1:1 · 4 视角',
+    aspectHint: '1:1 · 4 张各一视角',
   },
   {
     id: 'free',

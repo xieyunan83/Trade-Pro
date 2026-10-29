@@ -112,7 +112,18 @@ export const generateDesignImages = async (
   }
 };
 
-/** 同一产品连出 4 个标准视角（默认 1K，省额度），供 3D / 视频复用 */
+/** 去掉易触发「一张图拼多角」的措辞，保留产品描述 */
+const stripMultiViewCollageLanguage = (prompt: string): string =>
+  prompt
+    .replace(
+      /\b(multi[- ]?angle|multi[- ]?view|contact sheet|2\s*[x×]\s*2|four views?|quad[- ]?view|collage|grid of|panel set|turntable[- ]?reference)\b[^.!?\n]*/gi,
+      ' '
+    )
+    .replace(/\b(front,?\s*(three[- ]?quarter|45°?|45 degrees?),?\s*side,?\s*back)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+/** 同一产品连出 4 个标准视角（每张图仅一个视角），供 3D / 视频复用 */
 export const generateMultiAngleDesignImages = async (
   opts: Omit<DesignGenerateOpts, 'n'> & {
     onProgress?: (done: number, total: number, label: string) => void;
@@ -124,12 +135,20 @@ export const generateMultiAngleDesignImages = async (
   const images: string[] = [];
   const angles: string[] = [];
   const total = MULTI_ANGLE_VIEWS.length;
+  const productBase = stripMultiViewCollageLanguage(opts.prompt.trim());
 
   try {
     for (let i = 0; i < total; i++) {
       const view = MULTI_ANGLE_VIEWS[i];
       opts.onProgress?.(i, total, view.label);
-      const prompt = `${opts.prompt.trim()}. Angle: ${view.label}. ${view.prompt}`;
+      const prompt = [
+        productBase,
+        `This request generates exactly one image for camera angle「${view.label}」only.`,
+        view.prompt,
+        'Never combine multiple angles into one frame.',
+      ]
+        .filter(Boolean)
+        .join(' ');
       const result = await generateWanImage(
         {
           prompt,

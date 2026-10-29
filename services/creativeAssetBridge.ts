@@ -36,25 +36,25 @@ export const MULTI_ANGLE_VIEWS: Array<{ id: string; label: string; prompt: strin
     id: 'front',
     label: '正面',
     prompt:
-      'same product, front orthographic view, centered, clean white seamless background, studio softbox lighting, sharp focus, commercial product photography, no watermark, no text',
+      'ONE single photograph only: front orthographic view of the same product, full-bleed centered. Do NOT include other angles. Do NOT make a 2x2 grid, collage, contact sheet, or multi-panel layout. Clean white seamless background, studio softbox lighting, sharp focus, commercial product photography, no watermark, no text',
   },
   {
     id: 'three_quarter',
     label: '45°',
     prompt:
-      'same product, three-quarter view about 45 degrees, centered, clean white seamless background, studio softbox lighting, sharp focus, commercial product photography, no watermark, no text',
+      'ONE single photograph only: three-quarter view about 45 degrees of the same product, full-bleed centered. Do NOT include other angles. Do NOT make a 2x2 grid, collage, contact sheet, or multi-panel layout. Clean white seamless background, studio softbox lighting, sharp focus, commercial product photography, no watermark, no text',
   },
   {
     id: 'side',
     label: '侧面',
     prompt:
-      'same product, pure side profile view, centered, clean white seamless background, studio softbox lighting, sharp focus, commercial product photography, no watermark, no text',
+      'ONE single photograph only: pure side profile view of the same product, full-bleed centered. Do NOT include other angles. Do NOT make a 2x2 grid, collage, contact sheet, or multi-panel layout. Clean white seamless background, studio softbox lighting, sharp focus, commercial product photography, no watermark, no text',
   },
   {
     id: 'back',
     label: '背面',
     prompt:
-      'same product, rear / back view, centered, clean white seamless background, studio softbox lighting, sharp focus, commercial product photography, no watermark, no text',
+      'ONE single photograph only: rear / back view of the same product, full-bleed centered. Do NOT include other angles. Do NOT make a 2x2 grid, collage, contact sheet, or multi-panel layout. Clean white seamless background, studio softbox lighting, sharp focus, commercial product photography, no watermark, no text',
   },
 ];
 

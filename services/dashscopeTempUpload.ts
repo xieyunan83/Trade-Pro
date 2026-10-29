@@ -8,6 +8,7 @@ import {
   qwenCorsHint,
 } from './qwenProxy';
 import { compressImageDataUrl } from './catalogExcelService';
+import { resolveToUploadableImage } from './creativeAssetVault';
 
 const UPLOADS_PATH = '/api/v1/uploads';
 /** 官方临时上传文档默认北京站；与 MaaS 网关 Key 可能互通，失败再回退调用方 Origin */
@@ -121,12 +122,14 @@ export const uploadLocalImageToDashscopeTemp = async (opts: {
 }): Promise<string> => {
   const apiKey = sanitizeKey(opts.apiKey);
   if (!apiKey) throw new Error('缺少 API Key，无法上传参考图');
-  if (/^https?:\/\//i.test(opts.image.trim())) return opts.image.trim();
-  if (!opts.image.startsWith('data:image/')) {
+  // vault: / blob: → data:；公网 http(s) / oss: 原样
+  const image = await resolveToUploadableImage(opts.image);
+  if (/^https?:\/\//i.test(image) || /^oss:\/\//i.test(image)) return image;
+  if (!image.startsWith('data:image/')) {
     throw new Error('参考图须为本地上传图片或公网 HTTPS 地址');
   }
 
-  const { blob, filename } = await dataUrlToBlob(opts.image);
+  const { blob, filename } = await dataUrlToBlob(image);
   const origins = [
     opts.preferOrigin?.trim(),
     DASHSCOPE_UPLOAD_ORIGIN,
@@ -152,9 +155,9 @@ export const uploadLocalImageToDashscopeTemp = async (opts: {
   // 浏览器直传 OSS 若遇 CORS，走同域服务端上传
   try {
     const m = /^data:([^;]+);base64,(.+)$/i.exec(
-      opts.image.length > 900_000
-        ? await compressImageDataUrl(opts.image, 1280, 0.82)
-        : opts.image
+      image.length > 900_000
+        ? await compressImageDataUrl(image, 1280, 0.82)
+        : image
     );
     if (!m?.[2]) throw lastErr || new Error('参考图无效');
     const res = await fetch('/api/dashscope-upload', {
