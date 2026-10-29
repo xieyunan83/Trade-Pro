@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Loader2, MessageCircle, Send, Sparkles, X } from 'lucide-react';
+import { Loader2, Send, Sparkles, X } from 'lucide-react';
 import {
   askXiaoYuan,
   XIAOYUAN_AVATAR,
@@ -17,13 +17,11 @@ type Props = {
 const WELCOME: XiaoYuanMsg = {
   id: 'welcome',
   role: 'assistant',
-  text: `你好，我是${XIAOYUAN_NAME}，平台操作助手。你可以问我：功能入口在哪、演示怎么走、平面/3D/视频/建站怎么用。技术实现细节我不会讲，但操作步骤我可以一步步带你。`,
+  text: `你好，我是${XIAOYUAN_NAME}。想找功能入口、不会操作某一步，直接问我就好——例如任务流下一步、平面设计、客户搜索、建站怎么用。`,
   at: Date.now(),
 };
 
-/**
- * 右下角浮动助手：ChatGPT 式对话，严格不泄密。
- */
+/** 右下角浮动助手：ChatGPT 式对话 */
 export const XiaoYuanAssistant: React.FC<Props> = ({ visible = true }) => {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState('');
@@ -71,7 +69,6 @@ export const XiaoYuanAssistant: React.FC<Props> = ({ visible = true }) => {
 
   return (
     <>
-      {/* FAB */}
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -114,7 +111,7 @@ export const XiaoYuanAssistant: React.FC<Props> = ({ visible = true }) => {
                   平台助手
                 </span>
               </div>
-              <p className="text-[10px] text-slate-300 truncate">操作答疑 · 功能指路 · 不涉及内部实现</p>
+              <p className="text-[10px] text-slate-300 truncate">功能指路 · 操作答疑</p>
             </div>
             <button
               type="button"
@@ -200,9 +197,6 @@ export const XiaoYuanAssistant: React.FC<Props> = ({ visible = true }) => {
               {busy ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
             </button>
           </div>
-          <p className="shrink-0 text-[9px] text-center text-slate-400 pb-2 px-3 flex items-center justify-center gap-1">
-            <MessageCircle size={9} /> 仅解答使用方式，不提供平台内部技术细节
-          </p>
         </div>
       )}
     </>
