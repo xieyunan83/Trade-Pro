@@ -28,6 +28,8 @@ import {
   generateModel3d,
   getModel3dProviderStatus,
   hydrateModel3dProvider,
+  recoverModel3dJobs,
+  sanitizeModel3dJobs,
 } from '../services/model3dService';
 import { loadDataProviderLocal, saveDataProvider } from '../services/dataProviders';
 import { consumeCreativeHandoff } from '../services/creativeAssetBridge';
@@ -48,7 +50,7 @@ type Props = {
  * 产品设计 · 3D：图/文生 3D、品质档、真实 GLB 导出。
  */
 export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigateModule }) => {
-  const [jobs, setJobs] = useState<Model3dJob[]>(() => loadModel3dJobs());
+  const [jobs, setJobs] = useState<Model3dJob[]>(() => sanitizeModel3dJobs(loadModel3dJobs()));
   const [mode, setMode] = useState<Model3dMode>('image');
   const [modelSkillId, setModelSkillId] = useState<Model3dSkillId>('turntable_hero');
   const [quality, setQuality] = useState<Model3dQuality>('high_detail');
@@ -59,7 +61,10 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [msgTone, setMsgTone] = useState<'info' | 'error' | 'ok'>('info');
-  const [activeId, setActiveId] = useState<string | null>(jobs[0]?.id || null);
+  const [activeId, setActiveId] = useState<string | null>(() => {
+    const initial = sanitizeModel3dJobs(loadModel3dJobs());
+    return initial[0]?.id || null;
+  });
   const [provider, setProvider] = useState(() => getModel3dProviderStatus());
   const [hydrating, setHydrating] = useState(true);
   const [quickKey, setQuickKey] = useState('');
@@ -73,28 +78,55 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     let cancelled = false;
     (async () => {
       setHydrating(true);
+      // 先清僵尸 running@100%，立刻可操作，再异步恢复/落库
+      const cleaned = sanitizeModel3dJobs(loadModel3dJobs());
+      saveModel3dJobs(cleaned);
+      setJobs(cleaned);
+      const stuck = cleaned.filter((j) => j.status === 'failed' && (j.error || '').includes('中断'));
+      if (stuck.length) {
+        setMsgTone('error');
+        setMsg(
+          `发现 ${stuck.length} 条中断的 3D 任务（刷新时卡在准备预览）。请在右侧删除后重新生成；云端可能已扣费。`
+        );
+      }
+
       const st = await hydrateModel3dProvider();
-      // 把历史任务里的临时 GLB/预览图迁入本机库
+      if (cancelled) return;
+      setProvider(st);
+      setHydrating(false);
+      if (!st.ready) {
+        setMsgTone('error');
+        setMsg(st.detail);
+      }
+
       try {
-        const raw = loadModel3dJobs();
-        const migrated: Model3dJob[] = [];
-        for (const j of raw) {
-          migrated.push(await persistModel3dJob(j));
+        const recovered = await recoverModel3dJobs(loadModel3dJobs());
+        if (cancelled) return;
+        saveModel3dJobs(recovered);
+        setJobs(recovered);
+        const revived = recovered.filter((j) => j.previewHint?.includes('已从云端恢复'));
+        if (revived.length) {
+          setMsgTone('ok');
+          setMsg(`已从云端恢复 ${revived.length} 个 3D 模型，可预览/下载`);
+          setActiveId(revived[0].id);
         }
-        if (!cancelled) {
+
+        // 仅对 ready 任务后台落库，不阻塞界面
+        void (async () => {
+          const migrated: Model3dJob[] = [];
+          for (const j of recovered) {
+            if (j.status === 'ready' && (j.modelUrl || j.pbrModelUrl)) {
+              migrated.push(await persistModel3dJob(j));
+            } else {
+              migrated.push(j);
+            }
+          }
+          if (cancelled) return;
           saveModel3dJobs(migrated);
           setJobs(migrated);
-        }
+        })();
       } catch (e) {
-        console.warn('3d jobs migrate', e);
-      }
-      if (!cancelled) {
-        setProvider(st);
-        setHydrating(false);
-        if (!st.ready) {
-          setMsgTone('error');
-          setMsg(st.detail);
-        }
+        console.warn('3d jobs recover/migrate', e);
       }
     })();
     return () => {
@@ -268,6 +300,9 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         sourceImage: sourceImages[0],
         sourceImages,
         quality,
+        onTaskCreated: (taskId) => {
+          patchJob(job.id, { providerTaskId: taskId });
+        },
         onProgress: (pct, status) => {
           const s = (status || '').toLowerCase();
           const label =

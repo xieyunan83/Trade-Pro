@@ -252,6 +252,39 @@ const pickUrls = (out: any, taskId: string): Model3dGenerateResult => {
   };
 };
 
+/** 单次查询任务（刷新后捞回已成功的计费结果）；未完成返回 null */
+export const fetchQwenTripoTaskOnce = async (
+  taskId: string
+): Promise<Model3dGenerateResult | null> => {
+  const id = (taskId || '').trim();
+  if (!id) return null;
+  const cfg = resolveCfg();
+  const path = TASK_PATH(id);
+  const { url, proxyOrigin } = buildUrl(cfg.origin, path);
+  const headers = buildAliyunFetchHeaders({
+    targetUrl: url,
+    apiKey: cfg.apiKey,
+    proxyOrigin: proxyOrigin || cfg.origin,
+    extra: { 'X-Upstream-Path': path },
+  });
+  const res = await fetch(url, { method: 'GET', headers });
+  const json = await parseJson(res);
+  if (!res.ok && !json.output) {
+    throw new Error(json.message || `查询 Tripo 任务失败 HTTP ${res.status}`);
+  }
+  const out = json.output || json;
+  const status = String(out.task_status || out.status || '').toUpperCase();
+  if (status === 'SUCCEEDED' || status === 'SUCCESS') {
+    return pickUrls(out, id);
+  }
+  if (status === 'FAILED' || status === 'CANCELED' || status === 'CANCELLED') {
+    throw new Error(
+      humanizeCreativeProviderError(out.message || out.code || `3D 任务失败（${status}）`)
+    );
+  }
+  return null;
+};
+
 const isPublicHttpUrl = (u: string) => /^https?:\/\//i.test(u.trim());
 
 const guessImageType = (url: string): 'jpeg' | 'png' =>
@@ -351,6 +384,7 @@ export const generateQwenTripoModel3d = async (
 
   try {
     const taskId = await createTask(cfg, taskInput, parameters);
+    input.onTaskCreated?.(taskId);
     input.onProgress?.(12, 'running');
     const out = await pollTask(cfg, taskId, input.onProgress);
     return pickUrls(out, taskId);

@@ -18,10 +18,12 @@ import {
   hydrateHunyuan3dProvider,
 } from './hunyuan3dService';
 import {
+  fetchQwenTripoTaskOnce,
   generateQwenTripoModel3d,
   getQwenTripo3dProviderStatus,
   hydrateQwenTripo3dProvider,
 } from './qwenTripo3dService';
+import type { Model3dJob } from './creativeStudioStore';
 
 export type Model3dGenerateInput = {
   mode: 'image' | 'text';
@@ -32,6 +34,8 @@ export type Model3dGenerateInput = {
   sourceImages?: string[];
   quality: 'high_detail' | 'engine_ready';
   onProgress?: (pct: number, status: string) => void;
+  /** 任务一创建就回传 task_id，刷新后可凭此捞回已扣费结果 */
+  onTaskCreated?: (taskId: string) => void;
 };
 
 export type Model3dGenerateResult = {
@@ -405,6 +409,7 @@ const generateModel3dInner = async (input: Model3dGenerateInput): Promise<Model3
       body.texture_quality = 'detailed';
     }
     const taskId = await createTask(apiKey, body);
+    input.onTaskCreated?.(taskId);
     input.onProgress?.(10, 'running');
     const data = await pollTask(apiKey, taskId, input.onProgress);
     return { ...pickUrls(data), taskId };
@@ -462,6 +467,7 @@ const generateModel3dInner = async (input: Model3dGenerateInput): Promise<Model3
     };
     if (input.prompt?.trim()) body.prompt = input.prompt.trim();
     const taskId = await createTask(apiKey, body);
+    input.onTaskCreated?.(taskId);
     input.onProgress?.(14, 'running');
     const data = await pollTask(apiKey, taskId, input.onProgress);
     return { ...pickUrls(data), taskId };
@@ -484,7 +490,89 @@ const generateModel3dInner = async (input: Model3dGenerateInput): Promise<Model3
   }
 
   const taskId = await createTask(apiKey, body);
+  input.onTaskCreated?.(taskId);
   input.onProgress?.(12, 'running');
   const data = await pollTask(apiKey, taskId, input.onProgress);
   return { ...pickUrls(data), taskId };
+};
+
+const jobHasModel = (j: Model3dJob) =>
+  !!(j.modelUrl || j.pbrModelUrl || j.baseModelUrl);
+
+/** 同步清理：刷新后仍卡在 running@100% 的僵尸任务 */
+export const sanitizeModel3dJobs = (jobs: Model3dJob[]): Model3dJob[] => {
+  const now = Date.now();
+  return jobs.map((j) => {
+    if (j.status === 'failed') return j;
+    if (jobHasModel(j)) {
+      if (j.status === 'ready') return j;
+      return {
+        ...j,
+        status: 'ready',
+        progress: 100,
+        previewHint: j.previewHint || '模型已就绪 · 可拖动环视',
+        error: undefined,
+        updatedAt: now,
+      };
+    }
+    if (j.status !== 'running' && j.status !== 'queued') return j;
+    const stale =
+      (j.progress ?? 0) >= 98 || now - (j.updatedAt || j.createdAt) > 2 * 60 * 1000;
+    if (!stale) return j;
+    return {
+      ...j,
+      status: 'failed',
+      progress: 0,
+      error:
+        '上次生成在浏览器刷新或本机落库时中断。云端可能已扣费；若任务仍卡在「准备预览」，请删除本条后重新生成。',
+      previewHint: '生成中断 · 请删除后重试',
+      updatedAt: now,
+    };
+  });
+};
+
+/** 有 task_id 时尝试从云端捞回已成功的 GLB（不重复计费查询） */
+export const recoverModel3dJobs = async (jobs: Model3dJob[]): Promise<Model3dJob[]> => {
+  const base = sanitizeModel3dJobs(jobs);
+  const out: Model3dJob[] = [];
+  for (const j of base) {
+    if (j.status === 'ready' || j.status === 'failed' || !j.providerTaskId || jobHasModel(j)) {
+      out.push(j);
+      continue;
+    }
+    if (!getQwenTripo3dProviderStatus().ready) {
+      out.push(j);
+      continue;
+    }
+    try {
+      const result = await fetchQwenTripoTaskOnce(j.providerTaskId);
+      if (result?.modelUrl) {
+        out.push({
+          ...j,
+          status: 'ready',
+          progress: 100,
+          modelUrl: result.modelUrl,
+          pbrModelUrl: result.pbrModelUrl || j.pbrModelUrl,
+          baseModelUrl: result.baseModelUrl || j.baseModelUrl,
+          previewImageUrl: result.previewImageUrl || j.previewImageUrl,
+          previewHint: '模型已就绪 · 已从云端恢复',
+          error: undefined,
+          updatedAt: Date.now(),
+        });
+        continue;
+      }
+    } catch (e) {
+      console.warn('[model3d] recover task failed', j.providerTaskId, e);
+    }
+    out.push(
+      sanitizeModel3dJobs([
+        {
+          ...j,
+          progress: 100,
+          updatedAt: Date.now() - 3 * 60 * 1000,
+        },
+      ])[0]
+    );
+  }
+  return out;
 };
