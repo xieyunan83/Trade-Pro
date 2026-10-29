@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useDeferredValue } from 'react';
 import type { Client, HistoryItem, MailGroup, User } from '../types';
 import { ModuleType } from '../types';
 import {
@@ -133,6 +133,13 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /** 约束卡用延迟值，避免每键入一字就重排布局把输入框顶飞 */
+  const deferredConstraintKey = useDeferredValue(
+    (category.trim() || name.trim()).slice(0, 80)
+  );
+  const deferredPriceBand = useDeferredValue(priceBand);
+  const deferredSku = useDeferredValue(skuCode);
+
   const openHistoryFor = (m: GtmClientMatch) => {
     if (!m.historyId || !onOpenHistory) return;
     const item = history.find((h) => h.id === m.historyId);
@@ -218,16 +225,6 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
           </div>
         </div>
 
-        {(category || name) && (
-          <div className="mb-4">
-            <DesignConstraintCardPanel
-              categoryOrName={category || name}
-              priceBandText={priceBand}
-              skuCode={skuCode}
-            />
-          </div>
-        )}
-
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
           <label className="block sm:col-span-2">
             <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
@@ -237,6 +234,7 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="例如：1:64 合金回力消防车"
+              autoComplete="off"
               className="mt-1 w-full px-3 py-2.5 rounded-xl border border-slate-200 font-bold text-sm"
             />
           </label>
@@ -248,6 +246,7 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
               value={skuCode}
               onChange={(e) => setSkuCode(e.target.value)}
               placeholder="可选"
+              autoComplete="off"
               className="mt-1 w-full px-3 py-2.5 rounded-xl border border-slate-200 font-bold text-sm"
             />
           </label>
@@ -257,6 +256,7 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
               value={category}
               onChange={(e) => setCategory(e.target.value)}
               placeholder="合金/回力车玩具"
+              autoComplete="off"
               className="mt-1 w-full px-3 py-2.5 rounded-xl border border-slate-200 font-bold text-sm"
             />
           </label>
@@ -268,6 +268,7 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
               value={priceBand}
               onChange={(e) => setPriceBand(e.target.value)}
               placeholder="例如 FOB $1.2–2.5"
+              autoComplete="off"
               className="mt-1 w-full px-3 py-2.5 rounded-xl border border-slate-200 font-bold text-sm"
             />
           </label>
@@ -279,6 +280,7 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               placeholder="开窗礼盒、可充电、适合会展…"
+              autoComplete="off"
               className="mt-1 w-full px-3 py-2.5 rounded-xl border border-slate-200 font-bold text-sm"
             />
           </label>
@@ -307,6 +309,17 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
             CRM {crmClients.length} 家 · 背调历史 {history.length} 条
           </span>
         </div>
+
+        {deferredConstraintKey ? (
+          <div className="mt-4">
+            <DesignConstraintCardPanel
+              categoryOrName={deferredConstraintKey}
+              priceBandText={deferredPriceBand}
+              skuCode={deferredSku}
+            />
+          </div>
+        ) : null}
+
         <p className="mt-3 text-[11px] text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 font-medium leading-relaxed">
           匹配依据：库内在售/采购品类、SKU、标签，以及包装/配色/价带重叠；完成后会给出定价参考与置信度。结果很少时，先「从历史同步」或「补全
           CRM 空白」。

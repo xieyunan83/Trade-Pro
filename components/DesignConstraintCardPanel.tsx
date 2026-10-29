@@ -41,9 +41,11 @@ export const DesignConstraintCardPanel: React.FC<Props> = ({
       const cat = (categoryOrName || '').trim();
       if (!cat) {
         setCard(null);
+        setLoading(false);
         return;
       }
-      setLoading(true);
+      // 已有卡片时静默刷新，避免输入过程中 spinner 把下方表单顶得乱跳
+      setLoading((prev) => (card ? prev : true));
       try {
         const journey = loadTradeJourney();
         const profiles = await loadProductCatalog();
@@ -79,18 +81,20 @@ export const DesignConstraintCardPanel: React.FC<Props> = ({
         if (!cancelled) setLoading(false);
       }
     };
-    const t = window.setTimeout(() => void run(), 280);
+    // 输入防抖加长，减少键入时的重算与布局抖动
+    const t = window.setTimeout(() => void run(), 700);
     return () => {
       cancelled = true;
       window.clearTimeout(t);
     };
-  }, [categoryOrName, targetMarket, priceBandText, skuCode, onCardReady]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onCardReady/card 故意不入依赖，避免父组件重渲触发循环
+  }, [categoryOrName, targetMarket, priceBandText, skuCode]);
 
   if (!categoryOrName.trim()) return null;
 
   return (
     <div
-      className={`rounded-2xl border border-violet-100 bg-gradient-to-br from-violet-50/60 via-white to-teal-50/40 ${
+      className={`rounded-2xl border border-violet-100 bg-gradient-to-br from-violet-50/60 via-white to-teal-50/40 min-h-[4.5rem] ${
         compact ? 'p-3' : 'p-4'
       } space-y-3`}
     >

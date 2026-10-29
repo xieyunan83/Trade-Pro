@@ -11,7 +11,7 @@ import {
   getCooldownRemainingSec,
 } from './services/rateLimitGate';
 import { exportToPPT, exportAutomationReportToPPT, exportBatchAutomationReportsToPPT } from './services/exportService';
-import { saveHistory, getHistory, getAllFilesFromDB, saveAutomationTask, getAutomationQueue, deleteAutomationTask, saveFileToDB, saveDiscoveryArchive, getDiscoveryArchives, deleteDiscoveryArchive, deleteHistoryItem } from './services/db';
+import { saveHistory, saveHistoryBulk, getHistory, getAllFilesFromDB, saveAutomationTask, getAutomationQueue, deleteAutomationTask, saveFileToDB, saveDiscoveryArchive, getDiscoveryArchives, deleteDiscoveryArchive, deleteHistoryItem } from './services/db';
 import {
   loadAndRepairAutomationQueue,
   mergeDecisionMakersIntoAutomationTasks,
@@ -626,8 +626,43 @@ const App: React.FC = () => {
 
     const loadData = async () => {
         try {
-            // 1. Load Local DB Data First
+            // 1. 本机数据优先上屏（CRM / 历史），云同步放到后面，避免登录空白卡顿
             const h = await getHistory();
+            if (!cancelled) {
+              try {
+                const earlyCrm = filterOutCrmTombstones(loadAllCrmClients());
+                const migratedEarly = migrateLegacyCrmOwnership(earlyCrm, users, depts());
+                setCrmClients(scope(migratedEarly.clients));
+              } catch (e) {
+                console.warn('[CRM] cache-first paint failed', e);
+              }
+              try {
+                const restored = applyDmPersistToHistory(h);
+                const migratedHistQuick = migrateLegacyOwnership(restored, users, depts());
+                setHistory(scope(migratedHistQuick.items));
+              } catch (e) {
+                console.warn('[history] cache-first paint failed', e);
+                if (!cancelled) setHistory(scope(h));
+              }
+              try {
+                const tombs = readDiscoveryTombstones();
+                const localDisc = await getDiscoveryArchives();
+                const discLocal = localDisc
+                  .filter((i) => !isDiscoveryTombstoned(i, tombs))
+                  .sort((a, b) => b.timestamp - a.timestamp);
+                const migratedDisc = migrateLegacyOwnership(discLocal, users, depts());
+                const ownedLocal = scope(migratedDisc.items);
+                setDiscoveryArchives(ownedLocal);
+                if (ownedLocal[0]) {
+                  setDiscoveryState(archiveToDiscoveryState(ownedLocal[0]));
+                }
+              } catch (e) {
+                console.warn('[discovery] cache-first paint failed', e);
+              }
+              userDataReadyRef.current = true;
+              setWorkspaceSyncStatus('本机资料已就绪，正在后台同步…');
+            }
+
             const repaired = await loadAndRepairAutomationQueue(currentUser);
             if (repaired.repaired || repaired.claimed) {
               console.info(
@@ -645,6 +680,14 @@ const App: React.FC = () => {
                   setWorkspaceSyncStatus(
                     `已同步 CRM ${ws.crm.merged} · 作业 ${ws.automation.merged} · 历史 ${ws.history.merged}`
                   );
+                  // 云同步写入本机后，再刷一次 CRM（不阻塞首屏）
+                  try {
+                    const afterSyncCrm = filterOutCrmTombstones(loadAllCrmClients());
+                    const migratedAfter = migrateLegacyCrmOwnership(afterSyncCrm, users, depts());
+                    setCrmClients(scope(migratedAfter.clients));
+                  } catch {
+                    /* ignore */
+                  }
                 }
                 const qAfter = await getAutomationQueue();
                 if (qAfter.length) queueTasks = qAfter;
@@ -675,18 +718,6 @@ const App: React.FC = () => {
             if (!cancelled) setWorkspaceSyncing(false);
             const scopedQueue = scope(queueTasks);
             if (!cancelled) setAutomationResults(scopedQueue);
-            // 尽快把云端已写入本机的 CRM 刷上界面，后面再做 KB/GitHub 等慢步骤
-            if (!cancelled) {
-              try {
-                const earlyCrm = filterOutCrmTombstones(loadAllCrmClients());
-                if (earlyCrm.length > 0) {
-                  const migratedEarly = migrateLegacyCrmOwnership(earlyCrm, users, depts());
-                  setCrmClients(scope(migratedEarly.clients));
-                }
-              } catch (e) {
-                console.warn('[CRM] early paint failed', e);
-              }
-            }
             const files = await getAllFilesFromDB();
             if (!cancelled) setKbCount(files.length);
 
@@ -728,42 +759,42 @@ const App: React.FC = () => {
             addCustomCountry('荷兰');
             addCustomCountry('英国');
             addCustomCountry('美国');
-            const fixedHistory = await (async () => {
-              const out: HistoryItem[] = [];
-              for (const item of h) {
-                const hq = item.data?.companyInfo?.headquarters || item.data?.companyInfo?.city || '';
-                const normCountry = normalizeCountryZh(item.country || hq);
-                const recoveredKw =
-                  item.keyword?.trim() ||
-                  item.data?.searchKeyword?.trim() ||
-                  '';
-                if (recoveredKw) addCustomKeyword(recoveredKw);
-                const needKeyword = !item.keyword?.trim() && !!recoveredKw;
-                const needCountry = normCountry !== '未分类' && item.country !== normCountry;
-                if (needKeyword || needCountry) {
-                  const next: HistoryItem = {
-                    ...item,
-                    keyword: item.keyword?.trim() || recoveredKw || undefined,
-                    country: normCountry !== '未分类' ? normCountry : item.country,
-                    data: item.data
-                      ? {
-                          ...item.data,
-                          searchKeyword: item.data.searchKeyword || recoveredKw || undefined,
-                        }
-                      : item.data,
-                  };
-                  try {
-                    await persistHistoryItem(next);
-                  } catch (e) {
-                    console.warn('history backfill failed', e);
-                  }
-                  out.push(next);
-                } else {
-                  out.push(item);
-                }
+            // 批量回填，避免登录时逐条 await IndexedDB 拖死主路径
+            const fixedHistory: HistoryItem[] = [];
+            const dirtyHistory: HistoryItem[] = [];
+            for (const item of h) {
+              const hq = item.data?.companyInfo?.headquarters || item.data?.companyInfo?.city || '';
+              const normCountry = normalizeCountryZh(item.country || hq);
+              const recoveredKw =
+                item.keyword?.trim() ||
+                item.data?.searchKeyword?.trim() ||
+                '';
+              if (recoveredKw) addCustomKeyword(recoveredKw);
+              const needKeyword = !item.keyword?.trim() && !!recoveredKw;
+              const needCountry = normCountry !== '未分类' && item.country !== normCountry;
+              if (needKeyword || needCountry) {
+                const next: HistoryItem = {
+                  ...item,
+                  keyword: item.keyword?.trim() || recoveredKw || undefined,
+                  country: normCountry !== '未分类' ? normCountry : item.country,
+                  data: item.data
+                    ? {
+                        ...item.data,
+                        searchKeyword: item.data.searchKeyword || recoveredKw || undefined,
+                      }
+                    : item.data,
+                };
+                dirtyHistory.push(next);
+                fixedHistory.push(next);
+              } else {
+                fixedHistory.push(item);
               }
-              return out;
-            })();
+            }
+            if (dirtyHistory.length) {
+              void saveHistoryBulk(dirtyHistory).catch((e) =>
+                console.warn('history backfill bulk failed', e)
+              );
+            }
             const historyForRecover = fixedHistory;
 
             const knownDomains = new Set(

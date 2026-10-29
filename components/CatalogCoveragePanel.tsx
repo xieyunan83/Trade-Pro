@@ -54,8 +54,12 @@ export const CatalogCoveragePanel: React.FC<Props> = ({
     setBlankCount(listBlankCrmClientsForDesignFill(crmClients, profiles).length);
   }, [history, crmClients]);
 
+  // 登录过程中 history/crm 会多次增量更新；防抖避免主线程连刷覆盖看板顶掉输入
   useEffect(() => {
-    void refresh().catch(() => undefined);
+    const t = window.setTimeout(() => {
+      void refresh().catch(() => undefined);
+    }, 450);
+    return () => window.clearTimeout(t);
   }, [refresh]);
 
   const runBackfill = async () => {

@@ -83,25 +83,56 @@ export const upsertDmPersistRecord = (rec: Omit<DmPersistRecord, 'updatedAt'>): 
   saveAll(list);
 };
 
-const recordAppliesToHistory = (rec: DmPersistRecord, h: HistoryItem): boolean => {
-  if (rec.historyId && h.id === rec.historyId) return true;
-  const host = cleanHost(h.domain || h.data?.companyInfo?.website);
-  if (host && cleanHost(rec.domain) === host) return true;
-  const name = (h.data?.companyInfo?.name || '').trim().toLowerCase();
-  const recName = (rec.companyName || '').trim().toLowerCase();
-  if (name && recName && name === recName) return true;
-  return false;
-};
-
 /** 把耐久化结果合并进历史（刷新后恢复「已挖决策人」） */
 export const applyDmPersistToHistory = (history: HistoryItem[]): HistoryItem[] => {
   const records = loadDmPersistRecords();
   if (!records.length || !history.length) return history;
 
+  // 索引化：避免 history × records 全量嵌套扫描（登录卡顿主因之一）
+  const byHistoryId = new Map<string, DmPersistRecord[]>();
+  const byDomain = new Map<string, DmPersistRecord[]>();
+  const byName: DmPersistRecord[] = [];
+  for (const r of records) {
+    if (r.historyId) {
+      const arr = byHistoryId.get(r.historyId) || [];
+      arr.push(r);
+      byHistoryId.set(r.historyId, arr);
+    }
+    const d = cleanHost(r.domain);
+    if (d) {
+      const arr = byDomain.get(d) || [];
+      arr.push(r);
+      byDomain.set(d, arr);
+    }
+    if ((r.companyName || '').trim()) byName.push(r);
+  }
+
+  const pickBest = (matches: DmPersistRecord[]) =>
+    matches.reduce((a, b) => ((b.searchedAt || 0) >= (a.searchedAt || 0) ? b : a));
+
   return history.map((h) => {
-    const matches = records.filter((r) => recordAppliesToHistory(r, h));
+    const matches: DmPersistRecord[] = [];
+    const idHits = byHistoryId.get(h.id);
+    if (idHits) matches.push(...idHits);
+    const host = cleanHost(h.domain || h.data?.companyInfo?.website);
+    if (host) {
+      const dHits = byDomain.get(host);
+      if (dHits) {
+        for (const r of dHits) {
+          if (!matches.includes(r)) matches.push(r);
+        }
+      }
+    }
+    if (!matches.length && byName.length) {
+      const name = (h.data?.companyInfo?.name || '').trim().toLowerCase();
+      if (name) {
+        for (const r of byName) {
+          if ((r.companyName || '').trim().toLowerCase() === name) matches.push(r);
+        }
+      }
+    }
     if (!matches.length) return h;
-    const best = matches.reduce((a, b) => ((b.searchedAt || 0) >= (a.searchedAt || 0) ? b : a));
+    const best = pickBest(matches);
     const curAt = h.data?.decisionMakerEmailSearchAt || 0;
     const curN = h.data?.decisionMakers?.length || 0;
     const bestN = best.decisionMakers?.length || 0;
