@@ -29,6 +29,9 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const imgRef = useRef<HTMLInputElement>(null);
+  /** 列表行补图：当前待写入图片的 SKU id */
+  const rowImgRef = useRef<HTMLInputElement>(null);
+  const [rowImgTargetId, setRowImgTargetId] = useState<string | null>(null);
   const journey0 = loadTradeJourney();
   const [fitMarket, setFitMarket] = useState(
     () => journey0.targetMarket || MARKET_PICK_OPTIONS[0].label
@@ -132,6 +135,46 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
       setForm((f) => ({ ...f, imageDataUrl: compressed }));
     };
     reader.readAsDataURL(file);
+  };
+
+  /** 给已导入 / 已有 SKU 补图或换图 */
+  const attachImageToSku = async (skuId: string, file: File | null) => {
+    if (!file || !file.type.startsWith('image/')) {
+      setMsg('请选择图片文件');
+      return;
+    }
+    if (file.size > 12 * 1024 * 1024) {
+      setMsg('单张图片请小于 12MB');
+      return;
+    }
+    setBusy(true);
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('读取图片失败'));
+        reader.readAsDataURL(file);
+      });
+      const compressed = await compressImageDataUrl(dataUrl);
+      const next = rows.map((r) =>
+        r.id === skuId
+          ? { ...r, images: [compressed, ...(r.images || []).slice(0, 5)], updatedAt: Date.now() }
+          : r
+      );
+      persist(next);
+      const hit = next.find((r) => r.id === skuId);
+      setMsg(`已为 ${hit?.skuCode || '该 SKU'} 更新产品图，可在平面设计 / 发文等模块调用`);
+    } catch (e: any) {
+      setMsg(e?.message || '补图失败');
+    } finally {
+      setBusy(false);
+      setRowImgTargetId(null);
+    }
+  };
+
+  const openRowImagePicker = (skuId: string) => {
+    setRowImgTargetId(skuId);
+    setTimeout(() => rowImgRef.current?.click(), 0);
   };
 
   const importExcel = async (file: File) => {
@@ -380,6 +423,18 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
         </div>
 
         <div className="lg:col-span-2 rounded-2xl border border-slate-200 bg-white overflow-hidden">
+          <input
+            ref={rowImgRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0] || null;
+              const id = rowImgTargetId;
+              e.target.value = '';
+              if (id) void attachImageToSku(id, f);
+            }}
+          />
           <div className="p-3 border-b border-slate-100 flex flex-wrap gap-2 items-center">
             <input
               value={q}
@@ -390,12 +445,15 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
             <span className="text-[10px] font-bold text-slate-400">
               {filtered.length} / {rows.length}
             </span>
+            <span className="text-[10px] font-bold text-violet-700 bg-violet-50 border border-violet-100 px-2 py-1 rounded-lg">
+              点左侧「图」可为已有 SKU 补图 / 换图
+            </span>
           </div>
           <div className="overflow-x-auto max-h-[32rem]">
             <table className="w-full text-left text-sm">
               <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-wider text-slate-500 sticky top-0">
                 <tr>
-                  <th className="px-3 py-2 w-14">图</th>
+                  <th className="px-3 py-2 w-16">图</th>
                   <th className="px-3 py-2">货号</th>
                   <th className="px-3 py-2">品名</th>
                   <th className="px-3 py-2">品类</th>
@@ -408,17 +466,28 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
                 {filtered.map((r) => (
                   <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50/80">
                     <td className="px-3 py-2">
-                      {r.images?.[0] && !/toysbear\.net/i.test(r.images[0]) ? (
-                        <img
-                          src={r.images[0]}
-                          alt=""
-                          className="w-11 h-11 rounded-lg object-cover border border-slate-200 bg-white"
-                        />
-                      ) : (
-                        <div className="w-11 h-11 rounded-lg bg-slate-100 flex items-center justify-center text-slate-300">
-                          <ImageIcon size={14} />
-                        </div>
-                      )}
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => openRowImagePicker(r.id)}
+                        title={r.images?.[0] ? '点击更换产品图' : '点击上传产品图'}
+                        className="group relative w-11 h-11 rounded-lg overflow-hidden border border-slate-200 bg-slate-50 hover:border-violet-400 hover:ring-2 hover:ring-violet-100 disabled:opacity-50"
+                      >
+                        {r.images?.[0] && !/toysbear\.net/i.test(r.images[0]) ? (
+                          <img
+                            src={r.images[0]}
+                            alt=""
+                            className="w-full h-full object-cover bg-white"
+                          />
+                        ) : (
+                          <span className="w-full h-full flex flex-col items-center justify-center text-slate-300 gap-0.5">
+                            <ImageIcon size={14} />
+                          </span>
+                        )}
+                        <span className="absolute inset-0 bg-slate-900/55 text-white text-[8px] font-black opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                          {r.images?.[0] ? '换图' : '上传'}
+                        </span>
+                      </button>
                     </td>
                     <td className="px-3 py-2 font-mono text-xs font-bold">{r.skuCode}</td>
                     <td className="px-3 py-2 font-medium">
