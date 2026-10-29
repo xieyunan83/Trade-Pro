@@ -699,72 +699,89 @@ export const buildCatalogCoverageReport = (
     if (p.historyId) profileByHistory.set(p.historyId, p);
   }
 
+  /**
+   * 性能关键：禁止对全量 history 逐条 buildProductProfileFromAnalysis（2k+ 会卡死 UI）。
+   * 缺口优先扫已有 profiles；无画像的历史只做轻量占位，不重建报告。
+   */
   const gaps: CatalogCoverageRow[] = [];
-  let historyWithReport = 0;
+  const seenGap = new Set<string>();
 
+  for (const p of profiles) {
+    const missing = missingKindsForProfile(p);
+    if (missing.length < 2 && profileHasDesignSignals(p)) continue;
+    const id = p.id || p.historyId || p.website || p.companyName;
+    if (!id || seenGap.has(id)) continue;
+    seenGap.add(id);
+    gaps.push({
+      id: p.id,
+      companyName: p.companyName,
+      website: p.website,
+      historyId: p.historyId,
+      crmClientId: p.crmClientId,
+      missing,
+      catalogQuality: p.catalogQuality || 0,
+      designSignalQuality: p.designSignalQuality || 0,
+    });
+  }
+
+  let historyWithReport = 0;
+  let noProfileGaps = 0;
+  const MAX_NO_PROFILE_GAPS = 40;
   for (const h of history) {
     if (!h?.data) continue;
     historyWithReport += 1;
-    const built = buildProductProfileFromAnalysis(h.data, { historyId: h.id });
     const domain = domainKey(h.data.companyInfo?.website) || domainKey(h.domain) || '';
     const existing =
       (h.id && profileByHistory.get(h.id)) ||
       (domain && profileByDomain.get(domain)) ||
       null;
-
-    const probe = existing ? mergeProductProfiles(existing, built || existing) : built;
-    if (!probe) {
-      gaps.push({
-        id: h.id,
-        companyName: h.data.companyInfo?.name || h.domain || h.id,
-        website: domain,
-        historyId: h.id,
-        missing: ['tags', 'packaging', 'colors', 'price', 'buyCost', 'cycle', 'volume'],
-        catalogQuality: 0,
-        designSignalQuality: 0,
-      });
-      continue;
-    }
-    const missing = missingKindsForProfile(probe);
-    if (missing.length >= 2 || !profileHasDesignSignals(probe)) {
-      gaps.push({
-        id: probe.id,
-        companyName: probe.companyName,
-        website: probe.website,
-        historyId: h.id,
-        crmClientId: probe.crmClientId,
-        missing,
-        catalogQuality: probe.catalogQuality || 0,
-        designSignalQuality: probe.designSignalQuality || 0,
-      });
-    }
+    if (existing) continue;
+    if (noProfileGaps >= MAX_NO_PROFILE_GAPS) continue;
+    const gid = h.id || domain;
+    if (!gid || seenGap.has(gid)) continue;
+    seenGap.add(gid);
+    noProfileGaps += 1;
+    gaps.push({
+      id: h.id,
+      companyName: h.data.companyInfo?.name || h.domain || h.id,
+      website: domain,
+      historyId: h.id,
+      missing: ['tags', 'packaging', 'colors', 'price', 'buyCost', 'cycle', 'volume'],
+      catalogQuality: 0,
+      designSignalQuality: 0,
+    });
   }
 
-  const withTags = profiles.filter((p) => (p.productTags || []).length > 0).length;
-  const withPackaging = profiles.filter(
-    (p) => (p.packagingStyles || []).length > 0 || !!(p.packagingSummary || '').trim()
-  ).length;
-  const withColors = profiles.filter(
-    (p) => (p.colorPalettes || []).length > 0 || !!(p.colorPreference || '').trim()
-  ).length;
-  const withPrice = profiles.filter((p) => p.priceMinCny != null || p.priceMaxCny != null).length;
-  const withBuyCost = profiles.filter((p) => p.buyCostMinCny != null || p.buyCostMaxCny != null).length;
-  const withCycle = profiles.filter(
-    (p) => !!(p.procurementCycle || p.buyingSeasons || p.typicalMoq || '').trim()
-  ).length;
-  const withVolume = profiles.filter((p) => !!(p.volumeSignal || '').trim()).length;
-  const designReady = profiles.filter((p) => profileHasDesignSignals(p)).length;
+  let withTags = 0;
+  let withPackaging = 0;
+  let withColors = 0;
+  let withPrice = 0;
+  let withBuyCost = 0;
+  let withCycle = 0;
+  let withVolume = 0;
+  let designReady = 0;
+  for (const p of profiles) {
+    if ((p.productTags || []).length > 0) withTags += 1;
+    if ((p.packagingStyles || []).length > 0 || !!(p.packagingSummary || '').trim()) withPackaging += 1;
+    if ((p.colorPalettes || []).length > 0 || !!(p.colorPreference || '').trim()) withColors += 1;
+    if (p.priceMinCny != null || p.priceMaxCny != null) withPrice += 1;
+    if (p.buyCostMinCny != null || p.buyCostMaxCny != null) withBuyCost += 1;
+    if (!!(p.procurementCycle || p.buyingSeasons || p.typicalMoq || '').trim()) withCycle += 1;
+    if (!!(p.volumeSignal || '').trim()) withVolume += 1;
+    if (profileHasDesignSignals(p)) designReady += 1;
+  }
 
-  const crmBlankProductTags = (crmClients || []).filter((c) => {
+  let crmBlankProductTags = 0;
+  for (const c of crmClients || []) {
     const tags = c.tags || [];
     const hasProductTag =
       tags.some((t) => /^(在售:|采购:|包装:|配色:)/.test(t)) ||
       tags.some((t) => (t || '').length > 0 && !t.startsWith('关键词:') && !t.startsWith('国家:'));
     const hasType = !!(c.productType || '').trim() && c.productType !== 'N/A';
-    return !hasProductTag && !hasType;
-  }).length;
+    if (!hasProductTag && !hasType) crmBlankProductTags += 1;
+  }
 
-  // 缺口按缺失数量排序，最多返回 80 条供看板
+  // 缺口按缺失数量排序，最多返回 40 条供看板（减少 DOM）
   gaps.sort((a, b) => b.missing.length - a.missing.length || a.designSignalQuality - b.designSignalQuality);
 
   return {
@@ -779,7 +796,7 @@ export const buildCatalogCoverageReport = (
     withVolume,
     designReady,
     crmBlankProductTags,
-    gaps: gaps.slice(0, 80),
+    gaps: gaps.slice(0, 40),
   };
 };
 

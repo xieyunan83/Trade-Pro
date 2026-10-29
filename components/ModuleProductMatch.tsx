@@ -133,10 +133,10 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /** 约束卡用延迟值，避免每键入一字就重排布局把输入框顶飞 */
-  const deferredConstraintKey = useDeferredValue(
-    (category.trim() || name.trim()).slice(0, 80)
-  );
+  /** 约束卡：优先品类；品名至少 3 字才参与，避免「Bu」一类短输入触发重算卡死 */
+  const constraintSource =
+    category.trim() || (name.trim().length >= 3 ? name.trim() : '');
+  const deferredConstraintKey = useDeferredValue(constraintSource.slice(0, 80));
   const deferredPriceBand = useDeferredValue(priceBand);
   const deferredSku = useDeferredValue(skuCode);
 
@@ -194,15 +194,7 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
         )}
       </div>
 
-      <CatalogCoveragePanel
-        history={history}
-        crmClients={crmClients}
-        ownerUsername={currentUser?.username}
-        departmentId={currentUser?.departmentId}
-        onCrmPatched={onCrmClientsChange}
-        onStartDesignFill={onStartDesignFill}
-      />
-
+      {/* 匹配表单置顶：大库覆盖看板默认收起，避免一进页就卡死无法输入 */}
       <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-4 mb-5">
           <div>
@@ -330,6 +322,16 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
           </p>
         )}
       </div>
+
+      <CatalogCoveragePanel
+        history={history}
+        crmClients={crmClients}
+        ownerUsername={currentUser?.username}
+        departmentId={currentUser?.departmentId}
+        onCrmPatched={onCrmClientsChange}
+        onStartDesignFill={onStartDesignFill}
+        defaultCollapsed
+      />
 
       {pack && (
         <>

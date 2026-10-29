@@ -81,8 +81,8 @@ export const DesignConstraintCardPanel: React.FC<Props> = ({
         if (!cancelled) setLoading(false);
       }
     };
-    // 输入防抖加长，减少键入时的重算与布局抖动
-    const t = window.setTimeout(() => void run(), 700);
+    // 长防抖：大库 loadProductCatalog 很重，避免输入时连环卡死
+    const t = window.setTimeout(() => void run(), 1200);
     return () => {
       cancelled = true;
       window.clearTimeout(t);
