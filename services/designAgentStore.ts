@@ -169,14 +169,14 @@ export const DESIGN_SKILLS: DesignSkillDef[] = [
     defaultPrompt:
       'Single commercial product on pure white seamless studio, softbox lighting, sharp focus, locked materials colors tooling and proportions. One product only in frame — never collage, contact sheet, 2x2 grid, split screen, or multiple angles in one image',
     negativePrompt:
-      'multi-panel, collage, contact sheet, 2x2 grid, four views in one image, split screen, changing colors between angles, different SKUs, textured floors, props, watermark, text labels baked in',
+      'multi-panel, collage, contact sheet, 2x2 grid, four views in one image, split screen, redesign between angles, changing colors or ear shape or screen color between angles, different SKUs, face screen on back of head, textured floors, props, watermark, text labels baked in',
     craftNotes:
-      '四视角分四张图输出：正面、45°、侧面、背面各一张整图。禁止一张图里拼多个角度。比例、颜色、开模线一致。',
+      '四视角分四张图输出：正面、45°、侧面、背面各一张整图。禁止一张图里拼多个角度。后续视角必须以正面外形为身份锁。背面不得出现面部显示屏。',
     qaChecklist: [
       '每张图只有一个视角',
-      '四视角为同一产品',
-      '缩放与地平线一致',
-      '白底统一，可直接丢进 3D/视频多参考',
+      '四视角外形配色一致（非四个不同设计）',
+      '缩放与地平线一致、白底统一',
+      '背面无面部显示屏',
     ],
     aspectHint: '1:1 · 4 张各一视角',
   },

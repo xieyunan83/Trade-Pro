@@ -7,6 +7,7 @@ import { loadDataProviderLocal } from './dataProviders';
 import { listPoolKeys } from './apiKeyPool';
 import { env } from './env';
 import { MULTI_ANGLE_VIEWS } from './creativeAssetBridge';
+import { resolveToDataUrlOrHttps } from './creativeAssetVault';
 
 export type DesignGenerateOpts = {
   prompt: string;
@@ -84,32 +85,19 @@ const wanOverride = () => {
   return undefined;
 };
 
-export const generateDesignImages = async (
-  opts: DesignGenerateOpts
-): Promise<DesignGenerateResult> => {
-  const size = opts.size || '1K';
-  const n = Math.min(4, Math.max(1, opts.n || 1));
-  const timeoutMs = 240_000;
-  const thinkingMode = opts.thinkingMode === true;
-  const override = wanOverride();
-
-  try {
-    const result = await generateWanImage(
-      {
-        prompt: opts.prompt,
-        size,
-        n,
-        thinkingMode,
-        watermark: false,
-        referenceImages: opts.referenceImages,
-        timeoutMs,
-      },
-      override
-    );
-    return { images: result.images, engine: 'design' };
-  } catch (e: any) {
-    throw new Error(toUserFacingDesignError(e?.message || String(e)));
+const prepareReferenceImages = async (urls?: string[]): Promise<string[] | undefined> => {
+  if (!urls?.length) return undefined;
+  const out: string[] = [];
+  for (const u of urls) {
+    try {
+      const r = await resolveToDataUrlOrHttps(u);
+      if (r && (/^https?:\/\//i.test(r) || r.startsWith('data:image/'))) out.push(r);
+    } catch {
+      /* 跳过坏参考 */
+    }
+    if (out.length >= 4) break;
   }
+  return out.length ? out : undefined;
 };
 
 /** 去掉易触发「一张图拼多角」的措辞，保留产品描述 */
@@ -120,10 +108,40 @@ const stripMultiViewCollageLanguage = (prompt: string): string =>
       ' '
     )
     .replace(/\b(front,?\s*(three[- ]?quarter|45°?|45 degrees?),?\s*side,?\s*back)\b/gi, ' ')
+    .replace(/四视图拼版|四宫格|九宫格|拼版套图|一张图多角度/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 
-/** 同一产品连出 4 个标准视角（每张图仅一个视角），供 3D / 视频复用 */
+export const generateDesignImages = async (
+  opts: DesignGenerateOpts
+): Promise<DesignGenerateResult> => {
+  const size = opts.size || '1K';
+  const n = Math.min(4, Math.max(1, opts.n || 1));
+  const timeoutMs = 240_000;
+  const thinkingMode = opts.thinkingMode === true;
+  const override = wanOverride();
+
+  try {
+    const refs = await prepareReferenceImages(opts.referenceImages);
+    const result = await generateWanImage(
+      {
+        prompt: opts.prompt,
+        size,
+        n,
+        thinkingMode,
+        watermark: false,
+        referenceImages: refs,
+        timeoutMs,
+      },
+      override
+    );
+    return { images: result.images, engine: 'design' };
+  } catch (e: any) {
+    throw new Error(toUserFacingDesignError(e?.message || String(e)));
+  }
+};
+
+/** 同一产品连出 4 个标准视角（每张图仅一个视角）；后续视角用正面图作身份锁 */
 export const generateMultiAngleDesignImages = async (
   opts: Omit<DesignGenerateOpts, 'n'> & {
     onProgress?: (done: number, total: number, label: string) => void;
@@ -136,16 +154,26 @@ export const generateMultiAngleDesignImages = async (
   const angles: string[] = [];
   const total = MULTI_ANGLE_VIEWS.length;
   const productBase = stripMultiViewCollageLanguage(opts.prompt.trim());
+  const userRefs = await prepareReferenceImages(opts.referenceImages);
+  /** 正面图锁定外形，避免四次独立抽卡变成四个不同设计 */
+  let identityLockUrl: string | undefined;
 
   try {
     for (let i = 0; i < total; i++) {
       const view = MULTI_ANGLE_VIEWS[i];
       opts.onProgress?.(i, total, view.label);
+      const refs = [
+        ...(identityLockUrl ? [identityLockUrl] : []),
+        ...(userRefs || []),
+      ].slice(0, 4);
       const prompt = [
         productBase,
         `This request generates exactly one image for camera angle「${view.label}」only.`,
         view.prompt,
         'Never combine multiple angles into one frame.',
+        identityLockUrl
+          ? 'IDENTITY LOCK: Match the attached reference photograph exactly for shape, materials, silver finish, plastic accents, ear shape, leg proportions, screen size/placement and cartoon eyes. Only change camera orbit / viewing angle — do not redesign or recolor the product.'
+          : 'Establish the definitive product look for this SKU; later angles will lock to this image.',
       ]
         .filter(Boolean)
         .join(' ');
@@ -156,7 +184,7 @@ export const generateMultiAngleDesignImages = async (
           n: 1,
           thinkingMode,
           watermark: false,
-          referenceImages: opts.referenceImages,
+          referenceImages: refs.length ? refs : undefined,
           timeoutMs: 180_000,
         },
         override
@@ -164,6 +192,7 @@ export const generateMultiAngleDesignImages = async (
       if (result.images[0]) {
         images.push(result.images[0]);
         angles.push(view.label);
+        if (!identityLockUrl) identityLockUrl = result.images[0];
       }
       opts.onProgress?.(i + 1, total, view.label);
     }

@@ -309,6 +309,15 @@ export const resolveToUploadableImage = async (url: string): Promise<string> => 
   throw new Error('参考图须为本地上传图片或公网 HTTPS 地址');
 };
 
+/** 同 resolveToUploadableImage；空串返回 ''，便于生图参考链 */
+export const resolveToDataUrlOrHttps = async (
+  url: string | undefined | null
+): Promise<string> => {
+  const raw = (url || '').trim();
+  if (!raw) return '';
+  return resolveToUploadableImage(raw);
+};
+
 const touchAccess = async (id: string) => {
   try {
     const row = await getRow(id);

@@ -54,7 +54,7 @@ export const MULTI_ANGLE_VIEWS: Array<{ id: string; label: string; prompt: strin
     id: 'back',
     label: '背面',
     prompt:
-      'ONE single photograph only: rear / back view of the same product, full-bleed centered. Do NOT include other angles. Do NOT make a 2x2 grid, collage, contact sheet, or multi-panel layout. Clean white seamless background, studio softbox lighting, sharp focus, commercial product photography, no watermark, no text',
+      'ONE single photograph only: pure rear / back orthographic view of the same product, full-bleed centered. Critical: the BACK of the head shows housing only — NO rectangular face display / cartoon-eye screen on the rear (screen exists ONLY on the front of the head). Do NOT include other angles. Do NOT make a 2x2 grid, collage, contact sheet, or multi-panel layout. Clean white seamless background, studio softbox lighting, sharp focus, commercial product photography, no watermark, no text',
   },
 ];
 
