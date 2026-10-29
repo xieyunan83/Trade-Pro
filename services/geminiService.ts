@@ -2930,28 +2930,62 @@ export const testApiKey = async (apiKey: string, baseUrl?: string, modelId?: str
     }
 };
 
-export const generateMailGroupStrategy = async (client: AnalysisResult, productImages: string[], knowledgeBaseFiles: KnowledgeFile[]): Promise<MailGroup> => {
+export type MailGroupStrategyOpts = {
+  /** 创作流水线摘要（产品图/包装/发文） */
+  creativeOfferBrief?: string;
+  keywords?: string[];
+  countries?: string[];
+  marketLeadsSummary?: string;
+};
+
+export const generateMailGroupStrategy = async (
+  client: AnalysisResult,
+  productImages: string[],
+  knowledgeBaseFiles: KnowledgeFile[],
+  opts?: MailGroupStrategyOpts
+): Promise<MailGroup> => {
     const kbHints = [
       client.companyInfo?.name || '',
       client.searchKeyword || '',
+      ...(opts?.keywords || []),
       ...(client.businessScope?.coreProducts || []).slice(0, 6),
     ].filter(Boolean);
     const kbSnippet = buildKnowledgeExcerpts(knowledgeBaseFiles, {
       purpose: 'email',
-      hints: [...kbHints, '产品', '优势', '规格', 'MOQ', 'OEM', 'catalog', 'product'],
+      hints: [...kbHints, '产品', '优势', '规格', 'MOQ', 'OEM', 'catalog', 'product', '包装'],
     });
+    const marketBits = [
+      opts?.keywords?.length ? `Target KW: ${opts.keywords.join(' | ')}` : '',
+      opts?.countries?.length ? `Target markets: ${opts.countries.join(' | ')}` : '',
+      opts?.marketLeadsSummary || '',
+    ]
+      .filter(Boolean)
+      .join('\n');
+    const offerNote = [opts?.creativeOfferBrief, marketBits].filter(Boolean).join('\n');
     const prompt = buildYibingMailGroupPrompt({
       mode: 'single',
       clientBrief: buildCompactClientBrief(client),
-      offerBrief: buildCompactOurOfferBrief(kbSnippet),
+      offerBrief: buildCompactOurOfferBrief(kbSnippet, offerNote),
     });
-    // 勿把整库当 attachments；最多 1 张产品图
-    const text = await generateContentUnified('email', prompt, YIBING_MAIL_GROUP_RULES, true, (productImages || []).slice(0, 1), []);
+    // 勿把整库当 attachments；最多 1 张产品/包装图作视觉锚点
+    const text = await generateContentUnified(
+      'email',
+      prompt,
+      YIBING_MAIL_GROUP_RULES,
+      true,
+      (productImages || []).slice(0, 1),
+      []
+    );
     const res = extractJson(text);
     return normalizeMailGroupResult(res);
 };
 
-export const generateConsolidatedEmailStrategy = async (clients: AnalysisResult[], knowledgeBaseFiles: KnowledgeFile[], context: string = ''): Promise<MailGroup> => {
+export const generateConsolidatedEmailStrategy = async (
+  clients: AnalysisResult[],
+  knowledgeBaseFiles: KnowledgeFile[],
+  context: string = '',
+  opts?: MailGroupStrategyOpts & { productImages?: string[] }
+): Promise<MailGroup> => {
     if (clients.length === 0) return { analysis: 'No Data', email1: '', email2: '', email3: '' };
 
     const primary = clients[0];
@@ -2963,13 +2997,21 @@ export const generateConsolidatedEmailStrategy = async (clients: AnalysisResult[
       purpose: 'email',
       hints: [context, '产品', '优势', 'catalog', primary?.companyInfo?.name || ''],
     });
+    const offerNote = [opts?.creativeOfferBrief, context].filter(Boolean).join('\n');
     const prompt = buildYibingMailGroupPrompt({
       mode: 'batch',
       batchContext: `${context}\nPeer buyers: ${peers}`,
       clientBrief: buildCompactClientBrief(primary),
-      offerBrief: buildCompactOurOfferBrief(kbSnippet),
+      offerBrief: buildCompactOurOfferBrief(kbSnippet, offerNote),
     });
-    const text = await generateContentUnified('email', prompt, YIBING_MAIL_GROUP_RULES, true, [], []);
+    const text = await generateContentUnified(
+      'email',
+      prompt,
+      YIBING_MAIL_GROUP_RULES,
+      true,
+      (opts?.productImages || []).slice(0, 1),
+      []
+    );
     const res = extractJson(text);
     return normalizeMailGroupResult(res);
 };
@@ -5445,6 +5487,11 @@ export const streamStrategyChat = async function* (
       systemInstruction += `\n\n当前为通用模式：用户未绑定具体背调客户或市场标签，可先追问目标客户/市场再给策略。`;
     }
 
+    const creativeBrief = (strategyContext?.creativeOfferBrief || '').trim();
+    if (creativeBrief) {
+      systemInstruction += `\n\n## 我方创作素材（产品图 / 包装 / 发文，可写入开发信钩子）\n${creativeBrief}`;
+    }
+
     // 系统知识库：只抽相关文本摘录，禁止把 70+ 文件/大图整包塞进代理（会 413 FUNCTION_PAYLOAD_TOO_LARGE）
     if (knowledgeBase.length > 0) {
       const hints = [
@@ -5460,7 +5507,7 @@ export const streamStrategyChat = async function* (
       });
       if (kbText) {
         systemInstruction += coldEmailMode
-          ? `\n\n## Our offer (KB excerpt)\n${buildCompactOurOfferBrief(kbText)}`
+          ? `\n\n## Our offer (KB excerpt)\n${buildCompactOurOfferBrief(kbText, creativeBrief)}`
           : `\n\n## 我方知识库摘录（精简，共 ${knowledgeBase.length} 个文件中选取相关文本）\n${kbText}`;
       }
     }

@@ -14,6 +14,16 @@ import { compressImageBase64, filterTextKnowledgeFiles } from '../utils/aiContex
 import { getCustomKeywords, getCustomCountries } from '../services/taxonomyStore';
 import { formatBackgroundCheckTime } from '../utils/crmHistory';
 import {
+  getStrategyLlmStatus,
+  listStrategyOfferAssets,
+  pickDefaultStrategyOfferIds,
+  buildCreativeOfferBrief,
+  resolveOfferImagesForLlm,
+  strategyOfferKindLabel,
+  type StrategyOfferAsset,
+} from '../services/strategyOfferBridge';
+import { VaultImg } from './VaultMedia';
+import {
   Send,
   Paperclip,
   Loader2,
@@ -33,6 +43,7 @@ import {
   Check,
   ChevronDown,
   Search,
+  ImagePlus,
 } from 'lucide-react';
 
 interface Props {
@@ -63,8 +74,8 @@ export const ModuleStrategy: React.FC<Props> = ({
       id: 'init',
       role: 'model',
       text: data
-        ? `**Strategy Context Loaded** ✅\n\n已载入当前背调：**${data.companyInfo?.name || '该公司'}**。\n\n也可在输入框旁选择更多背调客户，或选择搜索关键词/国家，切换为「整市场」策略。`
-        : `**Strategy Assistant Ready** 🚀\n\n我是外贸策略顾问。你可以：\n- 上传附件（产品资料/报价）\n- 选择已背调客户（针对单客户）\n- 选择关键词与国家（针对整个市场）\n\n开发信请点「生成开发信」或说「写一组开发信」——短、多角度、末封带钩子。`,
+        ? `**Strategy Context Loaded** ✅\n\n已载入当前背调：**${data.companyInfo?.name || '该公司'}**。\n\n可引用平面产品图 / 包装图 / 发文素材，再叠加关键词与国家，由策略服务生成开发信组。`
+        : `**Strategy Assistant Ready** 🚀\n\n我是外贸策略顾问。请组合：\n- 创作素材（产品图 / 包装 / 发文）\n- 背调客户（单客户）\n- 关键词与国家（整市场）\n\n点「生成开发信」或说「写一组开发信」——会真正调用策略服务，短、多角度、末封带钩子。`,
       timestamp: Date.now(),
     },
   ]);
@@ -83,6 +94,11 @@ export const ModuleStrategy: React.FC<Props> = ({
   const [selectedCountries, setSelectedCountries] = useState<string[]>([]);
   const [picker, setPicker] = useState<PickerKind>(null);
   const [pickerFilter, setPickerFilter] = useState('');
+  const [offerAssets, setOfferAssets] = useState<StrategyOfferAsset[]>(() => listStrategyOfferAssets());
+  const [selectedOfferIds, setSelectedOfferIds] = useState<string[]>(() =>
+    pickDefaultStrategyOfferIds(listStrategyOfferAssets())
+  );
+  const [showOfferPicker, setShowOfferPicker] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -216,17 +232,40 @@ export const ModuleStrategy: React.FC<Props> = ({
     return leads;
   }, [discoveryArchives, selectedKeywords, selectedCountries]);
 
+  const creativeOfferBrief = useMemo(
+    () => buildCreativeOfferBrief(offerAssets, selectedOfferIds),
+    [offerAssets, selectedOfferIds]
+  );
+
   const strategyContext: StrategyChatContext = useMemo(
     () => ({
       companies: selectedCompanies,
       keywords: selectedKeywords,
       countries: selectedCountries,
       marketLeads,
+      creativeOfferBrief: creativeOfferBrief || undefined,
     }),
-    [selectedCompanies, selectedKeywords, selectedCountries, marketLeads]
+    [selectedCompanies, selectedKeywords, selectedCountries, marketLeads, creativeOfferBrief]
   );
 
   const primaryCompany = selectedCompanies[0] || data || null;
+  const llmStatus = getStrategyLlmStatus();
+
+  const refreshOfferAssets = () => {
+    const next = listStrategyOfferAssets();
+    setOfferAssets(next);
+    setSelectedOfferIds((prev) => {
+      const still = prev.filter((id) => next.some((a) => a.id === id));
+      return still.length ? still : pickDefaultStrategyOfferIds(next);
+    });
+  };
+
+  const toggleOfferAsset = (id: string) => {
+    setSelectedOfferIds((prev) => {
+      if (prev.includes(id)) return prev.filter((x) => x !== id);
+      return [...prev, id].slice(0, 6);
+    });
+  };
 
   const contextLabel = useMemo(() => {
     const parts: string[] = [];
@@ -237,8 +276,9 @@ export const ModuleStrategy: React.FC<Props> = ({
     }
     if (selectedKeywords.length) parts.push(`关键词 ${selectedKeywords.length}`);
     if (selectedCountries.length) parts.push(`国家 ${selectedCountries.length}`);
+    if (selectedOfferIds.length) parts.push(`素材 ${selectedOfferIds.length}`);
     return parts.length ? parts.join(' · ') : 'General Mode';
-  }, [selectedCompanies, selectedKeywords, selectedCountries]);
+  }, [selectedCompanies, selectedKeywords, selectedCountries, selectedOfferIds]);
 
   const processFiles = async (files: FileList | null): Promise<KnowledgeFile[]> => {
     if (!files) return [];
@@ -400,6 +440,20 @@ export const ModuleStrategy: React.FC<Props> = ({
   const handleSendMessage = async () => {
     if ((!inputValue.trim() && currentAttachments.length === 0) || isStreaming) return;
 
+    const status = getStrategyLlmStatus();
+    if (!status.ready) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now().toString(),
+          role: 'model',
+          text: status.detail,
+          timestamp: Date.now(),
+        },
+      ]);
+      return;
+    }
+
     const userMsg: ChatMessage = {
       id: Date.now().toString(),
       role: 'user',
@@ -429,7 +483,14 @@ export const ModuleStrategy: React.FC<Props> = ({
       const botMsgId = (Date.now() + 1).toString();
       setMessages((prev) => [
         ...prev,
-        { id: botMsgId, role: 'model', text: 'Thinking & Analyzing...', timestamp: Date.now() },
+        {
+          id: botMsgId,
+          role: 'model',
+          text: creativeOfferBrief
+            ? '正在结合背调与创作素材分析…'
+            : '正在调用策略服务…',
+          timestamp: Date.now(),
+        },
       ]);
 
       for await (const chunk of stream) {
@@ -438,20 +499,32 @@ export const ModuleStrategy: React.FC<Props> = ({
           prev.map((m) => (m.id === botMsgId ? { ...m, text: fullResponse } : m))
         );
       }
-    } catch (e: any) {
+      if (!fullResponse.trim()) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === botMsgId
+              ? { ...m, text: '策略服务未返回内容，请稍后重试或精简附件后再试。' }
+              : m
+          )
+        );
+      }
+    } catch (e: unknown) {
       console.error(e);
-      let errorText = e.message || 'Unknown error';
+      let errorText = e instanceof Error ? e.message : String(e);
       if (/413|FUNCTION_PAYLOAD_TOO_LARGE|Request Entity Too Large/i.test(errorText)) {
         errorText =
-          '请求体积过大（附件或系统知识库过多）。已自动压缩仍失败时，请：去掉大图/PDF、减少附件，或点右上角清空对话后再试。\n\n' +
-          errorText;
+          '请求体积过大（附件或系统知识库过多）。已自动压缩仍失败时，请：去掉大图/PDF、减少附件，或点右上角清空对话后再试。';
+      } else {
+        errorText = errorText
+          .replace(/千问|通义|DashScope|Qwen|Gemini|Tavily/gi, '策略服务')
+          .slice(0, 280);
       }
       setMessages((prev) => [
         ...prev,
         {
           id: Date.now().toString(),
           role: 'model',
-          text: `⚠️ **Error**: ${errorText}`,
+          text: `⚠️ ${errorText}`,
           timestamp: Date.now(),
         },
       ]);
@@ -465,15 +538,46 @@ export const ModuleStrategy: React.FC<Props> = ({
       alert('请先选择或打开一个背调客户，再生成开发信。');
       return;
     }
+    const status = getStrategyLlmStatus();
+    if (!status.ready) {
+      setGenerateMsg(status.detail);
+      return;
+    }
     setIsGeneratingEmails(true);
-    setGenerateMsg('');
+    setGenerateMsg('正在汇总创作素材并调用策略服务…');
     try {
+      refreshOfferAssets();
+      const assets = listStrategyOfferAssets();
+      const ids =
+        selectedOfferIds.length > 0 ? selectedOfferIds : pickDefaultStrategyOfferIds(assets);
+      const brief = buildCreativeOfferBrief(assets, ids);
+      setGenerateMsg('正在解析产品/包装配图…');
+      const images = await resolveOfferImagesForLlm(assets, ids, 1);
       const kbFiles = filterTextKnowledgeFiles(await getAllFilesFromDB());
-      const mailGroup = await generateMailGroupStrategy(primaryCompany, [], kbFiles);
+      const leadsSummary = marketLeads
+        .slice(0, 8)
+        .map((l) => `${l.name}${l.country ? ` (${l.country})` : ''}${l.keyword ? ` · ${l.keyword}` : ''}`)
+        .join('; ');
+      setGenerateMsg('正在生成 3 封开发信组…');
+      const mailGroup = await generateMailGroupStrategy(primaryCompany, images, kbFiles, {
+        creativeOfferBrief: brief || undefined,
+        keywords: selectedKeywords,
+        countries: selectedCountries,
+        marketLeadsSummary: leadsSummary || undefined,
+      });
       await onSaveGeneratedEmails(mailGroup, primaryCompany);
-      setGenerateMsg('开发信已生成并保存到背调报告，下载 PPT 时会自动包含。');
-    } catch (e: any) {
-      setGenerateMsg(`生成失败：${e?.message || e}`);
+      setGenerateMsg(
+        `开发信组已生成并保存${images.length ? '（已引用创作配图）' : ''}${
+          brief ? ' · 已并入产品/包装/发文线索' : ''
+        }。下载 PPT 时会自动包含。`
+      );
+    } catch (e: unknown) {
+      const raw = e instanceof Error ? e.message : String(e);
+      setGenerateMsg(
+        `生成失败：${raw
+          .replace(/千问|通义|DashScope|Qwen|Gemini|Tavily/gi, '策略服务')
+          .slice(0, 220)}`
+      );
     } finally {
       setIsGeneratingEmails(false);
     }
@@ -492,22 +596,141 @@ export const ModuleStrategy: React.FC<Props> = ({
       {primaryCompany && (
         <div className="bg-white rounded-2xl border border-indigo-200 p-4 sm:p-5 shadow-sm flex-shrink-0">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
+            <div className="min-w-0 flex-1">
               <div className="text-sm font-black text-slate-800">开发信 · 保存到背调报告</div>
               <p className="text-xs text-slate-500 font-medium mt-1">
-                针对「{primaryCompany.companyInfo?.name || '当前客户'}」生成 3 封短开发信（匹配破冰 / 实力证明 / 钩子收口），含多变主题；同日连发、末封带钩子。
+                针对「{primaryCompany.companyInfo?.name || '当前客户'}」+ 创作素材 / 关键词 / 国家，调用策略服务生成 3 封短开发信（匹配破冰 / 实力证明 / 钩子收口）。
               </p>
-              {generateMsg && <p className="text-[11px] font-bold text-emerald-700 mt-2">{generateMsg}</p>}
+              <p
+                className={`text-[11px] font-bold mt-2 px-2 py-1 rounded-lg inline-block ${
+                  llmStatus.ready
+                    ? 'text-emerald-800 bg-emerald-50 border border-emerald-100'
+                    : 'text-amber-800 bg-amber-50 border border-amber-100'
+                }`}
+              >
+                {llmStatus.detail}
+              </p>
+              {generateMsg && (
+                <p
+                  className={`text-[11px] font-bold mt-2 ${
+                    /失败|未就绪/.test(generateMsg) ? 'text-rose-700' : 'text-emerald-700'
+                  }`}
+                >
+                  {generateMsg}
+                </p>
+              )}
             </div>
             <button
               type="button"
-              onClick={handleGenerateAndSaveEmails}
-              disabled={isGeneratingEmails || !onSaveGeneratedEmails}
-              className="inline-flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white px-5 py-3 rounded-xl font-bold text-sm shadow-lg"
+              onClick={() => void handleGenerateAndSaveEmails()}
+              disabled={isGeneratingEmails || !onSaveGeneratedEmails || !llmStatus.ready}
+              className="inline-flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white px-5 py-3 rounded-xl font-bold text-sm shadow-lg shrink-0"
             >
               {isGeneratingEmails ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-              生成开发信
+              {isGeneratingEmails ? '生成中…' : '生成开发信'}
             </button>
+          </div>
+
+          <div className="mt-4 pt-3 border-t border-indigo-50 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-[10px] font-black text-slate-500 uppercase tracking-wider inline-flex items-center gap-1">
+                <ImagePlus size={11} /> 引用创作素材（产品图 / 包装 / 发文）
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={refreshOfferAssets}
+                  className="text-[10px] font-black text-slate-400 hover:text-indigo-600"
+                >
+                  刷新
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowOfferPicker((v) => !v)}
+                  className="text-[10px] font-black text-indigo-600 hover:text-indigo-800"
+                >
+                  {showOfferPicker ? '收起' : '选择素材'}
+                </button>
+              </div>
+            </div>
+            {selectedOfferIds.length === 0 ? (
+              <p className="text-[11px] text-slate-400 font-medium">
+                暂无素材。请先在平面设计 / 包装 / 发文模块生成，或点「选择素材」。
+              </p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {offerAssets
+                  .filter((a) => selectedOfferIds.includes(a.id))
+                  .map((a) => (
+                    <div
+                      key={a.id}
+                      className="relative w-14 h-14 rounded-lg overflow-hidden border border-indigo-200 bg-slate-50 group"
+                      title={`${strategyOfferKindLabel(a.kind)} · ${a.label}`}
+                    >
+                      {a.url ? (
+                        <VaultImg src={a.url} alt="" className="w-full h-full object-contain" />
+                      ) : (
+                        <span className="flex h-full items-center justify-center text-[9px] font-black text-slate-500 px-1 text-center">
+                          文案
+                        </span>
+                      )}
+                      <span className="absolute bottom-0 inset-x-0 bg-slate-900/70 text-white text-[8px] font-black text-center py-0.5">
+                        {strategyOfferKindLabel(a.kind)}
+                      </span>
+                      <button
+                        type="button"
+                        aria-label="移除"
+                        onClick={() => toggleOfferAsset(a.id)}
+                        className="absolute top-0.5 right-0.5 rounded-full bg-slate-900/85 text-white p-0.5 opacity-90"
+                      >
+                        <X size={10} />
+                      </button>
+                    </div>
+                  ))}
+              </div>
+            )}
+            {showOfferPicker && (
+              <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-2 max-h-48 overflow-y-auto">
+                {offerAssets.length === 0 ? (
+                  <p className="text-center text-slate-400 text-xs py-4 font-medium">
+                    创作库为空，请先生成产品图、包装或发文素材
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-4 sm:grid-cols-6 gap-2">
+                    {offerAssets.slice(0, 36).map((a) => {
+                      const on = selectedOfferIds.includes(a.id);
+                      return (
+                        <button
+                          key={a.id}
+                          type="button"
+                          onClick={() => toggleOfferAsset(a.id)}
+                          className={`relative aspect-square rounded-lg overflow-hidden border bg-white ${
+                            on ? 'border-indigo-500 ring-1 ring-indigo-200' : 'border-slate-200'
+                          }`}
+                          title={a.label}
+                        >
+                          {a.url ? (
+                            <VaultImg src={a.url} alt="" className="w-full h-full object-contain" />
+                          ) : (
+                            <span className="flex h-full items-center justify-center text-[9px] font-bold text-slate-500 p-1">
+                              {a.label.slice(0, 18)}
+                            </span>
+                          )}
+                          {on && (
+                            <span className="absolute top-0.5 left-0.5 rounded-full bg-indigo-600 text-white p-0.5">
+                              <Check size={10} />
+                            </span>
+                          )}
+                          <span className="absolute bottom-0 inset-x-0 bg-black/55 text-white text-[8px] font-black text-center truncate px-0.5">
+                            {strategyOfferKindLabel(a.kind)}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           {primaryCompany.generatedEmails && (
             <div className="mt-4 pt-4 border-t border-slate-100 space-y-3">
@@ -910,7 +1133,7 @@ export const ModuleStrategy: React.FC<Props> = ({
             </button>
           </div>
           <p className="mt-2 text-[10px] text-slate-400 font-bold px-1">
-            附件 = 我方资料 · 背调 = 单客户策略 · 关键词/国家 = 整市场策略（可组合）
+            创作素材 + 附件 = 我方卖点 · 背调 = 单客户 · 关键词/国家 = 整市场（生成开发信会一并送入策略服务）
           </p>
         </div>
       </div>

@@ -797,7 +797,7 @@ export interface ChatMessage {
   timestamp: number;
 }
 
-/** 开发策略对话上下文：单客户背调 + 市场关键词/国家 */
+/** 开发策略对话上下文：单客户背调 + 市场关键词/国家 + 创作素材 */
 export interface StrategyChatContext {
   /** 选中的背调客户报告（可多选，主推第 1 个） */
   companies?: AnalysisResult[];
@@ -813,6 +813,8 @@ export interface StrategyChatContext {
     clientType?: string;
     keyword?: string;
   }>;
+  /** 平面/包装/发文等我方素材摘要（进 prompt，勿塞大图） */
+  creativeOfferBrief?: string;
 }
 
 export interface KeywordExtractionResult {
