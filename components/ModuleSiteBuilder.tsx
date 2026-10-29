@@ -32,7 +32,6 @@ import {
   SITE_TEMPLATES,
   type SiteTemplateId,
   buildSectionsFromPrompt,
-  buildSitePreviewHtml,
   getTemplateMeta,
 } from '../services/siteBuilderTemplates';
 import { SiteTemplateThumb } from './SiteTemplateThumb';
@@ -52,6 +51,11 @@ import {
   planSiteCopyFromPrompt,
   plannedCopyToBrief,
 } from '../services/siteBriefPlanner';
+import {
+  generateSiteHtmlWithLlm,
+  getSiteVibeLlmStatus,
+  hardenPreviewHtml,
+} from '../services/siteVibeAgent';
 import { deleteSiteHtml, getSiteHtml, putSiteHtml } from '../services/siteProjectVault';
 
 type Props = { currentUser: User };
@@ -129,9 +133,11 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
   const [deployId, setDeployId] = useState<string>(DEFAULT_STACK.deployId);
   const [vaultHtml, setVaultHtml] = useState<string | null>(null);
   const [persistHint, setPersistHint] = useState('');
+  const [buildStatus, setBuildStatus] = useState('');
   const skus = useMemo(() => loadCatalogSkus(), []);
   const active = projects.find((p) => p.id === activeId) || null;
   const deployMeta = getDeployOption(active?.deployId || deployId);
+  const llmStatus = useMemo(() => getSiteVibeLlmStatus(), [busy, activeId]);
 
   const persistMeta = (next: SiteProject[]) => {
     setProjects(next);
@@ -154,25 +160,14 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
       .filter((s) => codes.includes(s.skuCode))
       .map((s) => `${s.skuCode} ${s.nameEn || s.name}`);
 
-  const buildHtmlFor = (proj: SiteProject, codes: string[], sourcePrompt?: string) => {
-    const labels = productLabelsFor(codes);
-    const tpl = (proj.templateId as SiteTemplateId) || 'trade_hero';
-    const seed = sourcePrompt || proj.brief || proj.title;
-    const planned = planSiteCopyFromPrompt(seed, labels, tpl);
-    return buildSitePreviewHtml({
-      templateId: tpl,
-      title: proj.title || planned.brandName,
-      brief: seed,
-      locale: proj.locale === 'zh' || planned.locale === 'zh' ? 'zh' : 'en',
-      productLabels: labels,
-      sections: proj.sections,
-      planned,
-    });
-  };
-
   const createFromPrompt = async (prompt: string, tpl?: SiteTemplateId) => {
     const text = prompt.trim();
     if (!text) return;
+    const llm = getSiteVibeLlmStatus();
+    if (!llm.ready) {
+      window.alert(llm.detail);
+      return;
+    }
     const ref = analyzeReferenceFromPrompt(text);
     const labels = productLabelsFor(skuCodes);
     const plan = planSiteCopyFromPrompt(text, labels, tpl || ref.suggestedTemplate || templateId);
@@ -180,67 +175,79 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
     const now = Date.now();
     const brief = [plannedCopyToBrief(plan, text), ref.briefAugment].filter(Boolean).join('\n');
     const sections = buildSectionsFromPrompt(text, labels, useTpl);
-    const meta = getTemplateMeta(useTpl);
     const id = newCreativeId('site');
-    const proj: SiteProject = {
-      id,
-      title: plan.brandName || meta.label,
-      brief,
-      locale: plan.locale,
-      templateId: useTpl,
-      referenceUrl: ref.url || undefined,
-      referenceNotes: ref.styleNotes.join('；') || undefined,
-      frontendId,
-      backendId,
-      databaseId,
-      deployId,
-      htmlPersisted: false,
-      skuCodes: [...skuCodes],
-      sections,
-      messages: [
-        {
-          id: newCreativeId('m'),
-          role: 'agent',
-          text: `已按你的建站指令搭好「${plan.brandName}」初稿（模板「${meta.label}」· ${plan.locale === 'zh' ? '中文' : 'English'}）。${
-            ref.url ? `版式节奏参考 ${ref.host || ref.url}，文案已换成你的货盘。` : ''
-          }右侧是完整落地页预览（首屏/货盘/优势/询盘）。继续说改动，或点「推送上线」。`,
-          at: now,
-        },
-        { id: newCreativeId('m'), role: 'user', text, at: now + 1 },
-        {
-          id: newCreativeId('m'),
-          role: 'agent',
-          text: `选型：前端 ${getStackOption(FRONTEND_OPTIONS, frontendId)?.label} · 后台 ${getStackOption(BACKEND_OPTIONS, backendId)?.label} · 数据库 ${getStackOption(DATABASE_OPTIONS, databaseId)?.label} · 部署 ${getDeployOption(deployId)?.label}。预览为可交付 HTML 骨架；推送上线后可挂真实后台与数据库。`,
-          at: now + 2,
-        },
-      ],
-      published: false,
-      ownerUsername: currentUser.username,
-      createdAt: now,
-      updatedAt: now,
-    };
-    const html = buildSitePreviewHtml({
-      templateId: useTpl,
-      title: proj.title,
-      brief: text,
-      locale: proj.locale,
-      productLabels: labels,
-      sections,
-      planned: plan,
-    });
-    const ok = await persistProjectHtml(proj, html);
-    proj.htmlPersisted = ok;
-    persistMeta([proj, ...projects]);
-    setActiveId(proj.id);
-    setTemplateId(useTpl);
+    setBusy(true);
+    setBuildStatus('正在调用对话模型从零编写网站（通常需 30～90 秒）…');
     setHomePrompt('');
     setInput('');
-    setVaultHtml(html);
+    try {
+      const result = await generateSiteHtmlWithLlm({
+        userPrompt: text,
+        productLabels: labels,
+        referenceUrl: ref.url || undefined,
+        localeHint: plan.locale,
+        brandHint: plan.brandName,
+        onProgress: setBuildStatus,
+      });
+      const html = hardenPreviewHtml(result.html);
+      const proj: SiteProject = {
+        id,
+        title: result.title || plan.brandName,
+        brief,
+        locale: plan.locale,
+        templateId: useTpl,
+        referenceUrl: ref.url || undefined,
+        referenceNotes: ref.styleNotes.join('；') || undefined,
+        frontendId,
+        backendId,
+        databaseId,
+        deployId,
+        htmlPersisted: false,
+        genMode: 'llm',
+        skuCodes: [...skuCodes],
+        sections,
+        messages: [
+          {
+            id: newCreativeId('m'),
+            role: 'agent',
+            text: `正在用对话模型编写「${plan.brandName}」整站代码…`,
+            at: now,
+          },
+          { id: newCreativeId('m'), role: 'user', text, at: now + 1 },
+          {
+            id: newCreativeId('m'),
+            role: 'agent',
+            text: `${result.summaryZh}。已生成完整单页 HTML（非套模板）。${
+              ref.url ? `版式参考 ${ref.host || ref.url}。` : ''
+            }右侧可预览；继续用对话改版（如「改成英文」「加强产品区」「加证书条」）。选型：${getStackOption(FRONTEND_OPTIONS, frontendId)?.label} / ${getStackOption(BACKEND_OPTIONS, backendId)?.label} / ${getDeployOption(deployId)?.label}。`,
+            at: Date.now(),
+          },
+        ],
+        published: false,
+        ownerUsername: currentUser.username,
+        createdAt: now,
+        updatedAt: Date.now(),
+      };
+      proj.htmlPersisted = await persistProjectHtml(proj, html);
+      persistMeta([proj, ...projects]);
+      setActiveId(proj.id);
+      setTemplateId(useTpl);
+      setVaultHtml(html);
+      setPersistHint('对话模型写站完成 · 本机已备份');
+    } catch (e: any) {
+      const msg = e?.message || String(e);
+      window.alert(`网站生成失败：${msg}`);
+      setBuildStatus('');
+      setPersistHint(msg);
+    } finally {
+      setBusy(false);
+      setBuildStatus('');
+    }
   };
 
   const createBlank = () => {
     void createFromPrompt(
-      'Modern B2B product showcase for overseas buyers — clear hero, product cards, and quote CTA.',
+      'Build a modern B2B export showroom for an overseas toy buyer: strong hero, product grid, trust strip, OEM/ODM, and quote form. Fashionable dark theme.',
       templateId
     );
   };
@@ -250,62 +257,65 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
     const text = input.trim();
     setInput('');
     setBusy(true);
+    setBuildStatus('正在根据对话改写整站代码…');
     const userMsg = { id: newCreativeId('m'), role: 'user' as const, text, at: Date.now() };
     const codes = skuCodes.length ? skuCodes : active.skuCodes;
     const labels = productLabelsFor(codes);
-    let nextTpl = (active.templateId as SiteTemplateId) || templateId;
-    for (const t of SITE_TEMPLATES) {
-      if (text.includes(t.label) || new RegExp(t.labelEn, 'i').test(text)) {
-        nextTpl = t.id;
-        break;
-      }
-    }
     const ref = analyzeReferenceFromPrompt(text);
-    if (ref.url && ref.suggestedTemplate) nextTpl = ref.suggestedTemplate;
-    // 合并历史意图 + 本轮改口，再重新规划页面（不把指令贴进标题）
-    const seed = [active.brief, text, ref.briefAugment || active.referenceNotes]
-      .filter(Boolean)
-      .join('\n');
-    const planned = planSiteCopyFromPrompt(seed, labels, nextTpl);
-    const nextLocale: SiteProject['locale'] = /中文|chinese/i.test(text)
-      ? 'zh'
-      : /english|英文/i.test(text)
-        ? 'en'
-        : planned.locale;
-    const planLocale: 'zh' | 'en' = nextLocale === 'zh' ? 'zh' : 'en';
-    const plan = { ...planned, locale: planLocale };
-    const sections = buildSectionsFromPrompt(seed, labels, nextTpl);
-    const mergedBrief = plannedCopyToBrief(plan, seed);
-    await new Promise((r) => setTimeout(r, 280));
-    const agentMsg = {
-      id: newCreativeId('m'),
-      role: 'agent' as const,
-      text: `已按你的说明改好整站预览（${getTemplateMeta(nextTpl).label} · ${LOCALE_LABEL[nextLocale]}）。主标题：「${plan.heroTitle}」。${
-        ref.url ? `已纳入参考 ${ref.host || '链接'}。` : ''
-      }继续说改动，或点「推送上线」。`,
-      at: Date.now(),
-    };
-    const next: SiteProject = {
-      ...active,
-      title: plan.brandName || active.title,
-      brief: mergedBrief,
-      locale: nextLocale,
-      templateId: nextTpl,
-      referenceUrl: ref.url || active.referenceUrl,
-      referenceNotes: ref.styleNotes.length
-        ? ref.styleNotes.join('；')
-        : active.referenceNotes,
-      skuCodes: codes,
-      sections,
-      messages: [...active.messages, userMsg, agentMsg],
-      updatedAt: Date.now(),
-    };
-    const html = buildHtmlFor(next, codes, seed);
-    next.htmlPersisted = await persistProjectHtml(next, html);
-    persistMeta(projects.map((p) => (p.id === active.id ? next : p)));
-    setVaultHtml(html);
-    setTemplateId(nextTpl);
-    setBusy(false);
+    try {
+      const prevHtml = vaultHtml || (await getSiteHtml(active.id)) || '';
+      const result = await generateSiteHtmlWithLlm({
+        userPrompt: text,
+        previousHtml: prevHtml || undefined,
+        productLabels: labels,
+        referenceUrl: ref.url || active.referenceUrl,
+        brandHint: active.title,
+        onProgress: setBuildStatus,
+      });
+      const html = hardenPreviewHtml(result.html);
+      const agentMsg = {
+        id: newCreativeId('m'),
+        role: 'agent' as const,
+        text: `${result.summaryZh}。预览已更新。继续说改动，或点「推送上线 / 导出 HTML」。`,
+        at: Date.now(),
+      };
+      const next: SiteProject = {
+        ...active,
+        title: result.title || active.title,
+        brief: [active.brief, text].filter(Boolean).join('\n').slice(-2000),
+        referenceUrl: ref.url || active.referenceUrl,
+        referenceNotes: ref.styleNotes.length
+          ? ref.styleNotes.join('；')
+          : active.referenceNotes,
+        skuCodes: codes,
+        genMode: 'llm',
+        sections: active.sections,
+        messages: [...active.messages, userMsg, agentMsg],
+        updatedAt: Date.now(),
+      };
+      next.htmlPersisted = await persistProjectHtml(next, html);
+      persistMeta(projects.map((p) => (p.id === active.id ? next : p)));
+      setVaultHtml(html);
+    } catch (e: any) {
+      const errText = e?.message || String(e);
+      const agentMsg = {
+        id: newCreativeId('m'),
+        role: 'agent' as const,
+        text: `改版失败：${errText}`,
+        at: Date.now(),
+      };
+      persistMeta(
+        projects.map((p) =>
+          p.id === active.id
+            ? { ...p, messages: [...p.messages, userMsg, agentMsg], updatedAt: Date.now() }
+            : p
+        )
+      );
+      window.alert(`改版失败：${errText}`);
+    } finally {
+      setBusy(false);
+      setBuildStatus('');
+    }
   };
 
   const remove = async (id: string) => {
@@ -319,36 +329,22 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
     }
   };
 
-  const previewHtml = useMemo(() => {
-    if (!active) return vaultHtml || '';
-    const codes = skuCodes.length ? skuCodes : active.skuCodes;
-    return buildHtmlFor(active, codes);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, skuCodes, skus]);
+  // 对话写站结果只认 vaultHtml，禁止模板重算把预览冲成空白/旧稿
+  const previewHtml = vaultHtml || '';
 
   useEffect(() => {
-    if (!active?.id || !previewHtml) return;
-    const id = active.id;
-    const title = active.title;
-    void putSiteHtml(id, previewHtml, title).then(() => {
-      setVaultHtml(previewHtml);
-      setPersistHint('本机已双备份（浏览器站点库 + 会话兜底）');
-      setProjects((prev) => {
-        const cur = prev.find((p) => p.id === id);
-        if (!cur || cur.htmlPersisted) return prev;
-        const next = prev.map((p) => (p.id === id ? { ...p, htmlPersisted: true } : p));
-        saveSiteProjects(next);
-        return next;
-      });
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- autosave by html fingerprint
-  }, [previewHtml, active?.id]);
-
-  useEffect(() => {
-    if (!activeId) return;
+    if (!activeId) {
+      setVaultHtml(null);
+      return;
+    }
+    let cancelled = false;
     void getSiteHtml(activeId).then((h) => {
-      if (h) setVaultHtml(h);
+      if (cancelled) return;
+      if (h) setVaultHtml(hardenPreviewHtml(h));
     });
+    return () => {
+      cancelled = true;
+    };
   }, [activeId]);
 
   const exportHtml = () => {
@@ -392,6 +388,25 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
   const applyTemplate = (id: SiteTemplateId) => {
     setTemplateId(id);
     if (!active) return;
+    // 对话写站项目：换风格请用自然语言，避免模板骨架覆盖 LLM HTML
+    if (active.genMode === 'llm' || vaultHtml) {
+      const next: SiteProject = {
+        ...active,
+        templateId: id,
+        messages: [
+          ...active.messages,
+          {
+            id: newCreativeId('m'),
+            role: 'agent',
+            text: `已记下风格倾向「${getTemplateMeta(id).label}」。请在对话框说明具体改法（例如「按询盘优先重做首屏」），我会重新写码，不会用空模板覆盖当前站。`,
+            at: Date.now(),
+          },
+        ],
+        updatedAt: Date.now(),
+      };
+      persistMeta(projects.map((p) => (p.id === active.id ? next : p)));
+      return;
+    }
     const codes = skuCodes.length ? skuCodes : active.skuCodes;
     const sections = buildSectionsFromPrompt(active.brief || active.title, productLabelsFor(codes), id);
     const next: SiteProject = {
@@ -548,7 +563,16 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
               网站设计开发
             </h2>
             <p className="text-sm text-slate-400 font-medium max-w-2xl mx-auto leading-relaxed">
-              用自然语言快速出站。可粘贴参考网址做风格借鉴；建站前选定前端 / 后台 / 数据库与部署目标；对话改版后一键推送上线。站点写入本机双备份，避免突然消失。
+              用对话模型从零编写完整单页网站（真正写 HTML/CSS，不是套几套死模板）。可粘贴参考站 URL、挂产品库 SKU；生成后继续对话改版，再导出或推送上线。
+            </p>
+            <p
+              className={`text-[11px] font-bold max-w-2xl mx-auto ${
+                llmStatus.ready ? 'text-teal-300/90' : 'text-rose-300'
+              }`}
+            >
+              {llmStatus.ready
+                ? '对话写站服务已就绪 · 首次生成通常 30～90 秒'
+                : llmStatus.detail}
             </p>
 
             <div className="max-w-2xl mx-auto text-left rounded-2xl border border-white/10 bg-white/5 backdrop-blur-md p-2.5 shadow-2xl">
@@ -570,16 +594,20 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
               />
               <div className="flex flex-wrap items-center justify-between gap-2 px-2 pb-1">
                 <span className="text-[10px] font-bold text-slate-500">
-                  {stackReady ? '⌘/Ctrl + Enter 生成' : '请先完成下方技术选型'}
+                  {busy
+                    ? buildStatus || '编写中…'
+                    : stackReady
+                      ? '⌘/Ctrl + Enter 生成（调用对话模型）'
+                      : '请先完成下方技术选型'}
                 </span>
                 <button
                   type="button"
-                  disabled={!homePrompt.trim() || !stackReady || busy}
+                  disabled={!homePrompt.trim() || !stackReady || busy || !llmStatus.ready}
                   onClick={() => void createFromPrompt(homePrompt)}
                   className="inline-flex items-center gap-1.5 rounded-xl bg-teal-400 hover:bg-teal-300 text-slate-950 text-xs font-black px-4 py-2.5 disabled:opacity-40"
                 >
                   {busy ? <Loader2 size={14} className="animate-spin" /> : null}
-                  开始构建 <ArrowRight size={14} />
+                  {busy ? '编写中…' : '开始构建'} <ArrowRight size={14} />
                 </button>
               </div>
             </div>
@@ -863,19 +891,26 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
                 {m.text}
               </div>
             ))}
+            {busy && buildStatus ? (
+              <div className="rounded-2xl px-3 py-2 text-sm bg-teal-50 text-teal-900 border border-teal-100 mr-2 inline-flex items-center gap-2">
+                <Loader2 className="animate-spin shrink-0" size={14} />
+                {buildStatus}
+              </div>
+            ) : null}
           </div>
 
           <div className="p-3 border-t border-slate-100 flex gap-2">
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && void send()}
-              placeholder="继续说改动，或粘贴参考链接…"
-              className="flex-1 rounded-xl border border-slate-200 px-3 py-2.5 text-sm"
+              onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && !busy && void send()}
+              placeholder="例如：改成英文站、产品区加大、加证书条…"
+              disabled={busy}
+              className="flex-1 rounded-xl border border-slate-200 px-3 py-2.5 text-sm disabled:opacity-60"
             />
             <button
               type="button"
-              disabled={busy || !input.trim()}
+              disabled={busy || !input.trim() || !llmStatus.ready}
               onClick={() => void send()}
               className="rounded-xl bg-teal-600 hover:bg-teal-500 text-white px-3 disabled:opacity-50"
             >
@@ -910,12 +945,21 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
                 viewport === 'mobile' ? 'w-[375px] max-w-full' : 'w-full'
               }`}
             >
-              <iframe
-                title="site-preview"
-                srcDoc={previewHtml || vaultHtml || ''}
-                className="w-full h-full border-0 bg-white"
-                sandbox="allow-scripts allow-same-origin"
-              />
+              {busy && !previewHtml ? (
+                <div className="w-full h-full flex flex-col items-center justify-center gap-3 bg-slate-900 text-slate-300 px-6 text-center">
+                  <Loader2 className="animate-spin text-teal-300" size={28} />
+                  <p className="text-sm font-bold">{buildStatus || '正在编写网站…'}</p>
+                  <p className="text-[11px] text-slate-500">对话写码通常需要几十秒，请勿关闭页面</p>
+                </div>
+              ) : (
+                <iframe
+                  key={`${activeId || 'x'}-${previewHtml.length}`}
+                  title="site-preview"
+                  srcDoc={previewHtml}
+                  className="w-full h-full border-0 bg-white"
+                  sandbox="allow-scripts allow-same-origin"
+                />
+              )}
             </div>
           </div>
         </div>

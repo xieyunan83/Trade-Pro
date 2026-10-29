@@ -5786,6 +5786,7 @@ export const callQwen = async (
     forcedSearch?: boolean;
     task?: TaskType;
     timeoutMs?: number;
+    maxTokens?: number;
   } = {}
 ): Promise<string> => {
   try {
@@ -5802,6 +5803,7 @@ export const callQwen = async (
         task: options.task,
         override: options.override,
         timeoutMs: options.timeoutMs,
+        maxTokens: options.maxTokens,
       }
     );
   } catch (error) {

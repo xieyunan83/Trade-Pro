@@ -91,6 +91,8 @@ export type SiteProject = {
   deployId?: string;
   /** HTML 已写入本机站点库（IndexedDB） */
   htmlPersisted?: boolean;
+  /** llm = 对话模型写码；template = 本地骨架兜底 */
+  genMode?: 'llm' | 'template';
   lastPublishedAt?: number;
   skuCodes: string[];
   sections: SiteSection[];
