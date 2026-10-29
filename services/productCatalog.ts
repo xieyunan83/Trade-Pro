@@ -1019,9 +1019,28 @@ export const matchOurProductToProfiles = (
   return hits.sort((a, b) => b.score - a.score);
 };
 
-export const loadProductCatalog = async (): Promise<CustomerProductProfile[]> => {
+/** 内存缓存：避免匹配页每次击键/适市卡都 getAll 两千条画像卡死 UI */
+let productCatalogMemCache: { at: number; rows: CustomerProductProfile[] } | null = null;
+const CATALOG_CACHE_TTL_MS = 90_000;
+
+export const invalidateProductCatalogCache = (): void => {
+  productCatalogMemCache = null;
+};
+
+export const loadProductCatalog = async (opts?: {
+  force?: boolean;
+}): Promise<CustomerProductProfile[]> => {
+  if (
+    !opts?.force &&
+    productCatalogMemCache &&
+    Date.now() - productCatalogMemCache.at < CATALOG_CACHE_TTL_MS
+  ) {
+    return productCatalogMemCache.rows;
+  }
   const local = await getProductProfiles();
-  return local.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  const rows = local.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  productCatalogMemCache = { at: Date.now(), rows };
+  return rows;
 };
 
 /** CRM 是否已有产品/设计向标签 */

@@ -4,6 +4,7 @@ import type { Client, HistoryItem } from '../types';
 import {
   backfillProductCatalogFromHistory,
   buildCatalogCoverageReport,
+  invalidateProductCatalogCache,
   listBlankCrmClientsForDesignFill,
   loadProductCatalog,
   type CatalogCoverageReport,
@@ -55,8 +56,6 @@ const CatalogCoveragePanelInner: React.FC<Props> = ({
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const [showGaps, setShowGaps] = useState(false);
   const genRef = useRef(0);
-  const histLen = history.length;
-  const crmLen = crmClients.length;
 
   const refresh = useCallback(async () => {
     const gen = ++genRef.current;
@@ -75,7 +74,11 @@ const CatalogCoveragePanelInner: React.FC<Props> = ({
     }
   }, [history, crmClients]);
 
+  // 只自动统计一次；登录过程中 history 会连改，反复全量扫描会让输入框「跳一下等几分钟」
+  const autoOnceRef = useRef(false);
   useEffect(() => {
+    if (autoOnceRef.current) return;
+    autoOnceRef.current = true;
     let cancelled = false;
     let idleId = 0;
     let timeoutId = 0;
@@ -83,12 +86,11 @@ const CatalogCoveragePanelInner: React.FC<Props> = ({
       if (cancelled) return;
       void refresh().catch(() => undefined);
     };
-    // 首次与数据变化：优先 idle，超时再跑，避免登录后立刻卡死匹配页
     const ric = window.requestIdleCallback;
     if (typeof ric === 'function') {
-      idleId = ric(() => run(), { timeout: 2200 });
+      idleId = ric(() => run(), { timeout: 2500 });
     } else {
-      timeoutId = window.setTimeout(run, 900);
+      timeoutId = window.setTimeout(run, 1200);
     }
     return () => {
       cancelled = true;
@@ -97,16 +99,19 @@ const CatalogCoveragePanelInner: React.FC<Props> = ({
       }
       if (timeoutId) window.clearTimeout(timeoutId);
     };
-  }, [refresh, histLen, crmLen]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 刻意只跑一次；手动「从历史同步」会再 refresh
+  }, []);
 
   const runBackfill = async () => {
     setBusy(true);
     setMsg(null);
     try {
+      invalidateProductCatalogCache();
       const { upserted, enriched, skipped } = await backfillProductCatalogFromHistory(history, {
         ownerUsername,
         departmentId,
       });
+      invalidateProductCatalogCache();
 
       let crmUpdated = 0;
       if (onCrmPatched) {

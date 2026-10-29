@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useDeferredValue } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import type { Client, HistoryItem, MailGroup, User } from '../types';
 import { ModuleType } from '../types';
 import {
@@ -13,10 +13,10 @@ import {
 import { CreativePipelineBar } from './CreativeRefPicker';
 import { CatalogCoveragePanel } from './CatalogCoveragePanel';
 import { DesignConstraintCardPanel } from './DesignConstraintCardPanel';
+import { MatchInputForm, type MatchFormValues } from './MatchInputForm';
 import {
   Search,
   Loader2,
-  Target,
   Sparkles,
   Globe2,
   Briefcase,
@@ -114,31 +114,21 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
   onNavigateModule,
 }) => {
   const suggested = useMemo(() => suggestGtmInputFromCreative(), []);
-  const [name, setName] = useState(suggested.productName || '');
-  const [category, setCategory] = useState(suggested.category || '');
-  const [priceBand, setPriceBand] = useState(suggested.priceBand || '');
-  const [skuCode, setSkuCode] = useState(suggested.skuCode || '');
-  const [notes, setNotes] = useState(suggested.notes || suggested.designNotes || '');
+  const formInitial = useMemo<MatchFormValues>(
+    () => ({
+      productName: suggested.productName || '',
+      category: suggested.category || '',
+      priceBand: suggested.priceBand || '',
+      skuCode: suggested.skuCode || '',
+      notes: suggested.notes || suggested.designNotes || '',
+    }),
+    [suggested]
+  );
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [pack, setPack] = useState<GtmLaunchPack | null>(() => loadGtmLaunchPacks()[0] || null);
   const [expandedMail, setExpandedMail] = useState<string | null>(null);
-
-  useEffect(() => {
-    const s = suggestGtmInputFromCreative();
-    if (s.productName && !name) setName(s.productName);
-    if (s.category && !category) setCategory(s.category);
-    if (s.skuCode && !skuCode) setSkuCode(s.skuCode);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  /** 约束卡：优先品类；品名至少 3 字才参与，避免「Bu」一类短输入触发重算卡死 */
-  const constraintSource =
-    category.trim() || (name.trim().length >= 3 ? name.trim() : '');
-  const deferredConstraintKey = useDeferredValue(constraintSource.slice(0, 80));
-  const deferredPriceBand = useDeferredValue(priceBand);
-  const deferredSku = useDeferredValue(skuCode);
 
   const openHistoryFor = (m: GtmClientMatch) => {
     if (!m.historyId || !onOpenHistory) return;
@@ -146,38 +136,37 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
     if (item) onOpenHistory(item);
   };
 
-  const run = async () => {
-    if (!name.trim()) {
-      setError('请填写新品名称');
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    setProgress('启动双专家…');
-    try {
-      const next = await runGtmLaunchPack({
-        input: {
-          productName: name.trim(),
-          category: category.trim() || undefined,
-          priceBand: priceBand.trim() || undefined,
-          skuCode: skuCode.trim() || undefined,
-          notes: notes.trim() || undefined,
-          designNotes: notes.trim() || undefined,
-        },
-        crmClients,
-        history,
-        mailTopN: 3,
-        onProgress: (_pct, label) => setProgress(label),
-      });
-      setPack(next);
-      setExpandedMail(next.matches.find((m) => m.mailGroup)?.companyName || null);
-    } catch (e: any) {
-      setError(e?.message || '编排失败，请稍后重试');
-    } finally {
-      setBusy(false);
-      setProgress('');
-    }
-  };
+  const run = useCallback(
+    async (values: MatchFormValues) => {
+      setBusy(true);
+      setError(null);
+      setProgress('启动双专家…');
+      try {
+        const next = await runGtmLaunchPack({
+          input: {
+            productName: values.productName,
+            category: values.category || undefined,
+            priceBand: values.priceBand || undefined,
+            skuCode: values.skuCode || undefined,
+            notes: values.notes || undefined,
+            designNotes: values.notes || undefined,
+          },
+          crmClients,
+          history,
+          mailTopN: 3,
+          onProgress: (_pct, label) => setProgress(label),
+        });
+        setPack(next);
+        setExpandedMail(next.matches.find((m) => m.mailGroup)?.companyName || null);
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : '编排失败，请稍后重试');
+      } finally {
+        setBusy(false);
+        setProgress('');
+      }
+    },
+    [crmClients, history]
+  );
 
   return (
     <div className="space-y-6 animate-fade-in max-w-6xl mx-auto">
@@ -194,134 +183,16 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
         )}
       </div>
 
-      {/* 匹配表单置顶：大库覆盖看板默认收起，避免一进页就卡死无法输入 */}
-      <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm">
-        <div className="flex flex-wrap items-start justify-between gap-4 mb-5">
-          <div>
-            <div className="flex items-center gap-2 text-slate-900 font-black text-xl">
-              <Target className="text-emerald-600" size={22} />
-              市调 · 匹配 · 开发信
-            </div>
-            <p className="text-sm text-slate-500 font-medium mt-1 max-w-2xl leading-relaxed">
-              两位专家协同出国家与定位；客户匹配只引用背调入库的「在售/采购」真数据与标签，不空编。请先完成客户背调（或 CRM
-              产品深挖）再匹配。
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2 text-[10px] font-black">
-            <span className="inline-flex items-center gap-1 rounded-full bg-cyan-50 text-cyan-800 px-2.5 py-1 border border-cyan-100">
-              <Compass size={12} /> 市调专家
-            </span>
-            <span className="inline-flex items-center gap-1 rounded-full bg-violet-50 text-violet-800 px-2.5 py-1 border border-violet-100">
-              <Briefcase size={12} /> 产品经理
-            </span>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
-          <label className="block sm:col-span-2">
-            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-              新品名称 *
-            </span>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="例如：1:64 合金回力消防车"
-              autoComplete="off"
-              className="mt-1 w-full px-3 py-2.5 rounded-xl border border-slate-200 font-bold text-sm"
-            />
-          </label>
-          <label className="block">
-            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-              货号 SKU
-            </span>
-            <input
-              value={skuCode}
-              onChange={(e) => setSkuCode(e.target.value)}
-              placeholder="可选"
-              autoComplete="off"
-              className="mt-1 w-full px-3 py-2.5 rounded-xl border border-slate-200 font-bold text-sm"
-            />
-          </label>
-          <label className="block">
-            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">品类</span>
-            <input
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              placeholder="合金/回力车玩具"
-              autoComplete="off"
-              className="mt-1 w-full px-3 py-2.5 rounded-xl border border-slate-200 font-bold text-sm"
-            />
-          </label>
-          <label className="block">
-            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-              价格带
-            </span>
-            <input
-              value={priceBand}
-              onChange={(e) => setPriceBand(e.target.value)}
-              placeholder="例如 FOB $1.2–2.5"
-              autoComplete="off"
-              className="mt-1 w-full px-3 py-2.5 rounded-xl border border-slate-200 font-bold text-sm"
-            />
-          </label>
-          <label className="block sm:col-span-2 lg:col-span-1">
-            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-              卖点 / 设计备注
-            </span>
-            <input
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="开窗礼盒、可充电、适合会展…"
-              autoComplete="off"
-              className="mt-1 w-full px-3 py-2.5 rounded-xl border border-slate-200 font-bold text-sm"
-            />
-          </label>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void run()}
-            className="inline-flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white px-5 py-2.5 rounded-xl font-bold text-sm"
-          >
-            {busy ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
-            {busy ? progress || '专家工作中…' : '双专家分析并匹配'}
-          </button>
-          {onGoCrm && (
-            <button
-              type="button"
-              onClick={onGoCrm}
-              className="text-xs font-bold text-emerald-700 hover:underline"
-            >
-              去客户库补充线索
-            </button>
-          )}
-          <span className="text-[11px] text-slate-400 font-medium">
-            CRM {crmClients.length} 家 · 背调历史 {history.length} 条
-          </span>
-        </div>
-
-        {deferredConstraintKey ? (
-          <div className="mt-4">
-            <DesignConstraintCardPanel
-              categoryOrName={deferredConstraintKey}
-              priceBandText={deferredPriceBand}
-              skuCode={deferredSku}
-            />
-          </div>
-        ) : null}
-
-        <p className="mt-3 text-[11px] text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 font-medium leading-relaxed">
-          匹配依据：库内在售/采购品类、SKU、标签，以及包装/配色/价带重叠；完成后会给出定价参考与置信度。结果很少时，先「从历史同步」或「补全
-          CRM 空白」。
-        </p>
-        {error && (
-          <p className="mt-3 text-sm font-bold text-rose-600 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2">
-            {error}
-          </p>
-        )}
-      </div>
+      <MatchInputForm
+        initial={formInitial}
+        busy={busy}
+        progress={progress}
+        error={error}
+        crmCount={crmClients.length}
+        historyCount={history.length}
+        onGoCrm={onGoCrm}
+        onSubmit={(values) => void run(values)}
+      />
 
       <CatalogCoveragePanel
         history={history}

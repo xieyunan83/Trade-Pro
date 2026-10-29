@@ -92,7 +92,9 @@ export const buildDesignConstraintCard = (opts: {
 }): DesignConstraintCard => {
   const category = (opts.categoryOrName || '').trim() || '玩具';
   const market = (opts.targetMarket || '').trim() || '目标市场';
-  const matched = opts.profiles.filter((p) => profileMatches(p, category, market));
+  // 大库只扫前 N 条较新画像，避免 2k+ filter/flatMap 堵死输入
+  const scan = opts.profiles.length > 400 ? opts.profiles.slice(0, 400) : opts.profiles;
+  const matched = scan.filter((p) => profileMatches(p, category, market));
   const withSignals = matched.filter((p) => profileHasDesignSignals(p));
   const pool = withSignals.length ? withSignals : matched;
 
