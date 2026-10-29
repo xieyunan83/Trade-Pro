@@ -213,7 +213,9 @@ export const ModuleLandingHub: React.FC<Props> = ({
               </div>
               <div className="min-w-0">
                 <h2 className="text-[13px] font-black text-slate-900 leading-tight">新品推荐</h2>
-                <p className="text-[9px] text-slate-500 font-medium truncate">有图才展示 · 点击进产品库</p>
+                <p className="text-[9px] text-slate-500 font-medium truncate">
+                  优先展示产品库带图 SKU · 点击进产品库
+                </p>
               </div>
             </div>
             {onNavigateModule ? (
@@ -233,14 +235,16 @@ export const ModuleLandingHub: React.FC<Props> = ({
               </div>
             ) : products.length === 0 ? (
               <div className="flex flex-col items-center justify-center gap-2 py-10 px-4 text-center">
-                <p className="text-xs text-slate-500 font-medium">暂无带图新品（演示期已隐藏失效外链图）</p>
+                <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                  暂无带图新品。请到产品库为 SKU 点「图」上传后，再回看板点刷新（或重新进入今日看板）。
+                </p>
                 {onNavigateModule ? (
                   <button
                     type="button"
                     onClick={goCatalog}
                     className="text-[11px] font-black text-cyan-800 bg-cyan-50 border border-cyan-200 px-3 py-1.5 rounded-lg"
                   >
-                    去产品库维护 SKU
+                    去产品库补图
                   </button>
                 ) : null}
               </div>
