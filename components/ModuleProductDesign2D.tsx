@@ -68,6 +68,10 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
   const [activeId, setActiveId] = useState<string | null>(projects[0]?.id || null);
   const [leftTab, setLeftTab] = useState<LeftTab>('skills');
   const [prompt, setPrompt] = useState('');
+  /** 负向约束：选 Skill 时预填，可自行增删；生成时还会合并全站通用拒绝项 */
+  const [negativePrompt, setNegativePrompt] = useState(
+    () => DESIGN_SKILLS.find((s) => s.id === 'product_hero')?.negativePrompt || ''
+  );
   const [skillId, setSkillId] = useState<DesignSkillId>('product_hero');
   const [size, setSize] = useState<'1K' | '2K' | '4K'>('1K');
   const [count, setCount] = useState(1);
@@ -159,6 +163,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     setSkillId(sid);
     setLeftTab('projects');
     if (sk.defaultPrompt) setPrompt(sk.defaultPrompt);
+    setNegativePrompt(sk.negativePrompt || '');
   };
 
   const resolveSkuMeta = () => {
@@ -183,7 +188,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
       skuName: skuMeta.name,
       skuCode: skuMeta.code,
       hasReferenceImages: hasRefs,
-      skillNegative: skill.negativePrompt,
+      skillNegative: negativePrompt.trim() || skill.negativePrompt,
       series: skillId === 'listing_set',
     }).prompt;
   };
@@ -230,7 +235,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
         skillLabel: skill.label,
         skillHint: skill.hint,
         skillDefaultPrompt: skill.defaultPrompt,
-        skillNegativePrompt: skill.negativePrompt,
+        skillNegativePrompt: negativePrompt.trim() || skill.negativePrompt,
         skillCraftNotes: skill.craftNotes,
         skillQaChecklist: skill.qaChecklist,
         userBrief: [prompt.trim(), marketNote].filter(Boolean).join('\n'),
@@ -349,7 +354,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             size,
             thinkingMode: false,
             referenceImages: refImages.length ? refImages : undefined,
-            negativePrompt: skill.negativePrompt,
+            negativePrompt: negativePrompt.trim() || skill.negativePrompt,
             onProgress: (done, total, label) => {
               setError(null);
               void done;
@@ -363,7 +368,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             n: count,
             thinkingMode: false,
             referenceImages: refImages.length ? refImages : undefined,
-            negativePrompt: skill.negativePrompt,
+            negativePrompt: negativePrompt.trim() || skill.negativePrompt,
             series: skillId === 'listing_set' || count > 1,
           });
       const now = Date.now();
@@ -623,6 +628,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                   onClick={() => {
                     setSkillId(s.id);
                     if (s.defaultPrompt) setPrompt(s.defaultPrompt);
+                    setNegativePrompt(s.negativePrompt || '');
                   }}
                   onDoubleClick={() => createProject(s.id)}
                   className={`w-full text-left rounded-xl px-3 py-2.5 border ${
@@ -970,6 +976,30 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             placeholder="例如：遥控车主图，白底，包装盒完整可见，适合亚马逊主图…"
             className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-medium resize-y min-h-[5rem]"
           />
+          <div>
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                负向约束（不想出现的）
+              </label>
+              <button
+                type="button"
+                onClick={() => setNegativePrompt(skill.negativePrompt || '')}
+                className="text-[9px] font-bold text-violet-600 hover:text-violet-800"
+              >
+                恢复 Skill 默认
+              </button>
+            </div>
+            <textarea
+              value={negativePrompt}
+              onChange={(e) => setNegativePrompt(e.target.value)}
+              rows={2}
+              placeholder="如：水印、乱码字、换色、多面板拼图…"
+              className="w-full rounded-xl border border-rose-100 bg-rose-50/40 px-3 py-2 text-xs font-medium text-slate-700 resize-y"
+            />
+            <p className="text-[9px] text-slate-400 font-medium mt-1 leading-relaxed">
+              选 Skill 会预填；可自行增删。系统仍会自动叠加通用拒绝项（水印/乱码/假认证等）。
+            </p>
+          </div>
           <div className="flex gap-2">
             <select
               className="flex-1 rounded-xl border border-slate-200 px-2 py-2 text-xs font-bold"

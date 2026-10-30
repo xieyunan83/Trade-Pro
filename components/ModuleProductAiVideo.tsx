@@ -49,6 +49,9 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
   const [mode, setMode] = useState<VideoMode>('image');
   const [videoSkillId, setVideoSkillId] = useState<VideoSkillId>('hero_orbit');
   const [prompt, setPrompt] = useState('');
+  const [negativePrompt, setNegativePrompt] = useState(
+    () => VIDEO_SKILLS.find((s) => s.id === 'hero_orbit')?.negativeHints || ''
+  );
   const [storyboard, setStoryboard] = useState('');
   const [durationSec, setDurationSec] = useState<4 | 5 | 8 | 10>(5);
   const [aspect, setAspect] = useState<'16:9' | '9:16' | '1:1'>('16:9');
@@ -154,7 +157,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
       basePrompt: prompt.trim() || activeVideoSkill.defaultPrompt,
       storyboard: storyboard.trim() || undefined,
       hasReferenceImages: hasRefs,
-      skillNegative: activeVideoSkill.negativeHints,
+      skillNegative: negativePrompt.trim() || activeVideoSkill.negativeHints,
     });
 
   const createDraft = async () => {
@@ -273,14 +276,11 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
     setMsg('正在提交正片任务…');
 
     try {
-      const skillForJob =
-        VIDEO_SKILLS.find((s) => s.defaultPrompt && active.prompt.includes(s.defaultPrompt.slice(0, 40))) ||
-        activeVideoSkill;
       const fullParts = composeVideoGenerationPrompt({
-        basePrompt: active.prompt || skillForJob.defaultPrompt || 'Product hero video, cinematic lighting',
+        basePrompt: active.prompt || activeVideoSkill.defaultPrompt || 'Product hero video, cinematic lighting',
         storyboard: active.storyboard,
         hasReferenceImages: (active.sourceImages || []).length > 0,
-        skillNegative: skillForJob.negativeHints,
+        skillNegative: negativePrompt.trim() || activeVideoSkill.negativeHints,
       });
       const result = await generateProductVideo({
         mode: active.mode,
@@ -413,6 +413,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
                     onClick={() => {
                       setVideoSkillId(s.id);
                       if (s.defaultPrompt) setPrompt(s.defaultPrompt);
+                      setNegativePrompt(s.negativeHints || '');
                       if (s.storyboardZh) setStoryboard(s.storyboardZh);
                       if (s.aspectHint.includes('9:16')) setAspect('9:16');
                       else if (s.aspectHint.includes('1:1')) setAspect('1:1');
@@ -497,6 +498,30 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
                 placeholder="0–2s：特写… 2–5s：环绕…"
                 className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm resize-y"
               />
+            </div>
+            <div>
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                  负向约束（不想出现的）
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setNegativePrompt(activeVideoSkill.negativeHints || '')}
+                  className="text-[9px] font-bold text-rose-600 hover:text-rose-800"
+                >
+                  恢复 Skill 默认
+                </button>
+              </div>
+              <textarea
+                value={negativePrompt}
+                onChange={(e) => setNegativePrompt(e.target.value)}
+                rows={2}
+                placeholder="如：变形、闪烁、水印、乱码字幕…"
+                className="mt-1 w-full rounded-xl border border-rose-100 bg-rose-50/40 px-3 py-2 text-xs font-medium text-slate-700 resize-y"
+              />
+              <p className="text-[9px] text-slate-400 font-medium mt-1">
+                写入视频负向通道；另叠加通用拒绝项。
+              </p>
             </div>
 
             <div className="grid grid-cols-2 gap-2">

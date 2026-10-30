@@ -64,6 +64,9 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
   const [alignImage, setAlignImage] = useState(true);
   const [autoSize, setAutoSize] = useState(false);
   const [prompt, setPrompt] = useState('');
+  const [negativePrompt, setNegativePrompt] = useState(
+    () => MODEL3D_SKILLS.find((s) => s.id === 'turntable_hero')?.negativeHints || ''
+  );
   const [sourceImages, setSourceImages] = useState<string[]>([]);
   const [skuPick, setSkuPick] = useState('');
   const [skuName, setSkuName] = useState<string | undefined>();
@@ -359,16 +362,16 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     const skill =
       MODEL3D_SKILLS.find((s) => s.id === modelSkillId) || MODEL3D_SKILLS[0];
     const fullPrompt = (prompt.trim() || skill.defaultPrompt).slice(0, 1024);
-    const negativePrompt = mergeNegatives(
+    const mergedNegative = mergeNegatives(
       UNIVERSAL_3D_NEGATIVES,
-      skill.negativeHints
+      negativePrompt.trim() || skill.negativeHints
     ).slice(0, 255);
 
     try {
       const result = await generateModel3d({
         mode,
         prompt: fullPrompt,
-        negativePrompt: negativePrompt || undefined,
+        negativePrompt: mergedNegative || undefined,
         sourceImage: sourceImages[0],
         sourceImages,
         quality,
@@ -713,6 +716,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                     onClick={() => {
                       setModelSkillId(s.id);
                       if (s.defaultPrompt) setPrompt(s.defaultPrompt);
+                      setNegativePrompt(s.negativeHints || '');
                       setQuality(s.qualityHint);
                       setTextureQuality(
                         s.qualityHint === 'engine_ready' ? 'standard' : 'detailed'
@@ -786,6 +790,35 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                 placeholder="如：玩具车，圆润边角，保留包装比例…"
                 className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm resize-y"
               />
+            </div>
+            <div>
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                  负向约束（不想出现的）
+                </label>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setNegativePrompt(
+                      (MODEL3D_SKILLS.find((s) => s.id === modelSkillId) || MODEL3D_SKILLS[0])
+                        .negativeHints || ''
+                    )
+                  }
+                  className="text-[9px] font-bold text-indigo-600 hover:text-indigo-800"
+                >
+                  恢复 Skill 默认
+                </button>
+              </div>
+              <textarea
+                value={negativePrompt}
+                onChange={(e) => setNegativePrompt(e.target.value)}
+                rows={2}
+                placeholder="如：破面、多余肢体、漂浮杂件…"
+                className="mt-1 w-full rounded-xl border border-rose-100 bg-rose-50/40 px-3 py-2 text-xs font-medium text-slate-700 resize-y"
+              />
+              <p className="text-[9px] text-slate-400 font-medium mt-1">
+                可编辑；生成时仍合并通用 3D 拒绝项。
+              </p>
             </div>
 
             <div>

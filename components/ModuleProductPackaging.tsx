@@ -64,6 +64,9 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
   const [activeId, setActiveId] = useState<string | null>(projects[0]?.id || null);
   const [leftTab, setLeftTab] = useState<LeftTab>('skills');
   const [prompt, setPrompt] = useState('');
+  const [negativePrompt, setNegativePrompt] = useState(
+    () => PACKAGING_SKILLS.find((s) => s.id === 'window_box')?.negativePrompt || ''
+  );
   const [skillId, setSkillId] = useState<PackagingSkillId>('window_box');
   const [size, setSize] = useState<'1K' | '2K' | '4K'>('1K');
   const [count, setCount] = useState(1);
@@ -161,6 +164,7 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
     setSkillId(sid);
     setLeftTab('projects');
     if (sk.defaultPrompt) setPrompt(sk.defaultPrompt);
+    setNegativePrompt(sk.negativePrompt || '');
   };
 
   const buildFinalPrompt = (hasRefs = false) => {
@@ -182,7 +186,7 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
       channel: skill.channel,
       palette: skill.palette,
       hasReferenceImages: hasRefs,
-      skillNegative: skill.negativePrompt,
+      skillNegative: negativePrompt.trim() || skill.negativePrompt,
     }).prompt;
   };
 
@@ -319,7 +323,7 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
         n: count,
         thinkingMode: false,
         referenceImages: refImages.length ? refImages : undefined,
-        negativePrompt: skill.negativePrompt,
+        negativePrompt: negativePrompt.trim() || skill.negativePrompt,
         series: count > 1,
       });
       const now = Date.now();
@@ -505,6 +509,7 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
                   onClick={() => {
                     setSkillId(s.id);
                     if (s.defaultPrompt) setPrompt(s.defaultPrompt);
+                    setNegativePrompt(s.negativePrompt || '');
                   }}
                   onDoubleClick={() => createProject(s.id)}
                   className={`w-full text-left rounded-xl px-3 py-2.5 border ${
@@ -705,6 +710,30 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
             placeholder="例如：特斯拉 Model Y 遥控车开窗彩盒，适合欧洲商超，儿童友好配色…"
             className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-medium resize-y min-h-[5rem]"
           />
+          <div>
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                负向约束（不想出现的）
+              </label>
+              <button
+                type="button"
+                onClick={() => setNegativePrompt(skill.negativePrompt || '')}
+                className="text-[9px] font-bold text-amber-700 hover:text-amber-900"
+              >
+                恢复 Skill 默认
+              </button>
+            </div>
+            <textarea
+              value={negativePrompt}
+              onChange={(e) => setNegativePrompt(e.target.value)}
+              rows={2}
+              placeholder="如：乱码文字、假认证标、竞品包装…"
+              className="w-full rounded-xl border border-rose-100 bg-rose-50/40 px-3 py-2 text-xs font-medium text-slate-700 resize-y"
+            />
+            <p className="text-[9px] text-slate-400 font-medium mt-1">
+              可编辑；系统仍会叠加通用拒绝项。
+            </p>
+          </div>
           <div className="flex gap-2">
             <select
               className="flex-1 rounded-xl border border-slate-200 px-2 py-2 text-xs font-bold"
