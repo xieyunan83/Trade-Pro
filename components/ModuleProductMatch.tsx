@@ -153,8 +153,15 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
           },
           crmClients,
           history,
-          mailTopN: 3,
+          mailTopN: 2,
+          skipBatchMail: true,
           onProgress: (_pct, label) => setProgress(label),
+          onPartial: (partial) => {
+            // 匹配结果先上屏，开发信后台并行补写
+            setPack({ ...partial });
+            setExpandedMail(null);
+            setProgress(`已匹配 ${partial.matches.length} 家，正在补写开发信…`);
+          },
         });
         setPack(next);
         setExpandedMail(next.matches.find((m) => m.mailGroup)?.companyName || null);

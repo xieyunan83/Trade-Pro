@@ -181,6 +181,11 @@ const MatchInputFormInner: React.FC<Props> = ({
           {busy ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
           {busy ? progress || '专家工作中…' : '双专家分析并匹配'}
         </button>
+        {busy && progress ? (
+          <span className="text-[11px] font-bold text-emerald-700 max-w-xs leading-snug">
+            {progress}
+          </span>
+        ) : null}
         <button
           type="button"
           onClick={loadConstraint}

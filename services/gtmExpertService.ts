@@ -54,9 +54,13 @@ export type RunGtmLaunchOpts = {
   crmClients: Client[];
   history: HistoryItem[];
   knowledgeBaseFiles?: KnowledgeFile[];
-  /** 为前 N 个匹配客户生成专属开发信组（默认 3，0=跳过） */
+  /** 为前 N 个匹配客户生成专属开发信组（默认 2，0=跳过） */
   mailTopN?: number;
+  /** 跳过批量模板信（默认跳过，省一轮模型等待） */
+  skipBatchMail?: boolean;
   onProgress?: (pct: number, label: string) => void;
+  /** 本地匹配一完成就回调（开发信仍在写），用于先出结果再补信 */
+  onPartial?: (pack: GtmLaunchPack) => void;
 };
 
 const emptySwot = () => ({
@@ -242,7 +246,10 @@ export const planGtmExpertBriefs = async (
   try {
     const raw = await callQwen(`${DUAL_EXPERT_PROMPT}\n\n---\n${user}`, {
       jsonMode: true,
-      timeoutMs: 60_000,
+      timeoutMs: 45_000,
+      maxTokens: 2048,
+      enableSearch: false,
+      forcedSearch: false,
     });
     const parsed = parseJsonLoose<{ market?: GtmMarketBrief; pm?: GtmPmBrief }>(raw);
     if (!parsed?.market || !parsed?.pm) return { market: fbM, pm: fbP };
@@ -405,32 +412,46 @@ export const generateOutreachMailGroup = async (opts: {
     offerBrief: opts.offerBrief,
     batchContext: opts.batchContext,
   });
-  const raw = await callQwen(prompt, { jsonMode: true, timeoutMs: 90_000 });
+  const raw = await callQwen(prompt, {
+    jsonMode: true,
+    timeoutMs: 50_000,
+    maxTokens: 1800,
+    enableSearch: false,
+    forcedSearch: false,
+  });
   const parsed = parseJsonLoose<Record<string, unknown>>(raw) || {};
   return normalizeMailGroupResult(parsed);
 };
 
 /**
  * 一键：双专家 Brief → 国家/客户匹配 → 开发信组
+ * 体验优化：Brief 与画像并行；匹配先出结果；开发信并行撰写。
  */
 export const runGtmLaunchPack = async (opts: RunGtmLaunchOpts): Promise<GtmLaunchPack> => {
-  const { input, crmClients, history, onProgress } = opts;
-  const mailTopN = opts.mailTopN ?? 3;
-  onProgress?.(5, '市调专家与产品经理编排中…');
+  const { input, crmClients, history, onProgress, onPartial } = opts;
+  const mailTopN = opts.mailTopN ?? 2;
+  const skipBatchMail = opts.skipBatchMail !== false;
 
-  const { market, pm } = await planGtmExpertBriefs(input);
-  onProgress?.(35, '匹配目标市场与客户库…');
+  onProgress?.(6, '并行：专家编排 + 加载画像库…');
+  const [briefs, profiles] = await Promise.all([
+    planGtmExpertBriefs(input),
+    loadProductCatalog(),
+  ]);
+  const { market, pm } = briefs;
+  onProgress?.(32, '正在按库内真数据匹配客户…');
 
-  const profiles = await loadProductCatalog();
-  // 只用背调入库的真实产品画像；无品类/SKU 的空壳不参与
-  const usableProfiles = profiles.filter(
-    (p) =>
-      (p.catalogQuality ?? 0) >= 8 &&
-      ((p.skus || []).length > 0 ||
-        (p.categories || []).length > 0 ||
-        (p.sellCategories || []).length > 0 ||
-        (p.procureCategories || []).length > 0)
-  );
+  // 只用背调入库的真实产品画像；质量优先截断，避免 2k+ 全量慢扫
+  const usableProfiles = profiles
+    .filter(
+      (p) =>
+        (p.catalogQuality ?? 0) >= 8 &&
+        ((p.skus || []).length > 0 ||
+          (p.categories || []).length > 0 ||
+          (p.sellCategories || []).length > 0 ||
+          (p.procureCategories || []).length > 0)
+    )
+    .sort((a, b) => (b.catalogQuality || 0) - (a.catalogQuality || 0))
+    .slice(0, 700);
 
   const categoryForMatch = input.category || market.categories[0] || input.productName;
   const parsedBand = parsePriceBandNumbers(input.priceBand);
@@ -511,11 +532,9 @@ export const runGtmLaunchPack = async (opts: RunGtmLaunchOpts): Promise<GtmLaunc
     })
   );
 
-  // CRM 只补充「已有背调产品标签」的客户，不凭空匹配
   const crmHits = matchCrmClientsForProduct(input, market, crmClients);
   let matches = mergeMatches(crmHits, profileRaw);
 
-  // 用市调国家再抬一档分
   const countryBoost = new Set(market.countries.map((c) => norm(c.name).slice(0, 12)));
   matches = matches
     .map((m) => {
@@ -533,8 +552,6 @@ export const runGtmLaunchPack = async (opts: RunGtmLaunchOpts): Promise<GtmLaunc
     })
     .sort((a, b) => b.score - a.score);
 
-  onProgress?.(55, '撰写专业开发信组…');
-
   const offerBrief = buildCompactOurOfferBrief(
     '',
     [
@@ -549,67 +566,9 @@ export const runGtmLaunchPack = async (opts: RunGtmLaunchOpts): Promise<GtmLaunc
       .join(' | ')
   );
 
-  let batchMailGroup: MailGroup | undefined;
-  try {
-    batchMailGroup = await generateOutreachMailGroup({
-      batch: true,
-      batchContext: `Product launch: ${input.productName}. Priority markets: ${market.countries
-        .slice(0, 4)
-        .map((c) => c.name)
-        .join(', ')}`,
-      clientBrief: `Segment: ${pm.buyerPersonas.slice(0, 3).join(' / ')}\nMarkets: ${market.countries
-        .slice(0, 5)
-        .map((c) => c.name)
-        .join(', ')}`,
-      offerBrief,
-    });
-  } catch {
-    /* 批量模板失败不阻断 */
-  }
-
-  const top = matches.slice(0, Math.max(0, mailTopN));
-  for (let i = 0; i < top.length; i++) {
-    const m = top[i];
-    onProgress?.(60 + Math.round(((i + 1) / Math.max(top.length, 1)) * 30), `开发信：${m.companyName}`);
-    try {
-      const client = crmClients.find((c) => c.id === m.clientId);
-      const analysis = client
-        ? clientToAnalysisStub(client, history)
-        : ({
-            companyInfo: {
-              name: m.companyName,
-              headquarters: m.country,
-              foundedYear: '—',
-              nature: '—',
-              scale: '—',
-              website: m.website || '',
-              description: m.productType || '',
-            },
-            businessScope: {
-              coreProducts: (m.productType || '').split(/[/、,]/).map((s) => s.trim()).filter(Boolean),
-              relevantProducts: [],
-              brandPositioning: '—',
-              consumerGroup: '—',
-              productVariety: 'Medium',
-              priceSensitivity: '—',
-              websiteStructure: '—',
-            },
-            swot: emptySwot(),
-            searchCountry: m.country,
-          } as AnalysisResult);
-      const mg = await generateOutreachMailGroup({
-        clientBrief: buildCompactClientBrief(analysis),
-        offerBrief,
-      });
-      m.mailGroup = mg;
-    } catch {
-      /* 单客失败跳过 */
-    }
-  }
-
-  onProgress?.(96, '归档投放包…');
-  const pack: GtmLaunchPack = {
-    id: newGtmId(),
+  const packId = newGtmId();
+  const packBase: GtmLaunchPack = {
+    id: packId,
     createdAt: Date.now(),
     productName: input.productName,
     category: input.category,
@@ -619,13 +578,117 @@ export const runGtmLaunchPack = async (opts: RunGtmLaunchOpts): Promise<GtmLaunc
     market,
     pm,
     matches,
-    batchMailGroup,
     designCard,
     pricingAdvice,
   };
-  upsertGtmLaunchPack(pack);
+  upsertGtmLaunchPack(packBase);
+  onPartial?.(packBase);
+  onProgress?.(52, `已匹配 ${matches.length} 家，正在并行写开发信…`);
+  // 让出主线程，先把匹配结果画到界面
+  await new Promise<void>((r) => setTimeout(r, 0));
+
+  const top = matches.slice(0, Math.max(0, mailTopN));
+  const mailTasks: Array<Promise<void>> = [];
+
+  if (!skipBatchMail) {
+    mailTasks.push(
+      (async () => {
+        try {
+          packBase.batchMailGroup = await generateOutreachMailGroup({
+            batch: true,
+            batchContext: `Product launch: ${input.productName}. Priority markets: ${market.countries
+              .slice(0, 4)
+              .map((c) => c.name)
+              .join(', ')}`,
+            clientBrief: `Segment: ${pm.buyerPersonas.slice(0, 3).join(' / ')}\nMarkets: ${market.countries
+              .slice(0, 5)
+              .map((c) => c.name)
+              .join(', ')}`,
+            offerBrief,
+          });
+        } catch {
+          /* 批量模板失败不阻断 */
+        }
+      })()
+    );
+  }
+
+  // 域名索引：避免每封信都在 2k+ 历史上线性扫描
+  const historyByHost = new Map<string, HistoryItem>();
+  for (const h of history) {
+    const hd = (h.domain || h.data?.companyInfo?.website || '')
+      .toLowerCase()
+      .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
+      .split('/')[0];
+    if (hd && !historyByHost.has(hd)) historyByHost.set(hd, h);
+  }
+  const stubFromClient = (client: Client): AnalysisResult => {
+    const domain = (client.website || '')
+      .toLowerCase()
+      .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
+      .split('/')[0];
+    const hit = (domain && historyByHost.get(domain)) || undefined;
+    if (hit?.data) return hit.data;
+    return clientToAnalysisStub(client, []);
+  };
+
+  for (let i = 0; i < top.length; i++) {
+    const m = top[i];
+    const idx = i;
+    mailTasks.push(
+      (async () => {
+        onProgress?.(
+          55 + Math.round(((idx + 1) / Math.max(top.length, 1)) * 35),
+          `开发信：${m.companyName}`
+        );
+        try {
+          const client = crmClients.find((c) => c.id === m.clientId);
+          const analysis = client
+            ? stubFromClient(client)
+            : ({
+                companyInfo: {
+                  name: m.companyName,
+                  headquarters: m.country,
+                  foundedYear: '—',
+                  nature: '—',
+                  scale: '—',
+                  website: m.website || '',
+                  description: m.productType || '',
+                },
+                businessScope: {
+                  coreProducts: (m.productType || '')
+                    .split(/[/、,]/)
+                    .map((s) => s.trim())
+                    .filter(Boolean),
+                  relevantProducts: [],
+                  brandPositioning: '—',
+                  consumerGroup: '—',
+                  productVariety: 'Medium',
+                  priceSensitivity: '—',
+                  websiteStructure: '—',
+                },
+                swot: emptySwot(),
+                searchCountry: m.country,
+              } as AnalysisResult);
+          m.mailGroup = await generateOutreachMailGroup({
+            clientBrief: buildCompactClientBrief(analysis),
+            offerBrief,
+          });
+        } catch {
+          /* 单客失败跳过 */
+        }
+      })()
+    );
+  }
+
+  if (mailTasks.length) {
+    await Promise.all(mailTasks);
+  }
+
+  onProgress?.(96, '归档投放包…');
+  upsertGtmLaunchPack(packBase);
   onProgress?.(100, '完成');
-  return pack;
+  return packBase;
 };
 
 /** 从创作交接 / SKU 预填新品输入 */
