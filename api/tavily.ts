@@ -1,8 +1,8 @@
 /**
  * Vercel Serverless：同域转发 Tavily API
+ * 【硬约束】禁止外部 import，避免 FUNCTION_INVOCATION_FAILED。
  * 用法：/api/tavily?__upstream=/search 或 /extract
  */
-import { enforceApiRateLimit } from './_firewall';
 export const config = {
   runtime: 'nodejs',
   maxDuration: 60,
@@ -56,7 +56,6 @@ export default async function handler(req: any, res: any) {
       res.status(204).end();
       return;
     }
-    if (!enforceApiRateLimit(req, res, 'tavily')) return;
     if (req.method !== 'POST') {
       res.status(405).json({ error: 'Tavily proxy only accepts POST' });
       return;
@@ -73,7 +72,7 @@ export default async function handler(req: any, res: any) {
     }
     if (!auth) {
       res.status(401).json({
-        error: '未配置 Tavily API Key。请在管理后台保存，或设置服务端 TAVILY_API_KEY。',
+        error: '未配置检索 API Key。请在管理后台保存，或设置服务端环境变量。',
       });
       return;
     }
@@ -104,7 +103,7 @@ export default async function handler(req: any, res: any) {
       applyCors(res);
       const aborted = e?.name === 'AbortError' || /aborted|timeout/i.test(String(e?.message || e));
       res.status(aborted ? 504 : 502).json({
-        error: aborted ? `Tavily 上游超时（${UPSTREAM_TIMEOUT_MS / 1000}s）` : e?.message || String(e),
+        error: aborted ? `检索上游超时（${UPSTREAM_TIMEOUT_MS / 1000}s）` : e?.message || String(e),
       });
     } finally {
       clearTimeout(timer);

@@ -2,11 +2,13 @@
  * Vercel Serverless：同域转发
  * - 默认：阿里云千问（Authorization / X-Qwen-Origin）
  * - 若带 x-goog-api-key：转发 Google Gemini（禁止 Authorization，兼容 AIza / AQ.）
+ *
+ * 【硬约束】本文件禁止任何相对/绝对 import。
+ * 历史上引入 ./_firewall 等共享模块会导致打包漏文件 → FUNCTION_INVOCATION_FAILED → HTTP 500。
  * 用法：
  *   /api/qwen?__upstream=/compatible-mode/v1/chat/completions
  *   /api/gemini?__upstream=/v1beta/models/...:generateContent  （rewrite → 本函数）
  */
-import { enforceApiRateLimit } from './_firewall';
 export const config = {
   runtime: 'nodejs',
   maxDuration: 300,
@@ -15,6 +17,50 @@ export const config = {
 const QWEN_FALLBACK = 'https://token-plan.cn-beijing.maas.aliyuncs.com';
 const GEMINI_ORIGIN = 'https://generativelanguage.googleapis.com';
 const UPSTREAM_TIMEOUT_MS = 280_000;
+
+/** 进程内尽力限流（无外部依赖）；失败则放行，绝不拖垮函数 */
+const RL_WINDOW_MS = 60_000;
+const RL_MAX = 360;
+const rlBuckets = new Map<string, { count: number; resetAt: number }>();
+
+const softRateLimit = (req: any, res: any): boolean => {
+  try {
+    const auth =
+      req.headers?.authorization ||
+      req.headers?.['x-upstream-authorization'] ||
+      req.headers?.['x-goog-api-key'] ||
+      '';
+    const xf = req.headers?.['x-forwarded-for'];
+    const ip =
+      typeof xf === 'string' && xf.trim()
+        ? xf.split(',')[0].trim()
+        : Array.isArray(xf) && xf[0]
+          ? String(xf[0])
+          : 'unknown';
+    const key = String(auth || ip).slice(0, 80) || 'anon';
+    const now = Date.now();
+    const cur = rlBuckets.get(key);
+    if (!cur || now >= cur.resetAt) {
+      rlBuckets.set(key, { count: 1, resetAt: now + RL_WINDOW_MS });
+      return true;
+    }
+    if (cur.count >= RL_MAX) {
+      const retry = Math.max(1, Math.ceil((cur.resetAt - now) / 1000));
+      res.setHeader('Retry-After', String(retry));
+      res.setHeader('Cache-Control', 'no-store');
+      res.status(429).json({
+        error: `请求过于频繁，请 ${retry} 秒后再试`,
+        retryAfterSec: retry,
+        route: 'qwen',
+      });
+      return false;
+    }
+    cur.count += 1;
+    return true;
+  } catch {
+    return true;
+  }
+};
 
 const applyCors = (res: { setHeader: (k: string, v: string) => void }) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -79,12 +125,7 @@ export default async function handler(req: any, res: any) {
       res.status(204).end();
       return;
     }
-    // 限流失败不得拖垮整函数（历史上 _firewall 异常 → FUNCTION_INVOCATION_FAILED → HTTP 500）
-    try {
-      if (!enforceApiRateLimit(req, res, 'qwen')) return;
-    } catch (rlErr) {
-      console.warn('[api/qwen] rate limit skipped', rlErr);
-    }
+    if (!softRateLimit(req, res)) return;
 
     const method = String(req.method || 'GET').toUpperCase();
     if (!['GET', 'POST', 'HEAD'].includes(method)) {
@@ -124,8 +165,6 @@ export default async function handler(req: any, res: any) {
       }
 
       if (geminiMode) {
-        // 绝不带 Authorization（Bearer 会触发 ACCESS_TOKEN_TYPE_UNSUPPORTED）
-        // AQ. Auth Key：优先 ?key=；AIza：优先 x-goog-api-key（避免双凭证冲突）
         if (googKey.startsWith('AQ.')) {
           if (!target.searchParams.has('key')) {
             target.searchParams.set('key', googKey);
@@ -142,13 +181,11 @@ export default async function handler(req: any, res: any) {
       } else {
         const auth = req.headers.authorization || req.headers['x-upstream-authorization'];
         if (auth) headers.Authorization = String(auth);
-        // 万相视频等异步任务必须透传，否则上游报不支持同步调用
         const dashAsync =
           req.headers['x-dashscope-async'] || req.headers['X-DashScope-Async'];
         if (typeof dashAsync === 'string' && dashAsync.trim()) {
           headers['X-DashScope-Async'] = dashAsync.trim();
         }
-        // 临时 oss:// 素材解析（百炼上传后图生 3D）
         const ossResolve =
           req.headers['x-dashscope-ossresourceresolve'] ||
           req.headers['X-DashScope-OssResourceResolve'];

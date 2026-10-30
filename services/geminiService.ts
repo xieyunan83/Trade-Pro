@@ -2229,17 +2229,20 @@ const callOpenAICompatible = async (
 
     // Comprehensive Error Message
     let errorMsg = `[Connection Failed] `;
+    const lastMsg = String(lastError?.message || '');
     if (baseUrl.includes('openrouter')) {
         errorMsg += `OpenRouter connection failed. Ensure your API Key is valid and you have credits. If in China, try using a global VPN mode.`;
     } else if (baseUrl.includes('googleapis.com')) {
         errorMsg += `It seems you are using a raw Google URL. Please use the 'Google Official (Native)' preset instead.`;
+    } else if (/FUNCTION_INVOCATION_FAILED/i.test(lastMsg)) {
+        // 不是 API Key 问题：Vercel 云函数自身崩溃（常见于代理打包/import 异常）
+        errorMsg +=
+          '云端代理函数崩溃（FUNCTION_INVOCATION_FAILED）。与 API Key 无关，请等待最新部署生效后重试；若持续失败请联系管理员查看 Vercel 函数日志。';
     } else {
-        errorMsg += `Last Error: ${lastError?.message || 'Network Error'}. Check URL/Network.`;
-        errorMsg += qwenCorsHint(lastError?.message);
-        if (/FUNCTION_INVOCATION_FAILED/i.test(String(lastError?.message || ''))) {
-          errorMsg += ' 同域云函数异常，请重新部署最新代码后重试。';
-        } else if (!isLocalDevHost() && isDomesticQwenEndpoint(baseUrl) && !baseUrl.includes('/functions/v1/qwen-proxy') && !isAppHostedQwenProxy(baseUrl)) {
-          errorMsg += ' 若尚未部署 qwen-proxy，线上测试必失败。';
+        errorMsg += `Last Error: ${lastMsg || 'Network Error'}. Check URL/Network.`;
+        errorMsg += qwenCorsHint(lastMsg);
+        if (!isLocalDevHost() && isDomesticQwenEndpoint(baseUrl) && !baseUrl.includes('/functions/v1/qwen-proxy') && !isAppHostedQwenProxy(baseUrl)) {
+          errorMsg += ' 若尚未部署同域代理，线上测试必失败。';
         }
     }
     throw new Error(errorMsg);
@@ -4389,7 +4392,8 @@ export const digProductIntelligence = async (
         searchKeyword: searchKeyword || undefined,
         searchCountry: searchCountry || undefined,
       });
-      productEvidence = tavilyBundle.text || '';
+      // 控制体量：过大证据会把 /api/qwen 请求打到边缘，加重代理压力
+      productEvidence = String(tavilyBundle.text || '').slice(0, 8_000);
     } catch (e) {
       console.warn('[digProductIntelligence] Tavily skipped', e);
     }
@@ -4688,7 +4692,7 @@ export const digDesignSignals = async (
         searchKeyword: searchKeyword || undefined,
         searchCountry: searchCountry || undefined,
       });
-      designEvidence = tavilyBundle.text || '';
+      designEvidence = String(tavilyBundle.text || '').slice(0, 6_000);
     } catch (e) {
       console.warn('[digDesignSignals] Tavily skipped', e);
     }
