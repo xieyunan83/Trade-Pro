@@ -1,6 +1,7 @@
 /**
  * Vercel Serverless：同域转发 AnySearch MCP（零外部 import）
  */
+import { enforceApiRateLimit } from './_firewall';
 export const config = {
   runtime: 'nodejs',
   maxDuration: 60,
@@ -40,6 +41,7 @@ export default async function handler(req: any, res: any) {
       res.status(204).end();
       return;
     }
+    if (!enforceApiRateLimit(req, res, 'anysearch')) return;
 
     if (req.method !== 'POST') {
       res.status(405).json({ error: 'AnySearch proxy only accepts POST' });

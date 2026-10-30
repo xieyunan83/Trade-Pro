@@ -3,6 +3,7 @@
  * POST JSON: { model, filename?, contentType?, contentBase64 }
  * Header: Authorization: Bearer <apiKey>
  */
+import { enforceApiRateLimit } from './_firewall';
 export const config = {
   runtime: 'nodejs',
   maxDuration: 60,
@@ -31,6 +32,7 @@ export default async function handler(req: any, res: any) {
       res.status(204).end();
       return;
     }
+    if (!enforceApiRateLimit(req, res, 'dashscope')) return;
     if (req.method !== 'POST') {
       res.status(405).json({ error: 'Only POST' });
       return;

@@ -2,6 +2,7 @@
  * Vercel：社交平台 Graph / REST 同域代理（LinkedIn / Meta / X）
  * /api/social?__origin=https://api.linkedin.com&__upstream=/v2/ugcPosts
  */
+import { enforceApiRateLimit } from './_firewall';
 export const config = {
   runtime: 'nodejs',
   maxDuration: 60,
@@ -45,6 +46,7 @@ export default async function handler(req: any, res: any) {
       res.status(204).end();
       return;
     }
+    if (!enforceApiRateLimit(req, res, 'social')) return;
 
     const originRaw = String(req.query?.__origin || req.headers['x-social-origin'] || '').trim();
     let origin = originRaw.replace(/\/$/, '');

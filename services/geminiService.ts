@@ -248,10 +248,19 @@ export const enableGeminiQwenParallelMerge = () => {
 /** 按任务类型读取该项路由（search / analysis / organize 各自独立） */
 export const resolveEngineForTask = (task: TaskType): AIEngineChoice => {
   const map = getTaskAIModels();
-  if (task === 'search') return map.search;
-  if (task === 'analysis') return map.analysis;
-  // email / keywords / chat / 其他整理类 → organize
-  return map.organize;
+  let engine: AIEngineChoice =
+    task === 'search' ? map.search : task === 'analysis' ? map.analysis : map.organize;
+  // 高峰负载：both → 单路，降低上游并行扇出（管理后台显式 both 在空闲时仍生效）
+  if (engine === 'both') {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const gov = require('./loadGovernor') as typeof import('./loadGovernor');
+      engine = gov.collapseEngineUnderLoad(engine) as AIEngineChoice;
+    } catch {
+      /* ignore */
+    }
+  }
+  return engine;
 };
 
 const hasGeminiOfficialKey = (): boolean => {
@@ -2679,6 +2688,15 @@ const generateContentUnified = async (
       enableSearch?: boolean;
     }
 ): Promise<string> => {
+    let heavyId: string | null = null;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const gov = require('./loadGovernor') as typeof import('./loadGovernor');
+      heavyId = gov.beginHeavyJob('ai');
+    } catch {
+      heavyId = null;
+    }
+    try {
     const needsWebSearch =
       typeof opts?.enableSearch === 'boolean'
         ? opts.enableSearch
@@ -2785,6 +2803,17 @@ const generateContentUnified = async (
 
     // 该项选「仅用千问」
     return await runQwen();
+    } finally {
+      if (heavyId) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          const gov = require('./loadGovernor') as typeof import('./loadGovernor');
+          gov.endHeavyJob(heavyId);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
 };
 
 /**

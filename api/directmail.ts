@@ -4,6 +4,7 @@
  */
 import crypto from 'crypto';
 
+import { enforceApiRateLimit } from './_firewall';
 export const config = {
   runtime: 'nodejs',
   maxDuration: 30,
@@ -45,6 +46,7 @@ export default async function handler(req: any, res: any) {
       res.status(204).end();
       return;
     }
+    if (!enforceApiRateLimit(req, res, 'directmail')) return;
     if (req.method !== 'POST') {
       res.status(405).json({ ok: false, error: 'Only POST' });
       return;

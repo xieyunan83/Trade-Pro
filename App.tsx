@@ -676,6 +676,17 @@ const App: React.FC = () => {
               try {
                 const ws = await syncAllWorkspaceData({ upload: false });
                 console.info('[workspace-sync pull]\n' + formatWorkspaceSyncReport(ws));
+                // 可选：合并云端「额度耗尽」指纹，避免多机抢同一把已尽 Key
+                try {
+                  const { refreshExhaustedFromCloud } = await import('./services/apiKeyPool');
+                  await Promise.allSettled(
+                    (['qwen', 'gemini', 'tavily', 'anymailfinder'] as const).map((p) =>
+                      refreshExhaustedFromCloud(p)
+                    )
+                  );
+                } catch {
+                  /* ignore */
+                }
                 if (!cancelled) {
                   setWorkspaceSyncStatus(
                     `已同步 CRM ${ws.crm.merged} · 作业 ${ws.automation.merged} · 历史 ${ws.history.merged}`
@@ -4932,7 +4943,7 @@ const App: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setExcelBatchOpen(true)}
-                className="inline-flex items-center justify-center gap-1.5 rounded-2xl border border-cyan-200 bg-cyan-50 hover:bg-cyan-100 text-cyan-900 px-4 sm:px-5 py-3 text-sm font-extrabold touch-manipulation"
+                className="inline-flex items-center justify-center gap-1.5 rounded-2xl border border-teal-200 bg-teal-50 hover:bg-teal-100 text-teal-900 px-4 sm:px-5 py-3 text-sm font-extrabold touch-manipulation"
                 title="下载模板并上传 Excel，批量背调与产品分析"
               >
                 <FileSpreadsheet size={18} /> Excel 批量

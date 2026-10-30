@@ -3,6 +3,7 @@
  * 用法：/api/tokenhub?__upstream=/v1/api/3d/submit
  * 开发环境走 Vite /tokenhub-api 代理。
  */
+import { enforceApiRateLimit } from './_firewall';
 export const config = {
   runtime: 'nodejs',
   maxDuration: 300,
@@ -56,6 +57,7 @@ export default async function handler(req: any, res: any) {
       res.status(204).end();
       return;
     }
+    if (!enforceApiRateLimit(req, res, 'tokenhub')) return;
     const method = String(req.method || 'GET').toUpperCase();
     if (!['GET', 'POST', 'HEAD'].includes(method)) {
       res.status(405).json({ error: 'Method not allowed' });

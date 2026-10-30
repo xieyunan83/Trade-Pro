@@ -1,6 +1,7 @@
 /**
  * Vercel Serverless：同域转发 Hunter.io（零外部 import）
  */
+import { enforceApiRateLimit } from './_firewall';
 export const config = {
   runtime: 'nodejs',
   maxDuration: 30,
@@ -36,6 +37,7 @@ export default async function handler(req: any, res: any) {
       res.status(204).end();
       return;
     }
+    if (!enforceApiRateLimit(req, res, 'hunter')) return;
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);

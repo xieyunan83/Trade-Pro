@@ -8,6 +8,7 @@ declare global {
     __TP_BOOT_MARK?: (phase?: string) => void;
     __TP_BOOT_FAIL?: (reason?: string) => void;
     __BW_SEED_DONE?: boolean;
+    bwDesktop?: { reportBootOk?: () => void; openExternal?: (url: string) => void };
   }
 }
 
@@ -53,6 +54,11 @@ const mountApp = () => {
         </ErrorBoundary>
       </React.StrictMode>
     );
+    try {
+      window.bwDesktop?.reportBootOk?.();
+    } catch {
+      /* ignore */
+    }
   } catch (e) {
     console.error('[boot] mount failed', e);
     window.__TP_BOOT_FAIL?.('mount-failed');

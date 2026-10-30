@@ -3,6 +3,7 @@
  * 用法：/api/tripo?__upstream=/v2/openapi/task
  * 开发环境走 Vite /tripo-api 代理。
  */
+import { enforceApiRateLimit } from './_firewall';
 export const config = {
   runtime: 'nodejs',
   maxDuration: 300,
@@ -71,6 +72,7 @@ export default async function handler(req: any, res: any) {
       res.status(204).end();
       return;
     }
+    if (!enforceApiRateLimit(req, res, 'tripo')) return;
 
     const method = String(req.method || 'GET').toUpperCase();
     if (!['GET', 'POST', 'HEAD'].includes(method)) {

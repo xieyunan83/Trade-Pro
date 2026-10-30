@@ -136,12 +136,35 @@ export const uploadHistoryChunked = async (items: HistoryItem[]): Promise<number
 
 const emptyBucket = () => ({ local: 0, cloud: 0, merged: 0, uploaded: 0 });
 
+/** 同页串行队列，避免登录「先拉后推」与手动同步叠成写风暴；不丢任何一次 upload */
+let syncChain: Promise<unknown> = Promise.resolve();
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 /**
  * 全量同步：合并本机与云端，先写回本机，再按需推上云端。
  * 硬规则：本函数路径上绝不调用任何云端 delete；本机为空时只拉取，不覆盖云端。
  * 禁止用「空合并结果」覆盖本机已有数据（云端拉取失败时尤甚）。
  */
 export const syncAllWorkspaceData = async (
+  opts?: WorkspaceSyncOptions
+): Promise<WorkspaceSyncReport> => {
+  const wantUpload = opts?.upload !== false;
+  const run = async () => {
+    if (wantUpload) {
+      await sleep(200 + Math.floor(Math.random() * 1800));
+    }
+    return runSyncAllWorkspaceData({ upload: wantUpload });
+  };
+  const p = syncChain.then(run, run) as Promise<WorkspaceSyncReport>;
+  syncChain = p.then(
+    () => undefined,
+    () => undefined
+  );
+  return p;
+};
+
+const runSyncAllWorkspaceData = async (
   opts?: WorkspaceSyncOptions
 ): Promise<WorkspaceSyncReport> => {
   const doUpload = opts?.upload !== false;

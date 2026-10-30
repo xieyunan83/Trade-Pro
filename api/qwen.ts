@@ -6,6 +6,7 @@
  *   /api/qwen?__upstream=/compatible-mode/v1/chat/completions
  *   /api/gemini?__upstream=/v1beta/models/...:generateContent  （rewrite → 本函数）
  */
+import { enforceApiRateLimit } from './_firewall';
 export const config = {
   runtime: 'nodejs',
   maxDuration: 300,
@@ -78,6 +79,7 @@ export default async function handler(req: any, res: any) {
       res.status(204).end();
       return;
     }
+    if (!enforceApiRateLimit(req, res, 'qwen')) return;
 
     const method = String(req.method || 'GET').toUpperCase();
     if (!['GET', 'POST', 'HEAD'].includes(method)) {

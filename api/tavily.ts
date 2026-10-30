@@ -2,6 +2,7 @@
  * Vercel Serverless：同域转发 Tavily API
  * 用法：/api/tavily?__upstream=/search 或 /extract
  */
+import { enforceApiRateLimit } from './_firewall';
 export const config = {
   runtime: 'nodejs',
   maxDuration: 60,
@@ -55,6 +56,7 @@ export default async function handler(req: any, res: any) {
       res.status(204).end();
       return;
     }
+    if (!enforceApiRateLimit(req, res, 'tavily')) return;
     if (req.method !== 'POST') {
       res.status(405).json({ error: 'Tavily proxy only accepts POST' });
       return;

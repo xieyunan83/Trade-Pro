@@ -205,10 +205,10 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
       <div className="tp-login min-h-screen min-h-[100dvh] flex flex-col items-center justify-center p-4 sm:p-6">
         <form
           onSubmit={handleForceChangePassword}
-          className="w-full max-w-md bg-white/95 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-4 border border-white/40"
+          className="tp-login-card w-full max-w-md rounded-[1.35rem] p-6 sm:p-8 space-y-4"
         >
-          <h2 className="text-xl font-black text-slate-900">请修改默认密码</h2>
-          <p className="text-sm text-slate-500 font-medium">
+          <h2 className="text-xl font-extrabold text-slate-900 tracking-tight">请修改默认密码</h2>
+          <p className="text-sm text-slate-500 font-medium leading-relaxed">
             账号 <strong>{forceChange.username}</strong> 仍在使用默认或首次登录密码，须先设置新密码（至少 8 位）才能继续。
           </p>
           {error && <div className="text-sm font-bold text-rose-600">{error}</div>}
@@ -217,7 +217,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
             placeholder="新密码"
             value={newPwd}
             onChange={(e) => setNewPwd(e.target.value)}
-            className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold"
+            className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20 focus:outline-none"
             required
             minLength={8}
           />
@@ -226,14 +226,14 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
             placeholder="确认新密码"
             value={newPwd2}
             onChange={(e) => setNewPwd2(e.target.value)}
-            className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold"
+            className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20 focus:outline-none"
             required
             minLength={8}
           />
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-slate-900 text-white py-3 rounded-xl font-black disabled:opacity-60"
+            className="tp-login-cta w-full text-white py-3 rounded-xl font-extrabold disabled:opacity-60"
           >
             {loading ? '保存中…' : '保存并进入系统'}
           </button>
@@ -263,37 +263,37 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
   return (
     <div className="tp-login min-h-screen min-h-[100dvh] flex flex-col items-center justify-center p-4 sm:p-6 relative overflow-hidden">
       <div
-        className="pointer-events-none absolute inset-0 opacity-[0.45]"
+        className="pointer-events-none absolute inset-0 opacity-[0.4]"
         style={{
           backgroundImage:
-            'linear-gradient(rgba(34,211,238,0.07) 1px, transparent 1px), linear-gradient(90deg, rgba(34,211,238,0.07) 1px, transparent 1px)',
-          backgroundSize: '48px 48px',
-          maskImage: 'radial-gradient(ellipse at center, black 20%, transparent 75%)',
+            'linear-gradient(rgba(45,212,191,0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(45,212,191,0.06) 1px, transparent 1px)',
+          backgroundSize: '52px 52px',
+          maskImage: 'radial-gradient(ellipse at center, black 18%, transparent 74%)',
         }}
       />
-      <div className="pointer-events-none absolute -top-24 left-1/2 -translate-x-1/2 w-[42rem] h-[22rem] rounded-full bg-cyan-500/15 blur-3xl" />
-      <div className="pointer-events-none absolute bottom-0 right-0 w-[28rem] h-[18rem] rounded-full bg-sky-600/10 blur-3xl" />
+      <div className="pointer-events-none absolute -top-28 left-1/2 -translate-x-1/2 w-[44rem] h-[24rem] rounded-full bg-teal-400/15 blur-3xl" />
+      <div className="pointer-events-none absolute bottom-[-4rem] right-[-2rem] w-[30rem] h-[20rem] rounded-full bg-amber-700/10 blur-3xl" />
 
       <div className="text-center mb-8 sm:mb-11 px-2 relative z-10 tp-login-hero">
-        <div className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full border border-cyan-300/35 bg-cyan-400/10 text-cyan-100 text-[11px] font-bold tracking-[0.2em] mb-5 shadow-[0_0_24px_rgba(34,211,238,0.12)]">
-          <Sparkles size={12} className="text-cyan-300" />
-          未来已来
+        <div className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full border border-teal-300/30 bg-teal-400/10 text-teal-100 text-[11px] font-bold tracking-[0.22em] mb-5">
+          <Sparkles size={12} className="text-teal-300" />
+          澄海 · 智造出海
         </div>
-        <h1 className="text-4xl sm:text-5xl md:text-[3.25rem] font-extrabold text-white tracking-tight mb-3 sm:mb-4 drop-shadow-[0_2px_24px_rgba(0,0,0,0.35)]">
+        <h1 className="text-4xl sm:text-5xl md:text-[3.35rem] font-extrabold text-white tracking-tight mb-3 sm:mb-4 drop-shadow-[0_2px_28px_rgba(0,0,0,0.4)]">
           外贸智慧协同
         </h1>
-        <p className="text-base sm:text-lg md:text-xl text-slate-300/90 font-medium tracking-wide">
+        <p className="text-base sm:text-lg md:text-xl text-slate-300/85 font-medium tracking-wide">
           赋能澄海玩具产业升级
         </p>
       </div>
 
-      <div className="relative z-10 bg-white p-6 sm:p-8 md:p-10 rounded-[1.75rem] sm:rounded-[2rem] shadow-signal w-full max-w-md border border-slate-200/80 tp-login-card">
+      <div className="relative z-10 p-6 sm:p-8 md:p-10 rounded-[1.35rem] sm:rounded-[1.5rem] w-full max-w-md tp-login-card">
         <div className="flex items-center gap-3 mb-7 sm:mb-8">
-          <div className="text-cyan-600 bg-gradient-to-br from-cyan-50 to-sky-50 p-2.5 rounded-xl border border-cyan-100/80">
+          <div className="text-teal-700 bg-gradient-to-br from-teal-50 to-stone-50 p-2.5 rounded-xl border border-teal-100/90">
             {pendingUser ? (
-              <Cpu size={26} strokeWidth={2.5} />
+              <Cpu size={26} strokeWidth={2.25} />
             ) : (
-              <UserIcon size={26} strokeWidth={2.5} />
+              <UserIcon size={26} strokeWidth={2.25} />
             )}
           </div>
           <div>
@@ -301,7 +301,9 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
               {pendingUser ? (bindMode === 'remac' ? '确认网卡地址' : '绑定本机设备') : '登录系统'}
             </h2>
             {!pendingUser && (
-              <p className="text-[11px] font-bold text-slate-400 mt-0.5">澄海玩具 · 数字化外贸工作台</p>
+              <p className="text-[11px] font-semibold text-slate-400 mt-0.5 tracking-wide">
+                澄海玩具 · 数字化外贸工作台
+              </p>
             )}
           </div>
         </div>
@@ -337,7 +339,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
                 type="text"
                 value={macInput}
                 onChange={(e) => setMacInput(e.target.value)}
-                className="w-full px-4 py-3.5 rounded-2xl border-2 border-slate-100 focus:border-cyan-500 focus:outline-none font-bold text-base"
+                className="w-full px-4 py-3.5 rounded-xl border border-slate-200 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20 font-bold text-base"
                 placeholder="A1:B2:C3:D4:E5:F6"
                 required
               />
@@ -346,7 +348,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-gradient-to-r from-cyan-600 to-sky-600 hover:brightness-105 text-white py-3.5 rounded-2xl font-extrabold text-lg shadow-signal disabled:opacity-70"
+              className="tp-login-cta w-full hover:brightness-105 text-white py-3.5 rounded-xl font-extrabold text-lg disabled:opacity-70"
             >
               {loading ? (
                 <Loader2 className="animate-spin mx-auto" size={22} />
@@ -382,7 +384,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  className="w-full pl-11 pr-4 py-3.5 rounded-2xl border-2 border-slate-100 focus:border-cyan-500 focus:ring-0 focus:outline-none font-semibold text-base text-slate-950 transition-colors placeholder:text-slate-400"
+                  className="w-full pl-11 pr-4 py-3.5 rounded-xl border border-slate-200 focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20 focus:outline-none font-semibold text-base text-slate-950 transition-colors placeholder:text-slate-400"
                   placeholder="输入用户名"
                   required
                   autoComplete="username"
@@ -402,7 +404,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full pl-11 pr-4 py-3.5 rounded-2xl border-2 border-slate-100 focus:border-cyan-500 focus:ring-0 focus:outline-none font-semibold text-base text-slate-950 transition-colors placeholder:text-slate-400"
+                  className="w-full pl-11 pr-4 py-3.5 rounded-xl border border-slate-200 focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20 focus:outline-none font-semibold text-base text-slate-950 transition-colors placeholder:text-slate-400"
                   placeholder="••••••••"
                   required
                   autoComplete="current-password"
@@ -412,7 +414,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-gradient-to-r from-cyan-600 to-sky-600 hover:brightness-105 active:scale-[0.99] text-white py-3.5 sm:py-4 rounded-2xl font-extrabold text-lg shadow-signal transition-[filter,transform] flex items-center justify-center gap-2 disabled:opacity-70 touch-manipulation"
+              className="tp-login-cta w-full hover:brightness-105 active:scale-[0.99] text-white py-3.5 sm:py-4 rounded-xl font-extrabold text-lg transition-[filter,transform] flex items-center justify-center gap-2 disabled:opacity-70 touch-manipulation"
             >
               {loading ? <Loader2 className="animate-spin" size={22} /> : '进入平台'}
             </button>

@@ -104,15 +104,15 @@ export const ModuleLandingHub: React.FC<Props> = ({
       {/* 单行顶栏 */}
       <section className="tp-hub-hero text-white">
         <div className="relative px-3 sm:px-4 py-2 flex flex-nowrap items-center gap-2 sm:gap-3 min-h-[2.75rem]">
-          <div className="hidden sm:inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-[0.16em] text-cyan-300/90 shrink-0">
-            <Radio size={10} className="tp-live-dot text-emerald-400" /> Hub
+          <div className="hidden sm:inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-[0.18em] text-teal-300/90 shrink-0">
+            <Radio size={10} className="tp-live-dot text-teal-400" /> Hub
           </div>
           <div className="min-w-0 flex-1 flex items-center gap-2 truncate">
-            <span className="text-[13px] sm:text-sm font-black tracking-tight truncate">
+            <span className="text-[13px] sm:text-sm font-extrabold tracking-tight truncate">
               外贸智慧协同
-              <span className="font-semibold text-slate-300 text-[11px] ml-1.5">{currentUser.username}</span>
+              <span className="font-medium text-slate-300 text-[11px] ml-1.5">{currentUser.username}</span>
             </span>
-            <span className="hidden md:inline text-[10px] text-slate-400 font-medium truncate">
+            <span className="hidden md:inline text-[10px] text-slate-400/90 font-medium truncate">
               · 库 {jp.skuCount} · 待调 {jp.pendingTasks} · 已调 {jp.completedBg} · CRM {jp.crmCount}
               {data?.fetchedAt ? ` · ${fmtTime(data.fetchedAt)}` : ''}
             </span>
@@ -122,7 +122,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
               type="button"
               onClick={() => void load(true)}
               disabled={loading}
-              className="inline-flex items-center gap-1 rounded-lg bg-white/10 hover:bg-white/15 border border-white/20 px-2 py-1 text-[10px] font-extrabold disabled:opacity-50"
+              className="inline-flex items-center gap-1 rounded-lg bg-white/10 hover:bg-white/15 border border-white/15 px-2 py-1 text-[10px] font-bold disabled:opacity-50"
             >
               {loading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
               刷新
@@ -131,7 +131,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={onEnterWorkspace}
-                className="inline-flex items-center gap-1 rounded-lg bg-cyan-400 hover:bg-cyan-300 text-slate-950 px-2.5 py-1 text-[10px] font-extrabold"
+                className="inline-flex items-center gap-1 rounded-lg bg-teal-400 hover:bg-teal-300 text-slate-950 px-2.5 py-1 text-[10px] font-extrabold"
               >
                 客户搜索
               </button>
@@ -140,7 +140,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={() => onNavigateModule(ModuleType.PROMO_GENERATOR)}
-                className="inline-flex items-center gap-1 rounded-lg bg-white/10 hover:bg-white/15 border border-white/20 px-2 py-1 text-[10px] font-extrabold"
+                className="inline-flex items-center gap-1 rounded-lg bg-white/10 hover:bg-white/15 border border-white/15 px-2 py-1 text-[10px] font-bold"
               >
                 自动化获客
               </button>
@@ -158,12 +158,12 @@ export const ModuleLandingHub: React.FC<Props> = ({
       {/* 情报三联上移 */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 items-stretch">
         <section className="tp-surface lg:col-span-3 overflow-hidden flex flex-col min-h-[220px] max-h-[320px] lg:max-h-[300px]">
-          <header className="px-3 py-2 border-b border-slate-100 flex items-center gap-2 shrink-0">
-            <div className="h-7 w-7 rounded-lg bg-slate-900 text-cyan-300 flex items-center justify-center">
+          <header className="px-3 py-2 border-b border-slate-100/90 flex items-center gap-2 shrink-0">
+            <div className="h-7 w-7 rounded-lg bg-slate-900 text-teal-300 flex items-center justify-center">
               <Newspaper size={13} />
             </div>
             <div className="min-w-0">
-              <h2 className="text-[13px] font-black text-slate-900 leading-tight">行业新闻</h2>
+              <h2 className="text-[13px] font-extrabold text-slate-900 leading-tight tracking-tight">行业新闻</h2>
               <p className="text-[9px] text-slate-500 font-medium">国内 · 国际 · 优选</p>
             </div>
           </header>
@@ -181,7 +181,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
                   href={n.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="group flex items-start gap-2 rounded-lg hover:bg-cyan-50/80 px-2 py-1.5 transition-colors"
+                  className="group flex items-start gap-2 rounded-lg hover:bg-teal-50/80 px-2 py-1.5 transition-colors"
                 >
                   <span
                     className={`mt-1.5 h-1.5 w-1.5 rounded-full shrink-0 ${
@@ -193,12 +193,12 @@ export const ModuleLandingHub: React.FC<Props> = ({
                     }`}
                   />
                   <div className="min-w-0 flex-1">
-                    <p className="text-[11px] font-bold text-slate-800 leading-snug line-clamp-2 group-hover:text-cyan-900">
+                    <p className="text-[11px] font-bold text-slate-800 leading-snug line-clamp-2 group-hover:text-teal-900">
                       {n.title}
                     </p>
                     <p className="text-[9px] font-bold text-slate-400 mt-0.5">{n.source}</p>
                   </div>
-                  <ExternalLink size={10} className="shrink-0 text-slate-300 mt-1 group-hover:text-cyan-600" />
+                  <ExternalLink size={10} className="shrink-0 text-slate-300 mt-1 group-hover:text-teal-600" />
                 </a>
               ))
             )}
@@ -206,13 +206,13 @@ export const ModuleLandingHub: React.FC<Props> = ({
         </section>
 
         <section className="tp-surface lg:col-span-6 overflow-hidden flex flex-col min-h-[220px] max-h-[320px] lg:max-h-[300px]">
-          <header className="px-3 py-2 border-b border-slate-100 flex items-center justify-between gap-2 shrink-0 bg-gradient-to-r from-slate-50 to-cyan-50/50">
+          <header className="px-3 py-2 border-b border-slate-100/90 flex items-center justify-between gap-2 shrink-0 bg-gradient-to-r from-stone-50/80 to-teal-50/40">
             <div className="flex items-center gap-2 min-w-0">
-              <div className="h-7 w-7 rounded-lg bg-slate-900 text-amber-300 flex items-center justify-center shrink-0">
+              <div className="h-7 w-7 rounded-lg bg-slate-900 text-amber-200 flex items-center justify-center shrink-0">
                 <Sparkles size={13} />
               </div>
               <div className="min-w-0">
-                <h2 className="text-[13px] font-black text-slate-900 leading-tight">新品推荐</h2>
+                <h2 className="text-[13px] font-extrabold text-slate-900 leading-tight tracking-tight">新品推荐</h2>
                 <p className="text-[9px] text-slate-500 font-medium truncate">
                   优先展示产品库带图 SKU · 点击进产品库
                 </p>
@@ -222,7 +222,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={goCatalog}
-                className="shrink-0 inline-flex items-center gap-1 text-[10px] font-black text-cyan-800 bg-cyan-50 hover:bg-cyan-100 border border-cyan-200/80 px-2.5 py-1 rounded-lg"
+                className="shrink-0 inline-flex items-center gap-1 text-[10px] font-extrabold text-teal-800 bg-teal-50 hover:bg-teal-100 border border-teal-200/80 px-2.5 py-1 rounded-lg"
               >
                 去产品库 <ArrowRight size={11} />
               </button>
@@ -242,7 +242,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
                   <button
                     type="button"
                     onClick={goCatalog}
-                    className="text-[11px] font-black text-cyan-800 bg-cyan-50 border border-cyan-200 px-3 py-1.5 rounded-lg"
+                    className="text-[11px] font-extrabold text-teal-800 bg-teal-50 border border-teal-200 px-3 py-1.5 rounded-lg"
                   >
                     去产品库补图
                   </button>
@@ -255,7 +255,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
                     key={p.id}
                     type="button"
                     onClick={goCatalog}
-                    className="group text-left rounded-xl border border-slate-200 hover:border-cyan-300 hover:shadow-sm bg-white overflow-hidden transition-all"
+                    className="group text-left rounded-xl border border-slate-200 hover:border-teal-300 hover:shadow-sm bg-white overflow-hidden transition-all"
                   >
                     <div className="relative aspect-square bg-slate-50 border-b border-slate-100 flex items-center justify-center p-1.5">
                       <img
@@ -270,7 +270,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
                       />
                     </div>
                     <div className="px-1.5 py-1.5">
-                      <p className="text-[10px] font-black text-slate-800 leading-snug line-clamp-2 group-hover:text-cyan-900">
+                      <p className="text-[10px] font-extrabold text-slate-800 leading-snug line-clamp-2 group-hover:text-teal-900">
                         {p.title}
                       </p>
                       {p.specs?.[0] ? (

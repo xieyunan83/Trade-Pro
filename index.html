@@ -57,12 +57,12 @@
             var el = document.getElementById('root');
             if (!el) return;
             el.innerHTML =
-                '<div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;font-family:system-ui,sans-serif;background:#f8fafc;color:#0f172a;text-align:center">' +
+                '<div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;font-family:system-ui,sans-serif;background:#070b14;color:#e2e8f0;text-align:center">' +
                 '<div style="font-size:18px;font-weight:800">页面资源未加载成功</div>' +
-                '<div style="font-size:13px;color:#64748b;max-width:360px;line-height:1.5">多半是发版缓存未刷新。请关闭客户端后重新打开，或按 Ctrl+Shift+R（Mac：Cmd+Shift+R）强制刷新。</div>' +
+                '<div style="font-size:13px;color:#94a3b8;max-width:360px;line-height:1.5">多半是网络超时或发版缓存未刷新。请检查能否打开本站，关闭客户端后重开，或按 Ctrl+Shift+R（Mac：Cmd+Shift+R）强制刷新。</div>' +
                 '<button type="button" onclick="location.href=location.pathname+\'?_boot=\'+Date.now()+location.hash" ' +
-                'style="margin-top:8px;padding:10px 18px;border:0;border-radius:12px;background:#0f172a;color:#fff;font-weight:700;cursor:pointer">立即重试</button>' +
-                '<div style="font-size:11px;color:#94a3b8">原因: ' +
+                'style="margin-top:8px;padding:10px 18px;border:0;border-radius:12px;background:#06b6d4;color:#042f2e;font-weight:700;cursor:pointer">立即重试</button>' +
+                '<div style="font-size:11px;color:#64748b">原因: ' +
                 String(reason || 'unknown') +
                 '</div></div>';
         };
@@ -109,31 +109,31 @@
           extend: {
             colors: {
               ink: {
-                950: '#070b14',
-                900: '#0b1220',
-                800: '#121a2b',
-                700: '#1a2438',
+                950: '#06090f',
+                900: '#0c121c',
+                800: '#151c2a',
+                700: '#1e2838',
               },
               signal: {
-                300: '#67e8f9',
-                400: '#22d3ee',
-                500: '#06b6d4',
-                600: '#0891b2',
+                300: '#5eead4',
+                400: '#2dd4bf',
+                500: '#14b8a6',
+                600: '#0d9488',
               },
               mist: {
-                50: '#f4f7fb',
-                100: '#e8eef6',
-                200: '#d5e0ee',
+                50: '#f3f6f9',
+                100: '#e7edf3',
+                200: '#d3dde8',
               },
             },
             fontFamily: {
-              display: ['"Sora"', 'system-ui', 'sans-serif'],
-              sans: ['"Sora"', 'system-ui', 'sans-serif'],
+              display: ['"Plus Jakarta Sans"', 'system-ui', 'sans-serif'],
+              sans: ['"Plus Jakarta Sans"', 'system-ui', 'sans-serif'],
               mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
             },
             boxShadow: {
-              'signal': '0 0 0 1px rgba(6,182,212,0.18), 0 18px 40px -18px rgba(8,24,48,0.35)',
-              'panel': '0 1px 0 rgba(255,255,255,0.65) inset, 0 12px 32px -16px rgba(15,23,42,0.18)',
+              'signal': '0 0 0 1px rgba(20,184,166,0.2), 0 20px 44px -20px rgba(15,23,42,0.4)',
+              'panel': '0 1px 0 rgba(255,255,255,0.72) inset, 0 14px 36px -18px rgba(15,23,42,0.16)',
             },
           },
         },
@@ -142,7 +142,8 @@
     <script defer src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Sora:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+    <noscript><link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet"></noscript>
     <!--
       导出类 CDN 改为首屏后按需注入，避免与主包抢连接导致 boot-timeout / 客户端假死。
       window.__TP_ENSURE_EXPORT_LIBS() 供导出流程调用。
@@ -209,27 +210,39 @@
     </script>
     <style>
         :root {
-          --tp-ink: #0b1220;
-          --tp-ink-soft: #121a2b;
-          --tp-signal: #06b6d4;
-          --tp-signal-soft: rgba(6, 182, 212, 0.14);
-          --tp-canvas: #e6eef5;
-          /* Linear/Vercel 式：实心底 + 细边，避免全站毛玻璃拖慢滚动 */
-          --tp-card: #ffffff;
+          --tp-ink: #0c121c;
+          --tp-ink-soft: #151c2a;
+          --tp-signal: #14b8a6;
+          --tp-signal-bright: #2dd4bf;
+          --tp-signal-soft: rgba(20, 184, 166, 0.14);
+          --tp-accent-warm: #b8956c;
+          --tp-canvas: #e9eef4;
+          /* 实心底 + 细边：无额外毛玻璃，保滚动流畅 */
+          --tp-card: #fcfdfe;
           --tp-card-elevated: #ffffff;
-          --tp-line: rgba(15, 23, 42, 0.08);
+          --tp-line: rgba(15, 23, 42, 0.07);
           --tp-text: #0f172a;
           --tp-muted: #64748b;
-          --tp-shadow-panel: 0 0 0 1px rgba(15, 23, 42, 0.05), 0 1px 0 rgba(255,255,255,0.9) inset, 0 18px 40px -28px rgba(15, 23, 42, 0.28);
+          --tp-radius: 0.95rem;
+          --tp-shadow-panel:
+            0 0 0 1px rgba(15, 23, 42, 0.045),
+            0 1px 0 rgba(255, 255, 255, 0.92) inset,
+            0 16px 36px -26px rgba(15, 23, 42, 0.32);
         }
 
         html, body, #root { min-height: 100%; min-height: 100dvh; }
         body {
-          font-family: 'Sora', system-ui, sans-serif;
+          font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
           background: var(--tp-canvas);
           color: var(--tp-text);
           -webkit-font-smoothing: antialiased;
           text-rendering: optimizeLegibility;
+          font-feature-settings: 'ss01' on, 'cv11' on;
+          letter-spacing: -0.011em;
+        }
+        ::selection {
+          background: rgba(20, 184, 166, 0.22);
+          color: #0c122c;
         }
 
         @media (prefers-reduced-motion: reduce) {
@@ -242,15 +255,15 @@
           .tp-btn-primary:hover:not(:disabled) { transform: none; }
         }
 
-        /* ——— Unified world canvas：安静指挥台（参考 Linear / Vercel 克制氛围） ——— */
+        /* ——— 精密外贸工作台画布 ——— */
         .tp-app {
           position: relative;
           isolation: isolate;
           background:
-            radial-gradient(1000px 480px at 0% 10%, rgba(6, 182, 212, 0.16), transparent 58%),
-            radial-gradient(720px 360px at 100% 0%, rgba(14, 165, 233, 0.10), transparent 55%),
-            radial-gradient(640px 320px at 70% 100%, rgba(8, 145, 178, 0.08), transparent 50%),
-            linear-gradient(165deg, #eef4f9 0%, #e6eef5 48%, #dce7f0 100%);
+            radial-gradient(920px 420px at 6% 0%, rgba(20, 184, 166, 0.13), transparent 58%),
+            radial-gradient(780px 380px at 100% 8%, rgba(184, 149, 108, 0.09), transparent 52%),
+            radial-gradient(640px 360px at 72% 100%, rgba(13, 148, 136, 0.07), transparent 55%),
+            linear-gradient(168deg, #f2f5f8 0%, #e9eef4 46%, #dde6ef 100%);
         }
         .tp-app::before {
           content: '';
@@ -258,14 +271,14 @@
           inset: 0;
           pointer-events: none;
           z-index: 0;
-          opacity: 0.32;
+          opacity: 0.28;
           background-image:
-            linear-gradient(rgba(6, 182, 212, 0.05) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(6, 182, 212, 0.05) 1px, transparent 1px);
-          background-size: 48px 48px;
-          mask-image: radial-gradient(ellipse at 8% 20%, black 0%, transparent 70%);
+            linear-gradient(rgba(15, 23, 42, 0.035) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(15, 23, 42, 0.035) 1px, transparent 1px);
+          background-size: 56px 56px;
+          mask-image: radial-gradient(ellipse at 12% 8%, black 0%, transparent 72%);
         }
-        /* 导航展开时：能量从左侧渗入整页底层，绝不盖住主区文字 */
+        /* 导航展开：仅青绿渗入，避免紫色光晕 */
         .tp-app::after {
           content: '';
           position: absolute;
@@ -273,15 +286,14 @@
           pointer-events: none;
           z-index: 0;
           opacity: 0;
-          transition: opacity 0.45s ease;
+          transition: opacity 0.4s ease;
           background:
-            radial-gradient(720px 640px at 0% 42%, rgba(34, 211, 238, 0.18), transparent 62%),
-            radial-gradient(520px 420px at 8% 18%, rgba(167, 139, 250, 0.10), transparent 55%);
+            radial-gradient(700px 600px at 0% 42%, rgba(45, 212, 191, 0.16), transparent 62%),
+            radial-gradient(480px 380px at 10% 12%, rgba(184, 149, 108, 0.08), transparent 55%);
         }
         .tp-app.is-nav-expanded::after { opacity: 1; }
         .tp-app > * { position: relative; z-index: 1; }
 
-        /* Main stage：与侧栏同一画布，仅多一层轻雾让卡片浮起 */
         .tp-main-stage {
           background: transparent;
           content-visibility: auto;
@@ -292,96 +304,98 @@
           inset: 0;
           pointer-events: none;
           background:
-            radial-gradient(720px 320px at 40% 0%, rgba(255,255,255,0.45), transparent 65%),
-            radial-gradient(600px 280px at 70% 100%, rgba(6, 182, 212, 0.06), transparent 70%);
+            radial-gradient(760px 300px at 42% 0%, rgba(255,255,255,0.55), transparent 65%),
+            radial-gradient(560px 260px at 78% 100%, rgba(20, 184, 166, 0.05), transparent 70%);
           z-index: 0;
         }
         .tp-main-stage > * { position: relative; z-index: 1; }
 
-        /* ——— 导航坞：窄轨 + 深空玻璃，固定贴边跟随视口 ——— */
+        /* ——— 导航坞 ——— */
         .tp-sidebar {
           background:
             linear-gradient(
-              180deg,
-              rgba(7, 12, 24, 0.97) 0%,
-              rgba(9, 18, 34, 0.96) 50%,
-              rgba(6, 12, 24, 0.98) 100%
+              185deg,
+              rgba(8, 12, 20, 0.985) 0%,
+              rgba(12, 18, 28, 0.975) 48%,
+              rgba(8, 14, 22, 0.99) 100%
             ) !important;
-          border-right: 1px solid rgba(34, 211, 238, 0.18) !important;
+          border-right: 1px solid rgba(45, 212, 191, 0.16) !important;
           box-shadow:
-            1px 0 0 rgba(103, 232, 249, 0.06) inset,
-            18px 0 40px -22px rgba(0, 0, 0, 0.5);
-          /* 侧栏轻模糊即可；过重会拖累整页合成 */
-          backdrop-filter: blur(12px) saturate(1.2);
-          -webkit-backdrop-filter: blur(12px) saturate(1.2);
+            1px 0 0 rgba(94, 234, 212, 0.05) inset,
+            20px 0 44px -24px rgba(0, 0, 0, 0.55);
+          backdrop-filter: blur(10px) saturate(1.15);
+          -webkit-backdrop-filter: blur(10px) saturate(1.15);
         }
         .tp-sidebar::before {
           content: '';
           position: absolute;
           inset: 0;
           pointer-events: none;
-          opacity: 0.45;
+          opacity: 0.38;
           background-image:
-            linear-gradient(rgba(34, 211, 238, 0.06) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(34, 211, 238, 0.05) 1px, transparent 1px);
-          background-size: 18px 18px;
-          mask-image: linear-gradient(180deg, black, transparent 88%);
+            linear-gradient(rgba(45, 212, 191, 0.05) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(45, 212, 191, 0.04) 1px, transparent 1px);
+          background-size: 20px 20px;
+          mask-image: linear-gradient(180deg, black, transparent 90%);
         }
         .tp-sidebar .tp-brand-mark {
-          background: linear-gradient(135deg, #22d3ee 0%, #0891b2 55%, #0e7490 100%);
+          background: linear-gradient(145deg, #5eead4 0%, #14b8a6 48%, #0f766e 100%);
           box-shadow:
-            0 0 0 1px rgba(255,255,255,0.28) inset,
-            0 0 20px rgba(34, 211, 238, 0.55),
-            0 8px 18px -8px rgba(6, 182, 212, 0.8);
+            0 0 0 1px rgba(255,255,255,0.3) inset,
+            0 0 18px rgba(45, 212, 191, 0.45),
+            0 8px 16px -8px rgba(13, 148, 136, 0.75);
         }
         .tp-nav-item {
           position: relative;
-          color: rgba(226, 232, 240, 0.62) !important;
+          color: rgba(226, 232, 240, 0.58) !important;
           border: 1px solid transparent;
+          border-radius: 0.75rem;
+          letter-spacing: -0.01em;
         }
         .tp-nav-item:hover:not(:disabled) {
           color: #f8fafc !important;
-          background: rgba(255, 255, 255, 0.04) !important;
-          border-color: rgba(148, 163, 184, 0.08);
+          background: rgba(255, 255, 255, 0.045) !important;
+          border-color: rgba(148, 163, 184, 0.1);
         }
         .tp-nav-item.is-active {
-          color: #ecfeff !important;
-          background: linear-gradient(90deg, rgba(6, 182, 212, 0.22), rgba(6, 182, 212, 0.06)) !important;
-          border-color: rgba(6, 182, 212, 0.28) !important;
-          box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.08) inset;
+          color: #f0fdfa !important;
+          background: linear-gradient(90deg, rgba(20, 184, 166, 0.24), rgba(20, 184, 166, 0.05)) !important;
+          border-color: rgba(45, 212, 191, 0.26) !important;
+          box-shadow: 0 0 0 1px rgba(20, 184, 166, 0.08) inset;
         }
         .tp-nav-item.is-active::before {
           content: '';
           position: absolute;
           left: 0;
-          top: 20%;
-          bottom: 20%;
+          top: 22%;
+          bottom: 22%;
           width: 3px;
           border-radius: 999px;
-          background: linear-gradient(180deg, #67e8f9, #0891b2);
-          box-shadow: 0 0 12px rgba(34, 211, 238, 0.55);
+          background: linear-gradient(180deg, #5eead4, #0d9488);
+          box-shadow: 0 0 10px rgba(45, 212, 191, 0.5);
         }
 
-        /* ——— Header / scan bar — 与玻璃导航坞同一材质 ——— */
+        /* ——— Header / 搜索条 ——— */
         .tp-header {
-          background: rgba(255, 255, 255, 0.82) !important;
-          border-bottom: 1px solid rgba(15, 23, 42, 0.06) !important;
-          backdrop-filter: blur(10px) saturate(1.1);
-          box-shadow: 0 8px 24px -22px rgba(15, 23, 42, 0.16);
+          background: rgba(252, 253, 254, 0.88) !important;
+          border-bottom: 1px solid rgba(15, 23, 42, 0.055) !important;
+          backdrop-filter: blur(10px) saturate(1.08);
+          box-shadow: 0 10px 28px -24px rgba(15, 23, 42, 0.18);
         }
         .tp-scan-input {
-          background: rgba(255, 255, 255, 0.92) !important;
-          border: 1px solid rgba(15, 23, 42, 0.08) !important;
-          box-shadow: 0 1px 0 rgba(255,255,255,0.85) inset, 0 8px 20px -16px rgba(15, 23, 42, 0.2) !important;
-          letter-spacing: -0.01em;
+          background: rgba(255, 255, 255, 0.94) !important;
+          border: 1px solid rgba(15, 23, 42, 0.075) !important;
+          box-shadow: 0 1px 0 rgba(255,255,255,0.9) inset, 0 10px 22px -18px rgba(15, 23, 42, 0.22) !important;
+          letter-spacing: -0.015em;
           color: #020617 !important;
           -webkit-text-fill-color: #020617;
           font-weight: 600;
+          border-radius: 1rem !important;
         }
         .tp-scan-input:focus {
           background: #fff !important;
-          border-color: rgba(6, 182, 212, 0.55) !important;
-          box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.14) !important;
+          border-color: rgba(20, 184, 166, 0.5) !important;
+          box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.14) !important;
           color: #020617 !important;
           -webkit-text-fill-color: #020617;
         }
@@ -430,9 +444,10 @@
           -webkit-text-fill-color: #020617;
         }
         .tp-btn-primary {
-          background: linear-gradient(135deg, #06b6d4 0%, #0284c7 100%) !important;
-          box-shadow: 0 10px 24px -10px rgba(6, 182, 212, 0.8), 0 1px 0 rgba(255,255,255,0.25) inset !important;
-          letter-spacing: 0.02em;
+          background: linear-gradient(135deg, #14b8a6 0%, #0e7490 100%) !important;
+          box-shadow: 0 12px 26px -12px rgba(13, 148, 136, 0.75), 0 1px 0 rgba(255,255,255,0.28) inset !important;
+          letter-spacing: 0.01em;
+          font-weight: 700;
           transition: transform 0.15s ease, filter 0.15s ease, box-shadow 0.15s ease;
         }
         .tp-btn-primary:hover:not(:disabled) {
@@ -441,7 +456,7 @@
         }
         .tp-btn-primary:disabled { filter: grayscale(0.2); transform: none; }
 
-        /* ——— Elevate cards：实心面板（无 backdrop-filter，保模块滚动/切换流畅） ——— */
+        /* ——— 卡片抬升（无 backdrop-filter） ——— */
         .tp-app main .bg-white {
           background: var(--tp-card-elevated) !important;
           box-shadow: var(--tp-shadow-panel);
@@ -450,22 +465,29 @@
         .tp-app main .border-slate-100 {
           border-color: var(--tp-line) !important;
         }
-        /* 着陆页表面：投资人一眼能感到「产品级」层次 */
         .tp-landing .tp-surface {
-          background: #fff;
+          background: var(--tp-card);
           border: 1px solid var(--tp-line);
           box-shadow: var(--tp-shadow-panel);
-          border-radius: 1.15rem;
+          border-radius: var(--tp-radius);
+          transition: box-shadow 0.2s ease, border-color 0.2s ease;
+        }
+        .tp-landing .tp-surface:hover {
+          border-color: rgba(20, 184, 166, 0.16);
+          box-shadow:
+            0 0 0 1px rgba(20, 184, 166, 0.06),
+            0 18px 40px -28px rgba(15, 23, 42, 0.28);
         }
         .tp-landing .tp-hub-hero {
           position: relative;
           overflow: hidden;
-          border-radius: 0.95rem;
-          border: 1px solid rgba(34, 211, 238, 0.2);
+          border-radius: 0.9rem;
+          border: 1px solid rgba(45, 212, 191, 0.18);
           background:
-            radial-gradient(ellipse 70% 140% at 100% 0%, rgba(34, 211, 238, 0.18), transparent 55%),
-            linear-gradient(115deg, #05080f 0%, #0b1524 48%, #0c2a32 100%);
-          box-shadow: 0 12px 28px -20px rgba(8, 24, 48, 0.5);
+            radial-gradient(ellipse 65% 130% at 100% 0%, rgba(45, 212, 191, 0.2), transparent 55%),
+            radial-gradient(ellipse 40% 80% at 0% 100%, rgba(184, 149, 108, 0.12), transparent 50%),
+            linear-gradient(118deg, #070b12 0%, #0d1520 46%, #0a2a28 100%);
+          box-shadow: 0 14px 32px -22px rgba(8, 24, 48, 0.55);
         }
         /* 小媛可拖动 FAB */
         .tp-xiaoyuan-fab {
@@ -491,60 +513,63 @@
           border: 1px solid rgba(255, 255, 255, 0.1);
         }
         .tp-landing .tp-kpi-pill strong {
-          color: #67e8f9;
+          color: #5eead4;
           font-variant-numeric: tabular-nums;
         }
-        /* Soften dead grey wells → cool mist panels */
         .tp-app main .bg-slate-50,
         .tp-app main .bg-slate-50\/50,
         .tp-app main .bg-slate-50\/80 {
-          background: rgba(241, 248, 252, 0.92) !important;
+          background: rgba(243, 247, 250, 0.94) !important;
         }
         .tp-app main .hover\:bg-slate-50:hover,
         .tp-app main .hover\:bg-slate-50\/50:hover {
-          background: rgba(236, 246, 251, 0.95) !important;
+          background: rgba(236, 244, 248, 0.96) !important;
         }
         .tp-app main .rounded-3xl,
         .tp-app main .rounded-2xl {
-          border-radius: 1.1rem !important;
+          border-radius: var(--tp-radius) !important;
+        }
+        .tp-app main h1,
+        .tp-app main h2,
+        .tp-app main h3 {
+          letter-spacing: -0.035em;
+          color: #0c121c;
         }
         .tp-app main h2.font-black,
         .tp-app main h3.font-black {
-          letter-spacing: -0.03em;
-          color: #0b1220;
+          font-weight: 800 !important;
         }
         .tp-app main label.text-slate-400,
         .tp-app main .text-xs.font-black.text-slate-400 {
           color: #64748b !important;
-          letter-spacing: 0.08em;
+          letter-spacing: 0.1em;
+          font-weight: 700 !important;
         }
-        /* Form controls: crisp, quiet focus */
         .tp-app main input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
         .tp-app main textarea,
         .tp-app main select {
-          background: rgba(255, 255, 255, 0.95) !important;
-          border-color: rgba(15, 23, 42, 0.09) !important;
+          background: rgba(255, 255, 255, 0.96) !important;
+          border-color: rgba(15, 23, 42, 0.085) !important;
           transition: border-color 0.15s ease, box-shadow 0.15s ease;
+          border-radius: 0.85rem;
         }
         .tp-app main input:not([type="checkbox"]):not([type="radio"]):focus,
         .tp-app main textarea:focus,
         .tp-app main select:focus {
-          border-color: rgba(6, 182, 212, 0.5) !important;
-          box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.12);
+          border-color: rgba(20, 184, 166, 0.48) !important;
+          box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.12);
           outline: none;
         }
-        /* Primary dark CTAs → ink + cyan edge (less flat black) */
         .tp-app main button.bg-slate-900,
         .tp-app main .bg-slate-900 {
-          background: linear-gradient(135deg, #0f172a 0%, #134e5e 100%) !important;
-          box-shadow: 0 10px 24px -12px rgba(8, 145, 178, 0.45), 0 1px 0 rgba(255,255,255,0.08) inset;
+          background: linear-gradient(135deg, #0c121c 0%, #134e4a 100%) !important;
+          box-shadow: 0 10px 24px -12px rgba(13, 148, 136, 0.42), 0 1px 0 rgba(255,255,255,0.08) inset;
         }
         .tp-app main button.bg-slate-900:hover,
         .tp-app main .hover\:bg-blue-600:hover {
           filter: brightness(1.06);
         }
 
-        /* Module panel title strip */
         .tp-panel-title {
           display: flex;
           align-items: center;
@@ -556,17 +581,16 @@
           justify-content: center;
           width: 2.5rem;
           height: 2.5rem;
-          border-radius: 0.85rem;
-          background: linear-gradient(135deg, rgba(6,182,212,0.16), rgba(14,165,233,0.08));
-          color: #0891b2;
-          border: 1px solid rgba(6, 182, 212, 0.18);
+          border-radius: 0.8rem;
+          background: linear-gradient(145deg, rgba(20,184,166,0.16), rgba(184,149,108,0.08));
+          color: #0d9488;
+          border: 1px solid rgba(20, 184, 166, 0.18);
           flex-shrink: 0;
         }
 
-        /* Unify loud accent buttons into signal system */
         .tp-app main .bg-violet-600,
         .tp-app main .bg-purple-600 {
-          background: linear-gradient(135deg, #0e7490, #0891b2) !important;
+          background: linear-gradient(135deg, #0f766e, #14b8a6) !important;
         }
         .tp-app main .hover\:bg-violet-700:hover,
         .tp-app main .hover\:bg-purple-700:hover {
@@ -575,8 +599,22 @@
         .tp-app main .bg-emerald-600 {
           background: linear-gradient(135deg, #059669, #0d9488) !important;
         }
-        .tp-app main .bg-blue-600:not(.tp-keep) {
-          background: linear-gradient(135deg, #0284c7, #0891b2) !important;
+        .tp-app main .bg-blue-600:not(.tp-keep),
+        .tp-app main .bg-cyan-600 {
+          background: linear-gradient(135deg, #0d9488, #0e7490) !important;
+        }
+        .tp-app main .bg-cyan-50,
+        .tp-app main .bg-sky-50 {
+          background: rgba(240, 253, 250, 0.9) !important;
+        }
+        .tp-app main .text-cyan-700,
+        .tp-app main .text-cyan-800,
+        .tp-app main .text-cyan-900 {
+          color: #0f766e !important;
+        }
+        .tp-app main .border-cyan-200,
+        .tp-app main .border-cyan-100 {
+          border-color: rgba(20, 184, 166, 0.28) !important;
         }
 
         /* 更快切入：模块切换几乎无感知延迟 */
@@ -821,35 +859,52 @@
           overflow: hidden;
         }
 
-        .custom-scrollbar::-webkit-scrollbar { width: 7px; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb {
-          background: linear-gradient(180deg, rgba(6,182,212,0.35), rgba(100,116,139,0.35));
+          background: linear-gradient(180deg, rgba(20,184,166,0.4), rgba(100,116,139,0.28));
           border-radius: 999px;
         }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(6, 182, 212, 0.55); }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(20, 184, 166, 0.55); }
         .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
         .scrollbar-hide::-webkit-scrollbar { display: none; }
         .touch-manipulation { touch-action: manipulation; }
 
-        /* Login atmosphere */
+        /* Login atmosphere — 深空 + 青绿/暖金点缀，无 opacity 入场动画 */
         .tp-login {
           min-height: 100dvh;
           background:
-            radial-gradient(900px 500px at 20% 10%, rgba(6, 182, 212, 0.26), transparent 55%),
-            radial-gradient(700px 400px at 90% 80%, rgba(14, 165, 233, 0.2), transparent 50%),
-            radial-gradient(500px 280px at 50% 100%, rgba(8, 145, 178, 0.12), transparent 60%),
-            linear-gradient(160deg, #070b14 0%, #0b1220 40%, #101a2e 100%);
+            radial-gradient(880px 480px at 18% 8%, rgba(45, 212, 191, 0.22), transparent 55%),
+            radial-gradient(720px 420px at 92% 78%, rgba(184, 149, 108, 0.14), transparent 52%),
+            radial-gradient(520px 300px at 48% 100%, rgba(13, 148, 136, 0.12), transparent 58%),
+            linear-gradient(158deg, #06090f 0%, #0c121c 42%, #0f1a24 100%);
           color: #e2e8f0;
+        }
+        .tp-login-card {
+          background: #fcfdfe !important;
+          border: 1px solid rgba(255, 255, 255, 0.55) !important;
+          box-shadow:
+            0 0 0 1px rgba(15, 23, 42, 0.04),
+            0 28px 60px -28px rgba(0, 0, 0, 0.55),
+            0 0 40px -12px rgba(45, 212, 191, 0.2) !important;
+        }
+        .tp-login-hero h1 {
+          letter-spacing: -0.045em;
+          font-weight: 800;
+        }
+        .tp-login .tp-login-cta {
+          background: linear-gradient(135deg, #14b8a6 0%, #0e7490 100%) !important;
+          box-shadow: 0 14px 28px -12px rgba(13, 148, 136, 0.7), 0 1px 0 rgba(255,255,255,0.25) inset;
         }
     </style>
 
 </head>
 <body>
     <div id="root">
-      <div id="tp-boot" style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;font-family:system-ui,sans-serif;color:#94a3b8;background:#070b14;">
-        <div style="font-size:15px;font-weight:700;color:#e2e8f0;">外贸智慧协同</div>
-        <div style="font-size:13px;">正在加载登录界面…</div>
+      <div id="tp-boot" style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;box-sizing:border-box;font-family:system-ui,sans-serif;color:#94a3b8;background:#070b14;text-align:center;">
+        <div style="font-size:18px;font-weight:800;color:#e2e8f0;letter-spacing:0.02em;">外贸智慧协同</div>
+        <div style="font-size:13px;color:#cbd5e1;">正在加载登录界面…</div>
+        <div style="font-size:11px;color:#64748b;max-width:320px;line-height:1.5;">若长时间无变化，请检查网络后按 Ctrl+Shift+R 强制刷新，或重新打开客户端。</div>
       </div>
     </div>
     <script type="module" src="./index.tsx"></script>

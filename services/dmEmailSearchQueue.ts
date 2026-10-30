@@ -34,7 +34,19 @@ export interface DmEmailSearchJob {
 
 type Listener = (jobs: DmEmailSearchJob[]) => void;
 
-const MAX_CONCURRENT = 3;
+const MAX_CONCURRENT_BASE = 3;
+const maxConcurrentNow = (): number => {
+  try {
+    // 高峰降并发，空闲保持 3
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const gov = require('./loadGovernor') as typeof import('./loadGovernor');
+    if (gov.shouldPreferSingleEngine()) return 1;
+    if (gov.getHeavyJobCount() >= 2) return 2;
+  } catch {
+    /* ignore */
+  }
+  return MAX_CONCURRENT_BASE;
+};
 /** 超过该时长仍为 running 的任务视为卡住，允许重新入队 */
 const JOB_STALE_MS = 20 * 60 * 1000;
 const jobs: DmEmailSearchJob[] = [];
@@ -133,7 +145,7 @@ const pump = async () => {
   try {
     while (true) {
       const running = jobs.filter((j) => j.status === 'running').length;
-      if (running >= MAX_CONCURRENT) break;
+      if (running >= maxConcurrentNow()) break;
       const next = jobs.find((j) => j.status === 'queued');
       if (!next) break;
 
@@ -215,7 +227,7 @@ const pump = async () => {
     // 若仍有空位与排队，再泵一次（处理竞态）
     const running = jobs.filter((j) => j.status === 'running').length;
     const queued = jobs.some((j) => j.status === 'queued');
-    if (queued && running < MAX_CONCURRENT) {
+    if (queued && running < maxConcurrentNow()) {
       setTimeout(() => {
         void pump();
       }, 0);

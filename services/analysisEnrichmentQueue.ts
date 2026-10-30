@@ -336,6 +336,13 @@ const pump = async () => {
         await new Promise((r) => setTimeout(r, 800));
         continue;
       }
+      try {
+        const { waitForLocalAiSlot } = await import('./loadGovernor');
+        await waitForLocalAiSlot(() => shouldStop);
+        if (shouldStop) break;
+      } catch {
+        /* ignore */
+      }
       await Promise.all(next.map((job) => runOne(job)));
       await new Promise((r) => setTimeout(r, JOB_GAP_MS));
     }

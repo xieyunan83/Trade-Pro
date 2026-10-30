@@ -94,10 +94,10 @@ export const CreativeStorageBadge: React.FC<Props> = ({ className = '', compact 
       className={`rounded-xl border px-3 py-2 flex flex-wrap items-center gap-2 text-xs font-bold ${
         warn
           ? 'border-amber-300 bg-amber-50 text-amber-950'
-          : 'border-cyan-200/80 bg-cyan-50/50 text-slate-700'
+          : 'border-teal-200/70 bg-teal-50/40 text-slate-700'
       } ${className}`}
     >
-      <HardDrive size={14} className="text-cyan-700 shrink-0" />
+      <HardDrive size={14} className="text-teal-700 shrink-0" />
       <div className="min-w-0 flex-1">
         <div>
           本机素材库（演示期）· {count} 个 · {formatBytes(bytes)} /{' '}
@@ -108,7 +108,7 @@ export const CreativeStorageBadge: React.FC<Props> = ({ className = '', compact 
         </div>
         <div className="mt-1.5 h-1 rounded-full bg-slate-200/80 overflow-hidden max-w-xs">
           <div
-            className={`h-full transition-all ${warn ? 'bg-amber-500' : 'bg-cyan-500'}`}
+            className={`h-full transition-all ${warn ? 'bg-amber-500' : 'bg-teal-500'}`}
             style={{ width: `${pct}%` }}
           />
         </div>

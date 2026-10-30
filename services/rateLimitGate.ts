@@ -33,6 +33,12 @@ export const noteRateLimited = (retryAfterSec = 60) => {
   const until = Date.now() + sec * 1000;
   if (until > cooldownUntil) cooldownUntil = until;
   notify();
+  try {
+    // 跨标签 / 同机其它页共享冷却，减轻惊群
+    void import('./loadGovernor').then((m) => m.publishSharedCooldown(until));
+  } catch {
+    /* ignore */
+  }
 };
 
 export const isRateLimitError = (err: unknown): boolean => {
@@ -59,10 +65,22 @@ export const shortErrorMessage = (err: unknown, max = 180): string => {
 
 /** 若在冷却中则等待到解锁（带轻微抖动，避免惊群） */
 export const waitForApiCooldown = async (shouldStop?: () => boolean): Promise<void> => {
-  while (Date.now() < cooldownUntil) {
+  const sharedUntil = (): number => {
+    try {
+      // 同步读，避免循环 import 初始化问题
+      if (typeof localStorage === 'undefined') return 0;
+      return Number(localStorage.getItem('trade_scout_shared_cooldown_until') || 0) || 0;
+    } catch {
+      return 0;
+    }
+  };
+  while (true) {
+    const until = Math.max(cooldownUntil, sharedUntil());
+    if (Date.now() >= until) break;
+    if (until > cooldownUntil) cooldownUntil = until;
     if (shouldStop?.()) return;
     notify();
-    const rem = cooldownUntil - Date.now();
+    const rem = until - Date.now();
     await new Promise((r) => setTimeout(r, Math.min(1000, Math.max(200, rem))));
   }
   notify();

@@ -144,6 +144,24 @@ export const markPoolKeyExhausted = (provider: ApiKeyPoolProvider, key: string) 
   set.add(k);
   writeExhausted(provider, set);
   console.warn(`[keypool:${provider}] exhausted this month:`, maskApiKey(k));
+  // 跨客户端共享耗尽指纹（表可选；失败不影响本机）
+  try {
+    void import('./keyQuotaCloud').then((m) => m.pushKeyExhaustedCloud(provider, k));
+  } catch {
+    /* ignore */
+  }
+  try {
+    if (typeof BroadcastChannel !== 'undefined') {
+      new BroadcastChannel('trade_pro_key_pool').postMessage({
+        type: 'exhausted',
+        provider,
+        month: monthKey(),
+        fingerprintHint: k.slice(0, 8),
+      });
+    }
+  } catch {
+    /* ignore */
+  }
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const mod = require('./deptApiKeys') as typeof import('./deptApiKeys');
@@ -168,6 +186,27 @@ export const markPoolKeyExhausted = (provider: ApiKeyPoolProvider, key: string) 
   } catch {
     const all = listPoolKeys(provider).filter((x) => x !== k);
     if (all.length) setPoolKeys(provider, [...all, k]);
+  }
+};
+
+/** 后台拉取云端耗尽指纹并合并到本机（可在登录后调用） */
+export const refreshExhaustedFromCloud = async (provider: ApiKeyPoolProvider): Promise<number> => {
+  try {
+    const { pullExhaustedFingerprints, fingerprintApiKey } = await import('./keyQuotaCloud');
+    const fps = await pullExhaustedFingerprints(provider);
+    if (!fps.size) return 0;
+    const set = readExhausted(provider);
+    let n = 0;
+    for (const key of listPoolKeys(provider)) {
+      if (fps.has(fingerprintApiKey(key)) && !set.has(key)) {
+        set.add(key);
+        n += 1;
+      }
+    }
+    if (n) writeExhausted(provider, set);
+    return n;
+  } catch {
+    return 0;
   }
 };
 

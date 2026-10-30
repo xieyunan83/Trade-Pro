@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>无法连接 — 外贸智慧协同</title>
+  <style>
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(900px 500px at 20% 10%, rgba(6, 182, 212, 0.22), transparent 55%),
+        linear-gradient(160deg, #070b14 0%, #0b1220 45%, #101a2e 100%);
+      color: #e2e8f0;
+    }
+    .wrap {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      padding: 28px 20px;
+      text-align: center;
+      box-sizing: border-box;
+    }
+    h1 { margin: 0; font-size: 20px; font-weight: 800; }
+    p { margin: 0; max-width: 420px; line-height: 1.55; font-size: 13px; color: #94a3b8; }
+    .code {
+      margin-top: 4px;
+      font-size: 11px;
+      color: #64748b;
+      word-break: break-all;
+      max-width: 480px;
+    }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-top: 10px; }
+    button {
+      border: 0;
+      border-radius: 12px;
+      padding: 11px 18px;
+      font-weight: 700;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .primary { background: #06b6d4; color: #042f2e; }
+    .ghost { background: rgba(255,255,255,0.08); color: #e2e8f0; }
+    ul {
+      text-align: left;
+      max-width: 420px;
+      margin: 8px 0 0;
+      padding-left: 18px;
+      color: #94a3b8;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>无法打开登录界面</h1>
+    <p>
+      客户端需要联网加载线上站点。当前网络访问失败或超时（常见于弱网、公司防火墙，或线路访问海外节点不稳定）。
+    </p>
+    <div class="code" id="detail">正在诊断…</div>
+    <div class="row">
+      <button class="primary" type="button" id="btn-retry">立即重试</button>
+      <button class="ghost" type="button" id="btn-browser">用系统浏览器打开</button>
+    </div>
+    <ul>
+      <li>请确认本机能打开网站：<span id="origin-label">https://babyworld.ltd</span></li>
+      <li>可换手机热点 / 关闭代理后再点「立即重试」</li>
+      <li>若浏览器也打不开，需要管理员把站点接到国内可访问的 CDN / 线路</li>
+    </ul>
+  </div>
+  <script>
+    (function () {
+      var params = new URLSearchParams(location.search || '');
+      var origin = params.get('origin') || 'https://babyworld.ltd';
+      var reason = params.get('reason') || 'network';
+      var err = params.get('err') || '';
+      document.getElementById('origin-label').textContent = origin;
+      document.getElementById('detail').textContent =
+        '原因: ' + reason + (err ? ' · ' + err : '') + ' · 目标: ' + origin;
+      document.getElementById('btn-retry').onclick = function () {
+        location.href = origin.replace(/\/$/, '') + '/?_boot=' + Date.now();
+      };
+      document.getElementById('btn-browser').onclick = function () {
+        if (window.bwDesktop && typeof window.bwDesktop.openExternal === 'function') {
+          window.bwDesktop.openExternal(origin);
+        } else {
+          location.href = origin;
+        }
+      };
+    })();
+  </script>
+</body>
+</html>
