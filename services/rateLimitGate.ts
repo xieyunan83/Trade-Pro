@@ -50,7 +50,7 @@ export const isRateLimitError = (err: unknown): boolean => {
 export const isTransientAnalysisError = (err: unknown): boolean => {
   if (isRateLimitError(err)) return true;
   const msg = String((err as any)?.message || err || '');
-  return /timeout|超时|Failed to fetch|NetworkError|network|ECONNRESET|ENOTFOUND|502|503|504|546|aborted|AbortError|未返回有效 JSON|Structure mismatch|Empty response|空响应|CONNECTION_FAILED|Connection Failed|资源不足|FUNCTION_INVOCATION|model_not_found|ModelNotFound|不支持该模型|模型不存在/i.test(
+  return /timeout|超时|Failed to fetch|NetworkError|network|ECONNRESET|ENOTFOUND|HTTP 500|500:|502|503|504|546|aborted|AbortError|未返回有效 JSON|Structure mismatch|Empty response|空响应|CONNECTION_FAILED|Connection Failed|qwen proxy crashed|资源不足|FUNCTION_INVOCATION|model_not_found|ModelNotFound|不支持该模型|模型不存在/i.test(
     msg
   );
 };

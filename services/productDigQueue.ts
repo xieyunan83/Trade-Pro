@@ -221,11 +221,13 @@ const runOne = async (job: ProductDigJob) => {
 
   try {
     const hist = resolveHistoryHandler?.(job.clientId);
-    const merged = await withRateLimitRetry(() =>
-      digProductIntelligence(job.domain, hist?.data || null, {
-        searchKeyword: job.searchKeyword || hist?.data?.searchKeyword,
-        searchCountry: job.searchCountry || hist?.data?.searchCountry,
-      })
+    const merged = await withRateLimitRetry(
+      () =>
+        digProductIntelligence(job.domain, hist?.data || null, {
+          searchKeyword: job.searchKeyword || hist?.data?.searchKeyword,
+          searchCountry: job.searchCountry || hist?.data?.searchCountry,
+        }),
+      { retryTransient: true, maxAttempts: 3, baseWaitSec: 20 }
     );
 
     job.status = 'completed';

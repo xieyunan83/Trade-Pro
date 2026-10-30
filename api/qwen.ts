@@ -79,7 +79,12 @@ export default async function handler(req: any, res: any) {
       res.status(204).end();
       return;
     }
-    if (!enforceApiRateLimit(req, res, 'qwen')) return;
+    // 限流失败不得拖垮整函数（历史上 _firewall 异常 → FUNCTION_INVOCATION_FAILED → HTTP 500）
+    try {
+      if (!enforceApiRateLimit(req, res, 'qwen')) return;
+    } catch (rlErr) {
+      console.warn('[api/qwen] rate limit skipped', rlErr);
+    }
 
     const method = String(req.method || 'GET').toUpperCase();
     if (!['GET', 'POST', 'HEAD'].includes(method)) {

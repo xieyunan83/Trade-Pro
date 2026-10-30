@@ -82,7 +82,7 @@ export const ProductDigPanel: React.FC = () => {
                     <div className="text-[10px] font-bold text-slate-400 truncate">{job.domain}</div>
                     <div className={`text-[10px] font-black mt-1 ${ui.tone}`}>
                       {ui.label}
-                      {job.status === 'failed' && job.error ? ` · ${job.error.slice(0, 40)}` : ''}
+                      {job.status === 'failed' && job.error ? ` · ${job.error.slice(0, 120)}` : ''}
                     </div>
                   </div>
                   {(job.status === 'completed' || job.status === 'failed') && (

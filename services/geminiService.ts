@@ -2537,6 +2537,10 @@ const callQwenChat = async (
     const msg = msg0;
     const isTimeout = /超时|timeout|AbortError|504|Gateway Timeout|上游超时/i.test(msg);
     const is546 = /546|WORKER_RESOURCE|云端代理算力不足/i.test(msg);
+    /** 代理/上游偶发 5xx、FUNCTION_INVOCATION_FAILED → 客户端包装成 Connection Failed */
+    const is5xxProxy =
+      /HTTP 5\d\d|Connection Failed|FUNCTION_INVOCATION|qwen proxy crashed|502|503/i.test(msg) &&
+      !isTimeout;
     const is429 = isRateErr || (/429|rate\s*limit|quota exceeded/i.test(msg) && !isQuotaErr);
 
     // 限流：短退避后自动重试（最多 2 次），避免整页反复「冷却中」
@@ -2635,13 +2639,16 @@ const callQwenChat = async (
       }
     }
 
-    // 线上代理超时 / 546：降级为不联网再试一次（保证功能可用）
+    // 线上代理超时 / 546 / 5xx：降级为不联网再试一次（保证背调补全/品类补做可用）
     const degradeNoSearch =
       options.enableSearch &&
-      (is546 || (isTimeout && (viaSupabase || (viaAppProxy && !isLocalDevHost()))));
+      (is546 ||
+        is5xxProxy ||
+        (isTimeout && (viaSupabase || (viaAppProxy && !isLocalDevHost()))));
     if (degradeNoSearch) {
-      console.warn('[Qwen] 云端代理受限，降级为不联网重试…');
+      console.warn('[Qwen] 云端代理受限/5xx，降级为不联网重试…');
       try {
+        await new Promise((r) => setTimeout(r, is5xxProxy ? 1500 : 400));
         return await runOnce(undefined);
       } catch (e2: any) {
         throw new Error(
@@ -4423,11 +4430,20 @@ Output JSON only:
     "matchTags": [],
     "sourceNote": "基于官网/公开证据整理，未编造"
   },
-  "products": [{ "name": "", "category": "", "role": "sell", "tags": [], "retailPrice": "", "retailPriceCNY": 0, "estimatedFOBPriceCNY": 0, "priceMinCNY": 0, "priceMaxCNY": 0, "pricingStrategy": "", "pitchPoint": "", "features": "", "colors": "", "packaging": "", "keywordMatch": false }]
+  "products": [{ "name": "", "category": "", "role": "sell", "tags": [], "retailPrice": "", "retailPriceCNY": 0, "estimatedFOBPriceCNY": 0, "priceMinCNY": 0, "priceMaxCNY": 0, "pricingStrategy": "", "pitchPoint": "", "features": "", "colors": "", "packaging": "",       "keywordMatch": false }]
 }
 `;
 
-  const text = await generateContentUnified('analysis', prompt, SYSTEM_INSTRUCTION, true);
+  // 已有 Tavily 证据时关闭模型侧联网，避免 enable_search + 大 prompt 打爆代理（HTTP 500）
+  const text = await generateContentUnified(
+    'analysis',
+    prompt,
+    SYSTEM_INSTRUCTION,
+    true,
+    [],
+    [],
+    { enableSearch: !productEvidence.trim() }
+  );
   const ai = extractJson(text) || {};
 
   const products = (Array.isArray(ai.products) ? ai.products : []).map((p: any) => {
@@ -4663,11 +4679,27 @@ export const digDesignSignals = async (
   const hasDomain = Boolean(canonicalDomain && canonicalDomain.includes('.') && !/\s/.test(canonicalDomain));
   const companyName = existing?.companyInfo?.name || rawInput;
 
+  let designEvidence = '';
+  if (hasDomain) {
+    try {
+      const tavilyBundle = await gatherTavilyCompanyEvidenceBundle({
+        domain: canonicalDomain,
+        companyHint: companyName,
+        searchKeyword: searchKeyword || undefined,
+        searchCountry: searchCountry || undefined,
+      });
+      designEvidence = tavilyBundle.text || '';
+    } catch (e) {
+      console.warn('[digDesignSignals] Tavily skipped', e);
+    }
+  }
+
   const prompt = `
 公司: "${companyName}" / 网站: "${hasDomain ? canonicalDomain : rawInput}"
 任务: 外贸「设计匹配信号」轻量补全。只输出 JSON。语言：简体中文。
 ${searchKeyword ? `线索关键词: ${searchKeyword}` : ''}
 ${searchCountry ? `市场: ${searchCountry}` : ''}
+${designEvidence ? `=== WEB EVIDENCE ===\n${designEvidence}\n=== END ===` : ''}
 
 【反幻觉硬规则】
 - 仅采信官网/店铺/可核验公开页；无证据字段必须写「公开信息未找到」。
@@ -4720,7 +4752,15 @@ JSON:
 products 最多 8 条；role=sell|procure|both。宁缺毋滥。
 `;
 
-  const text = await generateContentUnified('analysis', prompt, SYSTEM_INSTRUCTION, true);
+  const text = await generateContentUnified(
+    'analysis',
+    prompt,
+    SYSTEM_INSTRUCTION,
+    true,
+    [],
+    [],
+    { enableSearch: !designEvidence.trim() }
+  );
   const ai = extractJson(text) || {};
 
   const looksMissing = (s: string) =>

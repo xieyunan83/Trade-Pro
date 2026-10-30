@@ -262,35 +262,43 @@ const runOne = async (job: EnrichmentJob) => {
       // 无历史：先轻量设计信号拉骨架，再决策（品类深挖需要已有分析时更稳）
       job.steps = '公开信息补全';
       notify();
-      data = await withRateLimitRetry(() =>
-        digDesignSignals(job.domain, null, { searchKeyword: kw, searchCountry: country })
+      data = await withRateLimitRetry(
+        () => digDesignSignals(job.domain, null, { searchKeyword: kw, searchCountry: country }),
+        { retryTransient: true, maxAttempts: 3, baseWaitSec: 20 }
       );
     } else {
       if (localNeedsProductDig(data)) {
         job.steps = '补采品类价带';
         notify();
-        data = await withRateLimitRetry(() =>
-          digProductIntelligence(job.domain, data, {
-            searchKeyword: kw,
-            searchCountry: country,
-          })
+        data = await withRateLimitRetry(
+          () =>
+            digProductIntelligence(job.domain, data, {
+              searchKeyword: kw,
+              searchCountry: country,
+            }),
+          { retryTransient: true, maxAttempts: 3, baseWaitSec: 20 }
         );
       }
       if (localNeedsDesignFill(data)) {
         job.steps = '补全设计信号';
         notify();
-        data = await withRateLimitRetry(() =>
-          digDesignSignals(job.domain, data, {
-            searchKeyword: kw,
-            searchCountry: country,
-          })
+        data = await withRateLimitRetry(
+          () =>
+            digDesignSignals(job.domain, data, {
+              searchKeyword: kw,
+              searchCountry: country,
+            }),
+          { retryTransient: true, maxAttempts: 3, baseWaitSec: 20 }
         );
       }
     }
 
     job.steps = '决策模型判定';
     notify();
-    const { analysis } = await withRateLimitRetry(() => enrichAnalysisWithDecision(data!));
+    const { analysis } = await withRateLimitRetry(
+      () => enrichAnalysisWithDecision(data!),
+      { retryTransient: true, maxAttempts: 3, baseWaitSec: 15 }
+    );
 
     job.status = 'completed';
     job.finishedAt = Date.now();
