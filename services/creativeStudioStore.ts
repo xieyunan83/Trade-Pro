@@ -5,6 +5,8 @@
 export type Model3dMode = 'image' | 'text';
 export type Model3dQuality = 'high_detail' | 'engine_ready';
 export type Model3dJobStatus = 'queued' | 'running' | 'ready' | 'failed';
+export type Model3dProvider = 'tripo' | 'qwen_tripo' | 'hunyuan' | 'local';
+export type Model3dConvertFormat = 'GLTF' | 'USDZ' | 'FBX' | 'OBJ' | 'STL' | '3MF';
 
 export type Model3dJob = {
   id: string;
@@ -21,14 +23,20 @@ export type Model3dJob = {
   status: Model3dJobStatus;
   progress?: number;
   previewHint?: string;
-  /** 上游任务 ID */
+  /** 上游任务 ID（最近一次成功任务，可用于贴图/减面/转换） */
   providerTaskId?: string;
+  /** 首次生成任务 ID（后处理链的根） */
+  sourceTaskId?: string;
+  provider?: Model3dProvider;
+  modelVersion?: string;
   /** GLB / 网格下载地址 */
   modelUrl?: string;
   pbrModelUrl?: string;
   baseModelUrl?: string;
   /** 渲染预览图 */
   previewImageUrl?: string;
+  /** 转换格式下载（OBJ/STL/FBX 等） */
+  convertedUrls?: Partial<Record<Model3dConvertFormat, string>>;
   exportFormats: string[];
   error?: string;
   ownerUsername?: string;

@@ -28,8 +28,11 @@ import {
   generateModel3d,
   getModel3dProviderStatus,
   hydrateModel3dProvider,
+  isTripoOfficialReady,
   recoverModel3dJobs,
+  runTripoPostProcess,
   sanitizeModel3dJobs,
+  type TripoConvertFormat,
 } from '../services/model3dService';
 import { loadDataProviderLocal, saveDataProvider } from '../services/dataProviders';
 import { consumeCreativeHandoff } from '../services/creativeAssetBridge';
@@ -392,7 +395,10 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         ...job,
         status: 'ready',
         progress: 100,
+        provider: result.provider || 'tripo',
+        modelVersion: result.modelVersion,
         providerTaskId: result.taskId,
+        sourceTaskId: result.sourceTaskId || result.taskId,
         modelUrl: result.modelUrl,
         pbrModelUrl: result.pbrModelUrl,
         baseModelUrl: result.baseModelUrl,
@@ -404,7 +410,10 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
       patchJob(job.id, {
         status: 'ready',
         progress: 100,
+        provider: readyNow.provider,
+        modelVersion: readyNow.modelVersion,
         providerTaskId: readyNow.providerTaskId,
+        sourceTaskId: readyNow.sourceTaskId,
         modelUrl: readyNow.modelUrl,
         pbrModelUrl: readyNow.pbrModelUrl,
         baseModelUrl: readyNow.baseModelUrl,
@@ -414,7 +423,11 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
       });
       setBusy(false);
       setMsgTone('ok');
-      setMsg('3D 已生成，可预览 / 下载；本机缓存写入中…');
+      setMsg(
+        readyNow.provider === 'tripo'
+          ? '3D 已生成（Tripo 官方）。可预览/下载，或使用右侧后处理：高清贴图 · 减面 · 格式转换'
+          : '3D 已生成，可预览 / 下载；本机缓存写入中…'
+      );
 
       void (async () => {
         try {
@@ -474,6 +487,118 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     if (activeId === id) setActiveId(next[0]?.id || null);
   };
 
+  /** Tripo 后处理：贴图 / 减面 / 格式转换 */
+  const runPostProcess = async (
+    kind: 'texture_hd' | 'lowpoly' | 'convert',
+    format?: TripoConvertFormat
+  ) => {
+    if (!active || active.status !== 'ready') return;
+    const taskId = (active.providerTaskId || active.sourceTaskId || '').trim();
+    if (!taskId || active.provider === 'local') {
+      setMsgTone('error');
+      setMsg('本地导入的模型无法云端后处理；请用 Tripo 生成后再试。');
+      return;
+    }
+    if (!isTripoOfficialReady()) {
+      setMsgTone('error');
+      setMsg('后处理需启用 Tripo 官方 Key（tsk_）。');
+      return;
+    }
+    if (active.provider && active.provider !== 'tripo') {
+      setMsgTone('error');
+      setMsg('当前模型非 Tripo 官方任务，无法使用贴图/减面/转换。请用已启用的 Tripo Key 重新生成。');
+      return;
+    }
+    setBusy(true);
+    setMsgTone('info');
+    setMsg(
+      kind === 'texture_hd'
+        ? '正在高清贴图重做…'
+        : kind === 'lowpoly'
+          ? '正在智能减面…'
+          : `正在转换为 ${format || 'OBJ'}…`
+    );
+    try {
+      const result = await runTripoPostProcess({
+        kind,
+        originalTaskId: taskId,
+        format,
+        texturePrompt: prompt.trim() || undefined,
+        onTaskCreated: (tid) => patchJob(active.id, { providerTaskId: tid }),
+        onProgress: (pct, status) => {
+          patchJob(active.id, {
+            status: 'running',
+            progress: Math.round(pct),
+            previewHint: `后处理 ${status} ${Math.round(pct)}%`,
+          });
+        },
+      });
+      const converted =
+        kind === 'convert' && format
+          ? { ...(active.convertedUrls || {}), [format]: result.modelUrl }
+          : active.convertedUrls;
+      const formats = Array.from(
+        new Set([...(active.exportFormats || ['GLB']), ...(format ? [format] : ['GLB'])])
+      );
+      const next: Partial<Model3dJob> = {
+        status: 'ready',
+        progress: 100,
+        provider: 'tripo',
+        providerTaskId: result.taskId,
+        sourceTaskId: active.sourceTaskId || taskId,
+        modelUrl: kind === 'convert' ? active.modelUrl || result.modelUrl : result.modelUrl,
+        pbrModelUrl: kind === 'convert' ? active.pbrModelUrl : result.pbrModelUrl || result.modelUrl,
+        baseModelUrl: kind === 'convert' ? active.baseModelUrl : result.baseModelUrl,
+        previewImageUrl: result.previewImageUrl || active.previewImageUrl,
+        convertedUrls: converted,
+        exportFormats: formats,
+        previewHint:
+          kind === 'texture_hd'
+            ? '高清贴图完成 · 可环视'
+            : kind === 'lowpoly'
+              ? '智能减面完成 · 可环视'
+              : `${format} 已就绪 · 见下方导出`,
+        error: undefined,
+        updatedAt: Date.now(),
+      };
+      patchJob(active.id, next);
+      setBusy(false);
+      setMsgTone('ok');
+      setMsg(
+        kind === 'convert'
+          ? `${format} 转换完成，可下载`
+          : kind === 'texture_hd'
+            ? '高清贴图完成'
+            : '智能减面完成'
+      );
+      if (kind !== 'convert') {
+        const merged = { ...active, ...next } as Model3dJob;
+        void persistModel3dJob(merged).then((vaulted) => {
+          patchJob(active.id, {
+            modelUrl: vaulted.modelUrl,
+            pbrModelUrl: vaulted.pbrModelUrl,
+            baseModelUrl: vaulted.baseModelUrl,
+            previewImageUrl: vaulted.previewImageUrl,
+          });
+        });
+      }
+    } catch (e: any) {
+      const { humanizeCreativeProviderError } = await import('../services/providerErrorMessage');
+      const errText = humanizeCreativeProviderError(e?.message || e);
+      patchJob(active.id, {
+        status: 'ready',
+        progress: 100,
+        error: errText,
+        previewHint: active.previewHint || '后处理失败，原模型仍可下载',
+      });
+      setBusy(false);
+      setMsgTone('error');
+      setMsg(errText);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const rawDownloadUrl = active?.pbrModelUrl || active?.modelUrl || active?.baseModelUrl;
   const downloadUrl = useVaultUrl(rawDownloadUrl);
   const previewPoster = useVaultUrl(active?.previewImageUrl || active?.sourceImage);
@@ -488,7 +613,8 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
             </div>
             <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">产品设计 · 3D 图</h2>
             <p className="text-sm text-slate-500 font-medium mt-1 max-w-2xl">
-              可选用平面设计出图或产品库图片作参考，真实生成可下载的 3D 网格（GLB）。
+              对齐 Tripo 工作流：图/文/多视图生成（H3.1 高保真 / P1 低面）→ 高清贴图 → 智能减面 →
+              多格式导出（GLB / OBJ / STL / FBX 等）。
             </p>
             <div className="mt-2">
               <CreativePipelineBar current="3d" onNavigate={onNavigateModule} />
@@ -516,8 +642,8 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                 <KeyRound size={14} /> 尚未配置图生 3D API
               </div>
               <p className="text-[11px] text-rose-800/90 font-medium leading-relaxed">
-                未配置 Key 时点击「生成」不会创建任务。请管理员在「系统管理 → 数据接入 → 千问通道 · Tripo 3D」启用并填写
-                Key（格式通常以 tsk_ 开头）。
+                未配置 Key 时点击「生成」不会创建任务。请优先在「数据接入 → 图生 3D」填写 Tripo 官方 Key（tsk_），以启用高清贴图 /
+                减面 / 多格式导出；也可配置千问通道作为备选。
               </p>
               {isAdmin && (
                 <div className="space-y-2 pt-1">
@@ -663,9 +789,9 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                   }`}
                 >
                   <div className="text-xs font-black text-slate-800 flex items-center gap-1">
-                    <Sparkles size={12} /> 高细节
+                    <Sparkles size={12} /> 高细节 H3.1
                   </div>
-                  <p className="text-[10px] text-slate-500 mt-1 font-medium">高面数 · PBR 纹理</p>
+                  <p className="text-[10px] text-slate-500 mt-1 font-medium">官方高保真 · PBR · detailed</p>
                 </button>
                 <button
                   type="button"
@@ -675,9 +801,9 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                   }`}
                 >
                   <div className="text-xs font-black text-slate-800 flex items-center gap-1">
-                    <Layers size={12} /> 引擎就绪
+                    <Layers size={12} /> 引擎就绪 P1
                   </div>
-                  <p className="text-[10px] text-slate-500 mt-1 font-medium">智能减面 · 实时预览</p>
+                  <p className="text-[10px] text-slate-500 mt-1 font-medium">低面拓扑 · 引擎/打印预备</p>
                 </button>
               </div>
             </div>
@@ -878,26 +1004,91 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
             )}
           </div>
           {active?.status === 'ready' && downloadUrl && (
-            <div className="px-4 py-3 border-t border-white/10 flex flex-wrap gap-2 items-center">
-              <a
-                href={downloadUrl}
-                target="_blank"
-                rel="noreferrer"
-                download={`${(active.title || 'model').replace(/\s+/g, '_')}.glb`}
-                className="inline-flex items-center gap-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-[11px] font-black px-3 py-2.5 text-white shadow-lg shadow-emerald-500/30"
-              >
-                <Download size={12} /> 立即下载 GLB（已生成，请先保存）
-              </a>
-              {active.previewImageUrl && (
+            <div className="px-4 py-3 border-t border-white/10 space-y-2">
+              <div className="flex flex-wrap gap-2 items-center">
                 <a
-                  href={active.previewImageUrl}
+                  href={downloadUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="inline-flex items-center gap-1 rounded-lg bg-white/10 hover:bg-white/15 text-[11px] font-black px-3 py-2"
+                  download={`${(active.title || 'model').replace(/\s+/g, '_')}.glb`}
+                  className="inline-flex items-center gap-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-[11px] font-black px-3 py-2.5 text-white shadow-lg shadow-emerald-500/30"
                 >
-                  <ExternalLink size={12} /> 平面渲染图
+                  <Download size={12} /> 下载 GLB
                 </a>
-              )}
+                {active.previewImageUrl && (
+                  <a
+                    href={active.previewImageUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 rounded-lg bg-white/10 hover:bg-white/15 text-[11px] font-black px-3 py-2"
+                  >
+                    <ExternalLink size={12} /> 平面渲染图
+                  </a>
+                )}
+                {active.modelVersion && (
+                  <span className="text-[9px] font-bold text-slate-500">
+                    {active.provider || 'tripo'} · {active.modelVersion}
+                  </span>
+                )}
+              </div>
+              {isTripoOfficialReady() &&
+                active.provider !== 'local' &&
+                (active.providerTaskId || active.sourceTaskId) && (
+                  <div className="rounded-xl border border-white/10 bg-white/5 p-2.5 space-y-2">
+                    <div className="text-[10px] font-black text-teal-200/90 uppercase tracking-wider">
+                      Tripo 后处理（与官网同链路）
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void runPostProcess('texture_hd')}
+                        className="rounded-lg bg-teal-500/90 hover:bg-teal-400 text-[10px] font-black px-2.5 py-1.5 text-slate-950 disabled:opacity-50"
+                      >
+                        高清贴图
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void runPostProcess('lowpoly')}
+                        className="rounded-lg bg-white/10 hover:bg-white/15 text-[10px] font-black px-2.5 py-1.5 disabled:opacity-50"
+                      >
+                        智能减面
+                      </button>
+                      {(['OBJ', 'STL', 'FBX', 'USDZ', 'GLTF'] as TripoConvertFormat[]).map((fmt) => (
+                        <button
+                          key={fmt}
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void runPostProcess('convert', fmt)}
+                          className="rounded-lg bg-white/10 hover:bg-white/15 text-[10px] font-black px-2 py-1.5 disabled:opacity-50"
+                        >
+                          转 {fmt}
+                        </button>
+                      ))}
+                    </div>
+                    {active.convertedUrls &&
+                      Object.keys(active.convertedUrls).length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 pt-1">
+                          {(Object.entries(active.convertedUrls) as [TripoConvertFormat, string][]).map(
+                            ([fmt, url]) =>
+                              url ? (
+                                <a
+                                  key={fmt}
+                                  href={url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  download
+                                  className="inline-flex items-center gap-1 rounded-lg bg-emerald-500/20 text-emerald-200 text-[10px] font-black px-2 py-1"
+                                >
+                                  <Download size={10} /> {fmt}
+                                </a>
+                              ) : null
+                          )}
+                        </div>
+                      )}
+                  </div>
+                )}
             </div>
           )}
         </div>

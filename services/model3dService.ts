@@ -40,12 +40,25 @@ export type Model3dGenerateInput = {
 
 export type Model3dGenerateResult = {
   taskId: string;
+  /** 后处理链的根任务（首次生成） */
+  sourceTaskId?: string;
   modelUrl: string;
   previewImageUrl?: string;
   pbrModelUrl?: string;
   baseModelUrl?: string;
+  provider?: 'tripo' | 'qwen_tripo' | 'hunyuan';
+  modelVersion?: string;
   raw?: unknown;
 };
+
+/** 与 Tripo 官方对齐的模型版本 */
+export const TRIPO_MODEL_H = 'v3.1-20260211';
+export const TRIPO_MODEL_H_STABLE = 'v3.0-20250812';
+export const TRIPO_MODEL_P = 'P1-20260311';
+export const TRIPO_TEXTURE_MODEL = 'v3.0-20250812';
+
+export type TripoPostProcessKind = 'texture_hd' | 'lowpoly' | 'convert';
+export type TripoConvertFormat = 'GLTF' | 'USDZ' | 'FBX' | 'OBJ' | 'STL' | '3MF';
 
 const sanitizeKey = (k: string) =>
   (k || '')
@@ -135,6 +148,9 @@ const isTripoReady = (): boolean => {
   const key = pickKey(meta);
   return !!(key && (meta.enabled || sanitizeKey(env.tripoApiKey || '')));
 };
+
+/** UI：是否可走官方后处理（贴图 / 减面 / 格式转换） */
+export const isTripoOfficialReady = (): boolean => isTripoReady();
 
 const isCreditOrQuotaError = (msg: string): boolean =>
   /credit|余额|额度|quota|insufficient|payment|欠费|充值|balance|no funds|not enough/i.test(msg);
@@ -318,6 +334,11 @@ const pickUrls = (data: any): Model3dGenerateResult => {
     out.model_url ||
     out.glb_url ||
     out.mesh_url ||
+    out.fbx_url ||
+    out.obj_url ||
+    out.stl_url ||
+    out.usdz_url ||
+    out.gltf_url ||
     '';
   const previewImageUrl =
     out.rendered_image || out.preview_image || out.thumbnail || out.rendered_image_url || '';
@@ -336,8 +357,8 @@ const pickUrls = (data: any): Model3dGenerateResult => {
 
 /**
  * 真实生成 3D 模型（异步任务）。
- * high_detail → 更高面数/纹理；engine_ready → 较低面数智能减面。
- * 优先：千问 MaaS · Tripo → 混元备选 → Tripo 官方直连；额度/鉴权失败时互备回退。
+ * high_detail → Tripo H3.1 高保真；engine_ready → Tripo P1 低面/引擎向。
+ * 优先：Tripo 官方（已配 tsk_）→ 千问 MaaS Tripo → 混元；额度/鉴权失败时互备回退。
  */
 export const generateModel3d = async (input: Model3dGenerateInput): Promise<Model3dGenerateResult> => {
   const qwenOk = getQwenTripo3dProviderStatus().ready;
@@ -347,34 +368,37 @@ export const generateModel3d = async (input: Model3dGenerateInput): Promise<Mode
   if (!qwenOk && !tripoOk && !hunyuanOk) {
     throw new Error(
       humanizeCreativeProviderError(
-        '未配置图生 3D API。请在「数据接入」填写「千问通道 · Tripo 3D」或其它 3D Key，或使用本页管理员快捷配置。'
+        '未配置图生 3D API。请在「数据接入」填写 Tripo 官方 Key（tsk_）或其它 3D Key，或使用本页管理员快捷配置。'
       )
     );
   }
 
-  const order: Array<'qwen_tripo' | 'hunyuan' | 'tripo'> = [];
+  // 已配置官方 Tripo 时优先走官方全能力，效果与后处理与官网一致
+  const order: Array<'tripo' | 'qwen_tripo' | 'hunyuan'> = [];
+  if (tripoOk) order.push('tripo');
   if (qwenOk) order.push('qwen_tripo');
   if (hunyuanOk) order.push('hunyuan');
-  if (tripoOk) order.push('tripo');
 
   let lastErr: Error | null = null;
   for (let i = 0; i < order.length; i++) {
     const provider = order[i];
     try {
+      if (provider === 'tripo') {
+        return await generateModel3dInner(input);
+      }
       if (provider === 'qwen_tripo') {
-        return await generateQwenTripoModel3d(input);
+        const r = await generateQwenTripoModel3d(input);
+        return { ...r, provider: 'qwen_tripo', sourceTaskId: r.taskId };
       }
-      if (provider === 'hunyuan') {
-        return await generateHunyuanModel3d(input);
-      }
-      return await generateModel3dInner(input);
+      const r = await generateHunyuanModel3d(input);
+      return { ...r, provider: 'hunyuan', sourceTaskId: r.taskId };
     } catch (e: any) {
       const msg = String(e?.message || e);
       lastErr = new Error(humanizeCreativeProviderError(msg));
       const canFallback =
         i < order.length - 1 &&
         (isCreditOrQuotaError(msg) ||
-          /未配置|Key|401|403|额度|公网图片|公网 URL|InvalidApiKey|不支持/i.test(msg));
+          /未配置|Key|401|403|额度|公网图片|公网 URL|InvalidApiKey|不支持|model_version|1004/i.test(msg));
       if (canFallback) {
         input.onProgress?.(3, 'fallback');
         continue;
@@ -383,6 +407,50 @@ export const generateModel3d = async (input: Model3dGenerateInput): Promise<Mode
     }
   }
   throw lastErr || new Error('3D 生成失败');
+};
+
+/** Tripo 高细节 / 引擎向参数（对齐官方 H 系列 / P 系列） */
+const tripoQualityParams = (
+  quality: Model3dGenerateInput['quality'],
+  kind: 'text' | 'image' | 'multiview'
+): { modelVersion: string; bits: Record<string, unknown> } => {
+  if (quality === 'engine_ready') {
+    // P 系列：干净低面拓扑，适合引擎 / 打印预备
+    if (kind !== 'text') {
+      return {
+        modelVersion: TRIPO_MODEL_P,
+        bits: {
+          texture: true,
+          pbr: true,
+          face_limit: 8000,
+          texture_quality: 'standard',
+        },
+      };
+    }
+    return {
+      modelVersion: TRIPO_MODEL_H,
+      bits: {
+        texture: true,
+        pbr: true,
+        face_limit: 20000,
+        smart_low_poly: true,
+        texture_quality: 'standard',
+        geometry_quality: 'standard',
+        export_uv: true,
+      },
+    };
+  }
+  return {
+    modelVersion: TRIPO_MODEL_H,
+    bits: {
+      texture: true,
+      pbr: true,
+      texture_quality: 'detailed',
+      geometry_quality: 'detailed',
+      enable_image_autofix: kind !== 'text',
+      export_uv: true,
+    },
+  };
 };
 
 const generateModel3dInner = async (input: Model3dGenerateInput): Promise<Model3dGenerateResult> => {
@@ -394,25 +462,24 @@ const generateModel3dInner = async (input: Model3dGenerateInput): Promise<Model3
   if (input.mode === 'text') {
     const prompt = (input.prompt || '').trim();
     if (!prompt) throw new Error('请填写文字描述');
+    const { modelVersion, bits } = tripoQualityParams(quality, 'text');
     const body: Record<string, unknown> = {
       type: 'text_to_model',
-      prompt,
-      model_version: 'v2.5-20250123',
-      texture: true,
-      pbr: quality === 'high_detail',
+      prompt: prompt.slice(0, 1024),
+      model_version: modelVersion,
+      ...bits,
     };
-    if (quality === 'engine_ready') {
-      body.face_limit = 20000;
-      body.smart_low_poly = true;
-    } else {
-      body.face_limit = 100000;
-      body.texture_quality = 'detailed';
-    }
     const taskId = await createTask(apiKey, body);
     input.onTaskCreated?.(taskId);
     input.onProgress?.(10, 'running');
     const data = await pollTask(apiKey, taskId, input.onProgress);
-    return { ...pickUrls(data), taskId };
+    return {
+      ...pickUrls(data),
+      taskId,
+      sourceTaskId: taskId,
+      provider: 'tripo',
+      modelVersion,
+    };
   }
 
   const imgs = (
@@ -431,7 +498,11 @@ const generateModel3dInner = async (input: Model3dGenerateInput): Promise<Model3
   const toFileField = async (img: string): Promise<Record<string, unknown>> => {
     if (/^https?:\/\//i.test(img)) {
       return {
-        type: img.toLowerCase().includes('.png') ? 'png' : 'jpeg',
+        type: img.toLowerCase().includes('.png')
+          ? 'png'
+          : img.toLowerCase().includes('.webp')
+            ? 'webp'
+            : 'jpeg',
         url: img,
       };
     }
@@ -439,61 +510,154 @@ const generateModel3dInner = async (input: Model3dGenerateInput): Promise<Model3
     return { type: fileType, file_token: token };
   };
 
-  const qualityBits =
-    quality === 'engine_ready'
-      ? { face_limit: 20000, smart_low_poly: true, quad: true }
-      : { face_limit: 150000, texture_quality: 'detailed', geometry_quality: 'detailed' };
-
-  // ≥2 张：多视图建模（files 固定 4 槽：front / left / back / right）
+  // ≥2 张：多视图建模（files 固定 4 槽：front / left / back / right；首张=正面，不可空）
   if (imgs.length >= 2) {
+    const { modelVersion, bits } = tripoQualityParams(quality, 'multiview');
     input.onProgress?.(5, 'uploading');
     const uploaded: Record<string, unknown>[] = [];
     for (let i = 0; i < imgs.length; i++) {
       uploaded.push(await toFileField(imgs[i]));
       input.onProgress?.(5 + Math.round(((i + 1) / imgs.length) * 8), 'uploaded');
     }
-    // 按选用顺序填槽；不足 4 张用空对象占位（首张必须为正面）
     const files: Record<string, unknown>[] = [{}, {}, {}, {}];
     for (let i = 0; i < 4; i++) {
       files[i] = uploaded[i] || {};
     }
     const body: Record<string, unknown> = {
       type: 'multiview_to_model',
-      model_version: 'v2.5-20250123',
+      model_version: modelVersion,
       files,
-      texture: true,
-      pbr: true,
-      ...qualityBits,
+      ...bits,
     };
-    if (input.prompt?.trim()) body.prompt = input.prompt.trim();
+    if (input.prompt?.trim()) body.prompt = input.prompt.trim().slice(0, 1024);
     const taskId = await createTask(apiKey, body);
     input.onTaskCreated?.(taskId);
     input.onProgress?.(14, 'running');
     const data = await pollTask(apiKey, taskId, input.onProgress);
-    return { ...pickUrls(data), taskId };
+    return {
+      ...pickUrls(data),
+      taskId,
+      sourceTaskId: taskId,
+      provider: 'tripo',
+      modelVersion,
+    };
   }
 
+  const { modelVersion, bits } = tripoQualityParams(quality, 'image');
   const fileField = await toFileField(imgs[0]);
   input.onProgress?.(8, 'uploaded');
 
   const body: Record<string, unknown> = {
     type: 'image_to_model',
-    model_version: 'v2.5-20250123',
+    model_version: modelVersion,
     file: fileField,
-    texture: true,
-    pbr: true,
-    enable_image_autofix: true,
-    ...qualityBits,
+    ...bits,
   };
   if (input.prompt?.trim()) {
-    body.prompt = input.prompt.trim();
+    body.prompt = input.prompt.trim().slice(0, 1024);
   }
 
   const taskId = await createTask(apiKey, body);
   input.onTaskCreated?.(taskId);
   input.onProgress?.(12, 'running');
   const data = await pollTask(apiKey, taskId, input.onProgress);
-  return { ...pickUrls(data), taskId };
+  return {
+    ...pickUrls(data),
+    taskId,
+    sourceTaskId: taskId,
+    provider: 'tripo',
+    modelVersion,
+  };
+};
+
+/**
+ * Tripo 后处理：高清贴图 / 智能减面 / 格式转换（对齐官网工作流）
+ */
+export const runTripoPostProcess = async (opts: {
+  kind: TripoPostProcessKind;
+  /** 最近一次成功任务；贴图/减面/转换均基于此 */
+  originalTaskId: string;
+  format?: TripoConvertFormat;
+  texturePrompt?: string;
+  faceLimit?: number;
+  onProgress?: (pct: number, status: string) => void;
+  onTaskCreated?: (taskId: string) => void;
+}): Promise<Model3dGenerateResult> => {
+  if (!isTripoReady()) {
+    throw new Error('后处理需启用 Tripo 官方 Key（tsk_）。千问/混元通道暂不支持贴图重做与格式转换。');
+  }
+  const { apiKey } = resolveMeta();
+  const original = (opts.originalTaskId || '').trim();
+  if (!original) throw new Error('缺少上游任务 ID，无法后处理');
+
+  let body: Record<string, unknown>;
+  if (opts.kind === 'texture_hd') {
+    body = {
+      type: 'texture_model',
+      original_model_task_id: original,
+      model_version: TRIPO_TEXTURE_MODEL,
+      texture: true,
+      pbr: true,
+      texture_quality: 'detailed',
+      bake: true,
+      texture_alignment: 'original_image',
+    };
+    if (opts.texturePrompt?.trim()) {
+      body.texture_prompt = { text: opts.texturePrompt.trim().slice(0, 1024) };
+    }
+  } else if (opts.kind === 'lowpoly') {
+    body = {
+      type: 'highpoly_to_lowpoly',
+      original_model_task_id: original,
+      model_version: 'P-v2.0-20251225',
+      quad: true,
+      face_limit: opts.faceLimit && opts.faceLimit > 0 ? Math.min(10000, Math.max(500, opts.faceLimit)) : 8000,
+      bake: true,
+    };
+  } else {
+    const format = opts.format || 'OBJ';
+    body = {
+      type: 'convert_model',
+      original_model_task_id: original,
+      format,
+      face_limit: opts.faceLimit && opts.faceLimit > 0 ? opts.faceLimit : 10000,
+      bake: true,
+      pivot_to_center_bottom: true,
+    };
+  }
+
+  opts.onProgress?.(8, 'queued');
+  const taskId = await createTask(apiKey, body);
+  opts.onTaskCreated?.(taskId);
+  opts.onProgress?.(15, 'running');
+  const data = await pollTask(apiKey, taskId, opts.onProgress);
+  const picked = pickUrls(data);
+  return {
+    ...picked,
+    taskId,
+    sourceTaskId: original,
+    provider: 'tripo',
+  };
+};
+
+/** 单次查询 Tripo 官方任务（用于刷新恢复） */
+export const fetchTripoTaskOnce = async (taskId: string): Promise<Model3dGenerateResult | null> => {
+  if (!isTripoReady() || !taskId.trim()) return null;
+  const { apiKey } = resolveMeta();
+  const res = await fetch(tripoUrl(`/v2/openapi/task/${encodeURIComponent(taskId.trim())}`), {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+  const json = await parseJson(res);
+  if (!res.ok || (json.code != null && json.code !== 0 && !json.data)) return null;
+  const data = json.data || json;
+  const status = String(data.status || '').toLowerCase();
+  if (!(status === 'success' || status === 'succeeded' || status === 'completed')) return null;
+  try {
+    return { ...pickUrls(data), taskId: String(data.task_id || taskId), provider: 'tripo' };
+  } catch {
+    return null;
+  }
 };
 
 const jobHasModel = (j: Model3dJob) =>
@@ -531,7 +695,7 @@ export const sanitizeModel3dJobs = (jobs: Model3dJob[]): Model3dJob[] => {
   });
 };
 
-/** 有 task_id 时尝试从云端捞回已成功的 GLB（不重复计费查询） */
+/** 有 task_id 时尝试从云端捞回已成功的 GLB（不重复计费） */
 export const recoverModel3dJobs = async (jobs: Model3dJob[]): Promise<Model3dJob[]> => {
   const base = sanitizeModel3dJobs(jobs);
   const out: Model3dJob[] = [];
@@ -540,29 +704,36 @@ export const recoverModel3dJobs = async (jobs: Model3dJob[]): Promise<Model3dJob
       out.push(j);
       continue;
     }
-    if (!getQwenTripo3dProviderStatus().ready) {
-      out.push(j);
-      continue;
-    }
+    let result: Model3dGenerateResult | null = null;
     try {
-      const result = await fetchQwenTripoTaskOnce(j.providerTaskId);
-      if (result?.modelUrl) {
-        out.push({
-          ...j,
-          status: 'ready',
-          progress: 100,
-          modelUrl: result.modelUrl,
-          pbrModelUrl: result.pbrModelUrl || j.pbrModelUrl,
-          baseModelUrl: result.baseModelUrl || j.baseModelUrl,
-          previewImageUrl: result.previewImageUrl || j.previewImageUrl,
-          previewHint: '模型已就绪 · 已从云端恢复',
-          error: undefined,
-          updatedAt: Date.now(),
-        });
-        continue;
+      if (isTripoReady()) {
+        result = await fetchTripoTaskOnce(j.providerTaskId);
       }
     } catch (e) {
-      console.warn('[model3d] recover task failed', j.providerTaskId, e);
+      console.warn('[model3d] tripo recover failed', j.providerTaskId, e);
+    }
+    if (!result?.modelUrl && getQwenTripo3dProviderStatus().ready) {
+      try {
+        result = await fetchQwenTripoTaskOnce(j.providerTaskId);
+      } catch (e) {
+        console.warn('[model3d] qwen recover failed', j.providerTaskId, e);
+      }
+    }
+    if (result?.modelUrl) {
+      out.push({
+        ...j,
+        status: 'ready',
+        progress: 100,
+        provider: result.provider || j.provider,
+        modelUrl: result.modelUrl,
+        pbrModelUrl: result.pbrModelUrl || j.pbrModelUrl,
+        baseModelUrl: result.baseModelUrl || j.baseModelUrl,
+        previewImageUrl: result.previewImageUrl || j.previewImageUrl,
+        previewHint: '模型已就绪 · 已从云端恢复',
+        error: undefined,
+        updatedAt: Date.now(),
+      });
+      continue;
     }
     out.push(
       sanitizeModel3dJobs([
