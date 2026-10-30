@@ -1,6 +1,6 @@
 /**
- * 图/文生 3D：主路径 OpenAPI（上传 → 建任务 → 轮询 → GLB）；
- * 额度不足或未配置时自动回退混元 TokenHub（数据接入 · 图生 3D 备选）。
+ * 图/文生 3D：主路径千问 MaaS Tripo（上传 → 建任务 → 轮询 → GLB）；
+ * 额度不足或未配置时回退混元；官方 tsk_ 仅作显式配置时的垫底，默认不走。
  */
 import { env } from './env';
 import { isLocalDevHost } from './qwenProxy';
@@ -25,14 +25,27 @@ import {
 } from './qwenTripo3dService';
 import type { Model3dJob } from './creativeStudioStore';
 
+/** 贴图质量（千问 MaaS Tripo parameters.texture_quality） */
+export type Model3dTextureQuality = 'standard' | 'detailed' | 'extreme';
+
 export type Model3dGenerateInput = {
   mode: 'image' | 'text';
   prompt?: string;
+  /** 反向提示（写入 parameters.negative_prompt，勿塞进 prompt） */
+  negativePrompt?: string;
   /** 单图（兼容）；多图时优先用 sourceImages */
   sourceImage?: string;
   /** 多角度参考（建议正面/侧面/背面等，最多 4 张 → 多视图建模） */
   sourceImages?: string[];
   quality: 'high_detail' | 'engine_ready';
+  /** 贴图档；缺省：高细节→detailed，引擎就绪→standard */
+  textureQuality?: Model3dTextureQuality;
+  /** 图生：模型朝向对齐参考图 */
+  alignImage?: boolean;
+  /** 自动缩放到真实世界尺寸（米） */
+  autoSize?: boolean;
+  /** 面数上限（引擎就绪默认 20000） */
+  faceLimit?: number;
   onProgress?: (pct: number, status: string) => void;
   /** 任务一创建就回传 task_id，刷新后可凭此捞回已扣费结果 */
   onTaskCreated?: (taskId: string) => void;
@@ -357,8 +370,8 @@ const pickUrls = (data: any): Model3dGenerateResult => {
 
 /**
  * 真实生成 3D 模型（异步任务）。
- * high_detail → Tripo H3.1 高保真；engine_ready → Tripo P1 低面/引擎向。
- * 优先：Tripo 官方（已配 tsk_）→ 千问 MaaS Tripo → 混元；额度/鉴权失败时互备回退。
+ * high_detail → H3.1 超清几何 + 可选贴图档；engine_ready → 同模型智能低模。
+ * 优先：千问 MaaS Tripo → 混元备选 →（仅显式配置 tsk_ 时）官方垫底。
  */
 export const generateModel3d = async (input: Model3dGenerateInput): Promise<Model3dGenerateResult> => {
   const qwenOk = getQwenTripo3dProviderStatus().ready;
@@ -368,16 +381,16 @@ export const generateModel3d = async (input: Model3dGenerateInput): Promise<Mode
   if (!qwenOk && !tripoOk && !hunyuanOk) {
     throw new Error(
       humanizeCreativeProviderError(
-        '未配置图生 3D API。请在「数据接入」填写 Tripo 官方 Key（tsk_）或其它 3D Key，或使用本页管理员快捷配置。'
+        '未配置图生 3D API。请在「数据接入」填写千问通道 Tripo Key，或使用本页管理员快捷配置。'
       )
     );
   }
 
-  // 已配置官方 Tripo 时优先走官方全能力，效果与后处理与官网一致
+  // 主路径：千问 MaaS Tripo（与官方 H3.1/P1 同参能力）；无官方 Key 时直连会失败
   const order: Array<'tripo' | 'qwen_tripo' | 'hunyuan'> = [];
-  if (tripoOk) order.push('tripo');
   if (qwenOk) order.push('qwen_tripo');
   if (hunyuanOk) order.push('hunyuan');
+  if (tripoOk) order.push('tripo');
 
   let lastErr: Error | null = null;
   for (let i = 0; i < order.length; i++) {
@@ -584,7 +597,7 @@ export const runTripoPostProcess = async (opts: {
   onTaskCreated?: (taskId: string) => void;
 }): Promise<Model3dGenerateResult> => {
   if (!isTripoReady()) {
-    throw new Error('后处理需启用 Tripo 官方 Key（tsk_）。千问/混元通道暂不支持贴图重做与格式转换。');
+    throw new Error('当前 3D 通道不支持云端后处理（贴图重做 / 减面 / 格式转换）。');
   }
   const { apiKey } = resolveMeta();
   const original = (opts.originalTaskId || '').trim();
@@ -705,18 +718,21 @@ export const recoverModel3dJobs = async (jobs: Model3dJob[]): Promise<Model3dJob
       continue;
     }
     let result: Model3dGenerateResult | null = null;
-    try {
-      if (isTripoReady()) {
-        result = await fetchTripoTaskOnce(j.providerTaskId);
-      }
-    } catch (e) {
-      console.warn('[model3d] tripo recover failed', j.providerTaskId, e);
-    }
-    if (!result?.modelUrl && getQwenTripo3dProviderStatus().ready) {
+    const preferOfficial = j.provider === 'tripo' && isTripoReady();
+    const preferQwen =
+      (j.provider === 'qwen_tripo' || !preferOfficial) && getQwenTripo3dProviderStatus().ready;
+    if (preferQwen) {
       try {
         result = await fetchQwenTripoTaskOnce(j.providerTaskId);
       } catch (e) {
         console.warn('[model3d] qwen recover failed', j.providerTaskId, e);
+      }
+    }
+    if (!result?.modelUrl && isTripoReady()) {
+      try {
+        result = await fetchTripoTaskOnce(j.providerTaskId);
+      } catch (e) {
+        console.warn('[model3d] tripo recover failed', j.providerTaskId, e);
       }
     }
     if (result?.modelUrl) {

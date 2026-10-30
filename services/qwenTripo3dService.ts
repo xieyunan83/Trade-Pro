@@ -2,6 +2,9 @@
  * 千问 MaaS 通道 · Tripo 3D（异步）：提交 → 轮询 → GLB。
  * Key 来自管理后台「数据接入 · 千问通道 · Tripo 3D」。
  * 默认 Origin 与控制台 curl 一致：cn-beijing.maas.qianwenaiapi.com
+ *
+ * 能力对齐官方 H3.1 / P1 生成参数（贴图档、几何精度、智能低模、多视图等），
+ * 经同一套 MaaS 异步接口下发；不直连 api.tripo3d.ai。
  */
 import {
   buildAliyunFetchHeaders,
@@ -22,6 +25,7 @@ const CREATE_PATH = '/api/v1/services/aigc/video-generation/3d-generation';
 const TASK_PATH = (id: string) => `/api/v1/tasks/${encodeURIComponent(id)}`;
 /** 用户截图 / curl 默认网关 */
 export const DEFAULT_QWEN_TRIPO_ORIGIN = 'https://cn-beijing.maas.qianwenaiapi.com';
+/** 主模型：高精度（对应官方 v3.1）；勿默认切 P1，避免未开通导致整条链路失败 */
 const DEFAULT_MODEL = 'Tripo/Tripo-H3.1';
 
 const sanitizeKey = (k: string) =>
@@ -52,16 +56,16 @@ export const getQwenTripo3dProviderStatus = (): {
   const meta = loadDataProviderLocal('qwen_tripo');
   const key = sanitizeKey(meta.apiKey || '');
   if (key && meta.enabled) {
-    return { ready: true, detail: '千问通道 · Tripo 3D 已就绪', hasKey: true };
+    return { ready: true, detail: '3D 主通道已就绪', hasKey: true };
   }
   if (key && !meta.enabled) {
     return {
       ready: false,
-      detail: '已填写 Key，请在「数据接入」打开「千问通道 · Tripo 3D」开关',
+      detail: '已填写 Key，请在「数据接入」打开「图生 3D」主通道开关',
       hasKey: true,
     };
   }
-  return { ready: false, detail: '未配置千问通道 Tripo 3D Key', hasKey: false };
+  return { ready: false, detail: '未配置图生 3D 主通道 Key', hasKey: false };
 };
 
 export const hydrateQwenTripo3dProvider = async () => {
@@ -83,7 +87,7 @@ const resolveCfg = (): ResolvedCfg => {
   const apiKey = sanitizeKey(meta.apiKey || '');
   if (!apiKey) {
     throw new Error(
-      '未配置千问通道 Tripo API Key。请在「系统管理 → 数据接入 → 千问通道 · Tripo 3D」填写按量付费 Key。'
+      '未配置图生 3D API Key。请在「系统管理 → 数据接入」填写主通道 Key。'
     );
   }
   if (!meta.enabled) {
@@ -112,7 +116,7 @@ const parseJson = async (res: Response): Promise<any> => {
   try {
     return text ? JSON.parse(text) : {};
   } catch {
-    throw new Error(`Tripo 通道返回非 JSON（HTTP ${res.status}）：${text.slice(0, 180)}`);
+    throw new Error(`3D 通道返回非 JSON（HTTP ${res.status}）：${text.slice(0, 180)}`);
   }
 };
 
@@ -154,7 +158,7 @@ const createTask = async (
     });
   } catch (e: any) {
     throw new Error(
-      humanizeCreativeProviderError(`Tripo 任务创建失败：${e?.message || e}${qwenCorsHint(e?.message)}`)
+      humanizeCreativeProviderError(`3D 任务创建失败：${e?.message || e}${qwenCorsHint(e?.message)}`)
     );
   }
 
@@ -165,11 +169,13 @@ const createTask = async (
       json.code ||
       json.error?.message ||
       json.error ||
-      `创建 3D 任务失败 HTTP ${res.status}`;
+      `创建任务失败 HTTP ${res.status}`;
     throw new Error(humanizeCreativeProviderError(String(msg)));
   }
-  const taskId = json.output?.task_id || json.task_id;
-  if (!taskId) throw new Error('创建成功但未返回 task_id');
+  const taskId = json.output?.task_id || json.task_id || json.output?.taskId;
+  if (!taskId) {
+    throw new Error('3D 任务已提交但未返回 task_id');
+  }
   return String(taskId);
 };
 
@@ -179,26 +185,26 @@ const pollTask = async (
   onProgress?: (pct: number, status: string) => void
 ): Promise<any> => {
   const path = TASK_PATH(taskId);
-  const { url, proxyOrigin } = buildUrl(cfg.origin, path);
-  const headers = buildAliyunFetchHeaders({
-    targetUrl: url,
-    apiKey: cfg.apiKey,
-    proxyOrigin: proxyOrigin || cfg.origin,
-    extra: { 'X-Upstream-Path': path },
-  });
-
   // 官方建议：提交后约 10s 再查，之后 15～30s；3D 常需 30～120s
-  await sleep(8000);
   for (let i = 0; i < 90; i++) {
+    const { url, proxyOrigin } = buildUrl(cfg.origin, path);
+    const headers = buildAliyunFetchHeaders({
+      targetUrl: url,
+      apiKey: cfg.apiKey,
+      proxyOrigin: proxyOrigin || cfg.origin,
+      extra: { 'X-Upstream-Path': path },
+    });
     let res: Response;
     try {
       res = await fetch(url, { method: 'GET', headers });
     } catch (e: any) {
-      throw new Error(`查询 Tripo 任务失败：${e?.message || e}${qwenCorsHint(e?.message)}`);
+      throw new Error(
+        humanizeCreativeProviderError(`查询 3D 任务失败：${e?.message || e}${qwenCorsHint(e?.message)}`)
+      );
     }
     const json = await parseJson(res);
     if (!res.ok && !json.output) {
-      throw new Error(json.message || `查询 Tripo 任务失败 HTTP ${res.status}`);
+      throw new Error(json.message || `查询 3D 任务失败 HTTP ${res.status}`);
     }
     const out = json.output || json;
     const status = String(out.task_status || out.status || '').toUpperCase();
@@ -290,23 +296,59 @@ const isPublicHttpUrl = (u: string) => /^https?:\/\//i.test(u.trim());
 const guessImageType = (url: string): 'jpeg' | 'png' =>
   /\.png(\?|$)/i.test(url) ? 'png' : 'jpeg';
 
-const buildParameters = (quality: Model3dGenerateInput['quality']): Record<string, unknown> => {
-  if (quality === 'engine_ready') {
-    return {
-      texture_quality: 'standard',
-      geometry_quality: 'standard',
-      smart_low_poly: true,
-      face_limit: 20000,
-      pbr: true,
-      texture: true,
-    };
-  }
-  return {
-    texture_quality: 'detailed',
-    geometry_quality: 'ultra',
-    pbr: true,
+/**
+ * 参数策略（必须可复现此前可用路径）：
+ * - 高细节：H3.1 + detailed 贴图 + ultra 几何（已验证）
+ * - 引擎就绪：同模型 + smart_low_poly + face_limit（已验证；不默认切 P1，防未开通）
+ * - 可选：extreme 贴图 / 对齐朝向 / 真实尺寸 / negative_prompt
+ */
+const buildParameters = (
+  input: Model3dGenerateInput,
+  kind: 'text' | 'image' | 'multiview'
+): Record<string, unknown> => {
+  const textureQuality =
+    input.textureQuality ||
+    (input.quality === 'engine_ready' ? 'standard' : 'detailed');
+
+  const params: Record<string, unknown> = {
     texture: true,
+    pbr: true,
+    texture_quality: textureQuality,
+    export_uv: true,
   };
+
+  if (input.quality === 'engine_ready') {
+    params.geometry_quality = 'standard';
+    params.smart_low_poly = true;
+    params.face_limit = Math.min(
+      20000,
+      Math.max(500, Math.round(input.faceLimit || 20000))
+    );
+  } else {
+    params.geometry_quality = 'ultra';
+    if (input.faceLimit && input.faceLimit > 0) {
+      params.face_limit = Math.min(2_000_000, Math.round(input.faceLimit));
+    }
+  }
+
+  if (kind !== 'text') {
+    params.texture_alignment = 'original_image';
+  }
+  if (kind === 'image') {
+    params.enable_image_autofix = true;
+  }
+  if (input.alignImage && kind !== 'text') {
+    params.orientation = 'align_image';
+  }
+  if (input.autoSize) {
+    params.auto_size = true;
+  }
+  const neg = (input.negativePrompt || '').trim().slice(0, 255);
+  if (neg) {
+    params.negative_prompt = neg;
+  }
+
+  return params;
 };
 
 const resolveImageRefs = async (
@@ -334,23 +376,32 @@ const resolveImageRefs = async (
   return out;
 };
 
+const isParamReject = (msg: string) =>
+  /400|InvalidParameter|texture_quality|extreme|不支持|parameter/i.test(msg);
+
 /**
- * 经千问 MaaS 调用 Tripo/Tripo-H3.1（文生 / 图生 / 多视图）。
- * 本地上传图先经百炼临时存储换成 oss://，再提交异步任务。
+ * 经千问 MaaS 调用 Tripo-H3.1（文生 / 图生 / 多视图）。
+ * 本地上传图先经临时存储换成 oss://，再提交异步任务。
  */
 export const generateQwenTripoModel3d = async (
   input: Model3dGenerateInput
 ): Promise<Model3dGenerateResult> => {
   const cfg = resolveCfg();
-  const parameters = buildParameters(input.quality);
+  // 始终用已开通的 H3.1（后台可改 modelId）；不自动切 P1
+  const runCfg = {
+    ...cfg,
+    modelId: (cfg.modelId || '').trim() || DEFAULT_MODEL,
+  };
   input.onProgress?.(2, 'queued');
 
   let taskInput: Record<string, unknown>;
+  let kind: 'text' | 'image' | 'multiview' = 'text';
 
   if (input.mode === 'text') {
     const prompt = (input.prompt || '').trim();
     if (!prompt) throw new Error('请填写文字描述');
     taskInput = { prompt: prompt.slice(0, 1024) };
+    kind = 'text';
   } else {
     const imgs = (
       input.sourceImages?.length
@@ -365,7 +416,7 @@ export const generateQwenTripoModel3d = async (
 
     if (!imgs.length) throw new Error('请上传或选用产品图');
 
-    const resolved = await resolveImageRefs(cfg, imgs, input.onProgress);
+    const resolved = await resolveImageRefs(runCfg, imgs, input.onProgress);
 
     if (resolved.length >= 2) {
       const images: Record<string, unknown>[] = [{}, {}, {}, {}];
@@ -376,18 +427,41 @@ export const generateQwenTripoModel3d = async (
         };
       }
       taskInput = { images };
+      kind = 'multiview';
     } else {
       taskInput = { image: resolved[0] };
-      parameters.enable_image_autofix = true;
+      kind = 'image';
     }
   }
 
+  let parameters = buildParameters(input, kind);
+
   try {
-    const taskId = await createTask(cfg, taskInput, parameters);
+    let taskId: string;
+    try {
+      taskId = await createTask(runCfg, taskInput, parameters);
+    } catch (e: any) {
+      // extreme 等进阶贴图若账户不支持，自动回退到已验证的 detailed，保证能用
+      const msg = String(e?.message || e);
+      if (
+        parameters.texture_quality === 'extreme' &&
+        isParamReject(msg)
+      ) {
+        input.onProgress?.(6, 'fallback');
+        parameters = { ...parameters, texture_quality: 'detailed' };
+        taskId = await createTask(runCfg, taskInput, parameters);
+      } else {
+        throw e;
+      }
+    }
     input.onTaskCreated?.(taskId);
     input.onProgress?.(12, 'running');
-    const out = await pollTask(cfg, taskId, input.onProgress);
-    return pickUrls(out, taskId);
+    const out = await pollTask(runCfg, taskId, input.onProgress);
+    return {
+      ...pickUrls(out, taskId),
+      provider: 'qwen_tripo',
+      modelVersion: runCfg.modelId,
+    };
   } catch (e: any) {
     throw new Error(humanizeCreativeProviderError(e?.message || e));
   }

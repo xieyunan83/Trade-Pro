@@ -32,6 +32,7 @@ import {
   recoverModel3dJobs,
   runTripoPostProcess,
   sanitizeModel3dJobs,
+  type Model3dTextureQuality,
   type TripoConvertFormat,
 } from '../services/model3dService';
 import { loadDataProviderLocal, saveDataProvider } from '../services/dataProviders';
@@ -57,6 +58,10 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
   const [mode, setMode] = useState<Model3dMode>('image');
   const [modelSkillId, setModelSkillId] = useState<Model3dSkillId>('turntable_hero');
   const [quality, setQuality] = useState<Model3dQuality>('high_detail');
+  /** 默认高清：与此前可用路径一致；极致为可选增强 */
+  const [textureQuality, setTextureQuality] = useState<Model3dTextureQuality>('detailed');
+  const [alignImage, setAlignImage] = useState(true);
+  const [autoSize, setAutoSize] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [sourceImages, setSourceImages] = useState<string[]>([]);
   const [skuPick, setSkuPick] = useState('');
@@ -162,7 +167,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     const key = quickKey.replace(/^\uFEFF/, '').replace(/^Bearer\s+/i, '').replace(/\s+/g, '').trim();
     if (!key) {
       setMsgTone('error');
-      setMsg('请粘贴图生 3D API Key（千问 sk-… / Tripo tsk_… / 备选均可）');
+      setMsg('请粘贴图生 3D API Key（数据接入通道 Key / 备选均可）');
       return;
     }
     setSavingKey(true);
@@ -188,7 +193,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     setMsg(
       st.ready
         ? target === 'qwen_tripo'
-          ? '千问通道 Key 已保存并启用，可以开始生成'
+          ? '3D 主通道 Key 已保存并启用，可以开始生成'
           : target === 'hunyuan3d'
             ? '3D 备选 Key 已保存并启用，可以开始生成'
             : '3D API 已保存并启用，可以开始生成'
@@ -352,20 +357,24 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
 
     const skill =
       MODEL3D_SKILLS.find((s) => s.id === modelSkillId) || MODEL3D_SKILLS[0];
-    const fullPrompt = [
-      prompt.trim() || skill.defaultPrompt,
-      skill.negativeHints ? `Avoid: ${skill.negativeHints}` : '',
-    ]
-      .filter(Boolean)
-      .join('\n');
+    const fullPrompt = (prompt.trim() || skill.defaultPrompt).slice(0, 1024);
+    const negativePrompt = (skill.negativeHints || '').trim().slice(0, 255);
 
     try {
       const result = await generateModel3d({
         mode,
         prompt: fullPrompt,
+        negativePrompt: negativePrompt || undefined,
         sourceImage: sourceImages[0],
         sourceImages,
         quality,
+        textureQuality:
+          quality === 'engine_ready' && textureQuality === 'extreme'
+            ? 'detailed'
+            : textureQuality,
+        alignImage: mode === 'image' ? alignImage : false,
+        autoSize,
+        faceLimit: quality === 'engine_ready' ? 20000 : undefined,
         onTaskCreated: (taskId) => {
           patchJob(job.id, { providerTaskId: taskId });
         },
@@ -423,11 +432,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
       });
       setBusy(false);
       setMsgTone('ok');
-      setMsg(
-        readyNow.provider === 'tripo'
-          ? '3D 已生成（Tripo 官方）。可预览/下载，或使用右侧后处理：高清贴图 · 减面 · 格式转换'
-          : '3D 已生成，可预览 / 下载；本机缓存写入中…'
-      );
+      setMsg('3D 已生成，可预览 / 下载；本机缓存写入中…');
 
       void (async () => {
         try {
@@ -496,17 +501,17 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     const taskId = (active.providerTaskId || active.sourceTaskId || '').trim();
     if (!taskId || active.provider === 'local') {
       setMsgTone('error');
-      setMsg('本地导入的模型无法云端后处理；请用 Tripo 生成后再试。');
+      setMsg('本地导入的模型无法云端后处理；请直接下载生成结果。');
       return;
     }
     if (!isTripoOfficialReady()) {
       setMsgTone('error');
-      setMsg('后处理需启用 Tripo 官方 Key（tsk_）。');
+      setMsg('当前通道不支持云端后处理，请直接下载生成结果。');
       return;
     }
     if (active.provider && active.provider !== 'tripo') {
       setMsgTone('error');
-      setMsg('当前模型非 Tripo 官方任务，无法使用贴图/减面/转换。请用已启用的 Tripo Key 重新生成。');
+      setMsg('当前模型不支持云端贴图/减面/转换，请直接下载生成结果。');
       return;
     }
     setBusy(true);
@@ -613,8 +618,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
             </div>
             <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">产品设计 · 3D 图</h2>
             <p className="text-sm text-slate-500 font-medium mt-1 max-w-2xl">
-              对齐 Tripo 工作流：图/文/多视图生成（H3.1 高保真 / P1 低面）→ 高清贴图 → 智能减面 →
-              多格式导出（GLB / OBJ / STL / FBX 等）。
+              图生 / 文生 / 多视图建模：可选贴图档（标清·高清·极致）、对齐参考朝向、真实尺寸与智能低模；生成后预览、本机缓存与 GLB 下载。
             </p>
             <div className="mt-2">
               <CreativePipelineBar current="3d" onNavigate={onNavigateModule} />
@@ -642,8 +646,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                 <KeyRound size={14} /> 尚未配置图生 3D API
               </div>
               <p className="text-[11px] text-rose-800/90 font-medium leading-relaxed">
-                未配置 Key 时点击「生成」不会创建任务。请优先在「数据接入 → 图生 3D」填写 Tripo 官方 Key（tsk_），以启用高清贴图 /
-                减面 / 多格式导出；也可配置千问通道作为备选。
+                未配置 Key 时点击「生成」不会创建任务。请在「数据接入」配置图生 3D 主通道 Key（管理员也可在下方快捷粘贴）。
               </p>
               {isAdmin && (
                 <div className="space-y-2 pt-1">
@@ -654,7 +657,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                     type="password"
                     value={quickKey}
                     onChange={(e) => setQuickKey(e.target.value)}
-                    placeholder="粘贴 Key（tsk_ 主路径 / TokenHub 备选）"
+                    placeholder="粘贴图生 3D API Key"
                     className="w-full rounded-xl border border-rose-200 bg-white px-3 py-2 text-sm"
                     autoComplete="off"
                   />
@@ -707,6 +710,9 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                       setModelSkillId(s.id);
                       if (s.defaultPrompt) setPrompt(s.defaultPrompt);
                       setQuality(s.qualityHint);
+                      setTextureQuality(
+                        s.qualityHint === 'engine_ready' ? 'standard' : 'detailed'
+                      );
                     }}
                     className={`w-full text-left rounded-xl border px-2.5 py-2 ${
                       modelSkillId === s.id
@@ -760,7 +766,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                   />
                 </button>
                 <p className="text-[10px] text-slate-400 font-medium leading-relaxed">
-                  多选 ≥2 张将按多视图重建（更贴近平面设计）；单张则走常规图生 3D。
+                  多选 2～4 张按「前 → 左 → 后 → 右」多视图重建（几何更准）；单张走图生并自动修图。
                 </p>
               </div>
             ) : null}
@@ -783,29 +789,87 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
               <div className="mt-1 grid grid-cols-2 gap-2">
                 <button
                   type="button"
-                  onClick={() => setQuality('high_detail')}
+                  onClick={() => {
+                    setQuality('high_detail');
+                    if (textureQuality === 'standard') setTextureQuality('detailed');
+                  }}
                   className={`rounded-xl border p-3 text-left ${
                     quality === 'high_detail' ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200'
                   }`}
                 >
                   <div className="text-xs font-black text-slate-800 flex items-center gap-1">
-                    <Sparkles size={12} /> 高细节 H3.1
+                    <Sparkles size={12} /> 高细节
                   </div>
-                  <p className="text-[10px] text-slate-500 mt-1 font-medium">官方高保真 · PBR · detailed</p>
+                  <p className="text-[10px] text-slate-500 mt-1 font-medium">超清几何 · PBR · 高保真</p>
                 </button>
                 <button
                   type="button"
-                  onClick={() => setQuality('engine_ready')}
+                  onClick={() => {
+                    setQuality('engine_ready');
+                    setTextureQuality('standard');
+                  }}
                   className={`rounded-xl border p-3 text-left ${
                     quality === 'engine_ready' ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200'
                   }`}
                 >
                   <div className="text-xs font-black text-slate-800 flex items-center gap-1">
-                    <Layers size={12} /> 引擎就绪 P1
+                    <Layers size={12} /> 引擎就绪
                   </div>
-                  <p className="text-[10px] text-slate-500 mt-1 font-medium">低面拓扑 · 引擎/打印预备</p>
+                  <p className="text-[10px] text-slate-500 mt-1 font-medium">智能低模 · ≤2 万面</p>
                 </button>
               </div>
+            </div>
+
+            <div>
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                贴图质量
+              </label>
+              <div className="mt-1 grid grid-cols-3 gap-1.5">
+                {(
+                  [
+                    { id: 'standard' as const, label: '标清', hint: '更快' },
+                    { id: 'detailed' as const, label: '高清', hint: '推荐' },
+                    { id: 'extreme' as const, label: '极致', hint: '8K' },
+                  ] as const
+                ).map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => setTextureQuality(t.id)}
+                    className={`rounded-xl border px-2 py-2 text-center ${
+                      textureQuality === t.id
+                        ? 'border-indigo-500 bg-indigo-50'
+                        : 'border-slate-200 bg-white'
+                    }`}
+                  >
+                    <div className="text-[11px] font-black text-slate-800">{t.label}</div>
+                    <div className="text-[9px] text-slate-500 font-medium mt-0.5">{t.hint}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-1.5">
+              {mode === 'image' && (
+                <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={alignImage}
+                    onChange={(e) => setAlignImage(e.target.checked)}
+                    className="rounded border-slate-300 text-indigo-600"
+                  />
+                  <span className="text-[11px] font-bold text-slate-700">对齐参考图朝向</span>
+                </label>
+              )}
+              <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={autoSize}
+                  onChange={(e) => setAutoSize(e.target.checked)}
+                  className="rounded border-slate-300 text-indigo-600"
+                />
+                <span className="text-[11px] font-bold text-slate-700">真实世界尺寸（米，适合 AR/引擎）</span>
+              </label>
             </div>
 
             <div>
@@ -1027,16 +1091,16 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                 )}
                 {active.modelVersion && (
                   <span className="text-[9px] font-bold text-slate-500">
-                    {active.provider || 'tripo'} · {active.modelVersion}
+                    {active.quality === 'engine_ready' ? '引擎就绪' : '高细节'} · 已生成
                   </span>
                 )}
               </div>
               {isTripoOfficialReady() &&
-                active.provider !== 'local' &&
+                active.provider === 'tripo' &&
                 (active.providerTaskId || active.sourceTaskId) && (
                   <div className="rounded-xl border border-white/10 bg-white/5 p-2.5 space-y-2">
                     <div className="text-[10px] font-black text-teal-200/90 uppercase tracking-wider">
-                      Tripo 后处理（与官网同链路）
+                      云端后处理
                     </div>
                     <div className="flex flex-wrap gap-1.5">
                       <button
