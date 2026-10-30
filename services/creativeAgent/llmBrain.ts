@@ -3,6 +3,10 @@
  * 默认走平台已配置的对话模型；失败由上层回退 ruleBrain。
  */
 import { callQwen } from '../geminiService';
+import {
+  CREATIVE_LLM_SYSTEM_PLAN,
+  composeImageGenerationPrompt,
+} from '../creativeQualityKit';
 import type { CreativeBrief, CreativeBrainPort, CreativePlanInput } from './types';
 import { ruleCreativeBrain } from './ruleBrain';
 
@@ -12,16 +16,6 @@ type LlmBriefJson = {
   toolPrompt?: string;
   qaChecklist?: string[];
 };
-
-const SYSTEM_PLAN = `你是澄海玩具出口场景的「设计编排助手」。
-根据 Skill 与用户需求，输出严格 JSON（不要 markdown）：
-{
-  "titleZh": "短标题",
-  "summaryZh": "给业务员看的确认摘要，中文，禁止出现任何 AI 供应商/模型商品名",
-  "toolPrompt": "给生图引擎的英文提示词，专业、可执行、含构图与光影，禁止水印与乱码字",
-  "qaChecklist": ["质检项1", "质检项2", "质检项3", "质检项4"]
-}
-要求：保留产品身份；贴合 Skill；适合跨境电商/展会；不要编造不存在的认证文字。`;
 
 export const llmCreativeBrain: CreativeBrainPort = {
   id: 'llm',
@@ -46,7 +40,7 @@ export const llmCreativeBrain: CreativeBrainPort = {
     ].join('\n');
 
     try {
-      const raw = await callQwen(`${SYSTEM_PLAN}\n\n---\n${userBlock}`, {
+      const raw = await callQwen(`${CREATIVE_LLM_SYSTEM_PLAN}\n\n---\n${userBlock}`, {
         jsonMode: true,
         timeoutMs: 45_000,
       });
@@ -57,7 +51,15 @@ export const llmCreativeBrain: CreativeBrainPort = {
         const m = raw.match(/\{[\s\S]*\}/);
         if (m) parsed = JSON.parse(m[0]) as LlmBriefJson;
       }
-      const toolPrompt = (parsed.toolPrompt || '').trim() || fallback.toolPrompt;
+      const llmCore = (parsed.toolPrompt || '').trim();
+      // 再套质量内核：身份锁 + 负向库 + 商业脚注，避免 LLM 漏掉一致性
+      const hardened = composeImageGenerationPrompt({
+        baseToolPrompt: llmCore || fallback.toolPrompt,
+        hasReferenceImages: input.hasReferenceImages,
+        skillNegative: input.skillNegativePrompt,
+        series: input.skillId === 'listing_set' || input.skillId === 'multi_angle',
+      });
+      const toolPrompt = hardened.prompt;
       const qa =
         Array.isArray(parsed.qaChecklist) && parsed.qaChecklist.length >= 2
           ? parsed.qaChecklist.map(String).slice(0, 8)

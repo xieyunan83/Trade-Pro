@@ -9,6 +9,13 @@ import { env } from './env';
 import { MULTI_ANGLE_VIEWS } from './creativeAssetBridge';
 import { resolveToDataUrlOrHttps } from './creativeAssetVault';
 import { compressImageDataUrl } from './catalogExcelService';
+import {
+  COMMERCIAL_CRAFT_FOOTER,
+  UNIVERSAL_IMAGE_NEGATIVES,
+  composeImageGenerationPrompt,
+  identityLockBlock,
+  mergeNegatives,
+} from './creativeQualityKit';
 
 export type DesignGenerateOpts = {
   prompt: string;
@@ -16,6 +23,10 @@ export type DesignGenerateOpts = {
   size?: '1K' | '2K' | '4K';
   thinkingMode?: boolean;
   referenceImages?: string[];
+  /** 额外负向（Skill / Brief） */
+  negativePrompt?: string;
+  /** Listing 等系列一致性 */
+  series?: boolean;
 };
 
 export type DesignGenerateResult = {
@@ -144,6 +155,28 @@ const stripMultiViewCollageLanguage = (prompt: string): string =>
     .replace(/\s+/g, ' ')
     .trim();
 
+/** 末道加固：即使上游 Brief 已含约束，仍确保身份锁与负向库在位 */
+const hardenDesignPrompt = (
+  prompt: string,
+  hasRefs: boolean,
+  opts: { negativePrompt?: string; series?: boolean }
+): string => {
+  const alreadyHardened =
+    /NEGATIVE CONSTRAINTS/i.test(prompt) && /IDENTITY LOCK/i.test(prompt);
+  if (alreadyHardened) {
+    const extraNeg = mergeNegatives(opts.negativePrompt);
+    return extraNeg && !prompt.includes(extraNeg.slice(0, 24))
+      ? `${prompt}\nAlso avoid: ${extraNeg}`
+      : prompt;
+  }
+  return composeImageGenerationPrompt({
+    baseToolPrompt: prompt,
+    hasReferenceImages: hasRefs,
+    skillNegative: opts.negativePrompt,
+    series: !!opts.series,
+  }).prompt;
+};
+
 export const generateDesignImages = async (
   opts: DesignGenerateOpts
 ): Promise<DesignGenerateResult> => {
@@ -155,9 +188,14 @@ export const generateDesignImages = async (
 
   try {
     const refs = await prepareReferenceImages(opts.referenceImages);
+    const hasRefs = !!(refs && refs.length);
+    const prompt = hardenDesignPrompt(opts.prompt, hasRefs, {
+      negativePrompt: opts.negativePrompt,
+      series: opts.series || n > 1,
+    });
     const result = await generateWanImage(
       {
-        prompt: opts.prompt,
+        prompt,
         size,
         n,
         thinkingMode,
@@ -204,17 +242,20 @@ export const generateMultiAngleDesignImages = async (
         ...(identityLockUrl ? [identityLockUrl] : []),
         ...(userRefs || []),
       ].slice(0, 4);
+      const lockLine = identityLockUrl
+        ? `${identityLockBlock(true, 'image')} Only change camera orbit / viewing angle — do not redesign or recolor the product.`
+        : 'Establish the definitive product look for this SKU; later angles will lock to this image.';
       const prompt = [
         productBase,
         `This request generates exactly one image for camera angle「${view.label}」only.`,
         view.prompt,
         'Never combine multiple angles into one frame.',
-        identityLockUrl
-          ? 'IDENTITY LOCK: Match the attached reference photograph exactly for shape, materials, silver finish, plastic accents, ear shape, leg proportions, screen size/placement and cartoon eyes. Only change camera orbit / viewing angle — do not redesign or recolor the product.'
-          : 'Establish the definitive product look for this SKU; later angles will lock to this image.',
+        lockLine,
+        COMMERCIAL_CRAFT_FOOTER,
+        `NEGATIVE CONSTRAINTS (must avoid): ${mergeNegatives(UNIVERSAL_IMAGE_NEGATIVES, opts.negativePrompt, 'multi-panel, collage, contact sheet, 2x2 grid, four views in one image, redesign between angles')}`,
       ]
         .filter(Boolean)
-        .join(' ');
+        .join('\n');
       const result = await generateWanImage(
         {
           prompt,

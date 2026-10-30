@@ -41,6 +41,7 @@ import { persistModel3dJob } from '../services/creativeAssetPersist';
 import { isVaultRef, putBlobInVault, tryPersistMediaUrl } from '../services/creativeAssetVault';
 import { CreativePipelineBar, CreativeRefPicker } from './CreativeRefPicker';
 import { MODEL3D_SKILLS, type Model3dSkillId } from '../services/creativeSkills/model3dSkills';
+import { UNIVERSAL_3D_NEGATIVES, mergeNegatives } from '../services/creativeQualityKit';
 import { Model3dOrbitViewer } from './Model3dOrbitViewer';
 import { CreativeStorageBadge } from './CreativeStorageBadge';
 import { VaultImg, useVaultUrl } from './VaultMedia';
@@ -358,7 +359,10 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     const skill =
       MODEL3D_SKILLS.find((s) => s.id === modelSkillId) || MODEL3D_SKILLS[0];
     const fullPrompt = (prompt.trim() || skill.defaultPrompt).slice(0, 1024);
-    const negativePrompt = (skill.negativeHints || '').trim().slice(0, 255);
+    const negativePrompt = mergeNegatives(
+      UNIVERSAL_3D_NEGATIVES,
+      skill.negativeHints
+    ).slice(0, 255);
 
     try {
       const result = await generateModel3d({

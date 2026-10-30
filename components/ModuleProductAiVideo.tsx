@@ -34,6 +34,7 @@ import { humanizeCreativeProviderError } from '../services/providerErrorMessage'
 import { consumeCreativeHandoff } from '../services/creativeAssetBridge';
 import { CreativePipelineBar, CreativeRefPicker } from './CreativeRefPicker';
 import { VIDEO_SKILLS, type VideoSkillId } from '../services/creativeSkills/videoSkills';
+import { composeVideoGenerationPrompt } from '../services/creativeQualityKit';
 
 type Props = {
   currentUser: User;
@@ -148,15 +149,13 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
   const activeVideoSkill =
     VIDEO_SKILLS.find((s) => s.id === videoSkillId) || VIDEO_SKILLS[0];
 
-  const buildFullPrompt = () => {
-    const base = prompt.trim() || activeVideoSkill.defaultPrompt;
-    const board = storyboard.trim();
-    const avoid = activeVideoSkill.negativeHints
-      ? `\nAvoid: ${activeVideoSkill.negativeHints}`
-      : '';
-    if (!board) return `${base}${avoid}`.trim();
-    return `${base}\n分镜：${board}${avoid}`.trim();
-  };
+  const buildVideoPromptParts = (hasRefs: boolean) =>
+    composeVideoGenerationPrompt({
+      basePrompt: prompt.trim() || activeVideoSkill.defaultPrompt,
+      storyboard: storyboard.trim() || undefined,
+      hasReferenceImages: hasRefs,
+      skillNegative: activeVideoSkill.negativeHints,
+    });
 
   const createDraft = async () => {
     if (!provider.ready) {
@@ -208,16 +207,17 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
     );
 
     try {
+      const parts = buildVideoPromptParts(images.length > 0);
       const result = await generateProductVideo({
         mode: effectiveMode,
-        prompt: buildFullPrompt() || 'Product showcase, smooth camera orbit, studio lighting',
+        prompt: parts.prompt || 'Product showcase, smooth camera orbit, studio lighting',
         sourceImage: images[0],
         referenceImages: images.slice(1),
         durationSec,
         aspect,
         resolution: '720P',
         tier: 'draft',
-        negativePrompt: 'blurry, low quality, distorted product, watermark, text overlay',
+        negativePrompt: parts.negative,
         onProgress: (pct, status) => {
           patchJob(job.id, {
             progress: Math.round(pct),
@@ -273,19 +273,25 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
     setMsg('正在提交正片任务…');
 
     try {
+      const skillForJob =
+        VIDEO_SKILLS.find((s) => s.defaultPrompt && active.prompt.includes(s.defaultPrompt.slice(0, 40))) ||
+        activeVideoSkill;
+      const fullParts = composeVideoGenerationPrompt({
+        basePrompt: active.prompt || skillForJob.defaultPrompt || 'Product hero video, cinematic lighting',
+        storyboard: active.storyboard,
+        hasReferenceImages: (active.sourceImages || []).length > 0,
+        skillNegative: skillForJob.negativeHints,
+      });
       const result = await generateProductVideo({
         mode: active.mode,
-        prompt:
-          [active.prompt, active.storyboard ? `分镜：${active.storyboard}` : '']
-            .filter(Boolean)
-            .join('\n') || 'Product hero video, cinematic lighting',
+        prompt: fullParts.prompt,
         sourceImage: active.sourceImages[0],
         referenceImages: active.sourceImages.slice(1),
         durationSec: active.durationSec,
         aspect: active.aspect,
         resolution: '1080P',
         tier: 'full',
-        negativePrompt: 'blurry, low quality, distorted product, watermark, text overlay',
+        negativePrompt: fullParts.negative,
         onProgress: (pct, status) => {
           patchJob(active.id, {
             progress: Math.round(pct),
@@ -351,7 +357,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
             </div>
             <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">产品 AI 视频</h2>
             <p className="text-sm text-slate-500 font-medium mt-1 max-w-2xl">
-              可直接选用平面多角度套图或产品库图片；先出样片确认，再渲正片。
+              可直接选用平面多角度套图或产品库图片；有参考时锁定产品身份并关闭提示扩写防漂移。先出样片确认，再渲正片。
             </p>
             <div className="mt-2">
               <CreativePipelineBar current="video" onNavigate={onNavigateModule} />

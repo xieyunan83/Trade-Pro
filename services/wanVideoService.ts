@@ -286,11 +286,13 @@ export const generateProductVideo = async (input: VideoGenerateInput): Promise<V
   input.onProgress?.(3, 'queued');
 
   let taskInput: Record<string, unknown>;
+  // 有参考图时关闭 prompt_extend，减少模型改写导致的身份漂移（一致性优先）
+  const hasMediaRefs = input.mode !== 'text';
   const parameters: Record<string, unknown> = {
     resolution,
     ratio: aspectToRatio(input.aspect),
     duration,
-    prompt_extend: true,
+    prompt_extend: !hasMediaRefs,
   };
 
   if (input.mode === 'text') {

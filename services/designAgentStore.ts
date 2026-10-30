@@ -87,11 +87,11 @@ export const DESIGN_SKILLS: DesignSkillDef[] = [
     category: '电商',
     hint: '白底/场景主视觉，适合独立站与询盘',
     defaultPrompt:
-      'Amazon/Shopify style hero product photograph, single toy centered, pure #FFFFFF seamless cyclorama, soft dual softbox + gentle rim light, true-to-life color, crisp edges, commercial catalog sharpness, slight contact shadow, square crop safe margins, no props competing with product',
+      'Amazon/Shopify style hero product photograph, single toy centered, pure #FFFFFF seamless cyclorama, soft dual softbox + gentle rim light, true-to-life plastics and prints, crisp micro-detail on edges and logos, commercial catalog sharpness, slight contact shadow, subject fills ~85% frame, square crop safe margins, no competing props, locked SKU identity',
     negativePrompt:
-      'watermark, logo spam, garbled text, busy background, harsh specular blowout, distorted proportions, extra limbs, low-res, stock collage',
+      'watermark, logo spam, garbled text, busy background, harsh specular blowout, distorted proportions, extra limbs, low-res, stock collage, color drift from reference, fake certification seals, neon gel lighting',
     craftNotes:
-      '遵循跨境主图规范：主体占画幅约 85%、纯白底、真实材质、禁止伪造认证标。光影以电商柔箱为主，避免影棚彩色凝胶。',
+      '遵循跨境主图规范：主体占画幅约 85%、纯白底、真实材质、禁止伪造认证标。光影以电商柔箱为主，避免影棚彩色凝胶。有参考图时外形/配色必须锁死，只允许构图与光影微调。',
     qaChecklist: [
       '白底干净、无明显灰底或渐变脏边',
       '产品完整、无裁切关键部件',
@@ -106,11 +106,11 @@ export const DESIGN_SKILLS: DesignSkillDef[] = [
     category: '电商',
     hint: '卖点分镜风格，多张同规格',
     defaultPrompt:
-      'Marketplace listing feature-frame style: one clear selling point per frame, toy product hero with optional lifestyle inset, bold but clean composition, high-key lighting, color-accurate plastics, ready for A+ / main+bullet image set, consistent brand framing across series',
+      'Marketplace listing feature-frame style: one clear selling point per frame, toy product hero with optional lifestyle inset, bold but clean composition, high-key softbox lighting, color-accurate plastics, ready for A+ / main+bullet image set, identical brand framing crop margins and color temperature across the series, locked SKU identity',
     negativePrompt:
-      'crowded infographic clutter, unreadable micro-text, fake UI badges, watermark, mismatched product identity between frames',
+      'crowded infographic clutter, unreadable micro-text, fake UI badges, watermark, mismatched product identity between frames, style drift, different tooling per frame',
     craftNotes:
-      '对标 Listing 卖点图：一图一事（尺寸/玩法/安全/场景）。文案区仅留白示意，不生成细小乱字。全套保持同一产品身份与色温。',
+      '对标 Listing 卖点图：一图一事（尺寸/玩法/安全/场景）。文案区仅留白示意，不生成细小乱字。全套必须同一产品身份、同一色温与裁切边距——像同一套摄影棚连拍。',
     qaChecklist: [
       '卖点主题单一清晰',
       '与主图产品为同一 SKU 身份',

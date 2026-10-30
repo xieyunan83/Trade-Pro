@@ -32,6 +32,7 @@ import {
   generateDesignImages,
   getDesignAgentConfigStatus,
 } from '../services/designAgentService';
+import { composeImageGenerationPrompt } from '../services/creativeQualityKit';
 import { loadCatalogSkus } from '../services/productCatalogTypes';
 import { compressImageDataUrl } from '../services/catalogExcelService';
 import { consumeCreativeHandoff } from '../services/creativeAssetBridge';
@@ -162,21 +163,27 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
     if (sk.defaultPrompt) setPrompt(sk.defaultPrompt);
   };
 
-  const buildFinalPrompt = () => {
+  const buildFinalPrompt = (hasRefs = false) => {
     const userBit = prompt.trim();
-    const sku = active?.skuName
-      ? `Product: ${active.skuName}${active.skuCode ? ` (${active.skuCode})` : ''}. `
-      : skuPick
-        ? (() => {
-            const s = skus.find((x) => x.id === skuPick);
-            return s ? `Product: ${s.name} (${s.skuCode}). ` : '';
-          })()
-        : '';
-    const skillBit = skill.defaultPrompt ? `${skill.defaultPrompt}. ` : '';
-    const craftBit = skill.craftNotes ? `Craft notes: ${skill.craftNotes}. ` : '';
-    const channelBit = `Target retail channel: ${skill.channel}. Color direction: ${skill.palette}. `;
-    const avoidBit = skill.negativePrompt ? ` Avoid: ${skill.negativePrompt}.` : '';
-    return `${sku}${channelBit}${craftBit}${skillBit}${userBit || 'Create a polished commercial toy packaging design visual.'}${avoidBit}`.trim();
+    const skuName =
+      active?.skuName ||
+      (skuPick ? skus.find((x) => x.id === skuPick)?.name : undefined);
+    const skuCode =
+      active?.skuCode ||
+      (skuPick ? skus.find((x) => x.id === skuPick)?.skuCode : undefined);
+    return composeImageGenerationPrompt({
+      skillDefaultPrompt:
+        skill.defaultPrompt ||
+        'Create a polished commercial toy packaging design visual',
+      craftNotes: skill.craftNotes,
+      userBrief: userBit,
+      skuName,
+      skuCode,
+      channel: skill.channel,
+      palette: skill.palette,
+      hasReferenceImages: hasRefs,
+      skillNegative: skill.negativePrompt,
+    }).prompt;
   };
 
   const requestGenerate = () => {
@@ -269,7 +276,8 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
   const runGenerate = async () => {
     setConfirmOpen(false);
     const proj = ensureProject();
-    let finalPrompt = buildFinalPrompt();
+    const refImages = collectRefImages(proj);
+    let finalPrompt = buildFinalPrompt(refImages.length > 0);
     try {
       const skuRow = skus.find((s) => s.id === skuPick || s.skuCode === skuPick);
       const profiles = await loadProductCatalog();
@@ -292,7 +300,6 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
     } catch {
       /* ignore */
     }
-    const refImages = collectRefImages(proj);
     const modeHint = refImages.length
       ? `参考图 ${refImages.length} 张 + 文字`
       : '纯文字';
@@ -312,6 +319,8 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
         n: count,
         thinkingMode: false,
         referenceImages: refImages.length ? refImages : undefined,
+        negativePrompt: skill.negativePrompt,
+        series: count > 1,
       });
       const now = Date.now();
       const newAssetsRaw: PackagingAsset[] = result.images.map((url) => ({

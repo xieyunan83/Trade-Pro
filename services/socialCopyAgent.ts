@@ -168,28 +168,34 @@ export const generateSocialCoverImage = async (opts: {
   const square = opts.platform === 'instagram' || opts.platform === 'whatsapp';
 
   opts.onProgress?.('正在生成渠道配图…');
-  const prompt = [
-    vertical
-      ? 'Vertical 9:16 short-video cover poster for toy export marketing'
-      : square
-        ? 'Square 1:1 social product post visual'
-        : 'Landscape social share image for B2B toy wholesale',
-    `Product: ${opts.productName}`,
-    opts.highlight ? `Highlight: ${opts.highlight}` : '',
-    'Commercial toy product photography style, clean background, bold but sparse cover typography area left empty (no readable garbled text), no watermark, no logos of AI vendors',
-    opts.locale === 'zh' ? '适合中国玩具外贸社媒' : 'for global toy importers feed',
-    meta ? `Target canvas ${meta.size}` : '',
-  ]
-    .filter(Boolean)
-    .join('. ');
+  const { composeImageGenerationPrompt } = await import('./creativeQualityKit');
+  const composed = composeImageGenerationPrompt({
+    skillDefaultPrompt: [
+      vertical
+        ? 'Vertical 9:16 short-video cover poster for toy export marketing'
+        : square
+          ? 'Square 1:1 social product post visual'
+          : 'Landscape social share image for B2B toy wholesale',
+      'Commercial toy product photography, clean background, bold but sparse cover typography area left empty',
+      opts.locale === 'zh' ? '适合中国玩具外贸社媒' : 'for global toy importers feed',
+      meta ? `Target canvas ${meta.size}` : '',
+    ]
+      .filter(Boolean)
+      .join('. '),
+    userBrief: opts.highlight ? `Highlight: ${opts.highlight}` : undefined,
+    skuName: opts.productName,
+    hasReferenceImages: !!(opts.referenceImages && opts.referenceImages.length),
+    skillNegative: 'platform UI chrome, garbled cover text, watermark, fake badges',
+  });
 
   try {
     const result = await generateDesignImages({
-      prompt,
+      prompt: composed.prompt,
       size: '1K',
       n: 1,
       thinkingMode: false,
       referenceImages: opts.referenceImages?.slice(0, 2),
+      negativePrompt: composed.negative,
     });
     const url = result.images[0];
     if (!url) return undefined;

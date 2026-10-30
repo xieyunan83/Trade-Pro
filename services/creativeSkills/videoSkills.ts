@@ -33,10 +33,11 @@ export const VIDEO_SKILLS: VideoSkillDef[] = [
     category: '电商',
     hint: '慢速环绕 / 推近，独立站与亚马逊 A+ 视频主视觉',
     defaultPrompt:
-      'Cinematic product hero video of the toy, slow 360 orbit then gentle push-in, soft three-point studio lighting, seamless white or soft gradient cyclorama, sharp macro detail on materials, commercial ecommerce hero, no watermark, no on-screen text unless specified',
+      'Cinematic product hero video of the toy, slow 360 orbit then gentle push-in, soft three-point studio lighting, seamless white or soft gradient cyclorama, sharp macro detail on materials, commercial ecommerce hero, locked product identity for entire clip, no watermark, no on-screen text unless specified',
     storyboardZh:
       '0–2s 正面定格 → 2–6s 缓慢环绕展示外形与配色 → 6–8s 推近关键细节（按键/开窗/材质）→ 8–10s 回到英雄角收尾',
-    negativeHints: 'jitter, morphing, extra limbs, blurry logo, watermark, stock lower-third spam',
+    negativeHints:
+      'jitter, morphing, identity drift, extra limbs, blurry logo, watermark, stock lower-third spam, melting plastics, frame-to-frame redesign',
     qaChecklist: [
       '产品外形与参考图一致，无变形',
       '运镜平滑，无明显抖动或闪烁',
@@ -50,10 +51,11 @@ export const VIDEO_SKILLS: VideoSkillDef[] = [
     category: 'Listing',
     hint: '每 2–3 秒一个卖点动作，适合 Listing 主视频',
     defaultPrompt:
-      'Product feature demo video for marketplace listing, clear beat-by-beat demonstrations of toy functions, bright even lighting, readable motion, kid-safe playful energy without chaos, commercial clarity, no watermark',
+      'Product feature demo video for marketplace listing, clear beat-by-beat demonstrations of toy functions, bright even softbox lighting, readable motion, kid-safe playful energy without chaos, commercial clarity, same SKU look in every beat, no watermark',
     storyboardZh:
       '镜头1 开箱/亮相 → 镜头2 核心玩法演示 → 镜头3 安全/易用细节 → 镜头4 多件/配件展示 → 镜头5 收尾号召（静帧可叠卖点）',
-    negativeHints: 'chaotic cuts, unreadable action, dark underexposure, fake UI overlays',
+    negativeHints:
+      'chaotic cuts, unreadable action, dark underexposure, fake UI overlays, morphing product, identity drift',
     qaChecklist: ['每个卖点动作可看清', '节奏适合 15–30 秒 Listing', '无乱码字幕'],
     aspectHint: '1:1 / 16:9',
   },

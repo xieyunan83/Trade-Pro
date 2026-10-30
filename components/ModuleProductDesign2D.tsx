@@ -35,6 +35,7 @@ import {
 } from '../services/designAgentService';
 import { planCreativeBrief } from '../services/creativeAgent/runtime';
 import type { CreativeBrief } from '../services/creativeAgent/types';
+import { composeImageGenerationPrompt } from '../services/creativeQualityKit';
 import { loadCatalogSkus } from '../services/productCatalogTypes';
 import { compressImageDataUrl } from '../services/catalogExcelService';
 import { setCreativeHandoff } from '../services/creativeAssetBridge';
@@ -143,7 +144,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
         {
           id: newDesignId('m'),
           role: 'agent',
-          text: `你好，我是产品设计助手。请选择 Skill、描述需求，确认后生成平面图。当前 Skill「${sk.label}」：${sk.hint}`,
+          text: `你好，我是产品设计助手。请选择 Skill、上传产品参考图并描述需求；系统会锁定产品身份、叠加负向约束与质检项，确认后生成。当前 Skill「${sk.label}」：${sk.hint}`,
           at: now,
         },
       ],
@@ -171,13 +172,20 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
 
   const buildFinalPrompt = () => {
     if (pendingBrief?.toolPrompt) return pendingBrief.toolPrompt;
-    const userBit = prompt.trim();
     const skuMeta = resolveSkuMeta();
-    const sku = skuMeta.name
-      ? `Product: ${skuMeta.name}${skuMeta.code ? ` (${skuMeta.code})` : ''}. `
-      : '';
-    const skillBit = skill.defaultPrompt ? `${skill.defaultPrompt}. ` : '';
-    return `${sku}${skillBit}${userBit || 'Create a polished commercial product design visual.'}`.trim();
+    const skuRow = skus.find((s) => s.id === skuPick || s.skuCode === skuPick);
+    const hasRefs = refUploads.length > 0 || !!(skuRow?.images?.length);
+    return composeImageGenerationPrompt({
+      skillDefaultPrompt:
+        skill.defaultPrompt || 'Create a polished commercial product design visual',
+      craftNotes: skill.craftNotes,
+      userBrief: prompt.trim(),
+      skuName: skuMeta.name,
+      skuCode: skuMeta.code,
+      hasReferenceImages: hasRefs,
+      skillNegative: skill.negativePrompt,
+      series: skillId === 'listing_set',
+    }).prompt;
   };
 
   const requestGenerate = async () => {
@@ -341,6 +349,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             size,
             thinkingMode: false,
             referenceImages: refImages.length ? refImages : undefined,
+            negativePrompt: skill.negativePrompt,
             onProgress: (done, total, label) => {
               setError(null);
               void done;
@@ -354,6 +363,8 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             n: count,
             thinkingMode: false,
             referenceImages: refImages.length ? refImages : undefined,
+            negativePrompt: skill.negativePrompt,
+            series: skillId === 'listing_set' || count > 1,
           });
       const now = Date.now();
       const newAssetsRaw: DesignAsset[] = result.images.map((url, i) => ({
