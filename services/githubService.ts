@@ -141,25 +141,27 @@ export const fetchUserHistoryFromCloud = async (username: string): Promise<Histo
 export const saveCRMToCloud = async (clients: Client[]) => {
   if (!octokit) return;
   const { guardCloudWrite, logCloudSafetyBlock } = await import('./cloudDataSafety');
-  let remoteCount = -1;
+  const { mergeClientsById } = await import('./workspaceCloudSync');
+  let existing: Client[] = [];
   try {
-    const existing = await fetchCRMFromCloud();
-    remoteCount = existing.length;
+    existing = await fetchCRMFromCloud();
   } catch {
     /* ignore */
   }
+  // 硬规则：与远端 union 后再写，禁止用本机子集覆盖冲掉在线行（跨端条数漂移根因之一）
+  const merged = mergeClientsById(existing, clients);
   const decision = guardCloudWrite({
     kind: 'replace_file',
     localCount: clients.length,
-    payloadCount: clients.length,
-    cloudCount: remoteCount,
+    payloadCount: merged.length,
+    cloudCount: existing.length,
     label: 'GitHub crm.json',
   });
   if (!decision.allow) {
     logCloudSafetyBlock(decision);
     return;
   }
-  const content = toBase64(JSON.stringify(clients));
+  const content = toBase64(JSON.stringify(merged));
   try {
     // Check if repo exists
     await octokit.repos.get({ ...repoConfig });

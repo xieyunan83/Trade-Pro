@@ -16,7 +16,7 @@ import {
   syncProductProfilesCloud,
 } from './supabase';
 import { loadAllCrmClients, saveAllCrmClients } from '../utils/workspaceScope';
-import { filterOutCrmTombstones } from '../utils/crmTombstones';
+import { reconcileCrmTombstonesWithLiveClients } from '../utils/crmTombstones';
 import { pullMergePushAutomationQueue } from './automationQueueCloud';
 
 export type WorkspaceSyncReport = {
@@ -185,18 +185,24 @@ const runSyncAllWorkspaceData = async (
   }
 
   // —— CRM ——
+  // 硬规则：全量 union 合并（含云端全部行）；不按本机墓碑过滤云端；永不 delete。
+  // 合并后若云端/权威列表仍有该客户，清除误写墓碑，使 Mac/Windows 条数收敛。
   try {
-    const localCrm = filterOutCrmTombstones(loadAllCrmClients());
+    const localCrm = loadAllCrmClients();
     let cloudCrm: Client[] = [];
     let cloudOk = false;
     try {
-      cloudCrm = filterOutCrmTombstones(await getCrmClients());
+      cloudCrm = await getCrmClients();
       cloudOk = true;
     } catch (e: any) {
       errors.push(`CRM 云端拉取：${e?.message || String(e)}`);
     }
     const mergedCrm = mergeClientsById(localCrm, cloudCrm);
     if (mergedCrm.length > 0) {
+      const cleared = reconcileCrmTombstonesWithLiveClients(mergedCrm);
+      if (cleared > 0) {
+        console.info(`[workspace-sync] cleared ${cleared} stale CRM tombstones after union merge`);
+      }
       saveAllCrmClients(mergedCrm);
     } else if (localCrm.length > 0) {
       errors.push('CRM：合并结果为空，已保留本机数据');

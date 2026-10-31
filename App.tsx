@@ -20,6 +20,7 @@ import {
 import { pullMergePushAutomationQueue } from './services/automationQueueCloud';
 import {
   formatWorkspaceSyncReport,
+  mergeClientsById,
   syncAllWorkspaceData,
 } from './services/workspaceCloudSync';
 import { fetchGlobalConfig, fetchDocumentsFromRepo, backupUserHistory, fetchCRMFromCloud, saveCRMToCloud, fetchUserHistoryFromCloud, checkGitHubStatus, fetchApiConfigsFromCloud, setManualGitHubConfig } from './services/githubService';
@@ -43,6 +44,7 @@ import {
   clearCrmTombstonesForClients,
   filterOutCrmTombstones,
   markCrmClientsDeleted,
+  reconcileCrmTombstonesWithLiveClients,
 } from './utils/crmTombstones';
 import {
   buildJunkCleanupPlan,
@@ -336,6 +338,8 @@ const App: React.FC = () => {
   const viewingHistoryIdRef = useRef<string | null>(null);
   const analysisDataRef = useRef<AnalysisResult | null>(null);
   const userDataReadyRef = useRef(false);
+  /** 登录云端 CRM 合并完成前禁止 persist 写回，避免首屏按墓碑过滤后把全库冲掉 */
+  const crmPersistReadyRef = useRef(false);
 
   useEffect(() => {
     historyRef.current = history;
@@ -498,6 +502,7 @@ const App: React.FC = () => {
 
   const resetWorkspaceForUserSwitch = () => {
     userDataReadyRef.current = false;
+    crmPersistReadyRef.current = false;
     setAnalysisData(null);
     setViewingHistoryId(null);
     setDomainInput('');
@@ -608,6 +613,7 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!currentUser) {
       userDataReadyRef.current = false;
+      crmPersistReadyRef.current = false;
       lastWorkspaceUserRef.current = null;
       return;
     }
@@ -693,7 +699,9 @@ const App: React.FC = () => {
                   );
                   // 云同步写入本机后，再刷一次 CRM（不阻塞首屏）
                   try {
-                    const afterSyncCrm = filterOutCrmTombstones(loadAllCrmClients());
+                    const afterSyncAll = loadAllCrmClients();
+                    reconcileCrmTombstonesWithLiveClients(afterSyncAll);
+                    const afterSyncCrm = filterOutCrmTombstones(afterSyncAll);
                     const migratedAfter = migrateLegacyCrmOwnership(afterSyncCrm, users, depts());
                     setCrmClients(scope(migratedAfter.clients));
                   } catch {
@@ -882,7 +890,8 @@ const App: React.FC = () => {
             const ghStatus = checkGitHubStatus();
             if (!cancelled) setIsGitHubConnected(ghStatus.ok);
 
-            let nextCrm: Client[] = filterOutCrmTombstones(loadAllCrmClients());
+            // 全量本机作合并底（勿先按墓碑裁剪，否则 saveAll 会把「误墓碑但仍在本机」的客户永久冲掉）
+            let nextCrm: Client[] = loadAllCrmClients();
 
             if (currentUser && isSupabaseConfigured()) {
                 // 管理员与员工均从云端拉 Key，避免桌面客户端 / 新浏览器看到空配置
@@ -976,10 +985,9 @@ const App: React.FC = () => {
                 try {
                     const cloudCrm = await getCrmClients();
                     if (cloudCrm.length > 0) {
-                      // 云端全量与本地合并（按 id），展示时再过滤；排除用户已删除墓碑
-                      const byId = new Map<string, Client>();
-                      [...nextCrm, ...filterOutCrmTombstones(cloudCrm)].forEach((c) => byId.set(c.id, c));
-                      nextCrm = Array.from(byId.values());
+                      // 云端全量 union 合并（不因本机墓碑丢云端行）；展示时再 filter
+                      nextCrm = mergeClientsById(nextCrm, cloudCrm);
+                      reconcileCrmTombstonesWithLiveClients(nextCrm);
                     }
                 } catch (e) {
                     console.error("Supabase CRM sync failed", e);
@@ -1038,9 +1046,8 @@ const App: React.FC = () => {
                 try {
                   const cloudCRM = await fetchCRMFromCloud();
                   if (cloudCRM.length > 0) {
-                    const byId = new Map<string, Client>();
-                    [...nextCrm, ...filterOutCrmTombstones(cloudCRM)].forEach((c) => byId.set(c.id, c));
-                    nextCrm = Array.from(byId.values());
+                    nextCrm = mergeClientsById(nextCrm, cloudCRM);
+                    reconcileCrmTombstonesWithLiveClients(nextCrm);
                   }
                 } catch (e) {
                   console.warn('GitHub CRM sync failed', e);
@@ -1157,29 +1164,30 @@ const App: React.FC = () => {
               } catch (e) {
                 console.warn('[CRM] auto recovery failed', e);
               }
-            } else {
-              // 已有本地 CRM 时仍挡「用户主动删除」的墓碑复活
-              nextCrm = filterOutCrmTombstones(nextCrm);
             }
+
+            // 合并后清误墓碑；展示层再挡「用户明确删除」的复活（不删云端）
+            reconcileCrmTombstonesWithLiveClients(nextCrm);
 
             if (!cancelled) {
               // 旧 CRM 回填部门，便于本部门主管按规则看到历史客户
               const migrated = migrateLegacyCrmOwnership(nextCrm, users, depts());
               nextCrm = migrated.clients;
-              // 全库写入；禁止用「可见切片为空」的 mergeSave 把管理员本机清空
+              // 全库写入 union 结果（含曾被误墓碑隐藏的行）；禁止用可见切片覆盖全库
               if (nextCrm.length > 0) {
                 saveAllCrmClients(nextCrm);
               }
-              const filteredCrm = scope(nextCrm);
+              const filteredCrm = scope(filterOutCrmTombstones(nextCrm));
               setCrmClients(filteredCrm);
-              if (filteredCrm.length > 0) {
-                mergeSaveCrmClients(currentUser, filteredCrm, users, depts());
-              }
+              crmPersistReadyRef.current = true;
               userDataReadyRef.current = true;
             }
         } catch (e) {
             console.error("Sync Error", e);
-            if (!cancelled) userDataReadyRef.current = true;
+            if (!cancelled) {
+              crmPersistReadyRef.current = true;
+              userDataReadyRef.current = true;
+            }
         }
     };
 
@@ -1268,49 +1276,19 @@ const App: React.FC = () => {
   }, [currentUser?.username, currentUser?.role, currentUser?.departmentId]);
 
   useEffect(() => {
-      if (!currentUser || !userDataReadyRef.current) return;
-      const before = loadAllCrmClients();
-      const prevVisibleIds = new Set(
-        before
-          .filter((c) => canViewOwnedRecord(currentUser, c, users, departments))
-          .map((c) => c.id)
-      );
+      if (!currentUser || !userDataReadyRef.current || !crmPersistReadyRef.current) return;
+      // 仅把当前 React 可见列表合并写回本机 + upsert 云端。
+      // 硬规则：此路径绝不写墓碑、绝不 delete 云端（跨端墓碑曾把「看不见」当成删除，导致 Mac/Windows 条数不一致）。
       const mergedAll = mergeSaveCrmClients(currentUser, crmClients, users, departments);
-      const nowIds = new Set(crmClients.map((c) => c.id));
-      const removedIds = [...prevVisibleIds].filter((id) => !nowIds.has(id));
-
-      // 安全阀：可见列表一次被清空（或大批量消失）时，不当作「用户删除」写墓碑/云端删，
-      // 否则会挡掉登录自动恢复与从背调重建（曾导致 CRM 显示 0、背调历史仍在）。
-      const massWipe =
-        prevVisibleIds.size >= 20 &&
-        (crmClients.length === 0 || removedIds.length >= Math.max(20, Math.floor(prevVisibleIds.size * 0.8)));
-
-      if (removedIds.length && !massWipe) {
-        const removedClients = before.filter((c) => removedIds.includes(c.id));
-        markCrmClientsDeleted(removedClients);
-      } else if (massWipe && removedIds.length) {
-        console.warn(
-          `[CRM] skip tombstone/cloud-delete for suspected mass wipe: removed ${removedIds.length}, now ${crmClients.length}`
-        );
-      }
 
       if (isSupabaseConfigured()) {
-          // 只 upsert 当前可见列表；删除走单条 delete，避免空视图把云端全库清空
           if (crmClients.length > 0) {
             syncCrmClients(crmClients).catch(e => console.error("Supabase CRM sync failed", e));
           }
-          // 本机空 / 疑似整库被清空时：绝不向云端发 delete
-          if (!massWipe && crmClients.length > 0 && removedIds.length) {
-            for (const id of removedIds) {
-              deleteCrmClient(id, { source: 'sync' }).catch((e) =>
-                console.error('CRM delete sync failed', id, e)
-              );
-            }
-          }
       }
-      // GitHub 整文件备份：本机空或疑似 mass wipe 时禁止覆盖（防把 crm.json 写成 []）
-      if (isGitHubConnected && !massWipe && mergedAll.length > 0) {
-          saveCRMToCloud(filterOutCrmTombstones(mergedAll)).catch((e) =>
+      // GitHub：union 合并后写入（saveCRMToCloud 内不冲掉远端多出的行）
+      if (isGitHubConnected && mergedAll.length > 0) {
+          saveCRMToCloud(mergedAll).catch((e) =>
             console.error('Auto CRM GitHub sync failed', e)
           );
       }
@@ -3842,7 +3820,8 @@ const App: React.FC = () => {
     try {
       // 本机为空时 backup/saveCRM 内部会拒绝覆盖云端文件，避免把备份写成 []
       if (history.length > 0) await backupUserHistory(currentUser.username, history);
-      const allCrm = filterOutCrmTombstones(loadAllCrmClients());
+      // 全量本机 upsert 合并进云端备份（saveCRMToCloud 内会与远端 union，不会冲掉在线行）
+      const allCrm = loadAllCrmClients();
       if (allCrm.length > 0) await saveCRMToCloud(allCrm);
       else if (crmClients.length === 0) {
         alert('本机客户/历史为空，已跳过云端覆盖，避免清空在线备份。请先从云端恢复。');

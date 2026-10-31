@@ -753,20 +753,10 @@ export const deleteCrmClient = async (
 ): Promise<boolean> => {
   if (!isSupabaseConfigured()) return false
   const source = opts?.source || 'user'
-  // 同步路径 + 本机空库 → 绝不删云端（防误清空连锁）
+  // 硬规则：同步路径永远不删云端 CRM（跨端墓碑曾把「本机看不见」误当成删除）
   if (source === 'sync') {
-    const { loadAllCrmClients } = await import('../utils/workspaceScope')
-    const { guardCloudWrite, logCloudSafetyBlock } = await import('./cloudDataSafety')
-    const decision = guardCloudWrite({
-      kind: 'delete',
-      localCount: loadAllCrmClients().length,
-      payloadCount: 1,
-      label: 'crm_clients',
-    })
-    if (!decision.allow) {
-      logCloudSafetyBlock(decision)
-      return false
-    }
+    console.warn('[cloud-safety] 拒绝同步路径删除 crm_clients:', localId)
+    return false
   }
   try {
     const { error } = await supabase

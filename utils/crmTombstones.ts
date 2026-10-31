@@ -1,6 +1,10 @@
 /**
- * CRM 删除墓碑：防止登录时从 GitHub / Supabase / 背调历史把已删客户又合并回来。
- * 按 local id + 网址 + 公司名匹配。
+ * CRM 删除墓碑：防止登录时从 GitHub / 背调历史把「用户已明确删除」的客户又合并回来。
+ *
+ * 硬规则：
+ * - 仅按 local id 或「规范化网站 host」匹配（禁止仅用公司名匹配，易误伤同名客户）
+ * - 墓碑只影响本机展示；不得驱动同步去删云端
+ * - 若云端/合并结果里仍有该客户，应清除对应墓碑（跨设备收敛）
  */
 import type { Client } from '../types';
 
@@ -20,8 +24,6 @@ const normHost = (raw?: string) =>
     .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
     .split('/')[0]
     .trim();
-
-const normName = (raw?: string) => (raw || '').trim().toLowerCase();
 
 export const loadCrmTombstones = (): CrmTombstone[] => {
   try {
@@ -53,11 +55,9 @@ export const isCrmClientTombstoned = (
   if (!tombs.length) return false;
   const id = (client.id || '').trim();
   const host = normHost(client.website);
-  const name = normName(client.name);
   return tombs.some((t) => {
     if (id && t.id && t.id === id) return true;
     if (host && t.website && normHost(t.website) === host) return true;
-    if (name && t.name && normName(t.name) === name && name.length >= 2) return true;
     return false;
   });
 };
@@ -70,7 +70,7 @@ export const filterOutCrmTombstones = <T extends Pick<Client, 'id' | 'website' |
   return clients.filter((c) => !isCrmClientTombstoned(c, tombs));
 };
 
-/** 记录删除墓碑（幂等） */
+/** 记录删除墓碑（幂等）。仅用户明确删除时调用。 */
 export const markCrmClientsDeleted = (
   clients: Array<Pick<Client, 'id' | 'website' | 'name'>>
 ): void => {
@@ -80,15 +80,15 @@ export const markCrmClientsDeleted = (
   for (const c of clients) {
     const id = (c.id || '').trim();
     if (!id) continue;
-    // 去掉同 id / 同网站旧墓碑，再写入
+    const host = normHost(c.website);
     for (let i = tombs.length - 1; i >= 0; i--) {
       const t = tombs[i];
       if (t.id === id) tombs.splice(i, 1);
-      else if (normHost(c.website) && normHost(t.website) === normHost(c.website)) tombs.splice(i, 1);
+      else if (host && normHost(t.website) === host) tombs.splice(i, 1);
     }
     tombs.push({
       id,
-      website: normHost(c.website) || undefined,
+      website: host || undefined,
       name: (c.name || '').trim() || undefined,
       deletedAt: now,
     });
@@ -106,13 +106,34 @@ export const clearCrmTombstonesForClients = (
   for (const c of clients) {
     const id = (c.id || '').trim();
     const host = normHost(c.website);
-    const name = normName(c.name);
     tombs = tombs.filter((t) => {
       if (id && t.id === id) return false;
       if (host && t.website && normHost(t.website) === host) return false;
-      if (name && t.name && normName(t.name) === name) return false;
       return true;
     });
   }
   saveCrmTombstones(tombs);
+};
+
+/**
+ * 合并/拉取后：若客户仍在「权威列表」中，清掉对应墓碑。
+ * 用于修复跨设备误写墓碑导致的条数漂移（不删云端任何行）。
+ */
+export const reconcileCrmTombstonesWithLiveClients = (
+  liveClients: Array<Pick<Client, 'id' | 'website' | 'name'>>
+): number => {
+  const tombs = loadCrmTombstones();
+  if (!tombs.length || !liveClients.length) return 0;
+  const ids = new Set(liveClients.map((c) => (c.id || '').trim()).filter(Boolean));
+  const hosts = new Set(
+    liveClients.map((c) => normHost(c.website)).filter((h) => h.length > 0)
+  );
+  const next = tombs.filter((t) => {
+    if (t.id && ids.has(t.id)) return false;
+    if (t.website && hosts.has(normHost(t.website))) return false;
+    return true;
+  });
+  const removed = tombs.length - next.length;
+  if (removed > 0) saveCrmTombstones(next);
+  return removed;
 };
