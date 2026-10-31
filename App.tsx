@@ -575,7 +575,6 @@ const App: React.FC = () => {
     } catch (e) {
       console.warn('local users bootstrap failed', e);
     }
-    setAuthReady(true);
     const loadUsers = async () => {
       try {
         const loaded = await Promise.race([
