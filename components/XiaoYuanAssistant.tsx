@@ -17,8 +17,8 @@ type Props = {
 type Pos = { x: number; y: number };
 
 const POS_KEY = 'trade_scout_xiaoyuan_fab_pos_v1';
-const FAB_W = 52;
-const FAB_H = 68;
+const FAB_W = 72;
+const FAB_H = 92;
 
 const WELCOME: XiaoYuanMsg = {
   id: 'welcome',
@@ -150,12 +150,12 @@ export const XiaoYuanAssistant: React.FC<Props> = ({ visible = true }) => {
   };
 
   const panelW = Math.min(
-    typeof window !== 'undefined' ? window.innerWidth - 24 : 352,
-    352
+    typeof window !== 'undefined' ? window.innerWidth - 24 : 440,
+    460
   );
   const panelH = Math.min(
-    typeof window !== 'undefined' ? window.innerHeight * 0.68 : 480,
-    512
+    typeof window !== 'undefined' ? window.innerHeight * 0.78 : 580,
+    640
   );
   let panelLeft = pos.x + FAB_W + 10;
   let panelTop = pos.y - 24;
@@ -202,16 +202,16 @@ export const XiaoYuanAssistant: React.FC<Props> = ({ visible = true }) => {
           setOpen((v) => !v);
         }}
       >
-        <span className="relative w-11 h-11 rounded-full overflow-hidden bg-slate-900 ring-2 ring-cyan-300/70 shadow-lg shadow-cyan-900/25 group-hover:scale-105 transition-transform">
+        <span className="relative w-16 h-16 sm:w-[4.5rem] sm:h-[4.5rem] rounded-full overflow-hidden bg-slate-900 ring-[3px] ring-cyan-300/80 shadow-lg shadow-cyan-900/30 group-hover:scale-105 transition-transform">
           <img
             src={XIAOYUAN_AVATAR}
             alt={XIAOYUAN_NAME}
             className="w-full h-full object-cover object-top pointer-events-none"
             draggable={false}
           />
-          <span className="absolute bottom-0.5 right-0.5 w-2 h-2 rounded-full bg-emerald-400 ring-2 ring-slate-900" />
+          <span className="absolute bottom-1 right-1 w-3 h-3 rounded-full bg-emerald-400 ring-2 ring-slate-900" />
         </span>
-        <span className="text-[9px] font-black text-cyan-100/90 bg-slate-950/80 px-1.5 py-0.5 rounded-md border border-cyan-400/25 leading-none">
+        <span className="text-[11px] sm:text-xs font-black text-cyan-100/95 bg-slate-950/85 px-2 py-0.5 rounded-md border border-cyan-400/30 leading-none">
           {XIAOYUAN_NAME}
         </span>
       </button>
@@ -223,48 +223,48 @@ export const XiaoYuanAssistant: React.FC<Props> = ({ visible = true }) => {
           role="dialog"
           aria-label={`${XIAOYUAN_NAME}对话`}
         >
-          <header className="shrink-0 flex items-center gap-3 px-3.5 py-3 bg-gradient-to-r from-slate-900 to-slate-800 text-white">
+          <header className="shrink-0 flex items-center gap-3.5 px-4 py-3.5 bg-gradient-to-r from-slate-900 to-slate-800 text-white">
             <img
               src={XIAOYUAN_AVATAR}
               alt=""
-              className="w-10 h-10 rounded-full object-cover object-top ring-2 ring-teal-400/50"
+              className="w-14 h-14 sm:w-16 sm:h-16 rounded-full object-cover object-top ring-2 ring-teal-400/60 shadow-md"
               draggable={false}
             />
             <div className="min-w-0 flex-1">
-              <div className="text-sm font-black flex items-center gap-1.5">
+              <div className="text-base sm:text-lg font-black flex items-center gap-2">
                 {XIAOYUAN_NAME}
-                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-teal-500/20 text-teal-200 border border-teal-400/30">
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-200 border border-teal-400/30">
                   平台助手
                 </span>
               </div>
-              <p className="text-[10px] text-slate-300 truncate">可拖动头像 · 功能指路</p>
+              <p className="text-xs sm:text-sm text-slate-300 truncate mt-0.5">可拖动头像 · 功能指路</p>
             </div>
             <button
               type="button"
               onClick={() => setOpen(false)}
-              className="p-1.5 rounded-lg hover:bg-white/10 text-slate-300"
+              className="p-2 rounded-lg hover:bg-white/10 text-slate-300"
               aria-label="关闭"
             >
-              <X size={16} />
+              <X size={20} />
             </button>
           </header>
 
-          <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3 bg-slate-50">
+          <div className="flex-1 overflow-y-auto px-3.5 py-3.5 space-y-3.5 bg-slate-50">
             {messages.map((m) => (
               <div
                 key={m.id}
-                className={`flex gap-2 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                className={`flex gap-2.5 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
               >
                 {m.role === 'assistant' && (
                   <img
                     src={XIAOYUAN_AVATAR}
                     alt=""
-                    className="w-7 h-7 rounded-full object-cover object-top shrink-0 mt-0.5"
+                    className="w-11 h-11 rounded-full object-cover object-top shrink-0 mt-0.5 ring-1 ring-slate-200"
                     draggable={false}
                   />
                 )}
                 <div
-                  className={`max-w-[85%] rounded-2xl px-3 py-2 text-[13px] leading-relaxed whitespace-pre-wrap ${
+                  className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-[15px] sm:text-base leading-relaxed whitespace-pre-wrap ${
                     m.role === 'user'
                       ? 'bg-slate-900 text-white rounded-br-md'
                       : 'bg-white text-slate-700 border border-slate-200 rounded-bl-md shadow-sm'
@@ -275,22 +275,22 @@ export const XiaoYuanAssistant: React.FC<Props> = ({ visible = true }) => {
               </div>
             ))}
             {busy && (
-              <div className="flex items-center gap-2 text-xs text-slate-400 pl-9">
-                <Loader2 size={12} className="animate-spin" /> 小媛正在想…
+              <div className="flex items-center gap-2 text-sm text-slate-400 pl-14">
+                <Loader2 size={16} className="animate-spin" /> 小媛正在想…
               </div>
             )}
             <div ref={endRef} />
           </div>
 
           {messages.length <= 2 && (
-            <div className="shrink-0 px-3 pb-2 flex flex-wrap gap-1.5 bg-slate-50 border-t border-slate-100 pt-2">
+            <div className="shrink-0 px-3.5 pb-2.5 flex flex-wrap gap-2 bg-slate-50 border-t border-slate-100 pt-2.5">
               {XIAOYUAN_QUICK_PROMPTS.map((q) => (
                 <button
                   key={q}
                   type="button"
                   disabled={busy}
                   onClick={() => void send(q)}
-                  className="text-[10px] font-bold px-2 py-1 rounded-full border border-slate-200 bg-white text-slate-600 hover:border-teal-300 hover:text-teal-700 disabled:opacity-50"
+                  className="text-xs sm:text-[13px] font-bold px-2.5 py-1.5 rounded-full border border-slate-200 bg-white text-slate-600 hover:border-teal-300 hover:text-teal-700 disabled:opacity-50"
                 >
                   {q}
                 </button>
@@ -298,7 +298,7 @@ export const XiaoYuanAssistant: React.FC<Props> = ({ visible = true }) => {
             </div>
           )}
 
-          <div className="shrink-0 p-2.5 border-t border-slate-100 bg-white flex gap-2 items-end">
+          <div className="shrink-0 p-3 border-t border-slate-100 bg-white flex gap-2.5 items-end">
             <textarea
               ref={inputRef}
               value={input}
@@ -311,16 +311,16 @@ export const XiaoYuanAssistant: React.FC<Props> = ({ visible = true }) => {
               }}
               rows={2}
               placeholder="问小媛：入口在哪、怎么操作…"
-              className="flex-1 resize-none rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500/30"
+              className="flex-1 resize-none rounded-xl border border-slate-200 px-3.5 py-2.5 text-[15px] sm:text-base focus:outline-none focus:ring-2 focus:ring-teal-500/30"
             />
             <button
               type="button"
               disabled={busy || !input.trim()}
               onClick={() => void send()}
-              className="shrink-0 h-10 w-10 rounded-xl bg-teal-600 hover:bg-teal-500 text-white flex items-center justify-center disabled:opacity-40"
+              className="shrink-0 h-11 w-11 rounded-xl bg-teal-600 hover:bg-teal-500 text-white flex items-center justify-center disabled:opacity-40"
               aria-label="发送"
             >
-              {busy ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+              {busy ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
             </button>
           </div>
         </div>
