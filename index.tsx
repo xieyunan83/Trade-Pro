@@ -12,20 +12,19 @@ declare global {
   }
 }
 
-/** 主 JS 已执行：取消 boot-timeout 误杀，避免慢网/客户端种子等待被当成卡死 */
-window.__TP_BOOT_MARK?.('正在启动应用…');
+/** 主 JS 已执行：取消 boot-timeout；不改写启动壳文案 */
+window.__TP_BOOT_MARK?.();
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
   throw new Error("Could not find root element to mount to");
 }
 
-/** 桌面客户端：尽量等种子，但绝不为等种子挡住登录首屏 */
+/** 桌面客户端：有种子则极短等待，绝不挡住登录首屏 */
 const waitDesktopSeed = (): Promise<void> => {
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
   if (!/TradeCollabClient\/|BabyWorldClient\//i.test(ua)) return Promise.resolve();
   if (window.__BW_SEED_DONE) return Promise.resolve();
-  window.__TP_BOOT_MARK?.('正在同步桌面配置…');
   return new Promise((resolve) => {
     let settled = false;
     const done = () => {
@@ -34,8 +33,7 @@ const waitDesktopSeed = (): Promise<void> => {
       resolve();
     };
     window.addEventListener('bw-seed-done', done, { once: true });
-    // 首屏优先：最多等 300ms，超时照样挂载登录页
-    window.setTimeout(done, 300);
+    window.setTimeout(done, 80);
   });
 };
 
@@ -45,7 +43,7 @@ const mountApp = () => {
   } catch {
     /* ignore */
   }
-  window.__TP_BOOT_MARK?.('正在渲染界面…');
+  window.__TP_BOOT_MARK?.();
   try {
     ReactDOM.createRoot(rootElement).render(
       <React.StrictMode>

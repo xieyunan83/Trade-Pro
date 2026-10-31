@@ -326,7 +326,6 @@ const App: React.FC = () => {
   const [manualToken, setManualToken] = useState('');
   const [manualOwner, setManualOwner] = useState('');
   const [manualRepo, setManualRepo] = useState('');
-  const [authReady, setAuthReady] = useState(false);
   const shouldStopRef = useRef(false);
   const batchRunnerActiveRef = useRef(false);
   const batchSessionIdsRef = useRef<Set<string>>(new Set());
@@ -568,6 +567,15 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    // 同步本地用户 → 立刻可登录；云端迁移不挡首屏
+    try {
+      const local = loadUsersFromStorage();
+      if (local.length) setUsers(local);
+      setDepartments(loadDepartmentsFromStorage());
+    } catch (e) {
+      console.warn('local users bootstrap failed', e);
+    }
+    setAuthReady(true);
     const loadUsers = async () => {
       try {
         const loaded = await Promise.race([
@@ -582,11 +590,9 @@ const App: React.FC = () => {
         console.error('Failed to load users', e);
         const fallback = loadUsersFromStorage();
         if (fallback.length) setUsers(fallback);
-      } finally {
-        setAuthReady(true);
       }
     };
-    loadUsers();
+    void loadUsers();
   }, []);
 
   useEffect(() => {
@@ -4595,14 +4601,6 @@ const App: React.FC = () => {
   };
 
   if (!currentUser) {
-    if (!authReady) {
-      return (
-        <div className="tp-login h-screen min-h-[100dvh] flex flex-col items-center justify-center gap-3 text-slate-200">
-          <Loader2 className="animate-spin text-cyan-300" size={36} />
-          <p className="text-sm font-bold text-slate-300">正在准备登录…</p>
-        </div>
-      );
-    }
     return (
       <Login
         onLogin={(u) => {

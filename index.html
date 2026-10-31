@@ -76,16 +76,13 @@
             },
             true
         );
-        // 主包未执行才算启动失败。12s 对慢网/桌面种子过短会误杀；
-        // 主包一执行会调用 __TP_BOOT_MARK 取消计时。
-        window.__TP_BOOT_MARK = function (phase) {
+        // 主包一执行会调用 __TP_BOOT_MARK 取消计时。禁止改写启动壳文案（避免「正在加载登录界面」闪屏）。
+        window.__TP_BOOT_MARK = function () {
             try {
                 if (window.__TP_BOOT_TIMER) {
                     clearTimeout(window.__TP_BOOT_TIMER);
                     window.__TP_BOOT_TIMER = null;
                 }
-                var boot = document.getElementById('tp-boot');
-                if (boot && phase) boot.textContent = String(phase);
             } catch (e) {}
         };
         window.__TP_BOOT_TIMER = setTimeout(function () {
@@ -193,20 +190,18 @@
         );
         return window.__TP_EXPORT_LIBS_PROMISE;
       };
-      // 空闲时预取，不堵启动
-      if (typeof requestIdleCallback === 'function') {
-        requestIdleCallback(function () {
-          try {
+      // 登录首屏后再预取导出库，避免与主包抢带宽
+      setTimeout(function () {
+        try {
+          if (typeof requestIdleCallback === 'function') {
+            requestIdleCallback(function () {
+              try { window.__TP_ENSURE_EXPORT_LIBS(); } catch (e) {}
+            }, { timeout: 20000 });
+          } else {
             window.__TP_ENSURE_EXPORT_LIBS();
-          } catch (e) {}
-        }, { timeout: 8000 });
-      } else {
-        setTimeout(function () {
-          try {
-            window.__TP_ENSURE_EXPORT_LIBS();
-          } catch (e) {}
-        }, 4000);
-      }
+          }
+        } catch (e) {}
+      }, 12000);
     </script>
     <style>
         :root {
@@ -901,10 +896,14 @@
 </head>
 <body>
     <div id="root">
-      <div id="tp-boot" style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;box-sizing:border-box;font-family:system-ui,sans-serif;color:#94a3b8;background:#070b14;text-align:center;">
-        <div style="font-size:18px;font-weight:800;color:#e2e8f0;letter-spacing:0.02em;">外贸智慧协同</div>
-        <div style="font-size:13px;color:#cbd5e1;">正在加载登录界面…</div>
-        <div style="font-size:11px;color:#64748b;max-width:320px;line-height:1.5;">若长时间无变化，请检查网络后按 Ctrl+Shift+R 强制刷新，或重新打开客户端。</div>
+      <!-- 启动壳：视觉对齐登录页，无「正在加载 / 强制刷新」文案，缩短感知等待 -->
+      <div id="tp-boot" class="tp-login" style="min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;font-family:system-ui,sans-serif;" aria-hidden="true">
+        <div style="text-align:center;margin-bottom:2rem;">
+          <div style="display:inline-block;padding:4px 14px;border-radius:999px;border:1px solid rgba(94,234,212,0.3);background:rgba(45,212,191,0.1);color:#ccfbf1;font-size:11px;font-weight:700;letter-spacing:0.22em;margin-bottom:1.1rem;">澄海 · 智造出海</div>
+          <div style="font-size:clamp(2rem,5vw,3.1rem);font-weight:800;color:#fff;letter-spacing:-0.045em;line-height:1.1;">外贸智慧协同</div>
+          <div style="margin-top:0.75rem;font-size:1.05rem;color:rgba(203,213,225,0.85);font-weight:500;">赋能澄海玩具产业升级</div>
+        </div>
+        <div class="tp-login-card" style="width:100%;max-width:28rem;border-radius:1.35rem;padding:2rem 1.75rem;min-height:12rem;background:#fcfdfe;"></div>
       </div>
     </div>
     <script type="module" src="./index.tsx"></script>
