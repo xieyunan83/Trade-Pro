@@ -24,6 +24,8 @@ type Props = {
   historyOpen: boolean;
   /** 相位变化：用于固定坞宽度与主区让位 */
   onPhaseChange?: (phase: SphereNavPhase) => void;
+  /** 当前板块（双入口模块如产品匹配，用于面包屑保持商机/产品语境） */
+  onSectionChange?: (sectionId: PlatformSectionId | null) => void;
 };
 
 export const SphereNav: React.FC<Props> = ({
@@ -36,6 +38,7 @@ export const SphereNav: React.FC<Props> = ({
   onLogout,
   historyOpen,
   onPhaseChange,
+  onSectionChange,
 }) => {
   const [phase, setPhase] = useState<SphereNavPhase>('start');
   const [sectionId, setSectionId] = useState<PlatformSectionId | null>(null);
@@ -43,6 +46,10 @@ export const SphereNav: React.FC<Props> = ({
   useEffect(() => {
     onPhaseChange?.(phase);
   }, [phase, onPhaseChange]);
+
+  useEffect(() => {
+    onSectionChange?.(sectionId);
+  }, [sectionId, onSectionChange]);
 
   const visibleSections = useMemo(() => {
     return PLATFORM_SECTIONS.map((sec) => ({
@@ -57,11 +64,16 @@ export const SphereNav: React.FC<Props> = ({
   );
 
   useEffect(() => {
-    const sec = findSectionByModule(activeModule);
+    // 双入口模块：若当前板块已包含该模块，不要强行切到另一板块（商机点匹配勿跳产品）
+    if (sectionId) {
+      const current = visibleSections.find((s) => s.id === sectionId);
+      if (current?.items.some((i) => i.id === activeModule)) return;
+    }
+    const sec = findSectionByModule(activeModule, sectionId);
     if (sec && visibleSections.some((s) => s.id === sec.id)) {
       setSectionId(sec.id);
     }
-  }, [activeModule, visibleSections]);
+  }, [activeModule, visibleSections, sectionId]);
 
   const openStart = () => {
     setPhase('sections');
@@ -147,7 +159,8 @@ export const SphereNav: React.FC<Props> = ({
                 {visibleSections.map((sec, idx) => {
                   const Icon = sec.icon;
                   const isHot =
-                    sectionId === sec.id || findSectionByModule(activeModule)?.id === sec.id;
+                    sectionId === sec.id ||
+                    findSectionByModule(activeModule, sectionId)?.id === sec.id;
                   return (
                     <button
                       key={sec.id}

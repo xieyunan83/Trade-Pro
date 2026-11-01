@@ -224,7 +224,11 @@ import {
   LayoutDashboard, PackageSearch, Users, PenTool, Network, Search, Loader2, Menu, Globe, Zap, FileSpreadsheet, History, Clock, ChevronRight, AlertTriangle, RefreshCw, LogOut, Briefcase, Ruler, CheckCircle2, Hourglass, StopCircle, PlayCircle, Layers, Mail, Cloud, Download, Info, Link2, X, Database, Image, Trash2, Ban, Target
 } from 'lucide-react';
 import { ALWAYS_ACTIVE_MODULES } from './services/moduleNav';
-import { findSectionByModule, findNavItem } from './services/platformSections';
+import {
+  findSectionByModule,
+  findNavItem,
+  type PlatformSectionId,
+} from './services/platformSections';
 import { useModuleHashRoute } from './hooks/useModuleHashRoute';
 import { setUsageScope } from './services/limitService';
 import { appendClientActivity, markEmailSentOnClient } from './services/crmActivity';
@@ -273,6 +277,7 @@ const App: React.FC = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   /** 球体导航相位：决定固定坞宽度（主区让位，滚动时坞始终贴边） */
   const [sphereNavPhase, setSphereNavPhase] = useState<SphereNavPhase>('start');
+  const [sphereNavSectionId, setSphereNavSectionId] = useState<PlatformSectionId | null>(null);
   const sphereNavExpanded = sphereNavPhase !== 'start';
   const dockWidthClass =
     sphereNavPhase === 'submenu'
@@ -4943,8 +4948,8 @@ const App: React.FC = () => {
   }
 
   const alwaysActiveModules = ALWAYS_ACTIVE_MODULES;
-  const activeSectionMeta = findSectionByModule(activeModule);
-  const activeNavItem = findNavItem(activeModule);
+  const activeSectionMeta = findSectionByModule(activeModule, sphereNavSectionId);
+  const activeNavItem = findNavItem(activeModule, sphereNavSectionId);
 
   return (
     <AccessGate user={currentUser} onLogout={handleLogout}>
@@ -5005,6 +5010,7 @@ const App: React.FC = () => {
             analysisData={analysisData}
             historyOpen={historyOpen}
             onPhaseChange={setSphereNavPhase}
+            onSectionChange={setSphereNavSectionId}
             onSelectModule={(m) => {
               navigateModule(m);
               setMobileMenuOpen(false);

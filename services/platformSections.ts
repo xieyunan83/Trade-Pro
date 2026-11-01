@@ -223,10 +223,22 @@ export const PLATFORM_SECTIONS: PlatformSection[] = [
   },
 ];
 
-export const findSectionByModule = (mod: ModuleType): PlatformSection | undefined => {
-  // 产品匹配在「产品」「商机」双入口；默认归产品板块（设计→匹配主路径）
+/**
+ * 解析模块所属板块。
+ * 产品匹配在「商机」「产品」双入口：优先保留当前板块（preferred），
+ * 无偏好时默认商机（背调后匹配客户），产品设计流水线进入时会带 preferred=product。
+ */
+export const findSectionByModule = (
+  mod: ModuleType,
+  preferredSectionId?: PlatformSectionId | null
+): PlatformSection | undefined => {
+  if (preferredSectionId) {
+    const preferred = PLATFORM_SECTIONS.find((s) => s.id === preferredSectionId);
+    if (preferred?.items.some((i) => i.id === mod)) return preferred;
+  }
   if (mod === ModuleType.PRODUCT_MATCH) {
     return (
+      PLATFORM_SECTIONS.find((s) => s.id === 'opportunity') ||
       PLATFORM_SECTIONS.find((s) => s.id === 'product') ||
       PLATFORM_SECTIONS.find((s) => s.items.some((i) => i.id === mod))
     );
@@ -234,11 +246,18 @@ export const findSectionByModule = (mod: ModuleType): PlatformSection | undefine
   return PLATFORM_SECTIONS.find((s) => s.items.some((i) => i.id === mod));
 };
 
-export const findNavItem = (mod: ModuleType): PlatformNavItem | undefined => {
-  // 双入口时优先产品板块文案
+export const findNavItem = (
+  mod: ModuleType,
+  preferredSectionId?: PlatformSectionId | null
+): PlatformNavItem | undefined => {
+  if (preferredSectionId) {
+    const preferred = PLATFORM_SECTIONS.find((s) => s.id === preferredSectionId);
+    const hit = preferred?.items.find((i) => i.id === mod);
+    if (hit) return hit;
+  }
   if (mod === ModuleType.PRODUCT_MATCH) {
-    const productSec = PLATFORM_SECTIONS.find((s) => s.id === 'product');
-    const hit = productSec?.items.find((i) => i.id === mod);
+    const opp = PLATFORM_SECTIONS.find((s) => s.id === 'opportunity');
+    const hit = opp?.items.find((i) => i.id === mod);
     if (hit) return hit;
   }
   for (const s of PLATFORM_SECTIONS) {
