@@ -1,6 +1,7 @@
 /**
  * 夜间静默升级：上海时区 22:00–08:00，对旧客户补齐「新功能带来的缺口」
- *（领英占位 / 决策人邮箱 / 品类 / 背调补全）。白天自动停泵，不抢交互流量。
+ *（公司联系人补全 / 决策人邮箱 / 品类 / 背调补全）。白天自动停泵，不抢交互流量。
+ * 登录挂机即可，无需用户下指令。
  *
  * 邮箱：千问只猜候选，必须专业接口校验后才写入（见 emailPatternGuess）。
  */
@@ -65,7 +66,7 @@ type Handlers = {
   canDm: () => boolean;
   canProduct: () => boolean;
   canEnrich: () => boolean;
-  /** 领英占位完成 → App 持久化 */
+  /** 公司联系人补全完成 → App 持久化 */
   onLinkedInDone: (payload: {
     client: Client;
     decisionMakers: DecisionMaker[];
@@ -233,17 +234,18 @@ export const assessClientNightGaps = (
   const gaps: NightGapKind[] = [];
   const done = new Set(progressOf(client.id).done);
 
-  // 1) 领英占位：有官网、尚无领英主页联系人
+  // 1) 公司联系人：有官网、尚无可用联系人主页/姓名
   if (
     !done.has('linkedin_locate') &&
     domain.includes('.') &&
     !hasLi &&
+    !hasNamedContact &&
     (intel.hasBg || !!hist)
   ) {
     gaps.push('linkedin_locate');
   }
 
-  // 2) 决策人邮箱：有人名/领英占位但缺已验证邮箱
+  // 2) 决策人邮箱：有人名/主页但缺已验证邮箱（用户也可手动点搜；夜间静默补）
   if (
     caps.canDm &&
     !done.has('dm_email') &&
@@ -314,7 +316,7 @@ const scanAndEnqueue = () => {
   );
 
   let added = 0;
-  // 优先：缺领英占位 / 缺邮箱 的客户
+  // 优先：缺公司联系人 / 缺邮箱 的客户
   const scored = clients
     .map((c) => {
       const gaps = assessClientNightGaps(c, history, caps);
@@ -384,7 +386,7 @@ const runOneJob = async (job: NightUpgradeJob) => {
         decisionMakers: located.decisionMakers,
         historyId: hist?.id,
       });
-      job.note = `领英占位 +${located.stats.added}`;
+      job.note = `联系人 +${located.stats.added}`;
       markDone(client.id, 'linkedin_locate');
       job.status = 'completed';
     } else if (job.kind === 'dm_email') {
@@ -395,7 +397,7 @@ const runOneJob = async (job: NightUpgradeJob) => {
       } else {
         markDone(client.id, 'dm_email');
         job.status = 'completed';
-        job.note = '已交邮箱深挖队列（含猜验）';
+        job.note = '已交邮箱深挖队列';
       }
     } else if (job.kind === 'product_dig') {
       const ok = handlers.enqueueProduct(client);
@@ -487,4 +489,4 @@ export const stopNightSilentUpgrade = () => {
 };
 
 export const describeNightSilentUpgrade = (): string =>
-  `夜间静默升级（上海 22:00–08:00）· schema v${NIGHT_UPGRADE_SCHEMA_VERSION} · 领英占位 / 邮箱猜验 / 品类 / 背调补全`;
+  `夜间静默升级（上海 22:00–08:00）· schema v${NIGHT_UPGRADE_SCHEMA_VERSION} · 公司联系人 / 邮箱 / 品类 / 背调补全`;

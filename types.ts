@@ -269,8 +269,8 @@ export interface AutomationPipelineConfig {
   /** 搜索完成后立即背调 */
   doBackgroundCheck: boolean;
   /**
-   * 背调后先公开检索定位领英员工并写入决策人占位（姓名/职位/主页），
-   * 再交由 doDmMine 按占位序列补邮箱。
+   * 背调后静默补全公司联系人（姓名/职位/主页等，可不含邮箱）。
+   * 前台不展示此开关；开启背调时由流水线自动为 true。
    */
   doLinkedInLocate: boolean;
   /** 背调后挖掘决策人邮箱 */

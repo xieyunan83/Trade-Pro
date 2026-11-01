@@ -91,10 +91,11 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
   );
   const [queueMsg, setQueueMsg] = useState('');
   const [jobActive, setJobActive] = useState(false);
-  const [liLocating, setLiLocating] = useState(false);
+  const [bootstrapping, setBootstrapping] = useState(false);
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
   const [listFilter, setListFilter] = useState<'all' | 'buyer' | 'verified'>('all');
   const lastAppliedJobIdRef = React.useRef<string | null>(null);
+  const bootstrapKeyRef = React.useRef<string | null>(null);
 
   useEffect(() => {
     const list = (data.decisionMakers || []).filter(isUsableDecisionMaker);
@@ -221,44 +222,60 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
     setQueueMsg(`已批量删除 ${count} 位决策人`);
   };
 
-  const handleLocateLinkedIn = async () => {
-    const domain = data.companyInfo?.website || '';
-    const companyName = data.companyInfo?.name || '';
-    if (!domain && !companyName) {
-      setQueueMsg('缺少公司官网或名称，无法定位领英员工。');
+  /** 旧客户 / 未挖邮箱：打开决策人页时静默补全公司联系人（姓名职位主页等），邮箱留给用户手动深挖 */
+  useEffect(() => {
+    const domain = (data.companyInfo?.website || '').trim();
+    const companyName = (data.companyInfo?.name || '').trim();
+    const key = `${domain}|${companyName}|${historyId || ''}`;
+    if (bootstrapKeyRef.current === key) return;
+    if (!domain && !companyName) return;
+
+    const existing = (data.decisionMakers || []).filter(isUsableDecisionMaker);
+    const hasEmailSearch = !!data.decisionMakerEmailSearchAt;
+    const hasUsefulContacts = existing.some(
+      (d) =>
+        (!!(d.name || '').trim() &&
+          (d.name || '').trim() !== '公开信息未找到' &&
+          (!!(d.title || '').trim() || !!(d.linkedin || '').trim() || !!(d.phone || '').trim())) ||
+        !!(d.emailGuess || '').includes('@')
+    );
+    // 已挖过邮箱或已有可用联系人：不再静默补
+    if (hasEmailSearch || hasUsefulContacts) {
+      bootstrapKeyRef.current = key;
       return;
     }
-    setLiLocating(true);
-    setQueueMsg('正在公开检索目标公司领英员工并写入占位…');
-    try {
-      const res = await locateLinkedInEmployees({
-        domain,
-        companyName,
-        productKeyword: data.searchKeyword || data.businessScope?.coreProducts?.[0],
-        country: data.searchCountry || data.companyInfo?.headquarters,
-        existing: decisionMakers,
-        maxQueries: 5,
-      });
-      commit(res.decisionMakers);
-      const liCount = res.decisionMakers.filter(
-        (d) => d.source === 'LinkedIn' || /linkedin\.com\/in\//i.test(d.linkedin || '')
-      ).length;
-      if (res.stats.added > 0 || liCount > 0) {
-        setQueueMsg(
-          `领英定位完成：新增占位 ${res.stats.added} 人，列表共 ${res.decisionMakers.length} 人（含领英主页约 ${liCount}）。可继续「深挖邮箱」补联系方式。`
-        );
-      } else {
-        setQueueMsg(
-          '领英定位暂无新增主页。可检查官网域名，或到营销工具用检索公式手动打开后再手工新增。'
-        );
+
+    bootstrapKeyRef.current = key;
+    let cancelled = false;
+    setBootstrapping(true);
+    void (async () => {
+      try {
+        const res = await locateLinkedInEmployees({
+          domain,
+          companyName,
+          productKeyword: data.searchKeyword || data.businessScope?.coreProducts?.[0],
+          country: data.searchCountry || data.companyInfo?.headquarters,
+          existing,
+          maxQueries: 4,
+        });
+        if (cancelled) return;
+        if (res.decisionMakers.length > existing.length || res.stats.added > 0) {
+          commit(res.decisionMakers);
+          setQueueMsg(
+            `已展示 ${res.decisionMakers.length} 位公司联系人（可先查看姓名/职位/主页；邮箱请点「搜索决策人邮箱」补全）`
+          );
+        }
+      } catch (e) {
+        console.warn('[dm] silent contact bootstrap failed', e);
+      } finally {
+        if (!cancelled) setBootstrapping(false);
       }
-    } catch (e: any) {
-      console.error('linkedin locate failed', e);
-      setQueueMsg(e?.message || '领英员工定位失败，请稍后重试');
-    } finally {
-      setLiLocating(false);
-    }
-  };
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅随公司切换触发一次
+  }, [data.companyInfo?.website, data.companyInfo?.name, historyId, data.decisionMakerEmailSearchAt]);
 
   const handleEnqueueSearch = () => {
     setQueueMsg('');
@@ -270,32 +287,24 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
       const junk = decisionMakers.filter(
         (d) =>
           !d.emailGuess &&
-          d.source !== 'LinkedIn' &&
           !/linkedin\.com\/in\//i.test(d.linkedin || '') &&
           (d.source === 'AI' ||
             d.source === 'AI (Pattern Guess)' ||
             /Company Contact|公开信息未找到|待补充/i.test(`${d.name} ${d.title}`))
       ).length;
-      const liPlaceholders = decisionMakers.filter(
-        (d) =>
-          !d.emailGuess?.includes('@') &&
-          (d.source === 'LinkedIn' || /linkedin\.com\/in\//i.test(d.linkedin || ''))
-      ).length;
-      if (junk > 0 || (decisionMakers.length > 8 && liPlaceholders === 0)) {
+      if (junk > 0 || decisionMakers.length > 12) {
         const ok = window.confirm(
-          `当前已有 ${decisionMakers.length} 位决策人（其中约 ${junk} 位疑似无用占位）。\n建议先「清空全部」再搜索，避免旧数据干扰。\n\n仍要在现有列表上继续搜索吗？`
+          `当前已有 ${decisionMakers.length} 位决策人（其中约 ${junk} 位疑似无用信息）。\n建议先「清空全部」再搜索，避免旧数据干扰。\n\n仍要在现有列表上继续搜索吗？`
         );
         if (!ok) {
           setQueueMsg('已取消搜索。可先删除或清空无用决策人后再试。');
           return;
         }
-      } else if (liPlaceholders > 0) {
-        setQueueMsg(`将按 ${liPlaceholders} 位领英占位优先补全邮箱…`);
       }
     }
     if (onEnqueueEmailSearch) {
       const res = onEnqueueEmailSearch();
-      setQueueMsg((prev) => (prev ? `${prev} ${res.message}` : res.message));
+      setQueueMsg(res.message);
       return;
     }
     setQueueMsg('无法发起搜索，请联系管理员。');
@@ -350,19 +359,25 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
               <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-semibold text-slate-500">
                 {lastSearchAt ? (
                   <span className="inline-flex items-center gap-1 text-cyan-700">
-                    <Clock size={12} /> 最近搜索：{formatSearchTime(lastSearchAt)}
+                    <Clock size={12} /> 最近邮箱搜索：{formatSearchTime(lastSearchAt)}
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1 text-cyan-700">
-                    <Clock size={12} /> 已有 {decisionMakers.length} 位联系人（来自 CRM / 历史挖掘）
+                    <Clock size={12} /> 已有 {decisionMakers.length} 位联系人（可先查看公开信息）
                   </span>
                 )}
                 {searchHistory.length > 1 && (
-                  <span className="text-slate-400">累计搜索 {searchHistory.length} 次</span>
+                  <span className="text-slate-400">累计邮箱搜索 {searchHistory.length} 次</span>
                 )}
               </div>
+            ) : bootstrapping ? (
+              <div className="mt-2 text-[11px] font-semibold text-slate-500 inline-flex items-center gap-1.5">
+                <Loader2 size={12} className="animate-spin" /> 正在补全公司联系人…
+              </div>
             ) : (
-              <div className="mt-2 text-[11px] font-semibold text-amber-600">尚未搜索决策人邮箱（背调阶段已跳过，需手动触发）。</div>
+              <div className="mt-2 text-[11px] font-semibold text-amber-600">
+                暂无联系人。可点「搜索决策人邮箱」补全，或手动新增。
+              </div>
             )}
             {queueMsg && (
               <div className="mt-2 text-[11px] font-semibold text-emerald-700">{queueMsg}</div>
@@ -403,25 +418,15 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
                 <Trash2 size={16} /> 批量删除 ({selectedIndices.size})
               </button>
             )}
-            <button
-              type="button"
-              onClick={() => void handleLocateLinkedIn()}
-              disabled={liLocating || jobActive}
-              className="inline-flex items-center justify-center gap-2 bg-blue-50 hover:bg-blue-100 border border-blue-200 disabled:opacity-60 text-blue-800 px-4 py-2.5 rounded-xl text-sm font-semibold touch-manipulation shadow-sm"
-              title="公开检索目标公司领英员工主页，写入决策人占位序列，供后续挖邮箱"
-            >
-              {liLocating ? <Loader2 size={16} className="animate-spin" /> : <Linkedin size={16} />}
-              {liLocating ? '定位中…' : '定位领英员工占位'}
-            </button>
             {canDmEmailSearch && (
               <button
                 type="button"
                 onClick={handleEnqueueSearch}
-                disabled={jobActive || liLocating}
+                disabled={jobActive || bootstrapping}
                 className="inline-flex items-center justify-center gap-2 bg-cyan-600 hover:bg-cyan-700 disabled:opacity-60 text-white px-4 py-2.5 rounded-xl text-sm font-semibold touch-manipulation shadow-sm"
               >
                 {jobActive ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-                {jobActive ? '后台搜索中…' : lastSearchAt ? '再次深挖决策人邮箱' : '后台搜索决策人邮箱'}
+                {jobActive ? '后台搜索中…' : lastSearchAt ? '再次深挖决策人邮箱' : '搜索决策人邮箱'}
               </button>
             )}
             {canExportExcel && (
@@ -446,12 +451,12 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
           </div>
         </div>
 
-        <div className="mb-4 rounded-2xl border border-blue-100 bg-blue-50/70 px-4 py-3 text-xs font-semibold text-blue-900 leading-relaxed">
-          推荐顺序：先「定位领英员工占位」锁定采购相关主页 → 再「深挖邮箱」按占位序列补联系方式。占位可无邮箱，只要有姓名/职位/主页即可进入目标序列。
+        <div className="mb-4 rounded-2xl border border-slate-100 bg-slate-50/80 px-4 py-3 text-xs font-semibold text-slate-600 leading-relaxed">
+          先展示能找到的公司联系人（姓名、职位、电话、主页等）；邮箱可稍后点「搜索决策人邮箱」补全。
         </div>
         {jobActive && canDmEmailSearch && (
           <div className="mb-4 rounded-2xl border border-cyan-200/80 bg-cyan-50/80 px-4 py-3 text-xs font-semibold text-cyan-900">
-            已在后台按「占位名单 / 公司域名 → 补邮箱与职位」搜索，可切换其它客户继续浏览；完成后可点「再次深挖」补充更多决策人。
+            已在后台搜索邮箱，可切换其它客户继续浏览；完成后可点「再次深挖」补充更多决策人。
           </div>
         )}
 
@@ -655,13 +660,13 @@ const DecisionMakerCard: React.FC<{
         </div>
         <div className="flex flex-col items-end gap-2 flex-shrink-0">
           <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black ${typeBadge(dm.type)}`}>{dm.type}</span>
-          {(dm.source === 'LinkedIn' || /linkedin\.com\/in\//i.test(dm.linkedin || '')) &&
-            !dm.emailGuess?.includes('@') && (
+          {!dm.emailGuess?.includes('@') &&
+            (!!(dm.name || '').trim() || !!(dm.linkedin || '').trim()) && (
               <span
-                className="px-2 py-0.5 rounded-lg text-[10px] font-black bg-blue-50 text-blue-700 border border-blue-100"
-                title="领英占位：已锁定主页，待深挖邮箱"
+                className="px-2 py-0.5 rounded-lg text-[10px] font-black bg-slate-100 text-slate-600 border border-slate-200"
+                title="公开信息已展示；邮箱可稍后搜索补全"
               >
-                领英占位
+                待补邮箱
               </span>
             )}
           {dm.emailGuess ? (
@@ -838,7 +843,7 @@ const DecisionMakerCard: React.FC<{
           >
             <div className="flex items-center gap-2 min-w-0">
               <Linkedin size={14} className="text-blue-600 flex-shrink-0" />
-              <span className="text-xs font-bold text-blue-700 truncate">LinkedIn 主页</span>
+              <span className="text-xs font-bold text-blue-700 truncate">个人主页</span>
             </div>
             <ExternalLink size={12} className="text-blue-400 flex-shrink-0" />
           </a>

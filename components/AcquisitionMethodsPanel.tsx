@@ -78,7 +78,7 @@ export const AcquisitionMethodsPanel: React.FC<Props> = ({
             获客方法与检索公式
           </h3>
           <p className="text-[11px] font-semibold text-slate-400 mt-1 leading-relaxed">
-            三段式闭环：公开初筛 → 领英员工占位 → 深挖联系方式。万能公式：
+            三段式闭环：公开初筛 → 锁定决策人 → 深挖联系方式。万能公式：
             <span className="text-slate-600">{UNIVERSAL_SEARCH_FORMULA}</span>
           </p>
         </div>
@@ -183,7 +183,7 @@ export const AcquisitionMethodsPanel: React.FC<Props> = ({
       </div>
 
       <p className="text-[10px] font-semibold text-slate-400 leading-relaxed">
-        决策人模块可一键「定位领英员工占位」：按公司域名公开检索采购相关主页写入列表，再点「深挖邮箱」补全联系方式。排除词减号须紧贴单词（如
+        背调完成后，决策人页会先展示能找到的公司联系人；邮箱可在决策人模块手动搜索补全。排除词减号须紧贴单词（如
         -alibaba）。
       </p>
     </div>

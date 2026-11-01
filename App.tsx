@@ -443,7 +443,7 @@ const App: React.FC = () => {
     });
   }, []);
 
-  /** 夜间 22:00–08:00 静默补齐旧客户缺口（领英占位 / 邮箱猜验 / 品类 / 背调补全） */
+  /** 夜间 22:00–08:00 静默补齐旧客户缺口（公司联系人 / 邮箱 / 品类 / 背调补全），无需下指令 */
   useEffect(() => {
     if (!currentUser) {
       stopNightSilentUpgrade();
@@ -2600,7 +2600,7 @@ const App: React.FC = () => {
     setCrmClients((prev) => mergeHistoryItemsIntoCrm(prev, [histItem], stampOwnership).clients);
   };
 
-  /** 单条背调（供流水线并行调用）；可选领英占位 → 挖决策人 / 入 CRM */
+  /** 单条背调（供流水线并行调用）；静默补全联系人 → 可选挖邮箱 / 入 CRM */
   const runOneAutomationAnalysis = async (
     task: AutomationResult,
     opts: Pick<
@@ -2690,7 +2690,7 @@ const App: React.FC = () => {
       const domain = result.companyInfo?.website || task.website || '';
       const companyName = result.companyInfo?.name || task.clientName || domain;
 
-      // 先领英公开定位员工占位，再交给邮箱深挖（目标序列）
+      // 背调后静默补全公司联系人（姓名/职位/主页），再按需挖邮箱
       if (opts.doLinkedInLocate && (domain || companyName)) {
         try {
           const located = await locateLinkedInEmployees({
@@ -2920,7 +2920,8 @@ const App: React.FC = () => {
               followUps.push(
                 runLimited(() =>
                   runOneAutomationAnalysis(task, {
-                    doLinkedInLocate: config.doLinkedInLocate,
+                    // 背调开启即静默补全公司联系人（不在前台配置）
+                    doLinkedInLocate: !!config.doBackgroundCheck,
                     doDmMine: config.doDmMine,
                     doCrmImport: config.doCrmImport,
                     keyword: kw,
@@ -2941,7 +2942,6 @@ const App: React.FC = () => {
       const parts = [`搜索入队 ${searchedCount} 家`];
       if (config.doBackgroundCheck) parts.push('背调已并行处理');
       else parts.push('未开启背调（可点「继续待处理任务」）');
-      if (config.doLinkedInLocate) parts.push('领英员工已占位写入决策人');
       if (config.doDmMine) parts.push('决策人邮箱挖掘已后台排队');
       if (config.doCrmImport) parts.push('有决策人将自动入 CRM');
       alert(`自动化流程结束：${parts.join('；')}。`);
@@ -3089,10 +3089,45 @@ const App: React.FC = () => {
               console.error('批量任务落盘失败（界面仍记为完成）', saveErr);
             }
 
+            let histId: string | null = null;
             try {
-              await saveAnalysisToHistory(result, 'batch');
+              const saved = await saveAnalysisToHistory(result, 'batch');
+              histId = saved.id;
             } catch (histErr) {
               console.error('批量结果写入历史失败，但任务队列已保存', histErr);
+            }
+
+            // 背调完成后静默补全公司联系人（不暴露前台开关）
+            try {
+              const domain = result.companyInfo?.website || task.website || '';
+              const companyName = result.companyInfo?.name || task.clientName || domain;
+              if (domain || companyName) {
+                const located = await locateLinkedInEmployees({
+                  domain,
+                  companyName,
+                  productKeyword: kw || task.keyword || result.searchKeyword,
+                  country: task.country || result.searchCountry,
+                  existing: result.decisionMakers || [],
+                  maxQueries: 3,
+                });
+                if (located.decisionMakers.length) {
+                  await persistDecisionMakerResearch(
+                    { decisionMakers: located.decisionMakers },
+                    { historyId: histId, domain, companyName }
+                  );
+                  const withContacts: AutomationResult = {
+                    ...completedTask,
+                    analysis: { ...result, decisionMakers: located.decisionMakers },
+                  };
+                  batchSeedByIdRef.current.set(task.id, withContacts);
+                  syncAutomationResults((prev) =>
+                    prev.map((t) => (t.id === task.id ? withContacts : t))
+                  );
+                  void saveAutomationTask(withContacts).catch(() => undefined);
+                }
+              }
+            } catch (seedErr) {
+              console.warn('[batch] silent contact seed skipped', seedErr);
             }
 
             incrementUsage('analysis');
