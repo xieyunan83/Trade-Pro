@@ -130,35 +130,39 @@ export const ModuleBackground: React.FC<ModuleBackgroundProps> = ({
           />
         </div>
         {evidenceItems.length > 0 ? (
-          <ul className="space-y-2 max-h-96 overflow-auto pr-1">
-            {evidenceItems.map((item) => (
-              <li
-                key={item.url}
-                className="flex items-start gap-3 p-3 rounded-xl bg-slate-50 border border-slate-100"
-              >
-                <ExternalLink size={14} className="text-cyan-600 mt-0.5 flex-shrink-0" />
-                <div className="min-w-0 flex-1">
-                  <a
-                    href={item.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-sm font-bold text-blue-700 hover:underline break-all"
-                  >
-                    {item.title || item.url}
-                  </a>
-                  <div className="flex flex-wrap gap-1.5 mt-1">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-56 sm:max-h-64 overflow-y-auto pr-0.5">
+            {evidenceItems.map((item) => {
+              let host = '';
+              try {
+                host = new URL(item.url).hostname.replace(/^www\./, '');
+              } catch {
+                host = item.title || item.url;
+              }
+              return (
+                <a
+                  key={item.url}
+                  href={item.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  title={item.snippet || item.title || item.url}
+                  className="group rounded-xl border border-slate-100 bg-slate-50 hover:border-cyan-200 hover:bg-cyan-50/40 p-2.5 min-h-[4.5rem] flex flex-col gap-1 transition-colors"
+                >
+                  <div className="flex items-start gap-1.5 min-w-0">
+                    <ExternalLink size={12} className="text-cyan-600 mt-0.5 shrink-0" />
+                    <span className="text-[11px] font-black text-blue-700 group-hover:underline truncate">
+                      {host}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-1 mt-auto">
                     <Pill tone="blue">{item.source}</Pill>
                     {typeof item.confidence === 'number' && (
                       <Pill>{Math.round(item.confidence * 100)}%</Pill>
                     )}
                   </div>
-                  {item.snippet && (
-                    <p className="text-[11px] text-slate-500 font-medium mt-1 line-clamp-2">{item.snippet}</p>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ul>
+                </a>
+              );
+            })}
+          </div>
         ) : (
           <div className="text-sm text-slate-400 font-bold py-4 text-center">
             暂无来源链接。点击「再次背调」可采集官网与检索证据。

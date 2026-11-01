@@ -296,122 +296,119 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
           </button>
         </div>
 
-        <div className="bg-white rounded-3xl border border-emerald-100 shadow-sm p-6 space-y-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 text-slate-900 font-black text-xl">
-                <Target className="text-emerald-600" size={22} />
-                对本客户匹配我方产品
-              </div>
-              <p className="text-sm text-slate-500 font-medium mt-1 leading-relaxed">
-                基于「{focusCompany || focusWebsite}」背调入库的在售/采购画像，从产品库挑选适合开发的
-                SKU。
-              </p>
-              {focusWebsite && (
-                <div className="text-xs font-bold text-blue-600 mt-1 truncate">{focusWebsite}</div>
-              )}
+        <div className="bg-white rounded-2xl border border-emerald-100 shadow-sm px-4 py-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-slate-900 font-black text-base sm:text-lg">
+              <Target className="text-emerald-600" size={18} />
+              对本客户匹配我方产品
             </div>
+            <p className="text-[11px] text-slate-500 font-medium mt-0.5 truncate max-w-xl">
+              {focusCompany || focusWebsite}
+              {focusWebsite ? ` · ${focusWebsite}` : ''}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {clientMeta && (
+              <>
+                <span className="rounded-full bg-emerald-50 text-emerald-800 border border-emerald-100 px-2 py-0.5 text-[10px] font-black">
+                  画像 {clientMeta.quality}
+                </span>
+                <span className="rounded-full bg-cyan-50 text-cyan-800 border border-cyan-100 px-2 py-0.5 text-[10px] font-black">
+                  命中 {clientHits.length}/{clientMeta.skuCount}
+                </span>
+              </>
+            )}
             <button
               type="button"
               disabled={clientBusy}
               onClick={() => void runClientMatch()}
-              className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-4 py-2.5 text-sm font-black"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-3 py-2 text-xs font-black"
             >
-              {clientBusy ? <Loader2 size={16} className="animate-spin" /> : <Package size={16} />}
+              {clientBusy ? <Loader2 size={14} className="animate-spin" /> : <Package size={14} />}
               {clientBusy ? '匹配中…' : '重新匹配'}
             </button>
           </div>
-          {clientMeta && (
-            <div className="flex flex-wrap gap-2 text-[10px] font-black">
-              <span className="rounded-full bg-emerald-50 text-emerald-800 border border-emerald-100 px-2.5 py-1">
-                客户画像完整度 {clientMeta.quality}
-              </span>
-              <span className="rounded-full bg-slate-50 text-slate-600 border border-slate-200 px-2.5 py-1">
-                我方 SKU {clientMeta.skuCount}
-              </span>
-              <span className="rounded-full bg-cyan-50 text-cyan-800 border border-cyan-100 px-2.5 py-1">
-                命中 {clientHits.length}
-              </span>
-            </div>
-          )}
           {clientError && (
-            <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800">
+            <div className="w-full rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
               {clientError}
             </div>
           )}
         </div>
 
-        <section className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
-          <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-2">
-            <h3 className="font-black text-slate-800 flex items-center gap-2">
-              <Package size={16} className="text-emerald-600" />
+        <section className="space-y-2">
+          <div className="flex items-center justify-between gap-2 px-1">
+            <h3 className="font-black text-slate-800 text-sm flex items-center gap-1.5">
+              <Package size={14} className="text-emerald-600" />
               推荐我方产品 {clientHits.length ? `(${clientHits.length})` : ''}
             </h3>
-            <span className="text-[10px] font-bold text-slate-400">按该客户画像打分 · 可追溯理由</span>
+            <span className="text-[10px] font-bold text-slate-400">卡片可扫一眼看匹配理由</span>
           </div>
           {clientBusy && !clientHits.length ? (
-            <div className="p-10 flex items-center justify-center gap-2 text-slate-400 text-sm font-bold">
+            <div className="p-8 flex items-center justify-center gap-2 text-slate-400 text-sm font-bold bg-white rounded-2xl border border-slate-100">
               <Loader2 className="animate-spin text-emerald-600" size={18} /> 正在对照客户画像…
             </div>
           ) : !clientHits.length ? (
-            <div className="p-10 text-center text-slate-400 font-bold text-sm">
+            <div className="p-8 text-center text-slate-400 font-bold text-sm bg-white rounded-2xl border border-slate-100">
               暂无命中。可先完善产品库，或返回背调补充品类后再匹配。
             </div>
           ) : (
-            <ul className="divide-y divide-slate-100">
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
               {clientHits.map((h) => (
-                <li key={h.sku.id} className="p-5 flex flex-wrap gap-4">
-                  {h.sku.images?.[0] ? (
-                    <img
-                      src={h.sku.images[0]}
-                      alt=""
-                      className="w-16 h-16 rounded-xl object-cover border border-slate-100 bg-slate-50 shrink-0"
-                    />
-                  ) : (
-                    <div className="w-16 h-16 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-300 shrink-0">
-                      <Package size={22} />
+                <article
+                  key={h.sku.id}
+                  className="rounded-2xl border border-emerald-100/80 bg-gradient-to-br from-white via-emerald-50/30 to-cyan-50/40 shadow-sm overflow-hidden flex flex-col"
+                >
+                  <div className="relative aspect-[4/3] bg-slate-50">
+                    {h.sku.images?.[0] ? (
+                      <img
+                        src={h.sku.images[0]}
+                        alt=""
+                        className="absolute inset-0 w-full h-full object-contain p-3"
+                      />
+                    ) : (
+                      <div className="absolute inset-0 flex items-center justify-center text-emerald-200">
+                        <Package size={36} />
+                      </div>
+                    )}
+                    <span
+                      className={`absolute top-2 right-2 text-[10px] font-black px-2 py-0.5 rounded-full shadow-sm ${
+                        h.score >= 70
+                          ? 'bg-emerald-500 text-white'
+                          : h.score >= 40
+                            ? 'bg-amber-400 text-amber-950'
+                            : 'bg-white/90 text-slate-600'
+                      }`}
+                    >
+                      {h.score}分
+                    </span>
+                  </div>
+                  <div className="p-3 space-y-1.5 flex-1 flex flex-col">
+                    <div className="font-black text-slate-900 text-sm leading-snug line-clamp-2">
+                      {h.sku.name}
                     </div>
-                  )}
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-black text-slate-900">{h.sku.name}</span>
-                      {h.sku.skuCode && (
-                        <span className="text-[10px] font-bold text-slate-400">#{h.sku.skuCode}</span>
-                      )}
-                      <span
-                        className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
-                          h.score >= 70
-                            ? 'bg-emerald-100 text-emerald-700'
-                            : h.score >= 40
-                              ? 'bg-amber-100 text-amber-800'
-                              : 'bg-slate-100 text-slate-600'
-                        }`}
-                      >
-                        匹配度 {h.score}
-                      </span>
-                      {h.priceOverlap && (
-                        <span className="text-[10px] font-black text-teal-700 bg-teal-50 px-2 py-0.5 rounded-full">
-                          价带重叠
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-xs text-slate-500 font-bold mt-0.5">
+                    <div className="text-[10px] font-bold text-slate-400">
+                      {h.sku.skuCode ? `#${h.sku.skuCode} · ` : ''}
                       {h.sku.category || '未分类'}
                       {h.sku.factoryPrice != null
-                        ? ` · 出厂 ${h.sku.currency || 'CNY'} ${h.sku.factoryPrice}`
+                        ? ` · ${h.sku.currency || 'CNY'} ${h.sku.factoryPrice}`
                         : ''}
+                      {h.priceOverlap ? ' · 价带重叠' : ''}
                     </div>
-                    <ul className="mt-2 space-y-0.5">
-                      {h.reasons.map((r) => (
-                        <li key={r} className="text-xs text-slate-500 font-medium">
-                          · {r}
-                        </li>
+                    <div className="flex flex-wrap gap-1 pt-1 mt-auto">
+                      {h.reasons.slice(0, 4).map((r) => (
+                        <span
+                          key={r}
+                          className="text-[9px] font-bold text-emerald-800/80 bg-white/80 border border-emerald-100 rounded-lg px-1.5 py-0.5 max-w-full truncate"
+                          title={r}
+                        >
+                          {r.replace(/^[^：:]*[：:]/, '').slice(0, 18) || r.slice(0, 18)}
+                        </span>
                       ))}
-                    </ul>
+                    </div>
                   </div>
-                </li>
+                </article>
               ))}
-            </ul>
+            </div>
           )}
         </section>
 

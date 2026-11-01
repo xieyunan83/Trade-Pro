@@ -676,46 +676,39 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selectedClientIds.has(id));
 
   return (
-    <div className="max-w-7xl mx-auto space-y-4 sm:space-y-8 animate-fade-in">
-      {/* 漏斗 */}
-      <div className="bg-white p-4 sm:p-5 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm space-y-3">
+    <div className="max-w-7xl mx-auto space-y-3 sm:space-y-4 animate-fade-in">
+      {/* 漏斗：单行紧凑，给客户列表留屏 */}
+      <div className="bg-white px-3 py-2.5 rounded-2xl border border-slate-200 shadow-sm space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="min-w-0">
-            <h3 className="text-sm font-black text-slate-800">正式客户 · 商机漏斗</h3>
-            <p className="text-[10px] font-semibold text-slate-400 mt-0.5">
-              正式客户数与营销工具顶部「正式客户」同源。背调作业进度在「营销工具」；未入客户库的档案在「记录中心」。列表为空时请先点「清除全部筛选」。
-            </p>
-          </div>
-          <div className="text-[11px] font-bold text-slate-400">
-            正式客户 {clients.length} 家
+          <h3 className="text-xs font-black text-slate-800">正式客户 · 商机漏斗</h3>
+          <div className="text-[10px] font-bold text-slate-400">
+            {clients.length} 家
             {filteredEnriched.length !== clients.length && (
-              <span className="text-blue-600 ml-1">· 筛选 {filteredEnriched.length} 家</span>
+              <span className="text-blue-600 ml-1">· 筛选 {filteredEnriched.length}</span>
             )}
             {overdueCount > 0 ? (
               <button
                 type="button"
                 onClick={() => setFilterStatus('overdue')}
-                className="ml-2 text-red-600 hover:underline"
+                className="ml-1.5 text-red-600 hover:underline"
               >
-                · {overdueCount} 家跟进逾期
+                · 逾期 {overdueCount}
               </button>
-            ) : (
-              ' · 暂无逾期跟进'
-            )}
+            ) : null}
           </div>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
           <button
             type="button"
             onClick={() => setFilterStatus('all')}
-            className={`rounded-xl border px-3 py-2.5 text-left transition-all ${
+            className={`rounded-lg border px-2 py-1.5 text-left transition-all ${
               filterStatus === 'all'
                 ? 'bg-slate-900 text-white border-slate-900'
                 : 'bg-slate-50 text-slate-600 border-slate-100 hover:border-slate-300'
             }`}
           >
-            <div className="text-[10px] font-black uppercase tracking-widest opacity-70">全部</div>
-            <div className="text-lg font-black mt-0.5">{clients.length}</div>
+            <div className="text-[9px] font-black uppercase tracking-wider opacity-70">全部</div>
+            <div className="text-sm font-black leading-tight">{clients.length}</div>
           </button>
           {CRM_FUNNEL_STAGES.map((stage) => (
             <button
@@ -724,16 +717,16 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
               onClick={() =>
                 setFilterStatus((prev) => (prev === stage.value ? 'all' : stage.value))
               }
-              className={`rounded-xl border px-3 py-2.5 text-left transition-all ${
+              className={`rounded-lg border px-2 py-1.5 text-left transition-all ${
                 filterStatus === stage.value
-                  ? 'ring-2 ring-offset-1 ring-slate-900 ' + funnelToneClass[stage.tone]
+                  ? 'ring-2 ring-offset-0 ring-slate-900 ' + funnelToneClass[stage.tone]
                   : funnelToneClass[stage.tone]
               }`}
             >
-              <div className="text-[10px] font-black uppercase tracking-widest opacity-70">
+              <div className="text-[9px] font-black uppercase tracking-wider opacity-70 truncate">
                 {stage.label}
               </div>
-              <div className="text-lg font-black mt-0.5">{funnelCounts[stage.value] || 0}</div>
+              <div className="text-sm font-black leading-tight">{funnelCounts[stage.value] || 0}</div>
             </button>
           ))}
         </div>
@@ -761,15 +754,15 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
         </div>
       )}
 
-      <div className="bg-white p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm flex flex-col gap-3 sm:gap-4">
+      <div className="bg-white p-3 sm:p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-2.5 sm:gap-3">
         <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
           <div className="relative w-full flex-1">
-            <Search className="absolute left-4 top-3.5 text-slate-400" size={18} />
+            <Search className="absolute left-3 top-2.5 text-slate-400" size={16} />
             <input
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-12 pr-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold text-sm sm:text-base"
+              className="w-full pl-10 pr-3 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold text-sm"
               placeholder="搜索客户、网址、产品类型或拥有人..."
             />
           </div>
@@ -927,11 +920,11 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
         </div>
 
         {onBatchAnalysisEnrichment && (
-          <div className="w-full rounded-2xl border border-violet-200 bg-gradient-to-r from-violet-50 to-indigo-50 px-3 py-3 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+          <div className="w-full rounded-xl border border-violet-200 bg-gradient-to-r from-violet-50 to-indigo-50 px-2.5 py-2 flex flex-col sm:flex-row sm:items-center gap-2">
             <div className="min-w-0 flex-1">
-              <div className="text-sm font-black text-violet-950">背调补全 · 产品 / 市场 / 客户匹配</div>
-              <div className="text-[11px] font-bold text-violet-800/80 leading-relaxed">
-                对已有背调客户：按需补采品类与设计信号，再用结构化决策判定渠道与适市，回写标签与画像。请保持本页打开。
+              <div className="text-xs font-black text-violet-950">背调补全 · 产品 / 市场 / 客户匹配</div>
+              <div className="text-[10px] font-bold text-violet-800/75 leading-snug">
+                补采品类与设计信号并回写画像；请保持本页打开。
               </div>
             </div>
             <button
@@ -959,12 +952,12 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
         )}
 
         {onBatchDesignSignalFill && (
-          <div className="w-full rounded-2xl border border-cyan-200 bg-gradient-to-r from-cyan-50 to-teal-50 px-3 py-3 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+          <div className="w-full rounded-xl border border-cyan-200 bg-gradient-to-r from-cyan-50 to-teal-50 px-2.5 py-2 flex flex-col sm:flex-row sm:items-center gap-2">
             <div className="min-w-0 flex-1">
-              <div className="text-sm font-black text-cyan-950">补全 CRM 空白 · 设计信号</div>
-              <div className="text-[11px] font-bold text-cyan-800/80 leading-relaxed">
-                仅处理缺包装/配色/价带标签且有官网的客户；会消耗额度。通宵请保持本页打开、电脑勿睡眠。
-                {blankDesignCount != null ? ` 当前约 ${blankDesignCount} 家空白。` : ''}
+              <div className="text-xs font-black text-cyan-950">补全 CRM 空白 · 设计信号</div>
+              <div className="text-[10px] font-bold text-cyan-800/75 leading-snug">
+                补包装/配色/价带；通宵请保持本页打开。
+                {blankDesignCount != null ? ` 约 ${blankDesignCount} 家空白。` : ''}
               </div>
             </div>
             <button

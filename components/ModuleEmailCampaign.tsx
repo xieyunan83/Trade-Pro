@@ -25,6 +25,7 @@ import {
 } from '../services/emailCampaignStore';
 import { isDirectMailConfigured, sendDirectMail } from '../services/directMailService';
 import { filterOwnedRecords } from '../services/permissions';
+import { loadStrategyMailDraft } from '../services/strategyMailDraftStore';
 
 interface ModuleEmailCampaignProps {
   crmClients: Client[];
@@ -693,6 +694,57 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
             <h4 className="text-lg font-black text-slate-800">创建新模板</h4>
             <p className="text-slate-400 font-bold text-sm">手动编写，支持宏变量</p>
           </div>
+          {(() => {
+            const draft = loadStrategyMailDraft();
+            if (!draft?.mailGroup) return null;
+            const g = draft.mailGroup;
+            const items = [
+              { label: '匹配破冰', subject: g.subject1, body: g.email1 },
+              { label: '实力证明', subject: g.subject2, body: g.email2 },
+              { label: '钩子收口', subject: g.subject3, body: g.email3 },
+            ].filter((x) => x.body || x.subject);
+            if (!items.length) return null;
+            return (
+              <div className="md:col-span-2 rounded-2xl border border-indigo-200 bg-indigo-50/50 p-4 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-black text-indigo-950">从开发策略导入</div>
+                    <p className="text-[11px] font-bold text-indigo-800/80">
+                      {draft.companyName}
+                      {draft.savedAt
+                        ? ` · ${new Date(draft.savedAt).toLocaleString('zh-CN')}`
+                        : ''}
+                    </p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  {items.map((item) => (
+                    <button
+                      key={item.label}
+                      type="button"
+                      onClick={() => {
+                        setNewTemplate({
+                          id: '',
+                          name: `${draft.companyName} · ${item.label}`,
+                          subject: item.subject || '',
+                          body: (item.body || '').replace(/\n/g, '<br/>'),
+                          lastUpdated: Date.now(),
+                        });
+                        setIsCreatingTemplate(true);
+                      }}
+                      className="text-left rounded-xl border border-indigo-100 bg-white px-3 py-2.5 hover:border-indigo-300 hover:shadow-sm transition-all"
+                    >
+                      <div className="text-[10px] font-black text-indigo-600 uppercase">{item.label}</div>
+                      <div className="text-xs font-bold text-slate-800 mt-1 line-clamp-2">
+                        {item.subject || '（无主题）'}
+                      </div>
+                      <div className="text-[10px] text-indigo-700 font-black mt-2">填入编辑器 →</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
           {templates.map((template) => (
             <div
               key={template.id}

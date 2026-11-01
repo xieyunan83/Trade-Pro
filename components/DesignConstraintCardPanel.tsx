@@ -94,25 +94,29 @@ export const DesignConstraintCardPanel: React.FC<Props> = ({
 
   return (
     <div
-      className={`rounded-2xl border border-violet-100 bg-gradient-to-br from-violet-50/60 via-white to-teal-50/40 min-h-[4.5rem] ${
-        compact ? 'p-3' : 'p-4'
-      } space-y-3`}
+      className={`rounded-xl border border-violet-100/80 bg-white/70 ${
+        compact ? 'p-2 space-y-1.5' : 'p-4 space-y-3 min-h-[4.5rem]'
+      }`}
     >
       <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <Compass size={16} className="text-violet-600" />
-          <div>
-            <div className="text-sm font-black text-slate-800">设计适市约束</div>
-            <div className="text-[10px] font-bold text-slate-400">
-              来自客户库画像 · 设计前参考 · 完成后可匹配客户
+        <div className="flex items-center gap-1.5 min-w-0">
+          <Compass size={compact ? 13 : 16} className="text-violet-600 shrink-0" />
+          <div className="min-w-0">
+            <div className={`${compact ? 'text-[11px]' : 'text-sm'} font-black text-slate-800`}>
+              设计适市约束
             </div>
+            {!compact && (
+              <div className="text-[10px] font-bold text-slate-400">
+                来自客户库画像 · 设计前参考 · 完成后可匹配客户
+              </div>
+            )}
           </div>
         </div>
         {loading ? (
           <Loader2 size={14} className="animate-spin text-violet-500" />
         ) : card ? (
           <span
-            className={`text-[10px] font-black px-2 py-1 rounded-lg border ${tone(card.confidence)}`}
+            className={`text-[10px] font-black px-2 py-0.5 rounded-lg border ${tone(card.confidence)}`}
           >
             置信{card.confidence} {card.confidenceScore}
           </span>
@@ -121,26 +125,42 @@ export const DesignConstraintCardPanel: React.FC<Props> = ({
 
       {card && (
         <>
-          <div className="flex flex-wrap gap-1.5 text-[10px] font-bold text-slate-600">
-            <span className="px-2 py-1 rounded-lg bg-white border border-slate-100">
+          <div className="flex flex-wrap gap-1 text-[10px] font-bold text-slate-600">
+            <span className="px-1.5 py-0.5 rounded-md bg-violet-50 border border-violet-100">
               {card.market}
             </span>
-            <span className="px-2 py-1 rounded-lg bg-white border border-slate-100">
+            <span className="px-1.5 py-0.5 rounded-md bg-violet-50 border border-violet-100">
               {card.category}
             </span>
-            <span className="px-2 py-1 rounded-lg bg-white border border-slate-100">
-              样本 {card.sampleSize} · 信号齐 {card.designReadyCount}
-            </span>
+            {!compact && (
+              <span className="px-1.5 py-0.5 rounded-md bg-white border border-slate-100">
+                样本 {card.sampleSize} · 信号齐 {card.designReadyCount}
+              </span>
+            )}
           </div>
 
-          <ul className="space-y-1.5">
-            {card.designHints.map((h) => (
-              <li key={h} className="text-xs font-bold text-slate-700 leading-relaxed flex gap-2">
-                <span className="text-violet-500 shrink-0">·</span>
-                <span>{h}</span>
-              </li>
-            ))}
-          </ul>
+          {compact ? (
+            <ul className="flex flex-wrap gap-x-3 gap-y-0.5">
+              {card.designHints.slice(0, 3).map((h) => (
+                <li
+                  key={h}
+                  className="text-[10px] font-bold text-slate-700 leading-snug max-w-full truncate"
+                  title={h}
+                >
+                  · {h}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <ul className="space-y-1.5">
+              {card.designHints.map((h) => (
+                <li key={h} className="text-xs font-bold text-slate-700 leading-relaxed flex gap-2">
+                  <span className="text-violet-500 shrink-0">·</span>
+                  <span>{h}</span>
+                </li>
+              ))}
+            </ul>
+          )}
 
           {!compact && (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">

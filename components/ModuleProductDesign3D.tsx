@@ -646,37 +646,35 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
   const previewPoster = useVaultUrl(active?.previewImageUrl || active?.sourceImage);
 
   return (
-    <div className="max-w-[96rem] mx-auto space-y-4 animate-fade-in px-1">
-      <div className="rounded-3xl border border-indigo-200/70 bg-gradient-to-br from-indigo-50/80 via-white to-slate-50 p-5 sm:p-6 shadow-sm">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <div className="inline-flex items-center gap-2 text-indigo-700 font-black text-xs uppercase tracking-widest">
-              <Box size={14} /> 3D Studio
-            </div>
-            <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">产品设计 · 3D 图</h2>
-            <p className="text-sm text-slate-500 font-medium mt-1 max-w-2xl">
-              图生 / 文生 / 多视图建模：可选贴图档（标清·高清·极致）、对齐参考朝向、真实尺寸与智能低模；生成后预览、本机缓存与 GLB 下载。
-            </p>
-            <div className="mt-2">
-              <CreativePipelineBar current="3d" onNavigate={onNavigateModule} />
+    <div className="max-w-[96rem] mx-auto space-y-3 animate-fade-in px-1">
+      <div className="rounded-2xl border border-indigo-200/70 bg-gradient-to-br from-indigo-50/80 via-white to-slate-50 px-3 py-2.5 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
+            <span className="inline-flex items-center gap-1 text-indigo-700 font-black text-[10px] uppercase tracking-widest">
+              <Box size={12} /> 3D Studio
+            </span>
+            <h2 className="text-base font-extrabold text-slate-900">产品设计 · 3D 图</h2>
+            <div
+              className={`text-[10px] font-bold rounded-lg px-2 py-1 border ${
+                hydrating
+                  ? 'text-slate-600 bg-slate-50 border-slate-200'
+                  : provider.ready
+                    ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+                    : 'text-rose-800 bg-rose-50 border-rose-200'
+              }`}
+            >
+              {hydrating ? '同步中…' : provider.ready ? '服务已就绪' : '需配置 API Key'}
             </div>
           </div>
-          <div
-            className={`text-[10px] font-bold rounded-xl px-3 py-2 border ${
-              hydrating
-                ? 'text-slate-600 bg-slate-50 border-slate-200'
-                : provider.ready
-                  ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
-                  : 'text-rose-800 bg-rose-50 border-rose-200'
-            }`}
-          >
-            {hydrating ? '正在同步配置…' : provider.ready ? '3D 服务已就绪' : '需配置 API Key'}
-          </div>
+        </div>
+        <div className="mt-1.5">
+          <CreativePipelineBar current="3d" onNavigate={onNavigateModule} />
         </div>
       </div>
 
-      <div className="grid lg:grid-cols-12 gap-4">
-        <div className="lg:col-span-4 space-y-3">
+      {/* 预览区加宽，接近正方形视口 */}
+      <div className="grid lg:grid-cols-12 gap-3">
+        <div className="lg:col-span-3 space-y-3 max-h-[min(78vh,52rem)] overflow-y-auto custom-scrollbar pr-0.5">
           {!provider.ready && (
             <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 space-y-2">
               <div className="text-xs font-black text-rose-900 flex items-center gap-1.5">
@@ -1030,8 +1028,8 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
           </div>
         </div>
 
-        <div className="lg:col-span-5 rounded-2xl border border-slate-200 bg-slate-950 text-white overflow-hidden min-h-[400px] flex flex-col">
-          <div className="px-4 py-2.5 border-b border-white/10 flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-slate-300">
+        <div className="lg:col-span-6 rounded-2xl border border-slate-200 bg-slate-950 text-white overflow-hidden flex flex-col">
+          <div className="px-3 py-2 border-b border-white/10 flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-slate-300">
             <span>
               {active?.status === 'ready' && downloadUrl ? '3D 环视预览' : '视口预览'}
             </span>
@@ -1046,7 +1044,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
               </span>
             )}
           </div>
-          <div className="flex-1 relative flex items-stretch justify-center min-h-[300px]">
+          <div className="relative w-full aspect-square max-h-[min(72vh,40rem)] mx-auto flex items-stretch justify-center">
             {active?.status === 'running' ? (
               <div className="flex-1 flex flex-col items-center justify-center space-y-3 p-6">
                 <Loader2 className="mx-auto animate-spin text-indigo-400" size={36} />
@@ -1069,7 +1067,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                 src={previewUrl || downloadUrl}
                 stableKey={active.id}
                 poster={previewPoster || undefined}
-                className="flex-1"
+                className="w-full h-full min-h-0"
                 downloadHref={downloadUrl || previewUrl}
                 onLocalBlob={(blob) => {
                   if (!activeId) return;

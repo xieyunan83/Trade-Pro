@@ -5554,14 +5554,14 @@ const App: React.FC = () => {
                         canViewEmails={canViewFullDecisionMakerEmails(currentUser)}
                     />
                 </ModulePane>
-                {activeModule === ModuleType.STRATEGY && (
+                <ModulePane id={ModuleType.STRATEGY} activeId={activeModule} maxAlive={10}>
                     <div className="animate-fade-in max-w-7xl mx-auto pb-10">
                         {analysisData && (
-                            <div className="mb-6 sm:mb-8 flex flex-col md:flex-row md:items-end justify-between gap-4 bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-panel">
-                                <div className="min-w-0">
-                                  <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-600 mb-1">Strategy Context</div>
-                                  <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-slate-900 tracking-tight truncate">{analysisData.companyInfo?.name}</h2>
-                                  <div className="text-xs sm:text-sm text-slate-500 font-semibold mt-2">上下文：深度调查报告</div>
+                            <div className="mb-3 flex flex-wrap items-center justify-between gap-2 bg-white px-3 py-2 rounded-2xl border border-slate-200 shadow-sm">
+                                <div className="min-w-0 flex items-center gap-2">
+                                  <span className="text-[9px] font-bold uppercase tracking-[0.16em] text-cyan-600 shrink-0">Strategy</span>
+                                  <h2 className="text-sm sm:text-base font-extrabold text-slate-900 truncate">{analysisData.companyInfo?.name}</h2>
+                                  <span className="text-[10px] text-slate-400 font-semibold shrink-0">深度调查</span>
                                 </div>
                             </div>
                         )}
@@ -5640,7 +5640,7 @@ const App: React.FC = () => {
                           }}
                         />
                     </div>
-                )}
+                </ModulePane>
                 {analysisData && !alwaysActiveModules.includes(activeModule) && (
                     <ErrorBoundary label="背调报告">
                     <div className="animate-fade-in max-w-7xl mx-auto pb-10">

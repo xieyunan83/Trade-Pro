@@ -321,82 +321,78 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
 
   return (
     <div className="max-w-7xl mx-auto space-y-4 sm:space-y-6 animate-fade-in px-0">
-      <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
-        <div className="tp-panel-title mb-2">
-          <div className="tp-panel-title-icon">
-            <Globe size={20} />
+      <div className="bg-white p-4 sm:p-5 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
+        <div className="flex flex-col lg:flex-row lg:items-start gap-3 lg:gap-4 mb-3">
+          <div className="tp-panel-title mb-0 min-w-0 flex-1">
+            <div className="tp-panel-title-icon">
+              <Globe size={18} />
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-lg sm:text-xl font-black text-slate-800 tracking-tight">全球客户精准搜索</h2>
+              <p className="text-xs text-slate-500 font-medium mt-0.5">
+                按产品关键词、国家与客户类型精准匹配潜在买家。
+              </p>
+            </div>
           </div>
-          <div className="min-w-0">
-            <h2 className="text-xl sm:text-2xl font-black text-slate-800 tracking-tight">全球客户精准搜索</h2>
-            <p className="text-sm text-slate-500 font-medium mt-0.5">
-              按产品关键词、国家与客户类型精准匹配潜在买家。
-            </p>
-          </div>
-        </div>
 
-        {/* ICP 画像模板 */}
-        <div className="mt-5 sm:mt-6 rounded-2xl border border-cyan-100 bg-cyan-50/50 p-3 sm:p-4 space-y-3">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-            <div className="text-xs font-black text-cyan-900 flex items-center gap-1.5">
-              <Bookmark size={14} className="text-cyan-600" />
-              ICP 画像模板
-              <span className="font-medium text-cyan-800/70">保存当前搜索条件，一键复用</span>
-            </div>
-            <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
-              <input
-                type="text"
-                value={icpNameDraft}
-                onChange={(e) => setIcpNameDraft(e.target.value)}
-                placeholder="模板名称（可选）"
-                className="flex-1 sm:w-44 px-3 py-2 rounded-xl border border-cyan-200 bg-white text-xs font-bold"
-              />
-              <button
-                type="button"
-                onClick={handleSaveIcp}
-                className="inline-flex items-center justify-center gap-1.5 bg-cyan-600 hover:bg-cyan-700 text-white px-3 py-2 rounded-xl text-xs font-black"
-              >
-                <Plus size={14} /> 保存为 ICP
-              </button>
-            </div>
-          </div>
-          {icpTemplates.length > 0 ? (
-            <div className="flex flex-wrap gap-2">
-              {icpTemplates.map((icp) => (
-                <div
-                  key={icp.id}
-                  className="inline-flex items-center gap-1 bg-white border border-cyan-100 rounded-xl pl-2.5 pr-1 py-1 shadow-sm"
+          {/* ICP 与标题同一行，腾出下方搜索区 */}
+          <div className="w-full lg:w-[min(100%,28rem)] shrink-0 rounded-xl border border-cyan-100 bg-cyan-50/60 p-2.5 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-[11px] font-black text-cyan-900 flex items-center gap-1 min-w-0">
+                <Bookmark size={12} className="text-cyan-600 shrink-0" />
+                ICP 画像
+                <span className="font-medium text-cyan-800/60 truncate hidden sm:inline">一键复用</span>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <input
+                  type="text"
+                  value={icpNameDraft}
+                  onChange={(e) => setIcpNameDraft(e.target.value)}
+                  placeholder="名称"
+                  className="w-20 sm:w-28 px-2 py-1 rounded-lg border border-cyan-200 bg-white text-[11px] font-bold"
+                />
+                <button
+                  type="button"
+                  onClick={handleSaveIcp}
+                  className="inline-flex items-center gap-1 bg-cyan-600 hover:bg-cyan-700 text-white px-2 py-1 rounded-lg text-[11px] font-black"
                 >
-                  <button
-                    type="button"
-                    onClick={() => handleApplyIcp(icp)}
-                    className="text-left min-w-0"
-                    title={`应用：${icp.product || '—'} · ${icp.countries.length} 国`}
-                  >
-                    <div className="text-xs font-black text-slate-800 truncate max-w-[140px]">{icp.name}</div>
-                    <div className="text-[10px] font-bold text-slate-400 truncate max-w-[140px]">
-                      {icp.product || '无关键词'}
-                      {icp.countries.length ? ` · ${icp.countries.length}国` : ''}
-                    </div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteIcp(icp.id)}
-                    className="p-1.5 text-slate-300 hover:text-red-500"
-                    title="删除"
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </div>
-              ))}
+                  <Plus size={12} /> 保存
+                </button>
+              </div>
             </div>
-          ) : (
-            <p className="text-[11px] font-bold text-cyan-800/60">
-              尚无模板。填好关键词/国家/行业后点「保存为 ICP」，下次一键套用。
-            </p>
-          )}
+            {icpTemplates.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5 max-h-16 overflow-y-auto">
+                {icpTemplates.map((icp) => (
+                  <div
+                    key={icp.id}
+                    className="inline-flex items-center gap-0.5 bg-white border border-cyan-100 rounded-lg pl-2 pr-0.5 py-0.5"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => handleApplyIcp(icp)}
+                      className="text-left min-w-0"
+                      title={`应用：${icp.product || '—'} · ${icp.countries.length} 国`}
+                    >
+                      <div className="text-[11px] font-black text-slate-800 truncate max-w-[100px]">{icp.name}</div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteIcp(icp.id)}
+                      className="p-1 text-slate-300 hover:text-red-500"
+                      title="删除"
+                    >
+                      <Trash2 size={11} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-[10px] font-bold text-cyan-800/55">填好条件后点保存，下次一键套用</p>
+            )}
+          </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 mt-5 sm:mt-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
           <div>
             <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">产品关键词</label>
             <div className="relative">

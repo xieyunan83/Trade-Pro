@@ -22,6 +22,11 @@ import {
   strategyOfferKindLabel,
   type StrategyOfferAsset,
 } from '../services/strategyOfferBridge';
+import {
+  loadStrategyMailDraft,
+  saveStrategyMailDraft,
+  type StrategyMailDraft,
+} from '../services/strategyMailDraftStore';
 import { VaultImg } from './VaultMedia';
 import {
   Send,
@@ -44,6 +49,7 @@ import {
   ChevronDown,
   Search,
   ImagePlus,
+  Copy,
 } from 'lucide-react';
 
 interface Props {
@@ -69,6 +75,8 @@ export const ModuleStrategy: React.FC<Props> = ({
   onSaveGeneratedEmails,
 }) => {
   const [knowledgeBase, setKnowledgeBase] = useState<KnowledgeFile[]>([]);
+  const [mailDraft, setMailDraft] = useState<StrategyMailDraft | null>(() => loadStrategyMailDraft());
+  const [copyHint, setCopyHint] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>(() => [
     {
       id: 'init',
@@ -565,10 +573,18 @@ export const ModuleStrategy: React.FC<Props> = ({
         marketLeadsSummary: leadsSummary || undefined,
       });
       await onSaveGeneratedEmails(mailGroup, primaryCompany);
+      const draft: StrategyMailDraft = {
+        companyName: primaryCompany.companyInfo?.name || '客户',
+        website: primaryCompany.companyInfo?.website,
+        mailGroup,
+        savedAt: Date.now(),
+      };
+      saveStrategyMailDraft(draft);
+      setMailDraft(draft);
       setGenerateMsg(
         `开发信组已生成并保存${images.length ? '（已引用创作配图）' : ''}${
           brief ? ' · 已并入产品/包装/发文线索' : ''
-        }。下载 PPT 时会自动包含。`
+        }。可点「复制」带到邮件营销模板；切换页面也不会丢。`
       );
     } catch (e: unknown) {
       const raw = e instanceof Error ? e.message : String(e);
@@ -597,88 +613,112 @@ export const ModuleStrategy: React.FC<Props> = ({
   });
   const selectedOffers = offerAssets.filter((a) => selectedOfferIds.includes(a.id));
 
+  const displayMailGroup =
+    primaryCompany?.generatedEmails || mailDraft?.mailGroup || null;
+
+  const copyMail = async (label: string, subject?: string, body?: string) => {
+    const text = [subject ? `Subject: ${subject}` : '', body || ''].filter(Boolean).join('\n\n');
+    if (!text.trim()) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyHint(`已复制「${label}」，可到邮件营销粘贴为模板`);
+      window.setTimeout(() => setCopyHint(''), 2500);
+    } catch {
+      setCopyHint('复制失败，请手动选中文字');
+    }
+  };
+
   return (
-    <div className="h-[calc(100dvh-120px)] sm:h-[calc(100vh-140px)] flex flex-col gap-4 sm:gap-6 max-w-7xl mx-auto animate-fade-in overflow-hidden px-0">
+    <div className="h-[calc(100dvh-120px)] sm:h-[calc(100vh-140px)] flex flex-col gap-3 sm:gap-4 max-w-7xl mx-auto animate-fade-in overflow-hidden px-0">
       {primaryCompany && (
-        <div className="bg-white rounded-2xl border border-indigo-200 p-4 sm:p-5 shadow-sm flex-shrink-0">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="bg-white rounded-2xl border border-indigo-200 px-3 py-2.5 sm:px-4 sm:py-3 shadow-sm flex-shrink-0">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div className="min-w-0 flex-1">
-              <div className="text-sm font-black text-slate-800">开发信 · 保存到背调报告</div>
-              <p className="text-xs text-slate-500 font-medium mt-1">
-                针对「{primaryCompany.companyInfo?.name || '当前客户'}」+ 创作素材 / 关键词 / 国家，调用策略服务生成 3 封短开发信（匹配破冰 / 实力证明 / 钩子收口）。
+              <div className="text-xs font-black text-slate-800">
+                开发信 · {primaryCompany.companyInfo?.name || '当前客户'}
+              </div>
+              <p className="text-[11px] text-slate-500 font-medium mt-0.5">
+                生成后会保存到背调报告，并保留草稿供邮件营销复制。
+                {selectedOfferIds.length > 0 ? ` · 已选素材 ${selectedOfferIds.length}` : ''}
               </p>
-              <p
-                className={`text-[11px] font-bold mt-2 px-2 py-1 rounded-lg inline-block ${
-                  llmStatus.ready
-                    ? 'text-emerald-800 bg-emerald-50 border border-emerald-100'
-                    : 'text-amber-800 bg-amber-50 border border-amber-100'
-                }`}
-              >
-                {llmStatus.detail}
-              </p>
-              {generateMsg && (
-                <p
-                  className={`text-[11px] font-bold mt-2 ${
-                    /失败|未就绪/.test(generateMsg) ? 'text-rose-700' : 'text-emerald-700'
+              <div className="flex flex-wrap items-center gap-2 mt-1">
+                <span
+                  className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${
+                    llmStatus.ready
+                      ? 'text-emerald-800 bg-emerald-50 border border-emerald-100'
+                      : 'text-amber-800 bg-amber-50 border border-amber-100'
                   }`}
                 >
-                  {generateMsg}
-                </p>
-              )}
+                  {llmStatus.detail}
+                </span>
+                {generateMsg && (
+                  <span
+                    className={`text-[10px] font-bold ${
+                      /失败|未就绪/.test(generateMsg) ? 'text-rose-700' : 'text-emerald-700'
+                    }`}
+                  >
+                    {generateMsg}
+                  </span>
+                )}
+                {copyHint && <span className="text-[10px] font-bold text-indigo-700">{copyHint}</span>}
+              </div>
             </div>
             <button
               type="button"
               onClick={() => void handleGenerateAndSaveEmails()}
               disabled={isGeneratingEmails || !onSaveGeneratedEmails || !llmStatus.ready}
-              className="inline-flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white px-5 py-3 rounded-xl font-bold text-sm shadow-lg shrink-0"
+              className="inline-flex items-center justify-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-md shrink-0"
             >
-              {isGeneratingEmails ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+              {isGeneratingEmails ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
               {isGeneratingEmails ? '生成中…' : '生成开发信'}
             </button>
           </div>
 
-          <p className="mt-3 text-[11px] text-slate-500 font-medium">
-            产品素材请在下方输入栏点「产品」选择（平面 / 包装 / 发文 / 产品库）
-            {selectedOfferIds.length > 0 ? ` · 已选 ${selectedOfferIds.length}` : ''}
-          </p>
-          {primaryCompany.generatedEmails && (
-            <div className="mt-4 pt-4 border-t border-slate-100 space-y-3">
-              {primaryCompany.generatedEmails.analysis && (
-                <p className="text-xs font-bold text-indigo-800 bg-indigo-50 p-3 rounded-xl">
-                  {primaryCompany.generatedEmails.analysis}
-                  {primaryCompany.generatedEmails.sendTip
-                    ? ` · ${primaryCompany.generatedEmails.sendTip}`
-                    : ''}
+          {displayMailGroup && (
+            <div className="mt-2.5 pt-2.5 border-t border-slate-100 space-y-2">
+              {displayMailGroup.analysis && (
+                <p className="text-[11px] font-bold text-indigo-800 bg-indigo-50 px-2.5 py-1.5 rounded-lg line-clamp-2">
+                  {displayMailGroup.analysis}
+                  {displayMailGroup.sendTip ? ` · ${displayMailGroup.sendTip}` : ''}
                 </p>
               )}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                 {[
                   {
                     label: '匹配破冰',
-                    subject: primaryCompany.generatedEmails.subject1,
-                    body: primaryCompany.generatedEmails.email1,
+                    subject: displayMailGroup.subject1,
+                    body: displayMailGroup.email1,
                   },
                   {
                     label: '实力证明',
-                    subject: primaryCompany.generatedEmails.subject2,
-                    body: primaryCompany.generatedEmails.email2,
+                    subject: displayMailGroup.subject2,
+                    body: displayMailGroup.email2,
                   },
                   {
                     label: '钩子收口',
-                    subject: primaryCompany.generatedEmails.subject3,
-                    body: primaryCompany.generatedEmails.email3,
+                    subject: displayMailGroup.subject3,
+                    body: displayMailGroup.email3,
                   },
                 ].map((item) => (
-                  <div key={item.label} className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-                    <div className="text-[10px] font-black text-indigo-600 uppercase mb-1 flex items-center gap-1">
-                      <Mail size={12} /> {item.label}
+                  <div key={item.label} className="bg-slate-50 border border-slate-200 rounded-xl p-2.5">
+                    <div className="flex items-center justify-between gap-1 mb-1">
+                      <div className="text-[10px] font-black text-indigo-600 uppercase flex items-center gap-1">
+                        <Mail size={11} /> {item.label}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void copyMail(item.label, item.subject, item.body)}
+                        className="inline-flex items-center gap-0.5 text-[10px] font-black text-indigo-700 hover:bg-indigo-50 rounded-md px-1.5 py-0.5"
+                      >
+                        <Copy size={11} /> 复制
+                      </button>
                     </div>
                     {item.subject && (
                       <p className="text-[11px] font-bold text-slate-800 mb-1 line-clamp-2">
                         Subject: {item.subject}
                       </p>
                     )}
-                    <p className="text-xs text-slate-700 whitespace-pre-wrap line-clamp-6">{item.body}</p>
+                    <p className="text-[11px] text-slate-700 whitespace-pre-wrap line-clamp-5">{item.body}</p>
                   </div>
                 ))}
               </div>

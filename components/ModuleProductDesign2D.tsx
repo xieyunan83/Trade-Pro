@@ -518,60 +518,45 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
 
   return (
     <div className="max-w-[96rem] mx-auto animate-fade-in px-1 space-y-3">
-      {/* 顶栏 */}
-      <div className="rounded-2xl border border-violet-200/70 bg-gradient-to-br from-violet-50/80 via-white to-cyan-50/50 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
-        <div>
-          <div className="inline-flex items-center gap-1.5 rounded-full bg-slate-900 text-violet-200 text-[10px] font-black uppercase tracking-widest px-2.5 py-1">
-            <Sparkles size={11} /> Design Agent · 平面
+      {/* 顶栏：标题 / 流水线 / 适市约束压成一行，主画布尽量露出来 */}
+      <div className="rounded-2xl border border-violet-200/70 bg-gradient-to-br from-violet-50/80 via-white to-cyan-50/50 px-3 py-2.5 space-y-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
+            <span className="inline-flex items-center gap-1 rounded-full bg-slate-900 text-violet-200 text-[9px] font-black uppercase tracking-widest px-2 py-0.5">
+              <Sparkles size={10} /> 平面
+            </span>
+            <h2 className="text-base font-extrabold text-slate-900">产品设计 · 平面图</h2>
+            <span
+              className={`text-[10px] font-black ${status.configured ? 'text-emerald-700' : 'text-amber-700'}`}
+            >
+              {status.configured ? status.label : status.label}
+            </span>
           </div>
-          <h2 className="text-xl font-extrabold text-slate-900 mt-1.5">产品设计 · 平面图</h2>
-          <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1 max-w-2xl leading-relaxed">
-            文字 / 参考图生图；「多角度套图」一次出正面·45°·侧面·背面，可直接送去 3D 与视频。
-          </p>
-          <div className="mt-2">
-            <CreativePipelineBar current="2d" onNavigate={onNavigateModule} />
-          </div>
-        </div>
-        <div className="text-right shrink-0">
-          <div
-            className={`text-xs font-black ${status.configured ? 'text-emerald-700' : 'text-amber-700'}`}
-          >
-            {status.configured ? (
-              <span className="inline-flex items-center gap-1">
-                <CheckCircle2 size={14} /> {status.label}
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-1">
-                <AlertTriangle size={14} /> {status.label}
-              </span>
-            )}
-          </div>
-          <div className="text-[10px] text-slate-400 font-semibold mt-0.5 max-w-[14rem]">{status.detail}</div>
           <button
             type="button"
             onClick={() => createProject(skillId)}
-            className="mt-2 inline-flex items-center gap-1.5 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-xs font-black px-3 py-2"
+            className="inline-flex items-center gap-1 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-[11px] font-black px-2.5 py-1.5"
           >
-            <Plus size={14} /> 新建项目
+            <Plus size={12} /> 新建
           </button>
         </div>
+        <CreativePipelineBar current="2d" onNavigate={onNavigateModule} />
+        <DesignConstraintCardPanel
+          compact
+          categoryOrName={
+            skus.find((s) => s.id === skuPick || s.skuCode === skuPick)?.category ||
+            skus.find((s) => s.id === skuPick || s.skuCode === skuPick)?.name ||
+            active?.skuName ||
+            '玩具'
+          }
+          skuCode={
+            skus.find((s) => s.id === skuPick || s.skuCode === skuPick)?.skuCode ||
+            active?.skuCode
+          }
+        />
       </div>
 
-      <DesignConstraintCardPanel
-        compact
-        categoryOrName={
-          skus.find((s) => s.id === skuPick || s.skuCode === skuPick)?.category ||
-          skus.find((s) => s.id === skuPick || s.skuCode === skuPick)?.name ||
-          active?.skuName ||
-          '玩具'
-        }
-        skuCode={
-          skus.find((s) => s.id === skuPick || s.skuCode === skuPick)?.skuCode ||
-          active?.skuCode
-        }
-      />
-
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-3 min-h-[32rem]">
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-3 min-h-[36rem]">
         {/* 左：Projects / Skills / Assets */}
         <aside className="xl:col-span-3 rounded-2xl border border-slate-200 bg-white flex flex-col min-h-[20rem] overflow-hidden">
           <div className="flex border-b border-slate-100">
