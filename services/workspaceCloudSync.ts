@@ -18,6 +18,7 @@ import {
 import { loadAllCrmClients, saveAllCrmClients } from '../utils/workspaceScope';
 import { reconcileCrmTombstonesWithLiveClients } from '../utils/crmTombstones';
 import { pullMergePushAutomationQueue } from './automationQueueCloud';
+import { mergeHistoryPreferDmRich } from './dmSearchPersist';
 
 export type WorkspaceSyncReport = {
   ok: boolean;
@@ -46,6 +47,11 @@ const clientStamp = (c: Client): number =>
     0
   );
 
+const isWeakProductType = (s?: string) =>
+  !s ||
+  !String(s).trim() ||
+  /^(n\/?a|公开信息未找到|未知|待补充|global|-)$/i.test(String(s).trim());
+
 export const mergeClientsById = (local: Client[], cloud: Client[]): Client[] => {
   const map = new Map<string, Client>();
   for (const c of [...cloud, ...local]) {
@@ -58,9 +64,17 @@ export const mergeClientsById = (local: Client[], cloud: Client[]): Client[] => 
     const preferLocal = clientStamp(c) >= clientStamp(prev);
     const a = preferLocal ? c : prev;
     const b = preferLocal ? prev : c;
+    // 品类字段：勿让「公开信息未找到」盖掉另一端已采到的品类
+    const productType =
+      !isWeakProductType(a.productType)
+        ? a.productType
+        : !isWeakProductType(b.productType)
+          ? b.productType
+          : a.productType || b.productType;
     map.set(c.id, {
       ...b,
       ...a,
+      productType,
       contacts: (a.contacts?.length || 0) >= (b.contacts?.length || 0) ? a.contacts : b.contacts,
       tags: Array.from(new Set([...(b.tags || []), ...(a.tags || [])])),
       searchedKeywords: Array.from(
@@ -75,22 +89,9 @@ export const mergeClientsById = (local: Client[], cloud: Client[]): Client[] => 
   return Array.from(map.values());
 };
 
-export const mergeHistoryById = (local: HistoryItem[], cloud: HistoryItem[]): HistoryItem[] => {
-  const map = new Map<string, HistoryItem>();
-  for (const h of [...cloud, ...local]) {
-    if (!h?.id) continue;
-    const prev = map.get(h.id);
-    if (!prev) {
-      map.set(h.id, h);
-      continue;
-    }
-    const dmA = h.data?.decisionMakers?.length || 0;
-    const dmB = prev.data?.decisionMakers?.length || 0;
-    const richer = dmA !== dmB ? (dmA > dmB ? h : prev) : (h.timestamp || 0) >= (prev.timestamp || 0) ? h : prev;
-    map.set(h.id, richer);
-  }
-  return Array.from(map.values()).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-};
+export const mergeHistoryById = (local: HistoryItem[], cloud: HistoryItem[]): HistoryItem[] =>
+  // 与登录路径一致：品类深挖与决策人深挖字段级合并，避免跨端互相盖掉
+  mergeHistoryPreferDmRich(local, cloud);
 
 export const mergeProfilesById = (
   local: CustomerProductProfile[],

@@ -2,7 +2,8 @@
  * 决策人挖掘结果耐久化：防止刷新后「已挖」变回「未挖」、积分白费。
  * 独立于 HistoryItem 全量写入，按 historyId / 域名可重放合并。
  */
-import type { DecisionMaker, HistoryItem } from '../types';
+import type { AnalysisResult, DecisionMaker, HistoryItem } from '../types';
+import { hasRichProductCatalog } from './productCatalog';
 
 const STORAGE_KEY = 'trade_scout_dm_results_v2';
 const MAX_RECORDS = 2000;
@@ -159,18 +160,88 @@ export const applyDmPersistToHistory = (history: HistoryItem[]): HistoryItem[] =
   });
 };
 
-/** 合并两份历史：同 id 时保留决策人挖掘更新的那份 */
+const dmScore = (h: HistoryItem) => {
+  const at = h.data?.decisionMakerEmailSearchAt || 0;
+  const n = h.data?.decisionMakers?.length || 0;
+  const histN = h.data?.decisionMakerEmailSearchHistory?.length || 0;
+  return at * 1000 + n * 10 + histN;
+};
+
+const productScore = (h: HistoryItem) => {
+  const d = h.data;
+  if (!d) return 0;
+  const rich = hasRichProductCatalog(d) ? 1_000_000 : 0;
+  return (
+    rich +
+    (d.products?.length || 0) * 200 +
+    (d.websiteCategories?.length || 0) * 80 +
+    (d.productIntel?.sell?.categories?.length || 0) * 120 +
+    (d.productIntel?.procure?.categories?.length || 0) * 80
+  );
+};
+
+/**
+ * 同 id 字段级合并：品类深挖与决策人深挖互不覆盖。
+ * （旧逻辑只比决策人分数，会导致 A 机采完品类、B 机登录后仍显示未采）
+ */
+export const mergeTwoHistoryItemsRich = (a: HistoryItem, b: HistoryItem): HistoryItem => {
+  const newerTs = (a.timestamp || 0) >= (b.timestamp || 0) ? a : b;
+  const olderTs = newerTs === a ? b : a;
+  const preferDm = dmScore(a) >= dmScore(b) ? a : b;
+  const preferProduct = productScore(a) >= productScore(b) ? a : b;
+  const baseData = { ...(olderTs.data || {}), ...(newerTs.data || {}) };
+  const da = preferDm.data;
+  const pa = preferProduct.data;
+  const companyInfo = newerTs.data?.companyInfo || olderTs.data?.companyInfo;
+  if (!companyInfo) {
+    return (a.timestamp || 0) >= (b.timestamp || 0) ? a : b;
+  }
+  return {
+    ...olderTs,
+    ...newerTs,
+    timestamp: Math.max(a.timestamp || 0, b.timestamp || 0),
+    keyword: newerTs.keyword || olderTs.keyword,
+    country: newerTs.country || olderTs.country,
+    domain: newerTs.domain || olderTs.domain,
+    data: {
+      ...baseData,
+      companyInfo,
+      products:
+        (pa?.products?.length || 0) >= (baseData.products?.length || 0)
+          ? pa?.products || baseData.products
+          : baseData.products,
+      websiteCategories:
+        (pa?.websiteCategories?.length || 0) >= (baseData.websiteCategories?.length || 0)
+          ? pa?.websiteCategories || baseData.websiteCategories
+          : baseData.websiteCategories,
+      productIntel: pa?.productIntel || baseData.productIntel,
+      productSummary: pa?.productSummary || baseData.productSummary,
+      businessScope: pa?.businessScope || baseData.businessScope,
+      tradeIntelligence: pa?.tradeIntelligence || baseData.tradeIntelligence,
+      decisionMakers:
+        (da?.decisionMakers?.length || 0) >= (baseData.decisionMakers?.length || 0)
+          ? da?.decisionMakers || baseData.decisionMakers
+          : baseData.decisionMakers,
+      decisionMakerEmailSearchAt: Math.max(
+        da?.decisionMakerEmailSearchAt || 0,
+        baseData.decisionMakerEmailSearchAt || 0,
+        newerTs.data?.decisionMakerEmailSearchAt || 0
+      ),
+      decisionMakerEmailSearchHistory:
+        (da?.decisionMakerEmailSearchHistory?.length || 0) >=
+        (baseData.decisionMakerEmailSearchHistory?.length || 0)
+          ? da?.decisionMakerEmailSearchHistory || baseData.decisionMakerEmailSearchHistory
+          : baseData.decisionMakerEmailSearchHistory,
+    } as AnalysisResult,
+  };
+};
+
+/** 合并两份历史：同 id 时字段级保留品类 + 决策人（兼容旧名） */
 export const mergeHistoryPreferDmRich = (
   primary: HistoryItem[],
   secondary: HistoryItem[]
 ): HistoryItem[] => {
   const map = new Map<string, HistoryItem>();
-  const score = (h: HistoryItem) => {
-    const at = h.data?.decisionMakerEmailSearchAt || 0;
-    const n = h.data?.decisionMakers?.length || 0;
-    const histN = h.data?.decisionMakerEmailSearchHistory?.length || 0;
-    return at * 1000 + n * 10 + histN;
-  };
   for (const item of [...secondary, ...primary]) {
     if (!item?.id) continue;
     const prev = map.get(item.id);
@@ -178,7 +249,7 @@ export const mergeHistoryPreferDmRich = (
       map.set(item.id, item);
       continue;
     }
-    map.set(item.id, score(item) >= score(prev) ? item : prev);
+    map.set(item.id, mergeTwoHistoryItemsRich(prev, item));
   }
   return Array.from(map.values()).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 };

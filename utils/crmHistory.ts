@@ -1,4 +1,21 @@
 import { AnalysisResult, Client, ClientSearchResult, HistoryItem } from '../types';
+import { hasRichProductCatalog } from '../services/productCatalog';
+
+const isWeakProductType = (s?: string) =>
+  !s ||
+  !String(s).trim() ||
+  /^(n\/?a|公开信息未找到|未知|待补充|global|-)$/i.test(String(s).trim());
+
+/** 同客户多条背调时：优先已采品类的报告，再比时间 */
+const preferHistoryItem = (a: HistoryItem, b: HistoryItem): HistoryItem => {
+  const aRich = hasRichProductCatalog(a.data);
+  const bRich = hasRichProductCatalog(b.data);
+  if (aRich !== bRich) return aRich ? a : b;
+  const aProd = (a.data?.products?.length || 0) + (a.data?.websiteCategories?.length || 0);
+  const bProd = (b.data?.products?.length || 0) + (b.data?.websiteCategories?.length || 0);
+  if (aProd !== bProd) return aProd > bProd ? a : b;
+  return (a.timestamp || 0) >= (b.timestamp || 0) ? a : b;
+};
 
 /** Normalize website / domain for CRM ↔ history matching */
 export const normalizeCrmHost = (url?: string | null): string =>
@@ -258,7 +275,7 @@ export const findHistoryForClient = (
   });
 
   if (matches.length === 0) return undefined;
-  return matches.reduce((a, b) => (a.timestamp >= b.timestamp ? a : b));
+  return matches.reduce((a, b) => preferHistoryItem(a, b));
 };
 
 /** O(1) 背调历史索引（避免 CRM 列表每行 O(n) 扫描 history） */
@@ -275,14 +292,46 @@ export const buildHistoryLookupIndex = (history: HistoryItem[]): HistoryLookupIn
     const name = (h.data?.companyInfo?.name || '').trim().toLowerCase();
     if (host) {
       const prev = byHost.get(host);
-      if (!prev || h.timestamp >= prev.timestamp) byHost.set(host, h);
+      if (!prev || preferHistoryItem(h, prev) === h) byHost.set(host, h);
     }
     if (name) {
       const prev = byName.get(name);
-      if (!prev || h.timestamp >= prev.timestamp) byName.set(name, h);
+      if (!prev || preferHistoryItem(h, prev) === h) byName.set(name, h);
     }
   }
   return { byHost, byName };
+};
+
+/**
+ * 用背调历史回填 CRM 品类：跨端只同步了历史、CRM 仍显示「公开信息未找到」时调用。
+ */
+export const reconcileCrmProductTypesFromHistory = (
+  clients: Client[],
+  history: HistoryItem[]
+): { clients: Client[]; changed: number } => {
+  if (!clients.length || !history.length) return { clients, changed: 0 };
+  const index = buildHistoryLookupIndex(history);
+  let changed = 0;
+  const next = clients.map((c) => {
+    const h = lookupHistoryForClient(c, index);
+    if (!h?.data) return c;
+    const patch = clientPatchFromAnalysis(h.data, h.domain || c.website, h.timestamp);
+    const needType = isWeakProductType(c.productType) && !isWeakProductType(patch.productType);
+    const needTags =
+      (patch.tags?.length || 0) > 0 &&
+      !(c.tags || []).some((t) => /^(在售|采购|包装|配色):/.test(t));
+    if (!needType && !needTags) return c;
+    changed += 1;
+    return {
+      ...c,
+      productType: needType ? patch.productType || c.productType : c.productType,
+      tags: [...new Set([...(c.tags || []), ...(patch.tags || [])])].slice(0, 48),
+      lastBackgroundCheckAt: Math.max(c.lastBackgroundCheckAt || 0, patch.lastBackgroundCheckAt || 0),
+      hasAnalyzed: c.hasAnalyzed || patch.hasAnalyzed,
+      hasBackgroundCheck: c.hasBackgroundCheck || patch.hasBackgroundCheck,
+    };
+  });
+  return { clients: next, changed };
 };
 
 export const lookupHistoryForClient = (

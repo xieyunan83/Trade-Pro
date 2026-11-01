@@ -39,7 +39,7 @@ import { saveProductProfilesBulk } from './services/db';
 import { addCustomKeyword, addCustomCountry } from './services/taxonomyStore';
 import { normalizeCountryZh } from './utils/countryNormalize';
 import { buildSearchTags, stampSearchResults } from './utils/searchTags';
-import { mergeDiscoveryResultsIntoCrm, mergeHistoryItemsIntoCrm, findCrmIdsForHistoryItem, findCrmIdsForDiscoveryResults, lookupBackgroundCheck, formatBackgroundCheckTime, findHistoryForClient, clientPatchFromAnalysis, CRM_JUNE_2026_CUTOFF_MS, isSearchResultInCrm, normalizeCrmHost } from './utils/crmHistory';
+import { mergeDiscoveryResultsIntoCrm, mergeHistoryItemsIntoCrm, findCrmIdsForHistoryItem, findCrmIdsForDiscoveryResults, lookupBackgroundCheck, formatBackgroundCheckTime, findHistoryForClient, clientPatchFromAnalysis, reconcileCrmProductTypesFromHistory, CRM_JUNE_2026_CUTOFF_MS, isSearchResultInCrm, normalizeCrmHost } from './utils/crmHistory';
 import {
   clearCrmTombstonesForClients,
   filterOutCrmTombstones,
@@ -474,8 +474,13 @@ const App: React.FC = () => {
 
   const persistHistoryItem = async (item: HistoryItem) => {
     await saveHistory(item);
+    // 必须 await 云端：品类/背调补全后若未上传完就换客户端，对端会仍显示「未采」
     if (isSupabaseConfigured()) {
-      saveInvestigationHistory(item).catch(e => console.error('Supabase history save failed', e));
+      try {
+        await saveInvestigationHistory(item);
+      } catch (e) {
+        console.error('Supabase history save failed', e);
+      }
     }
   };
 
@@ -933,30 +938,34 @@ const App: React.FC = () => {
                           users,
                           depts()
                         ).items;
-                        // 把合并后更完整的报告写回本地，避免下次又被旧云端盖掉
+                        // 把合并后更完整的报告写回本地/云端（含品类深挖，不只决策人）
+                        const histRicher = (x?: HistoryItem | null, y?: HistoryItem | null) => {
+                          if (!x) return false;
+                          if (!y) return true;
+                          const dmBetter =
+                            (x.data?.decisionMakerEmailSearchAt || 0) >
+                              (y.data?.decisionMakerEmailSearchAt || 0) ||
+                            (x.data?.decisionMakers?.length || 0) >
+                              (y.data?.decisionMakers?.length || 0);
+                          const productBetter =
+                            hasRichProductCatalog(x.data) && !hasRichProductCatalog(y.data);
+                          const productMore =
+                            (x.data?.products?.length || 0) > (y.data?.products?.length || 0) ||
+                            (x.data?.websiteCategories?.length || 0) >
+                              (y.data?.websiteCategories?.length || 0);
+                          return dmBetter || productBetter || productMore;
+                        };
                         for (const item of merged) {
                           const local = localNow.find((x) => x.id === item.id);
                           const cloud = cloudHistory.find((x) => x.id === item.id);
-                          const richerThanLocal =
-                            !local ||
-                            (item.data?.decisionMakerEmailSearchAt || 0) >
-                              (local.data?.decisionMakerEmailSearchAt || 0) ||
-                            (item.data?.decisionMakers?.length || 0) >
-                              (local.data?.decisionMakers?.length || 0);
-                          const richerThanCloud =
-                            cloud &&
-                            ((item.data?.decisionMakerEmailSearchAt || 0) >
-                              (cloud.data?.decisionMakerEmailSearchAt || 0) ||
-                              (item.data?.decisionMakers?.length || 0) >
-                                (cloud.data?.decisionMakers?.length || 0));
-                          if (richerThanLocal) {
+                          if (histRicher(item, local)) {
                             try {
                               await saveHistory(item);
                             } catch (e) {
                               console.warn('[history] merge save local failed', e);
                             }
                           }
-                          if (richerThanCloud && isSupabaseConfigured()) {
+                          if (cloud && histRicher(item, cloud) && isSupabaseConfigured()) {
                             void saveInvestigationHistory(item).catch((e) =>
                               console.warn('[history] merge save cloud failed', e)
                             );
@@ -1173,6 +1182,18 @@ const App: React.FC = () => {
 
             // 合并后清误墓碑；展示层再挡「用户明确删除」的复活（不删云端）
             reconcileCrmTombstonesWithLiveClients(nextCrm);
+
+            // 用背调历史回填 CRM 品类（跨端采完品类后，对端 CRM 仍显示「公开信息未找到」）
+            try {
+              const histForCrm = await getHistory();
+              const reconciled = reconcileCrmProductTypesFromHistory(nextCrm, histForCrm);
+              if (reconciled.changed > 0) {
+                nextCrm = reconciled.clients;
+                console.info(`[CRM] reconciled product types from history: ${reconciled.changed}`);
+              }
+            } catch (e) {
+              console.warn('[CRM] product type reconcile failed', e);
+            }
 
             if (!cancelled) {
               // 旧 CRM 回填部门，便于本部门主管按规则看到历史客户
