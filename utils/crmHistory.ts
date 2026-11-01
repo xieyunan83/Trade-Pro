@@ -809,3 +809,173 @@ export const dmDigGroupLabel = (status: DmDigStatus): string => {
   if (status === 'empty') return '已挖·无联系人';
   return '未挖掘决策人';
 };
+
+const FUNNEL_RANK: Record<Client['status'], number> = {
+  已成交: 5,
+  谈判中: 4,
+  已寄样: 3,
+  '新建/潜在': 2,
+  '流失/搁置': 1,
+};
+
+const isWeakField = (s?: string) =>
+  !s ||
+  !String(s).trim() ||
+  /^(n\/?a|公开信息未找到|未知|待补充|global|unknown|-)$/i.test(String(s).trim());
+
+const contactKey = (c: NonNullable<Client['contacts']>[number]) => {
+  const email = (c.emailGuess || '').trim().toLowerCase();
+  if (email) return `e:${email}`;
+  return `n:${(c.name || '').trim().toLowerCase()}|${(c.title || '').trim().toLowerCase()}`;
+};
+
+const scoreCrmClient = (c: Client): number => {
+  let s = 0;
+  s += (FUNNEL_RANK[c.status] || 0) * 1000;
+  if (c.hasBackgroundCheck) s += 400;
+  if (c.hasAnalyzed) s += 80;
+  s += Math.min(200, (c.contacts?.length || 0) * 25);
+  s += Math.min(80, (c.activityEvents?.length || 0) * 2);
+  if (!isWeakField(c.productType)) s += 60;
+  if (!isWeakField(c.industry)) s += 20;
+  if ((c.website || '').trim()) s += 30;
+  if (!isWeakCrmMatchName((c.name || '').trim().toLowerCase())) s += 40;
+  s += Math.min(100, Math.floor((c.lastBackgroundCheckAt || 0) / 1e12));
+  return s;
+};
+
+/** 把多条同域名 CRM 记录合并为一条（保留更完整的那条 id） */
+export const mergeTwoCrmClients = (winner: Client, loser: Client): Client => {
+  const prefer = (a?: string, b?: string) =>
+    !isWeakField(a) ? a || '' : !isWeakField(b) ? b || '' : a || b || '';
+  const contactMap = new Map<string, NonNullable<Client['contacts']>[number]>();
+  for (const c of [...(loser.contacts || []), ...(winner.contacts || [])]) {
+    const k = contactKey(c);
+    if (!k || k === 'n:|') continue;
+    const prev = contactMap.get(k);
+    if (!prev) {
+      contactMap.set(k, c);
+      continue;
+    }
+    // 有邮箱 / 已验证的优先
+    const score = (x: typeof c) =>
+      (x.emailGuess ? 4 : 0) + (x.isVerified ? 2 : 0) + (x.whatsapp || x.phone ? 1 : 0);
+    contactMap.set(k, score(c) >= score(prev) ? { ...prev, ...c } : { ...c, ...prev });
+  }
+  const status =
+    (FUNNEL_RANK[winner.status] || 0) >= (FUNNEL_RANK[loser.status] || 0)
+      ? winner.status
+      : loser.status;
+  const events = [...(loser.activityEvents || []), ...(winner.activityEvents || [])]
+    .filter((e, i, arr) => arr.findIndex((x) => x.id === e.id) === i)
+    .sort((a, b) => (b.at || 0) - (a.at || 0))
+    .slice(0, 200);
+  const logExtra = `\n[域名去重合并] ${new Date().toLocaleString('zh-CN')} 并入「${loser.name}」(${loser.id})`;
+  return {
+    ...loser,
+    ...winner,
+    id: winner.id,
+    name: !isWeakCrmMatchName((winner.name || '').trim().toLowerCase())
+      ? winner.name
+      : loser.name || winner.name,
+    website: winner.website || loser.website,
+    country: prefer(winner.country, loser.country) || winner.country || loser.country,
+    type: winner.type || loser.type,
+    status,
+    productType: prefer(winner.productType, loser.productType) || winner.productType || loser.productType,
+    industry: prefer(winner.industry, loser.industry) || winner.industry || loser.industry,
+    priceRange: prefer(winner.priceRange, loser.priceRange) || winner.priceRange || loser.priceRange,
+    hasAnalyzed: !!(winner.hasAnalyzed || loser.hasAnalyzed),
+    hasBackgroundCheck: !!(winner.hasBackgroundCheck || loser.hasBackgroundCheck),
+    lastBackgroundCheckAt: Math.max(
+      winner.lastBackgroundCheckAt || 0,
+      loser.lastBackgroundCheckAt || 0
+    ) || undefined,
+    contacts: Array.from(contactMap.values()),
+    tags: Array.from(new Set([...(loser.tags || []), ...(winner.tags || [])])).slice(0, 64),
+    searchedKeywords: Array.from(
+      new Set(
+        [
+          ...(loser.searchedKeywords || []),
+          ...(winner.searchedKeywords || []),
+          loser.searchKeyword,
+          winner.searchKeyword,
+        ].filter(Boolean) as string[]
+      )
+    ),
+    searchKeyword: winner.searchKeyword || loser.searchKeyword,
+    activityEvents: events,
+    activityLog: `${winner.activityLog || ''}${loser.activityLog ? `\n---\n${loser.activityLog}` : ''}${logExtra}`,
+    ownerUsername: winner.ownerUsername || loser.ownerUsername,
+    departmentId: winner.departmentId || loser.departmentId,
+    lastContactSent: winner.lastContactSent || loser.lastContactSent || '',
+    lastContactReceived: winner.lastContactReceived || loser.lastContactReceived || '',
+    nextFollowUpDate: winner.nextFollowUpDate || loser.nextFollowUpDate || '',
+    lastOrderDate: winner.lastOrderDate || loser.lastOrderDate || '',
+    isSampleNeeded: winner.isSampleNeeded || loser.isSampleNeeded,
+  };
+};
+
+export type CrmDomainMergeResult = {
+  clients: Client[];
+  /** loserId → survivorId */
+  remaps: Record<string, string>;
+  mergedGroups: number;
+  removedCount: number;
+};
+
+/**
+ * 按规范化域名合并 CRM 重复客户（名称不同也合并）。
+ * 无官网的记录不参与合并，避免误伤。
+ */
+export const mergeCrmClientsByDomain = (clients: Client[]): CrmDomainMergeResult => {
+  const remaps: Record<string, string> = {};
+  const byHost = new Map<string, Client[]>();
+  const hostless: Client[] = [];
+
+  for (const c of clients) {
+    const host = normalizeCrmHost(c.website);
+    if (!host) {
+      hostless.push(c);
+      continue;
+    }
+    const list = byHost.get(host) || [];
+    list.push(c);
+    byHost.set(host, list);
+  }
+
+  const out: Client[] = [...hostless];
+  let mergedGroups = 0;
+  let removedCount = 0;
+
+  for (const [, group] of byHost) {
+    if (group.length === 1) {
+      out.push(group[0]);
+      continue;
+    }
+    mergedGroups += 1;
+    const ranked = [...group].sort((a, b) => {
+      const ds = scoreCrmClient(b) - scoreCrmClient(a);
+      if (ds !== 0) return ds;
+      return String(a.id).localeCompare(String(b.id));
+    });
+    let survivor = ranked[0];
+    for (let i = 1; i < ranked.length; i++) {
+      const loser = ranked[i];
+      remaps[loser.id] = survivor.id;
+      survivor = mergeTwoCrmClients(survivor, loser);
+      removedCount += 1;
+    }
+    // 统一域名展示为规范化 host（便于后续匹配）
+    const host = normalizeCrmHost(survivor.website);
+    if (host && normalizeCrmHost(survivor.website) === host) {
+      survivor = {
+        ...survivor,
+        website: survivor.website?.includes('://') ? survivor.website : host,
+      };
+    }
+    out.push(survivor);
+  }
+
+  return { clients: out, remaps, mergedGroups, removedCount };
+};

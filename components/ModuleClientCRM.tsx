@@ -358,6 +358,16 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   const [page, setPage] = useState(1);
   const [contactsEditorId, setContactsEditorId] = useState<string | null>(null);
 
+  // 同域名合并后清掉已消失的选中项
+  useEffect(() => {
+    const alive = new Set(clients.map((c) => c.id));
+    setSelectedClientIds((prev) => {
+      if (![...prev].some((id) => !alive.has(id))) return prev;
+      return new Set([...prev].filter((id) => alive.has(id)));
+    });
+    setContactsEditorId((id) => (id && !alive.has(id) ? null : id));
+  }, [clients]);
+
   const contactsEditorClient = useMemo(
     () => (contactsEditorId ? clients.find((c) => c.id === contactsEditorId) || null : null),
     [clients, contactsEditorId]

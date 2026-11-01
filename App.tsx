@@ -39,7 +39,8 @@ import { saveProductProfilesBulk } from './services/db';
 import { addCustomKeyword, addCustomCountry } from './services/taxonomyStore';
 import { normalizeCountryZh } from './utils/countryNormalize';
 import { buildSearchTags, stampSearchResults } from './utils/searchTags';
-import { mergeDiscoveryResultsIntoCrm, mergeHistoryItemsIntoCrm, findCrmIdsForHistoryItem, findCrmIdsForDiscoveryResults, lookupBackgroundCheck, formatBackgroundCheckTime, findHistoryForClient, clientPatchFromAnalysis, reconcileCrmProductTypesFromHistory, CRM_JUNE_2026_CUTOFF_MS, isSearchResultInCrm, normalizeCrmHost } from './utils/crmHistory';
+import { mergeDiscoveryResultsIntoCrm, mergeHistoryItemsIntoCrm, findCrmIdsForHistoryItem, findCrmIdsForDiscoveryResults, lookupBackgroundCheck, formatBackgroundCheckTime, findHistoryForClient, clientPatchFromAnalysis, reconcileCrmProductTypesFromHistory, CRM_JUNE_2026_CUTOFF_MS, isSearchResultInCrm, normalizeCrmHost, mergeCrmClientsByDomain, findCrmClientIndex } from './utils/crmHistory';
+import { remapEmailTaskClientIds } from './services/emailCampaignStore';
 import {
   clearCrmTombstonesForClients,
   filterOutCrmTombstones,
@@ -152,6 +153,32 @@ import { SphereNav, type SphereNavPhase } from './components/SphereNav';
 import { prefetchCoreModules, prefetchModule } from './services/modulePrefetch';
 import { lazyWithRetry } from './utils/lazyWithRetry';
 
+/** 同域名客户合并：邮件任务 clientId 重映射 + 云端删除被合并行 */
+const applyCrmDomainDedupe = (
+  clients: Client[],
+  opts?: { deleteCloudLosers?: boolean }
+): { clients: Client[]; removedCount: number; mergedGroups: number } => {
+  const deduped = mergeCrmClientsByDomain(clients);
+  if (deduped.removedCount > 0) {
+    remapEmailTaskClientIds(deduped.remaps);
+    if (opts?.deleteCloudLosers !== false) {
+      const loserIds = Object.keys(deduped.remaps);
+      void Promise.all(
+        loserIds.map((id) =>
+          deleteCrmClient(id).catch((e) =>
+            console.warn('[CRM] cloud delete after domain merge failed', id, e)
+          )
+        )
+      );
+    }
+  }
+  return {
+    clients: deduped.clients,
+    removedCount: deduped.removedCount,
+    mergedGroups: deduped.mergedGroups,
+  };
+};
+
 /** 重模块按需加载；部署后旧 chunk 404 时自动强刷一次 */
 const ModulePromoGenerator = lazyWithRetry(
   () => import('./components/ModulePromoGenerator').then((m) => ({ default: m.ModulePromoGenerator })),
@@ -214,7 +241,23 @@ const ClientFinder = lazyWithRetry(
   'finder'
 );
 import { BatchBackgroundExcelPanel } from './components/BatchBackgroundExcelPanel';
-import { batchBgQueueTarget, type ClassifiedBatchBgRow } from './services/batchBackgroundExcel';
+import {
+  applyBatchSeedToClient,
+  batchBgQueueTarget,
+  seedFromBatchRow,
+  type ClassifiedBatchBgRow,
+} from './services/batchBackgroundExcel';
+import { isQwenNightPromoWindow } from './services/qwenModelSchedule';
+import { waitForLocalAiSlot, withHeavyJob, getHeavyJobCount } from './services/loadGovernor';
+import {
+  EXCEL_NIGHT_BATCH_THRESHOLD,
+  getExcelNightBatch,
+  isAutomationTaskRunnableNow,
+  markExcelNightBatchNotified,
+  newExcelNightBatchId,
+  registerExcelNightBatch,
+  summarizeExcelNightBatch,
+} from './services/excelNightBatchStore';
 import { RecordsPanel, archiveToDiscoveryState } from './components/RecordsPanel';
 import { Login } from './components/Login';
 import { AccessGate } from './components/AccessGate';
@@ -795,7 +838,14 @@ const App: React.FC = () => {
               try {
                 const earlyCrm = filterOutCrmTombstones(loadAllCrmClients());
                 const migratedEarly = migrateLegacyCrmOwnership(earlyCrm, users, depts());
-                setCrmClients(scope(migratedEarly.clients));
+                const dedupedEarly = applyCrmDomainDedupe(migratedEarly.clients);
+                if (dedupedEarly.removedCount > 0) {
+                  console.info(
+                    `[CRM] early domain dedupe: groups=${dedupedEarly.mergedGroups} removed=${dedupedEarly.removedCount}`
+                  );
+                  saveAllCrmClients(dedupedEarly.clients);
+                }
+                setCrmClients(scope(dedupedEarly.clients));
               } catch (e) {
                 console.warn('[CRM] cache-first paint failed', e);
               }
@@ -1342,6 +1392,19 @@ const App: React.FC = () => {
               console.warn('[CRM] product type reconcile failed', e);
             }
 
+            // 同域名客户合并（名称不同也合并），避免 CRM/营销工具重复
+            try {
+              const deduped = applyCrmDomainDedupe(nextCrm);
+              if (deduped.removedCount > 0) {
+                console.info(
+                  `[CRM] domain dedupe: groups=${deduped.mergedGroups} removed=${deduped.removedCount}`
+                );
+                nextCrm = deduped.clients;
+              }
+            } catch (e) {
+              console.warn('[CRM] domain dedupe failed', e);
+            }
+
             if (!cancelled) {
               // 旧 CRM 回填部门，便于本部门主管按规则看到历史客户
               const migrated = migrateLegacyCrmOwnership(nextCrm, users, depts());
@@ -1523,7 +1586,14 @@ const App: React.FC = () => {
   /** 单次/再次背调：一律进后台队列，不挡当前页面操作 */
   const enqueueBackgroundAnalysis = async (
     domain: string,
-    override?: { searchKeyword?: string; searchTags?: string[]; searchCountry?: string; mode?: 'detailed' | 'economy' }
+    override?: {
+      searchKeyword?: string;
+      searchTags?: string[];
+      searchCountry?: string;
+      mode?: 'detailed' | 'economy';
+      /** 用户已确认「再次背调」时跳过库内复用 */
+      force?: boolean;
+    }
   ) => {
     if (!hasPermission(currentUser, 'feature.analyze_company') && !hasPermission(currentUser, 'feature.batch_analyze')) {
       alert('你没有背调权限，请联系管理员或部门主管开通。');
@@ -1534,6 +1604,35 @@ const App: React.FC = () => {
       alert('请先填写公司网址或名称');
       return;
     }
+
+    // 库内已有背调：不重跑全量，仅提示；缺口交给夜间补全 / 产品深挖
+    if (!override?.force) {
+      const existing = lookupBackgroundCheck(
+        target,
+        target,
+        historyRef.current,
+        crmClientsRef.current
+      );
+      if (existing.checked) {
+        const hist = existing.historyItem;
+        if (hist?.data) {
+          setCrmClients((prev) => mergeHistoryItemsIntoCrm(prev, [hist], stampOwnership).clients);
+        }
+        const when = existing.checkedAt
+          ? new Date(existing.checkedAt).toLocaleDateString('zh-CN')
+          : '较早前';
+        alert(
+          `「${target}」库内已有背调（${when}），已跳过全量分析以节省额度与时间。\n` +
+            `如需补联系人/邮箱/品类，夜间 22:00–08:00 会自动补全；也可在客户管理中单独深挖。`
+        );
+        if (hist?.data) {
+          setAnalysisData(enrichAnalysisDecisionMakers(hist.data, { historyItem: hist }));
+          setViewingHistoryId(hist.id);
+        }
+        return;
+      }
+    }
+
     const limit = checkLimit('analysis');
     if (!limit.allowed) {
       alert(`今日背调次数已达上限（${limit.current}/${limit.max}）。请联系管理员提高限额，或明日再试。`);
@@ -1580,7 +1679,12 @@ const App: React.FC = () => {
 
   const performSingleAnalysis = (
     domain: string,
-    override?: { searchKeyword?: string; searchTags?: string[]; searchCountry?: string }
+    override?: {
+      searchKeyword?: string;
+      searchTags?: string[];
+      searchCountry?: string;
+      force?: boolean;
+    }
   ) => {
     void enqueueBackgroundAnalysis(domain, override);
   };
@@ -2191,8 +2295,6 @@ const App: React.FC = () => {
   const handleAddToCRM = () => { 
       if (!analysisData) return;
       const website = analysisData.companyInfo.website;
-      const websiteKey = (website || '').toLowerCase();
-      const nameKey = (analysisData.companyInfo.name || '').trim().toLowerCase();
       const patch: Partial<Client> = {
           name: analysisData.companyInfo.name,
           website,
@@ -2206,10 +2308,7 @@ const App: React.FC = () => {
       };
       clearCrmTombstonesForClients([{ id: '', website, name: analysisData.companyInfo.name }]);
       setCrmClients(prev => {
-          const idx = prev.findIndex(c =>
-              (websiteKey && (c.website || '').toLowerCase() === websiteKey) ||
-              (nameKey && (c.name || '').trim().toLowerCase() === nameKey)
-          );
+          const idx = findCrmClientIndex(prev, website, analysisData.companyInfo.name);
           if (idx >= 0) {
               const updated = [...prev];
               updated[idx] = {
@@ -2219,7 +2318,7 @@ const App: React.FC = () => {
                       (updated[idx].activityLog || '') +
                       ` [Synced from Deep Analysis ${new Date().toLocaleDateString()}]`,
               };
-              return updated;
+              return applyCrmDomainDedupe(updated).clients;
           }
           const newClient: Client = stampOwnership({
               id: Date.now().toString(),
@@ -2233,7 +2332,7 @@ const App: React.FC = () => {
               activityLog: `Added from Deep Analysis. Rev: ${analysisData.financials.revenueEstimate}.`,
               ...patch,
           } as Client);
-          return [newClient, ...prev];
+          return applyCrmDomainDedupe([newClient, ...prev]).clients;
       });
       alert("已加入客户管理（含背调标记与 " + (analysisData.decisionMakers?.length || 0) + " 位决策人）");
   };
@@ -2271,11 +2370,41 @@ const App: React.FC = () => {
       }));
 
       setCrmClients(prev => {
-          const existingWebsites = new Set(prev.map(c => c.website?.toLowerCase()));
-          const unique = newClients.filter(c => !c.website || !existingWebsites.has(c.website?.toLowerCase()));
-          if (unique.length > 0) alert(`已导入 ${unique.length} 个新客户到 CRM`);
-          else alert("所选客户已在 CRM 中");
-          return [...unique, ...prev];
+          let next = [...prev];
+          let added = 0;
+          let merged = 0;
+          for (const c of newClients) {
+            const idx = findCrmClientIndex(next, c.website, c.name);
+            if (idx >= 0) {
+              const cur = next[idx];
+              next[idx] = {
+                ...cur,
+                tags: Array.from(new Set([...(cur.tags || []), ...(c.tags || [])])),
+                searchedKeywords: Array.from(
+                  new Set([...(cur.searchedKeywords || []), ...(c.searchedKeywords || []), c.searchKeyword].filter(Boolean) as string[])
+                ),
+                searchKeyword: cur.searchKeyword || c.searchKeyword,
+                activityLog: `${cur.activityLog || ''}\n${c.activityLog || ''}`.trim(),
+              };
+              merged += 1;
+            } else {
+              next = [c, ...next];
+              added += 1;
+            }
+          }
+          const deduped = applyCrmDomainDedupe(next);
+          window.setTimeout(() => {
+            if (added > 0 || merged > 0 || deduped.removedCount > 0) {
+              alert(
+                `已导入 CRM：新增 ${added}${merged ? ` · 同域名更新 ${merged}` : ''}${
+                  deduped.removedCount ? ` · 合并重复 ${deduped.removedCount}` : ''
+                }`
+              );
+            } else {
+              alert('所选客户已在 CRM 中（同域名视为同一家）');
+            }
+          }, 0);
+          return deduped.clients;
       });
       // 对应搜索结果若整档已入 CRM，从记录中心剔除
       const mergedForPrune = [...newClients, ...crmClientsRef.current];
@@ -2295,12 +2424,14 @@ const App: React.FC = () => {
     let added = 0;
     let updated = 0;
     let skipped = 0;
+    let domainMerged = 0;
 
     setCrmClients((prev) => {
       let next = prev;
       added = 0;
       updated = 0;
       skipped = 0;
+      domainMerged = 0;
 
       if (historyItems.length > 0) {
         const hist = mergeHistoryItemsIntoCrm(next, historyItems, stampOwnership);
@@ -2321,7 +2452,9 @@ const App: React.FC = () => {
         skipped += disc.stats.skipped;
       }
       clearCrmTombstonesForClients(next);
-      return next;
+      const deduped = applyCrmDomainDedupe(next);
+      domainMerged = deduped.removedCount;
+      return deduped.clients;
     });
 
     // 背调报告必须保留（CRM「查看报告」依赖 HistoryItem）；记录中心仅隐藏已入 CRM 项
@@ -2340,7 +2473,7 @@ const App: React.FC = () => {
               industry: archive.industry,
             }).clients;
           }
-          return next;
+          return applyCrmDomainDedupe(next, { deleteCloudLosers: false }).clients;
         })()
       );
     }
@@ -2349,6 +2482,7 @@ const App: React.FC = () => {
     if (added) parts.push(`新建 ${added}`);
     if (updated) parts.push(`更新 ${updated}`);
     if (skipped) parts.push(`跳过已存在 ${skipped}`);
+    if (domainMerged) parts.push(`同域名合并 ${domainMerged}`);
     alert(parts.length ? `CRM 导入完成：${parts.join('，')}` : '没有可导入的客户');
   };
 
@@ -2451,9 +2585,10 @@ const App: React.FC = () => {
                   lastBackgroundCheckAt: now,
                   ownerUsername: updated[idx].ownerUsername || currentUser?.username,
                   departmentId: updated[idx].departmentId || currentUser?.departmentId,
-                  contacts: (analysis.decisionMakers?.length
-                    ? analysis.decisionMakers
-                    : updated[idx].contacts) || [],
+                  contacts: mergeDecisionMakers(
+                    updated[idx].contacts || [],
+                    analysis.decisionMakers || []
+                  ),
                   searchKeyword: kw || updated[idx].searchKeyword,
                   searchedKeywords,
                   tags: analysis.searchTags || updated[idx].tags,
@@ -3067,14 +3202,16 @@ const App: React.FC = () => {
         batchSessionIdsRef.current.size === 0 || batchSessionIdsRef.current.has(t.id);
 
       const findNextPending = async (): Promise<AutomationResult | undefined> => {
-        const fromMem = automationResultsRef.current.find(
-          (t) => t.status === 'pending' && inSession(t)
-        );
+        const inNight = isQwenNightPromoWindow();
+        const runnable = (t: AutomationResult) =>
+          inSession(t) && isAutomationTaskRunnableNow(t, inNight);
+
+        const fromMem = automationResultsRef.current.find(runnable);
         if (fromMem) return fromMem;
 
         for (const id of batchSessionIdsRef.current) {
           const seed = batchSeedByIdRef.current.get(id);
-          if (!seed || seed.status !== 'pending') continue;
+          if (!seed || !isAutomationTaskRunnableNow(seed, inNight)) continue;
           const mem = automationResultsRef.current.find((t) => t.id === id);
           if (mem?.status === 'completed' || mem?.status === 'failed' || mem?.status === 'analyzing') {
             continue;
@@ -3087,15 +3224,32 @@ const App: React.FC = () => {
 
         try {
           const q = await getAutomationQueue();
-          return q.find((t) => t.status === 'pending' && inSession(t));
+          return q.find((t) => runnable(t));
         } catch (e) {
           console.warn('[batch] getAutomationQueue failed', e);
           return undefined;
         }
       };
 
+      const notifyExcelNightBatchIfDone = (batchId?: string) => {
+        if (!batchId) return;
+        const meta = getExcelNightBatch(batchId);
+        if (!meta || meta.notifiedAt) return;
+        const progress = summarizeExcelNightBatch(batchId, automationResultsRef.current);
+        if (!progress?.done) return;
+        markExcelNightBatchNotified(batchId);
+        window.setTimeout(() => {
+          alert(
+            `Excel 夜间批量背调已全部完成。\n` +
+              `成功 ${progress.completed} · 失败 ${progress.failed}（共 ${progress.total} 家）。\n` +
+              `结果已写入客户管理；可在任务队列查看明细。`
+          );
+        }, 400);
+      };
+
       try {
-        const BATCH_ANALYZE_CONCURRENCY = 2;
+        // 夜间窗口与静默补全双轨：降并发，错峰共用 Key
+        const BATCH_ANALYZE_CONCURRENCY = isQwenNightPromoWindow() ? 1 : 2;
         const runOneBatchTask = async (task: AutomationResult) => {
           const analyzingTask: AutomationResult = { ...task, status: 'analyzing' };
           batchSeedByIdRef.current.set(task.id, analyzingTask);
@@ -3106,6 +3260,15 @@ const App: React.FC = () => {
           void saveAutomationTask(analyzingTask).catch(() => undefined);
 
           try {
+            await waitForLocalAiSlot(() => shouldStopRef.current, isQwenNightPromoWindow() ? 1 : 2);
+            if (shouldStopRef.current) {
+              const paused: AutomationResult = { ...task, status: 'pending', error: undefined };
+              batchSeedByIdRef.current.set(task.id, paused);
+              syncAutomationResults((prev) => prev.map((t) => (t.id === task.id ? paused : t)));
+              void saveAutomationTask(paused).catch(() => undefined);
+              return;
+            }
+
             const kw = (task.keyword || discoveryState.product || '').trim();
             if (kw) addCustomKeyword(kw);
             const analyzeOpts = {
@@ -3114,25 +3277,39 @@ const App: React.FC = () => {
               searchCountry: task.country || undefined,
             };
             const preferredMode = task.mode || 'economy';
-            const result = await withRateLimitRetry(
-              async () => {
-                try {
-                  return await analyzeCompany(task.website, preferredMode, analyzeOpts);
-                } catch (e) {
-                  if (preferredMode === 'detailed' && isTransientAnalysisError(e)) {
-                    console.warn('[batch] detailed failed, fallback economy', task.website, e);
-                    return await analyzeCompany(task.website, 'economy', analyzeOpts);
+            const rawResult = await withHeavyJob('automation', () =>
+              withRateLimitRetry(
+                async () => {
+                  try {
+                    return await analyzeCompany(task.website, preferredMode, analyzeOpts);
+                  } catch (e) {
+                    if (preferredMode === 'detailed' && isTransientAnalysisError(e)) {
+                      console.warn('[batch] detailed failed, fallback economy', task.website, e);
+                      return await analyzeCompany(task.website, 'economy', analyzeOpts);
+                    }
+                    throw e;
                   }
-                  throw e;
+                },
+                {
+                  maxAttempts: 4,
+                  baseWaitSec: 45,
+                  shouldStop: () => shouldStopRef.current,
+                  retryTransient: true,
                 }
-              },
-              {
-                maxAttempts: 4,
-                baseWaitSec: 45,
-                shouldStop: () => shouldStopRef.current,
-                retryTransient: true,
-              }
+              )
             );
+
+            // Excel 导入的联系人等种子字段与背调结果合并
+            const seedContacts = task.importSeed?.contacts || [];
+            const result = seedContacts.length
+              ? {
+                  ...rawResult,
+                  decisionMakers: mergeDecisionMakers(
+                    rawResult.decisionMakers || [],
+                    seedContacts
+                  ),
+                }
+              : rawResult;
 
             const completedTask: AutomationResult = {
               ...task,
@@ -3205,6 +3382,43 @@ const App: React.FC = () => {
 
             incrementUsage('analysis');
             updateCrmStatus(result);
+            // Excel 行业/品类/备注等非联系人字段补进 CRM
+            if (task.importSeed) {
+              const seed = {
+                contacts: [] as NonNullable<typeof task.importSeed.contacts>,
+                industry: task.importSeed.industry || '',
+                clientType: task.importSeed.clientType || '',
+                productType: task.importSeed.productType || '',
+                note: task.importSeed.note || '',
+                profile: task.importSeed.profile || '',
+                address: task.importSeed.address || '',
+                postalCode: task.importSeed.postalCode || '',
+                fax: task.importSeed.fax || '',
+              };
+              if (
+                seed.industry ||
+                seed.clientType ||
+                seed.productType ||
+                seed.note ||
+                seed.profile ||
+                seed.address ||
+                seed.postalCode ||
+                seed.fax
+              ) {
+                setCrmClients((prev) => {
+                  const idx = findCrmClientIndex(
+                    prev,
+                    result.companyInfo?.website || task.website,
+                    result.companyInfo?.name || task.clientName
+                  );
+                  if (idx < 0) return prev;
+                  const next = [...prev];
+                  next[idx] = applyBatchSeedToClient(next[idx], seed);
+                  return next;
+                });
+              }
+            }
+            notifyExcelNightBatchIfDone(task.nightBatchId);
           } catch (e: any) {
             if (shouldStopRef.current) {
               const paused: AutomationResult = {
@@ -3233,12 +3447,16 @@ const App: React.FC = () => {
             if (isRateLimitError(e)) {
               noteRateLimited(75);
             }
+            notifyExcelNightBatchIfDone(task.nightBatchId);
           }
         };
 
         while (!shouldStopRef.current) {
+          // 日间：夜间限定任务不跑；若本波无可跑任务则停泵，等 22:00 续跑
+          const inNight = isQwenNightPromoWindow();
           const wave: AutomationResult[] = [];
-          for (let i = 0; i < BATCH_ANALYZE_CONCURRENCY; i++) {
+          const concurrency = inNight ? 1 : BATCH_ANALYZE_CONCURRENCY;
+          for (let i = 0; i < concurrency; i++) {
             const limit = checkLimit('analysis');
             if (!limit.allowed) {
               if (wave.length === 0) {
@@ -3263,7 +3481,16 @@ const App: React.FC = () => {
           await Promise.all(wave.map((t) => runOneBatchTask(t)));
           if (shouldStopRef.current) break;
 
-          const gap = getCooldownRemainingSec() > 0 ? 4000 : 1500;
+          // 已离开夜间窗口：本波结束后停泵，剩余 nightWindowOnly 保持 pending
+          if (!isQwenNightPromoWindow() && wave.some((t) => t.nightWindowOnly)) {
+            const moreDay = await findNextPending();
+            if (!moreDay) break;
+          }
+
+          const night = isQwenNightPromoWindow();
+          const cool = getCooldownRemainingSec() > 0;
+          const peerBusy = getHeavyJobCount('ai') > 0;
+          const gap = cool ? 5000 : night || peerBusy ? 3500 : 1500;
           await new Promise((r) => setTimeout(r, gap));
         }
       } finally {
@@ -3285,6 +3512,11 @@ const App: React.FC = () => {
           if (completedNow > 0 && sessionIds.size > 0) {
             console.info(`[batch] 后台背调完成 ${completedNow} 条`);
           }
+          // 夜间批次可能跨会话完成：再扫一次通知
+          const batchIds = new Set(
+            q.map((t) => t.nightBatchId).filter(Boolean) as string[]
+          );
+          for (const bid of batchIds) notifyExcelNightBatchIfDone(bid);
         } catch {
           /* ignore */
         }
@@ -3306,6 +3538,35 @@ const App: React.FC = () => {
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [isAutomating, batchProgress.active, automationResults]);
 
+  /** 每晚 22:00 进入窗口时，自动续跑 Excel 夜间限定队列 */
+  useEffect(() => {
+    if (!currentUser) return;
+    let wasInNight = isQwenNightPromoWindow();
+    const wakeNightExcelBatch = () => {
+      const inNight = isQwenNightPromoWindow();
+      const entered = inNight && !wasInNight;
+      wasInNight = inNight;
+      if (!inNight) return;
+      if (batchRunnerActiveRef.current || shouldStopRef.current) return;
+      if (!hasApiKeyConfigured()) return;
+      const pendingNight = (automationResultsRef.current || []).filter(
+        (t) => t.nightWindowOnly && t.status === 'pending'
+      );
+      if (!pendingNight.length) return;
+      // 刚进入窗口，或挂机期间定时巡检
+      if (entered || pendingNight.length > 0) {
+        console.info(`[batch] night-window wake excel tasks=${pendingNight.length}`);
+        void processBatchQueue(pendingNight);
+      }
+    };
+    const interval = window.setInterval(wakeNightExcelBatch, 60_000);
+    const boot = window.setTimeout(wakeNightExcelBatch, 8_000);
+    return () => {
+      window.clearInterval(interval);
+      window.clearTimeout(boot);
+    };
+  }, [currentUser?.username]);
+
   /** 桌面工作站：登录后自动续跑本机未完成的背调队列（线上升级不刷新则本来就不会停） */
   const autoResumeBatchOnceRef = useRef(false);
   useEffect(() => {
@@ -3313,14 +3574,18 @@ const App: React.FC = () => {
     if (autoResumeBatchOnceRef.current) return;
     if (!shouldAutoResumeBatch()) return;
     if (isAutomating || batchRunnerActiveRef.current || shouldStopRef.current) return;
-    const pending = automationResults.filter((t) => t.status === 'pending');
+    const inNight = isQwenNightPromoWindow();
+    const pending = automationResults.filter((t) =>
+      isAutomationTaskRunnableNow(t, inNight)
+    );
     // 桌面端顺带续跑近期瞬时失败（超时/网络/坏 JSON），避免 Windows 工作站一失败就堆死
     const retryFailed = automationResults
       .filter(
         (t) =>
           t.status === 'failed' &&
           (!t.failedAt || Date.now() - t.failedAt < 48 * 60 * 60 * 1000) &&
-          isTransientAnalysisError({ message: t.error || '' })
+          isTransientAnalysisError({ message: t.error || '' }) &&
+          (!t.nightWindowOnly || inNight)
       )
       .slice(0, 80)
       .map((t) => ({ ...t, status: 'pending' as const, error: undefined }));
@@ -3762,11 +4027,19 @@ const App: React.FC = () => {
       setBatchModalOpen(true);
   };
 
-  /** Excel 批量背调：跳过已有 → 历史补 CRM → 新客户入队 */
+  /** Excel 批量背调：库内已有→合并补充；历史补 CRM；新客户入队全量背调 */
   const handleExcelBatchStart = (payload: {
     toAnalyze: ClassifiedBatchBgRow[];
+    toMergeUpdate: ClassifiedBatchBgRow[];
     toCrmFromHistory: ClassifiedBatchBgRow[];
-    stats: { needAnalyze: number; skipCrm: number; skipHistory: number; invalid: number; total: number };
+    stats: {
+      needAnalyze: number;
+      mergeUpdate: number;
+      skipCrm: number;
+      skipHistory: number;
+      invalid: number;
+      total: number;
+    };
     mode: 'economy' | 'detailed';
   }) => {
     if (!hasPermission(currentUser, 'feature.batch_analyze')) {
@@ -3776,6 +4049,9 @@ const App: React.FC = () => {
 
     let crmAdded = 0;
     let crmUpdated = 0;
+    let mergeCount = 0;
+
+    // 1) 仅有历史报告、尚未入 CRM → 补入
     if (payload.toCrmFromHistory.length) {
       const items = payload.toCrmFromHistory
         .map((r) => r.historyItem)
@@ -3790,10 +4066,59 @@ const App: React.FC = () => {
       }
     }
 
+    // 2) 库内已有：合并 Excel 联系人/行业等，不烧 Token
+    if (payload.toMergeUpdate.length) {
+      setCrmClients((prev) => {
+        let next = [...prev];
+        for (const row of payload.toMergeUpdate) {
+          const seed = seedFromBatchRow(row);
+          const hist = row.historyItem;
+          if (hist?.data) {
+            const merged = mergeHistoryItemsIntoCrm(next, [hist], stampOwnership);
+            next = merged.clients;
+            crmAdded += merged.stats.added;
+            crmUpdated += merged.stats.updated;
+          }
+          const idx = findCrmClientIndex(next, row.website, row.companyName);
+          if (idx >= 0) {
+            next[idx] = applyBatchSeedToClient(next[idx], seed);
+            mergeCount += 1;
+            // 同步联系人进历史报告
+            if (seed.contacts.length && hist?.id) {
+              void persistDecisionMakerResearch(
+                { decisionMakers: mergeDecisionMakers(hist.data?.decisionMakers || [], seed.contacts) },
+                {
+                  historyId: hist.id,
+                  domain: row.website || hist.domain,
+                  companyName: row.companyName || hist.data?.companyInfo?.name,
+                }
+              );
+            }
+          } else if (hist?.data) {
+            // 刚从历史补入，再找一次
+            const idx2 = findCrmClientIndex(next, row.website, row.companyName);
+            if (idx2 >= 0) {
+              next[idx2] = applyBatchSeedToClient(next[idx2], seed);
+              mergeCount += 1;
+            }
+          } else {
+            // 无历史仅有 CRM 标记：按种子建/并
+            const idx3 = findCrmClientIndex(next, row.website, row.companyName);
+            if (idx3 >= 0) {
+              next[idx3] = applyBatchSeedToClient(next[idx3], seed);
+              mergeCount += 1;
+            }
+          }
+        }
+        return next;
+      });
+    }
+
     if (!payload.toAnalyze.length) {
       alert(
-        `Excel 批量完成：无需新背调。\n已跳过（CRM 已有） ${payload.stats.skipCrm} 家；` +
-          `从历史补入 CRM ${crmAdded + crmUpdated} 家（新增 ${crmAdded} / 更新 ${crmUpdated}）。`
+        `Excel 批量完成：无需新背调。\n` +
+          `信息补充 ${mergeCount} 家 · 跳过（CRM 已有） ${payload.stats.skipCrm} 家 · ` +
+          `历史补 CRM ${crmAdded + crmUpdated} 家（新增 ${crmAdded} / 更新 ${crmUpdated}）。`
       );
       return;
     }
@@ -3804,6 +4129,25 @@ const App: React.FC = () => {
       return;
     }
 
+    const analyzeCount = payload.toAnalyze.length;
+    let useNightWindow = false;
+    if (analyzeCount > EXCEL_NIGHT_BATCH_THRESHOLD) {
+      useNightWindow = confirm(
+        `本次需背调 ${analyzeCount} 家（超过 ${EXCEL_NIGHT_BATCH_THRESHOLD}），是否改为夜间静默执行以节省算力？\n\n` +
+          `确定：每晚 22:00 起自动跑到次日 08:00，未完成的次日 22:00 继续，直到全部处理完并通知你。\n` +
+          `取消：立即开始背调。`
+      );
+    }
+
+    const nightBatchId = useNightWindow ? newExcelNightBatchId() : undefined;
+    if (nightBatchId) {
+      registerExcelNightBatch({
+        id: nightBatchId,
+        total: analyzeCount,
+        mode: payload.mode,
+      });
+    }
+
     const newTasks: AutomationResult[] = payload.toAnalyze.map((row) => {
       const target = batchBgQueueTarget(row);
       const kw = (row.keyword || '').trim();
@@ -3812,6 +4156,7 @@ const App: React.FC = () => {
       const specificCountry = /^(global|worldwide|international|国际|全球|不限)$/i.test(country)
         ? ''
         : country;
+      const seed = seedFromBatchRow(row);
       return stampOwnership({
         id: newAutomationTaskId(),
         clientName: row.companyName || target,
@@ -3823,6 +4168,20 @@ const App: React.FC = () => {
         mode: payload.mode,
         keyword: kw || undefined,
         createdAt: Date.now(),
+        importSeed:
+          seed.contacts.length ||
+          seed.industry ||
+          seed.clientType ||
+          seed.productType ||
+          seed.note ||
+          seed.profile ||
+          seed.address ||
+          seed.postalCode ||
+          seed.fax
+            ? seed
+            : undefined,
+        nightWindowOnly: useNightWindow || undefined,
+        nightBatchId,
       });
     });
 
@@ -3841,14 +4200,28 @@ const App: React.FC = () => {
           console.warn('[excel-batch] saveAutomationTask failed', e);
         }
       }
-      void processBatchQueue(newTasks);
+      // 夜间模式：仅在窗口内开泵；白天只入队，等 22:00 自动续跑
+      if (!useNightWindow || isQwenNightPromoWindow()) {
+        void processBatchQueue(newTasks);
+      }
     })();
 
-    alert(
-      `已启动 Excel 批量背调 ${newTasks.length} 家（${payload.mode === 'detailed' ? '详细' : '经济'}模式）。\n` +
-        `跳过：CRM ${payload.stats.skipCrm} · 历史 ${payload.stats.skipHistory}（补 CRM ${crmAdded + crmUpdated}）· 无效 ${payload.stats.invalid}。\n` +
-        `完成后自动写入 CRM；可在任务队列查看进度。`
-    );
+    if (useNightWindow) {
+      const inNight = isQwenNightPromoWindow();
+      alert(
+        `已安排 Excel 夜间静默背调 ${newTasks.length} 家（${payload.mode === 'detailed' ? '详细' : '经济'}模式）。\n` +
+          (inNight
+            ? `当前已在夜间窗口，正在后台执行；08:00 将自动暂停，次日 22:00 续跑。\n`
+            : `将于每晚 22:00 自动开始，08:00 暂停；请保持客户端在线挂机。\n`) +
+          `全部完成后会弹窗通知。信息补充 ${mergeCount} · 跳过 CRM ${payload.stats.skipCrm}。`
+      );
+    } else {
+      alert(
+        `已启动 Excel 批量：新背调 ${newTasks.length} 家（${payload.mode === 'detailed' ? '详细' : '经济'}模式）。\n` +
+          `信息补充 ${mergeCount} · 跳过 CRM ${payload.stats.skipCrm} · 历史补 CRM ${crmAdded + crmUpdated} · 无效 ${payload.stats.invalid}。\n` +
+          `夜间补全继续运行，系统会自动错峰；可在任务队列查看进度。`
+      );
+    }
   };
 
   const confirmBatchStart = async (mode: 'detailed' | 'economy') => { 
@@ -3867,7 +4240,38 @@ const App: React.FC = () => {
         discoveryCountry && !/^(global|worldwide|international|国际|全球|不限)$/i.test(discoveryCountry)
           ? discoveryCountry
           : '';
-      const newTasks: AutomationResult[] = pendingBatch.map(target => stampOwnership({ 
+
+      // 库内已有 → 跳过全量背调，只补 CRM；其余入队
+      const toQueue: string[] = [];
+      let skippedExisting = 0;
+      const histToCrm: HistoryItem[] = [];
+      for (const target of pendingBatch) {
+        const lookup = lookupBackgroundCheck(
+          target,
+          target,
+          historyRef.current,
+          crmClientsRef.current
+        );
+        if (lookup.checked) {
+          skippedExisting += 1;
+          if (lookup.historyItem?.data) histToCrm.push(lookup.historyItem);
+          continue;
+        }
+        toQueue.push(target);
+      }
+      if (histToCrm.length) {
+        setCrmClients((prev) => mergeHistoryItemsIntoCrm(prev, histToCrm, stampOwnership).clients);
+      }
+      if (!toQueue.length) {
+        alert(
+          `所选 ${pendingBatch.length} 家均已在库中有背调，已跳过全量分析（补 CRM ${histToCrm.length}）。\n` +
+            `缺口由夜间 22:00–08:00 静默补全，或在客户管理中单独深挖。`
+        );
+        setPendingBatchCountries({});
+        return;
+      }
+
+      const newTasks: AutomationResult[] = toQueue.map(target => stampOwnership({ 
           id: newAutomationTaskId(), 
           clientName: target, 
           website: target, 
@@ -3892,8 +4296,13 @@ const App: React.FC = () => {
           await saveAutomationTask(task); 
       } 
       
-      // 后台执行，不阻塞当前页面；可同时开产品深挖
+      // 后台执行；夜间补全不停，共享 AI 槽错峰
       void processBatchQueue(newTasks);
+      if (skippedExisting > 0) {
+        alert(
+          `已入队新背调 ${newTasks.length} 家；跳过库内已有 ${skippedExisting} 家。\n夜间补全继续并行。`
+        );
+      }
   };
 
   const handleRunPending = async () => { 
@@ -3989,6 +4398,7 @@ const App: React.FC = () => {
         searchKeyword: data.searchKeyword || discoveryState.product || undefined,
         searchTags: data.searchTags,
         searchCountry: data.searchCountry || undefined,
+        force: true,
       });
   };
 
@@ -4029,6 +4439,7 @@ const App: React.FC = () => {
         searchKeyword: item.keyword || item.data?.searchKeyword || undefined,
         searchTags: item.data?.searchTags,
         searchCountry: item.country || item.data?.searchCountry || undefined,
+        force: true,
       });
   };
 
@@ -4132,8 +4543,39 @@ const App: React.FC = () => {
   const handleAddClients = (newClients: Client[]) => {
     const stamped = newClients.map(stampOwnership);
     clearCrmTombstonesForClients(stamped);
-    setCrmClients((prev) => [...prev, ...stamped]);
-    alert(`已成功导入 ${newClients.length} 个客户资料！`);
+    setCrmClients((prev) => {
+      let next = [...prev];
+      let added = 0;
+      let updated = 0;
+      for (const c of stamped) {
+        const idx = findCrmClientIndex(next, c.website, c.name);
+        if (idx >= 0) {
+          next[idx] = {
+            ...next[idx],
+            ...c,
+            id: next[idx].id,
+            contacts:
+              (c.contacts?.length || 0) >= (next[idx].contacts?.length || 0)
+                ? c.contacts
+                : next[idx].contacts,
+            tags: Array.from(new Set([...(next[idx].tags || []), ...(c.tags || [])])),
+          };
+          updated += 1;
+        } else {
+          next = [c, ...next];
+          added += 1;
+        }
+      }
+      const deduped = applyCrmDomainDedupe(next);
+      window.setTimeout(() => {
+        alert(
+          `已导入客户：新增 ${added} · 更新 ${updated}${
+            deduped.removedCount ? ` · 同域名合并 ${deduped.removedCount}` : ''
+          }`
+        );
+      }, 0);
+      return deduped.clients;
+    });
   };
 
   const handleBatchDeleteClients = async (clients: Client[]) => {

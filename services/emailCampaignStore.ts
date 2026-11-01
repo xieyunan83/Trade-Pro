@@ -104,6 +104,21 @@ export const enrichTaskOwnershipFromCrm = (
   return task;
 };
 
+/** CRM 域名去重后：把邮件任务上的旧 clientId 指到保留客户 */
+export const remapEmailTaskClientIds = (remaps: Record<string, string>): number => {
+  if (!remaps || !Object.keys(remaps).length) return 0;
+  const raw = readRawBundle();
+  let n = 0;
+  const tasks = raw.tasks.map((t) => {
+    const id = (t.clientId || '').trim();
+    if (!id || !remaps[id]) return t;
+    n += 1;
+    return { ...t, clientId: remaps[id] };
+  });
+  if (n) writeRawBundle(raw.templates, tasks);
+  return n;
+};
+
 export const loadEmailCampaignStoreForUser = (
   viewer: User,
   allUsers: User[],

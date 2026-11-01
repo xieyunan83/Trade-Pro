@@ -198,7 +198,34 @@ const runSyncAllWorkspaceData = async (
     } catch (e: any) {
       errors.push(`CRM 云端拉取：${e?.message || String(e)}`);
     }
-    const mergedCrm = mergeClientsById(localCrm, cloudCrm);
+    let mergedCrm = mergeClientsById(localCrm, cloudCrm);
+    // 同域名多条（名称不同）合并为一家，避免 CRM/营销工具重复
+    try {
+      const { mergeCrmClientsByDomain } = await import('../utils/crmHistory');
+      const domainMerged = mergeCrmClientsByDomain(mergedCrm);
+      if (domainMerged.removedCount > 0) {
+        console.info(
+          `[workspace-sync] CRM domain dedupe: groups=${domainMerged.mergedGroups} removed=${domainMerged.removedCount}`
+        );
+        mergedCrm = domainMerged.clients;
+        try {
+          const { remapEmailTaskClientIds } = await import('./emailCampaignStore');
+          remapEmailTaskClientIds(domainMerged.remaps);
+        } catch {
+          /* ignore */
+        }
+        // 删掉被合并掉的云端行，防止下次同步又带回
+        const loserIds = Object.keys(domainMerged.remaps);
+        if (loserIds.length) {
+          const { deleteCrmClient } = await import('./supabase');
+          await Promise.all(
+            loserIds.map((id) => deleteCrmClient(id).catch(() => false))
+          );
+        }
+      }
+    } catch (e) {
+      console.warn('[workspace-sync] CRM domain dedupe skipped', e);
+    }
     if (mergedCrm.length > 0) {
       const cleared = reconcileCrmTombstonesWithLiveClients(mergedCrm);
       if (cleared > 0) {

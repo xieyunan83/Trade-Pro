@@ -9,6 +9,7 @@ import {
   SkipForward,
   AlertCircle,
   CheckCircle2,
+  RefreshCw,
 } from 'lucide-react';
 import type { Client, HistoryItem } from '../types';
 import {
@@ -16,6 +17,7 @@ import {
   type BatchBgClassifyStats,
   downloadBatchBackgroundTemplate,
   parseBatchBackgroundExcel,
+  enrichBatchRowsMissingDomains,
   classifyBatchBackgroundRows,
   summarizeBatchBgClasses,
 } from '../services/batchBackgroundExcel';
@@ -25,9 +27,10 @@ type Props = {
   onClose: () => void;
   history: HistoryItem[];
   crmClients: Client[];
-  /** 用户确认开始：仅传入需真实背调的行 + 需从历史补入 CRM 的行 */
+  /** 用户确认开始：待背调 + 仅合并补充 + 历史补 CRM */
   onStart: (payload: {
     toAnalyze: ClassifiedBatchBgRow[];
+    toMergeUpdate: ClassifiedBatchBgRow[];
     toCrmFromHistory: ClassifiedBatchBgRow[];
     stats: BatchBgClassifyStats;
     mode: 'economy' | 'detailed';
@@ -67,13 +70,24 @@ export const BatchBackgroundExcelPanel: React.FC<Props> = ({
     setMsg(null);
     try {
       const parsed = await parseBatchBackgroundExcel(file);
-      const classified = classifyBatchBackgroundRows(parsed, history, crmClients);
+      const missing = parsed.filter((r) => !(r.website || '').trim()).length;
+      if (missing > 0) {
+        setMsg(`已读入 ${parsed.length} 行，正在根据邮箱后缀/公司名推断并核验官网（${missing} 行缺网址）…`);
+      }
+      const { rows: enriched, guessed } = await enrichBatchRowsMissingDomains(
+        parsed,
+        (done, total) => {
+          setMsg(`域名推断核验中 ${done}/${total}…`);
+        }
+      );
+      const classified = classifyBatchBackgroundRows(enriched, history, crmClients);
       const s = summarizeBatchBgClasses(classified);
       setRows(classified);
       setStats(s);
       setFileName(file.name);
       setMsg(
-        `已解析 ${s.total} 行：待背调 ${s.needAnalyze} · 跳过 ${s.skipCrm + s.skipHistory} · 无效 ${s.invalid}`
+        `已解析 ${s.total} 行：待背调 ${s.needAnalyze} · 仅补充 ${s.mergeUpdate} · 跳过 ${s.skipCrm + s.skipHistory} · 无效 ${s.invalid}` +
+          (guessed ? ` · 域名推断成功 ${guessed}` : missing ? ' · 部分缺网址未能核验域名' : '')
       );
     } catch (e: any) {
       setRows([]);
@@ -90,24 +104,26 @@ export const BatchBackgroundExcelPanel: React.FC<Props> = ({
       return;
     }
     const toAnalyze = rows.filter((r) => r.class === 'need_analyze');
+    const toMergeUpdate = rows.filter((r) => r.class === 'merge_update');
     const toCrmFromHistory = rows.filter(
       (r) => r.class === 'skip_history' && r.historyItem?.data
     );
-    if (!toAnalyze.length && !toCrmFromHistory.length) {
+    if (!toAnalyze.length && !toMergeUpdate.length && !toCrmFromHistory.length) {
       setMsg(
         stats.skipCrm
-          ? '全部客户已在 CRM 背调过，无需重复消耗额度。'
+          ? '全部客户已在库中且表格无新字段可补充，无需重复消耗额度。'
           : '没有可执行的任务（请检查表格内容）。'
       );
       return;
     }
-    onStart({ toAnalyze, toCrmFromHistory, stats, mode });
+    onStart({ toAnalyze, toMergeUpdate, toCrmFromHistory, stats, mode });
     reset();
     onClose();
   };
 
   const classLabel = (c: ClassifiedBatchBgRow['class']) => {
     if (c === 'need_analyze') return { text: '待背调', tone: 'text-cyan-700 bg-cyan-50' };
+    if (c === 'merge_update') return { text: '仅补充', tone: 'text-indigo-700 bg-indigo-50' };
     if (c === 'skip_crm') return { text: '跳过·CRM', tone: 'text-slate-600 bg-slate-100' };
     if (c === 'skip_history') return { text: '跳过·补CRM', tone: 'text-amber-800 bg-amber-50' };
     return { text: '无效', tone: 'text-rose-700 bg-rose-50' };
@@ -125,7 +141,7 @@ export const BatchBackgroundExcelPanel: React.FC<Props> = ({
               导入表格 · 批量背景调查与产品分析
             </h3>
             <p className="text-xs text-slate-500 font-medium mt-1 max-w-xl">
-              下载模板填写后上传。已背调客户自动跳过；完成后写入 CRM。
+              模板含公司/国家/简介/联系人/地址/邮编/电话/传真/邮件/网站等名录字段。无网站可用邮件@后缀猜域名；超 20 家可夜间静默。
             </p>
           </div>
           <button
@@ -183,10 +199,16 @@ export const BatchBackgroundExcelPanel: React.FC<Props> = ({
           </div>
 
           {stats && (
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
               <div className="rounded-xl border border-cyan-100 bg-cyan-50/60 px-3 py-2">
                 <div className="text-[10px] font-black text-cyan-700 uppercase">待背调</div>
                 <div className="text-lg font-black text-cyan-900">{stats.needAnalyze}</div>
+              </div>
+              <div className="rounded-xl border border-indigo-100 bg-indigo-50/70 px-3 py-2">
+                <div className="text-[10px] font-black text-indigo-700 uppercase flex items-center gap-1">
+                  <RefreshCw size={10} /> 仅补充
+                </div>
+                <div className="text-lg font-black text-indigo-950">{stats.mergeUpdate}</div>
               </div>
               <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
                 <div className="text-[10px] font-black text-slate-500 uppercase flex items-center gap-1">
@@ -215,6 +237,7 @@ export const BatchBackgroundExcelPanel: React.FC<Props> = ({
                     <th className="px-3 py-2">行</th>
                     <th className="px-3 py-2">公司</th>
                     <th className="px-3 py-2">网址</th>
+                    <th className="px-3 py-2">联系人</th>
                     <th className="px-3 py-2">状态</th>
                   </tr>
                 </thead>
@@ -229,6 +252,12 @@ export const BatchBackgroundExcelPanel: React.FC<Props> = ({
                         </td>
                         <td className="px-3 py-1.5 text-slate-500 truncate max-w-[10rem]">
                           {r.website || '—'}
+                          {r.domainGuessed ? (
+                            <span className="ml-1 text-[10px] font-black text-indigo-600">推断</span>
+                          ) : null}
+                        </td>
+                        <td className="px-3 py-1.5 text-slate-500">
+                          {r.contacts?.length || 0}
                         </td>
                         <td className="px-3 py-1.5">
                           <span className={`inline-block rounded-md px-1.5 py-0.5 font-black ${lab.tone}`}>
@@ -248,7 +277,7 @@ export const BatchBackgroundExcelPanel: React.FC<Props> = ({
 
           <div>
             <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">
-              背调模式
+              背调模式（仅「待背调」客户）
             </div>
             <div className="grid grid-cols-2 gap-2">
               <button
@@ -299,7 +328,7 @@ export const BatchBackgroundExcelPanel: React.FC<Props> = ({
             onClick={handleStart}
             className="rounded-xl bg-slate-900 hover:bg-cyan-700 text-white px-5 py-2.5 text-sm font-black inline-flex items-center gap-2 disabled:opacity-50"
           >
-            <Play size={16} /> 开始批量背调
+            <Play size={16} /> 开始批量处理
           </button>
         </div>
       </div>

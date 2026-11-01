@@ -381,29 +381,32 @@ const runOneJob = async (job: NightUpgradeJob) => {
 
   try {
     if (job.kind === 'linkedin_locate') {
+      const { withHeavyJob } = await import('./loadGovernor');
       const existing = hist?.data?.decisionMakers || client.contacts || [];
       const domain = client.website || hist?.domain || '';
-      const located = await locateLinkedInEmployees({
-        domain,
-        companyName: client.name,
-        productKeyword: client.searchKeyword || hist?.keyword,
-        country: client.country || hist?.country,
-        existing,
-        maxQueries: 3,
+      await withHeavyJob('ai', async () => {
+        const located = await locateLinkedInEmployees({
+          domain,
+          companyName: client.name,
+          productKeyword: client.searchKeyword || hist?.keyword,
+          country: client.country || hist?.country,
+          existing,
+          maxQueries: 3,
+        });
+        const enriched = await enrichDecisionMakersTitleAndWhatsApp({
+          domain,
+          companyName: client.name,
+          decisionMakers: located.decisionMakers,
+          limit: 8,
+        });
+        await handlers!.onLinkedInDone({
+          client,
+          decisionMakers: enriched,
+          historyId: hist?.id,
+        });
+        const waN = enriched.filter((d) => (d.whatsapp || '').trim()).length;
+        job.note = `联系人 +${located.stats.added}${waN ? ` · WhatsApp ${waN}` : ''}`;
       });
-      const enriched = await enrichDecisionMakersTitleAndWhatsApp({
-        domain,
-        companyName: client.name,
-        decisionMakers: located.decisionMakers,
-        limit: 8,
-      });
-      await handlers.onLinkedInDone({
-        client,
-        decisionMakers: enriched,
-        historyId: hist?.id,
-      });
-      const waN = enriched.filter((d) => (d.whatsapp || '').trim()).length;
-      job.note = `联系人 +${located.stats.added}${waN ? ` · WhatsApp ${waN}` : ''}`;
       markDone(client.id, 'linkedin_locate');
       job.status = 'completed';
     } else if (job.kind === 'dm_email') {
@@ -464,6 +467,17 @@ export const pumpNightUpgrade = async () => {
 
   pumping = true;
   try {
+    // 与批量背调双轨：共享冷却 / AI 槽位，避免同一 Key 撞限流
+    const { getHeavyJobCount, getSharedCooldownUntil, waitForLocalAiSlot } = await import(
+      './loadGovernor'
+    );
+    if (Date.now() < getSharedCooldownUntil()) {
+      return;
+    }
+    // 批量背调占用 AI 时先让出；软上限 1，给挂机批量留槽
+    await waitForLocalAiSlot(() => shouldStop, 1);
+    if (shouldStop) return;
+
     // 每晚窗口内定期扫缺口
     if (Date.now() - (state.lastScanAt || 0) > 10 * 60 * 1000) {
       scanAndEnqueue();
@@ -475,7 +489,9 @@ export const pumpNightUpgrade = async () => {
     const job = state.jobs.find((j) => j.status === 'queued');
     if (job) {
       await runOneJob(job);
-      await new Promise((r) => setTimeout(r, JOB_GAP_MS));
+      const busy = getHeavyJobCount('ai') > 0 || getHeavyJobCount('automation') > 0;
+      const gap = busy ? JOB_GAP_MS * 2.5 : JOB_GAP_MS;
+      await new Promise((r) => setTimeout(r, gap));
     }
   } finally {
     pumping = false;
@@ -506,4 +522,4 @@ export const stopNightSilentUpgrade = () => {
 };
 
 export const describeNightSilentUpgrade = (): string =>
-  `夜间静默升级（上海 22:00–08:00）· schema v${NIGHT_UPGRADE_SCHEMA_VERSION} · 公司联系人 / 邮箱 / 品类 / 背调补全`;
+  `夜间静默升级（上海 22:00–08:00）· schema v${NIGHT_UPGRADE_SCHEMA_VERSION} · 公司联系人 / 邮箱 / 品类 / 背调补全 · 与批量背调双轨错峰`;

@@ -240,8 +240,8 @@ export interface AutomationResult {
   status: 'pending' | 'analyzing' | 'generating_email' | 'completed' | 'failed';
   analysis?: AnalysisResult;
   mailGroup?: MailGroup;
-  productContext?: string; 
-  productImages?: string[]; 
+  productContext?: string;
+  productImages?: string[];
   mode?: 'detailed' | 'economy';
   /** 关联关键词，便于任务归类 */
   keyword?: string;
@@ -254,6 +254,28 @@ export interface AutomationResult {
   failedAt?: number;
   ownerUsername?: string;
   departmentId?: string;
+  /**
+   * Excel / 手工导入的种子信息：背调完成后与 AI 结果合并写入 CRM/历史。
+   * 库内已有记录时可不跑全量背调，仅用此字段做补充。
+   */
+  importSeed?: {
+    contacts?: DecisionMaker[];
+    industry?: string;
+    clientType?: string;
+    productType?: string;
+    note?: string;
+    profile?: string;
+    address?: string;
+    postalCode?: string;
+    fax?: string;
+  };
+  /**
+   * 仅在上海时区 22:00–次日 08:00 执行（Excel 大批量省算力）。
+   * 窗口外保持 pending，次日 22:00 自动续跑。
+   */
+  nightWindowOnly?: boolean;
+  /** 同一 Excel 夜间批次 id，全部完成后弹窗通知 */
+  nightBatchId?: string;
 }
 
 /** 自动化获客工作流确认配置 */
