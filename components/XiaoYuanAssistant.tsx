@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Loader2, Send, X } from 'lucide-react';
 import {
   askXiaoYuan,
+  preloadXiaoYuanAvatar,
   XIAOYUAN_AVATAR,
   XIAOYUAN_NAME,
   XIAOYUAN_QUICK_PROMPTS,
@@ -26,6 +27,33 @@ const WELCOME: XiaoYuanMsg = {
   text: `你好，我是${XIAOYUAN_NAME}。想找功能入口、不会操作某一步，直接问我就好——例如任务流下一步、平面设计、客户搜索、建站怎么用。`,
   at: Date.now(),
 };
+
+/** 共用头像：同一张预加载图，避免对话框里多处各自重新拉取/解码 */
+const XiaoYuanFace: React.FC<{
+  sizeClass: string;
+  ringClass?: string;
+  className?: string;
+  showOnlineDot?: boolean;
+}> = ({ sizeClass, ringClass = '', className = '', showOnlineDot }) => (
+  <span
+    className={`relative inline-block overflow-hidden rounded-full bg-slate-800 shrink-0 ${sizeClass} ${ringClass} ${className}`}
+  >
+    <img
+      src={XIAOYUAN_AVATAR}
+      alt=""
+      width={128}
+      height={128}
+      decoding="async"
+      loading="eager"
+      fetchPriority="high"
+      className="w-full h-full object-cover object-top pointer-events-none"
+      draggable={false}
+    />
+    {showOnlineDot ? (
+      <span className="absolute bottom-1 right-1 w-3 h-3 rounded-full bg-emerald-400 ring-2 ring-slate-900" />
+    ) : null}
+  </span>
+);
 
 const defaultPos = (): Pos => {
   if (typeof window === 'undefined') return { x: 8, y: 360 };
@@ -72,6 +100,10 @@ export const XiaoYuanAssistant: React.FC<Props> = ({ visible = true }) => {
     startX: number;
     startY: number;
   } | null>(null);
+
+  useEffect(() => {
+    preloadXiaoYuanAvatar();
+  }, []);
 
   useEffect(() => {
     if (open) {
@@ -199,18 +231,15 @@ export const XiaoYuanAssistant: React.FC<Props> = ({ visible = true }) => {
             dragRef.current.moved = false;
             return;
           }
+          preloadXiaoYuanAvatar();
           setOpen((v) => !v);
         }}
       >
-        <span className="relative w-16 h-16 sm:w-[4.5rem] sm:h-[4.5rem] rounded-full overflow-hidden bg-slate-900 ring-[3px] ring-cyan-300/80 shadow-lg shadow-cyan-900/30 group-hover:scale-105 transition-transform">
-          <img
-            src={XIAOYUAN_AVATAR}
-            alt={XIAOYUAN_NAME}
-            className="w-full h-full object-cover object-top pointer-events-none"
-            draggable={false}
-          />
-          <span className="absolute bottom-1 right-1 w-3 h-3 rounded-full bg-emerald-400 ring-2 ring-slate-900" />
-        </span>
+        <XiaoYuanFace
+          sizeClass="w-16 h-16 sm:w-[4.5rem] sm:h-[4.5rem]"
+          ringClass="ring-[3px] ring-cyan-300/80 shadow-lg shadow-cyan-900/30 group-hover:scale-105 transition-transform bg-slate-900"
+          showOnlineDot
+        />
         <span className="text-[11px] sm:text-xs font-black text-cyan-100/95 bg-slate-950/85 px-2 py-0.5 rounded-md border border-cyan-400/30 leading-none">
           {XIAOYUAN_NAME}
         </span>
@@ -224,11 +253,9 @@ export const XiaoYuanAssistant: React.FC<Props> = ({ visible = true }) => {
           aria-label={`${XIAOYUAN_NAME}对话`}
         >
           <header className="shrink-0 flex items-center gap-3.5 px-4 py-3.5 bg-gradient-to-r from-slate-900 to-slate-800 text-white">
-            <img
-              src={XIAOYUAN_AVATAR}
-              alt=""
-              className="w-14 h-14 sm:w-16 sm:h-16 rounded-full object-cover object-top ring-2 ring-teal-400/60 shadow-md"
-              draggable={false}
+            <XiaoYuanFace
+              sizeClass="w-14 h-14 sm:w-16 sm:h-16"
+              ringClass="ring-2 ring-teal-400/60 shadow-md"
             />
             <div className="min-w-0 flex-1">
               <div className="text-base sm:text-lg font-black flex items-center gap-2">
@@ -255,16 +282,8 @@ export const XiaoYuanAssistant: React.FC<Props> = ({ visible = true }) => {
                 key={m.id}
                 className={`flex gap-2.5 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
               >
-                {m.role === 'assistant' && (
-                  <img
-                    src={XIAOYUAN_AVATAR}
-                    alt=""
-                    className="w-11 h-11 rounded-full object-cover object-top shrink-0 mt-0.5 ring-1 ring-slate-200"
-                    draggable={false}
-                  />
-                )}
                 <div
-                  className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-[15px] sm:text-base leading-relaxed whitespace-pre-wrap ${
+                  className={`max-w-[90%] rounded-2xl px-3.5 py-2.5 text-[15px] sm:text-base leading-relaxed whitespace-pre-wrap ${
                     m.role === 'user'
                       ? 'bg-slate-900 text-white rounded-br-md'
                       : 'bg-white text-slate-700 border border-slate-200 rounded-bl-md shadow-sm'
@@ -275,7 +294,7 @@ export const XiaoYuanAssistant: React.FC<Props> = ({ visible = true }) => {
               </div>
             ))}
             {busy && (
-              <div className="flex items-center gap-2 text-sm text-slate-400 pl-14">
+              <div className="flex items-center gap-2 text-sm text-slate-400">
                 <Loader2 size={16} className="animate-spin" /> 小媛正在想…
               </div>
             )}

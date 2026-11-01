@@ -5,7 +5,27 @@
 import { callQwen } from './geminiService';
 
 export const XIAOYUAN_NAME = '小媛';
-export const XIAOYUAN_AVATAR = '/xiaoyuan-avatar.png';
+/** 压缩头像（约 4KB），打开对话不再重复拉大图 */
+export const XIAOYUAN_AVATAR = '/xiaoyuan-avatar.jpg';
+
+/** 登录后尽早预解码，避免点开对话框时两处头像同时空白转圈 */
+export const preloadXiaoYuanAvatar = (): void => {
+  if (typeof window === 'undefined') return;
+  const w = window as Window & { __tpXyAvatarReady?: boolean };
+  if (w.__tpXyAvatarReady) return;
+  const img = new Image();
+  img.decoding = 'async';
+  img.src = XIAOYUAN_AVATAR;
+  const mark = () => {
+    w.__tpXyAvatarReady = true;
+  };
+  if (typeof img.decode === 'function') {
+    void img.decode().then(mark).catch(mark);
+  } else {
+    img.onload = mark;
+    img.onerror = mark;
+  }
+};
 
 export type XiaoYuanMsg = {
   id: string;
