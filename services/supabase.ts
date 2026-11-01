@@ -686,6 +686,27 @@ export const getDiscoverySearchArchives = async (): Promise<DiscoveryArchiveItem
 
 // ==================== CRM 客户（JSON 完整存储） ====================
 
+/** 单条 CRM 即时 upsert（背调完成一条同步一条；勿等整表定时同步） */
+export const saveCrmClientOne = async (client: Client): Promise<boolean> => {
+  if (!isSupabaseConfigured() || !(client?.id || '').trim()) return false
+  try {
+    const { error } = await supabase.from('crm_clients').upsert(
+      {
+        user_id: cloudUid(),
+        local_id: client.id,
+        client_data: client,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'user_id,local_id' }
+    )
+    if (error) throw error
+    return true
+  } catch (error) {
+    console.error('单条 CRM 云端保存失败:', error)
+    throw error
+  }
+}
+
 export const saveCrmClientsBulk = async (clients: Client[]): Promise<boolean> => {
   if (!isSupabaseConfigured()) return false
   try {

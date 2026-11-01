@@ -18,7 +18,6 @@ import {
 } from './db';
 import {
   deleteProductProfileCloud,
-  saveProductProfileCloud,
   syncProductProfilesCloud,
 } from './supabase';
 import type { CatalogSku } from './productCatalogTypes';
@@ -572,9 +571,12 @@ export const upsertProductProfile = async (
 ): Promise<void> => {
   await saveProductProfile(profile);
   if (syncCloud) {
-    void saveProductProfileCloud(profile).catch((e) =>
-      console.warn('[productCatalog] cloud save failed', e)
-    );
+    try {
+      const { pushProductProfileToCloudNow } = await import('./immediateCloudSync');
+      await pushProductProfileToCloudNow(profile);
+    } catch (e) {
+      console.warn('[productCatalog] cloud save failed', e);
+    }
   }
 };
 

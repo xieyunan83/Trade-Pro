@@ -141,9 +141,19 @@ export const saveAutomationTask = async (
     }
   }
   if (!opts?.skipCloud) {
-    void import('./automationQueueCloud')
-      .then((m) => m.pushAutomationTaskToCloud(toCloud))
-      .catch(() => undefined);
+    // 完成/失败必须 await 上云，避免只写本机后死机丢进度；analyzing 仍可后台推
+    const mustAwait =
+      toCloud.status === 'completed' || toCloud.status === 'failed' || toCloud.status === 'pending';
+    try {
+      const { pushAutomationToCloudNow } = await import('./immediateCloudSync');
+      if (mustAwait) {
+        await pushAutomationToCloudNow(toCloud);
+      } else {
+        void pushAutomationToCloudNow(toCloud);
+      }
+    } catch {
+      /* 本机已落盘；云端失败由下次全量同步补 */
+    }
   }
 };
 

@@ -23,6 +23,7 @@ import {
   mergeClientsById,
   syncAllWorkspaceData,
 } from './services/workspaceCloudSync';
+import { enqueueCrmClientCloudPush } from './services/immediateCloudSync';
 import { fetchGlobalConfig, fetchDocumentsFromRepo, backupUserHistory, fetchCRMFromCloud, saveCRMToCloud, fetchUserHistoryFromCloud, checkGitHubStatus, fetchApiConfigsFromCloud, setManualGitHubConfig } from './services/githubService';
 import { isSupabaseConfigured, getKnowledgeFiles, getInvestigationHistory, saveInvestigationHistory, saveDiscoverySearch, getCrmClients, syncCrmClients, saveCrmClientsBulk, deleteCrmClient, deleteCrmClientsBulk, getDiscoverySearchArchives, deleteInvestigationHistory, deleteDiscoverySearchFromCloud, deleteDiscoverySearchesByMeta, getProductProfilesCloud } from './services/supabase';
 import {
@@ -609,9 +610,13 @@ const App: React.FC = () => {
             /* ignore */
           }
         }
-        setCrmClients((prev) =>
-          prev.map((c) => (c.id === client.id ? applyCatalogMatchTagsToClient(c, report) : c))
-        );
+        const tagged = applyCatalogMatchTagsToClient(client, report);
+        setCrmClients((prev) => {
+          const next = prev.map((c) => (c.id === client.id ? tagged : c));
+          crmClientsRef.current = next;
+          return next;
+        });
+        void enqueueCrmClientCloudPush(tagged);
         return { note: report.note };
       },
     });
@@ -1548,21 +1553,22 @@ const App: React.FC = () => {
 
   useEffect(() => {
       if (!currentUser || !userDataReadyRef.current || !crmPersistReadyRef.current) return;
-      // 仅把当前 React 可见列表合并写回本机 + upsert 云端。
-      // 硬规则：此路径绝不写墓碑、绝不 delete 云端（跨端墓碑曾把「看不见」当成删除，导致 Mac/Windows 条数不一致）。
+      // 仅把当前 React 可见列表合并写回本机。
+      // 云端：背调完成走「一条一推」；此处防抖整表 upsert 作兜底，避免批量时每条都整表上传。
+      // 硬规则：此路径绝不写墓碑、绝不 delete 云端。
       const mergedAll = mergeSaveCrmClients(currentUser, crmClients, users, departments);
 
-      if (isSupabaseConfigured()) {
-          if (crmClients.length > 0) {
-            syncCrmClients(crmClients).catch(e => console.error("Supabase CRM sync failed", e));
-          }
-      }
-      // GitHub：union 合并后写入（saveCRMToCloud 内不冲掉远端多出的行）
-      if (isGitHubConnected && mergedAll.length > 0) {
+      const t = window.setTimeout(() => {
+        if (isSupabaseConfigured() && crmClients.length > 0) {
+          syncCrmClients(crmClients).catch((e) => console.error('Supabase CRM sync failed', e));
+        }
+        if (isGitHubConnected && mergedAll.length > 0) {
           saveCRMToCloud(mergedAll).catch((e) =>
             console.error('Auto CRM GitHub sync failed', e)
           );
-      }
+        }
+      }, 12_000);
+      return () => window.clearTimeout(t);
   }, [crmClients, isGitHubConnected, currentUser, users, departments]);
 
   // 按用户隔离保存当前搜索界面，避免换账号串结果
@@ -2096,27 +2102,37 @@ const App: React.FC = () => {
       );
     }
 
-    // 3) 同步 CRM 联系人，避免列表只看 CRM 时仍像「未挖」
+    // 3) 同步 CRM 联系人，并即时上云（完成一条推一条）
     if (domainKey || nameKey) {
-      setCrmClients((prev) => {
-        let changed = false;
-        const crmNext = prev.map((c) => {
-          const cHost = cleanHost(c.website);
-          const cName = (c.name || '').trim().toLowerCase();
-          const hit =
-            (domainKey && cHost && domainKey === cHost) || (nameKey && cName && nameKey === cName);
-          if (!hit) return c;
-          changed = true;
-          return {
-            ...c,
-            contacts: patch.decisionMakers,
-            activityLog:
-              (c.activityLog || '') +
-              ` [决策人挖掘 ${new Date(patch.decisionMakerEmailSearchAt).toLocaleString('zh-CN')}]`,
-          };
-        });
-        return changed ? crmNext : prev;
+      const prevCrm = crmClientsRef.current || [];
+      const touched: Client[] = [];
+      const crmNext = prevCrm.map((c) => {
+        const cHost = cleanHost(c.website);
+        const cName = (c.name || '').trim().toLowerCase();
+        const hit =
+          (domainKey && cHost && domainKey === cHost) || (nameKey && cName && nameKey === cName);
+        if (!hit) return c;
+        const nextC = {
+          ...c,
+          contacts: patch.decisionMakers,
+          activityLog:
+            (c.activityLog || '') +
+            ` [决策人挖掘 ${new Date(patch.decisionMakerEmailSearchAt).toLocaleString('zh-CN')}]`,
+        };
+        touched.push(nextC);
+        return nextC;
       });
+      if (touched.length) {
+        crmClientsRef.current = crmNext;
+        setCrmClients(crmNext);
+        for (const c of touched) {
+          try {
+            await enqueueCrmClientCloudPush(c);
+          } catch {
+            /* 本机已更新 */
+          }
+        }
+      }
     }
 
     // 4) 同步写回营销工具任务队列
@@ -2586,7 +2602,8 @@ const App: React.FC = () => {
   };
 
   /** 背调完成后：已有则更新，没有则自动入库 CRM（批量/单次共用） */
-  const updateCrmStatus = (analysis: AnalysisResult) => {
+  /** 背调完成后立刻更新本机 CRM，并 await 单条上云（完成一个同步一个） */
+  const updateCrmStatus = async (analysis: AnalysisResult): Promise<Client | null> => {
       const now = Date.now();
       const kw = (analysis.searchKeyword || '').trim();
       const website = analysis.companyInfo?.website || '';
@@ -2595,61 +2612,67 @@ const App: React.FC = () => {
       const patch = clientPatchFromAnalysis(analysis, website, now);
       clearCrmTombstonesForClients([{ id: '', website, name: analysis.companyInfo?.name || '' }]);
 
-      setCrmClients((prev) => {
-          const idx = prev.findIndex(
-            (c) =>
-              (websiteKey && (c.website || '').toLowerCase() === websiteKey) ||
-              (nameKey && (c.name || '').trim().toLowerCase() === nameKey) ||
-              (normalizeCrmHost(website) &&
-                normalizeCrmHost(c.website) === normalizeCrmHost(website))
-          );
-          if (idx >= 0) {
-              const searchedKeywords = Array.from(
-                new Set(
-                  [...(prev[idx].searchedKeywords || []), prev[idx].searchKeyword, kw].filter(
-                    Boolean
-                  ) as string[]
-                )
-              );
-              const updated = [...prev];
-              updated[idx] = {
-                  ...updated[idx],
-                  ...patch,
-                  hasAnalyzed: true,
-                  hasBackgroundCheck: true,
-                  lastBackgroundCheckAt: now,
-                  ownerUsername: updated[idx].ownerUsername || currentUser?.username,
-                  departmentId: updated[idx].departmentId || currentUser?.departmentId,
-                  contacts: mergeDecisionMakers(
-                    updated[idx].contacts || [],
-                    analysis.decisionMakers || []
-                  ),
-                  searchKeyword: kw || updated[idx].searchKeyword,
-                  searchedKeywords,
-                  tags: analysis.searchTags || updated[idx].tags,
-                  activityLog:
-                      (updated[idx].activityLog || '') +
-                      ` [Analyzed ${new Date().toLocaleDateString()}]`,
-              };
-              return updated;
-          }
-          const newClient: Client = stampOwnership({
-              id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-              type: '进口商',
-              status: '新建/潜在',
-              isSampleNeeded: false,
-              lastOrderDate: '',
-              lastContactSent: '',
-              lastContactReceived: '',
-              nextFollowUpDate: new Date().toISOString().split('T')[0],
-              activityLog: `Auto-added after background check ${new Date().toLocaleDateString()}.`,
-              ...patch,
-              name: analysis.companyInfo?.name || website || '未命名客户',
-              website,
-              searchKeyword: kw || patch.searchKeyword,
-          } as Client);
-          return [newClient, ...prev];
-      });
+      const prev = crmClientsRef.current || [];
+      const idx = prev.findIndex(
+        (c) =>
+          (websiteKey && (c.website || '').toLowerCase() === websiteKey) ||
+          (nameKey && (c.name || '').trim().toLowerCase() === nameKey) ||
+          (normalizeCrmHost(website) &&
+            normalizeCrmHost(c.website) === normalizeCrmHost(website))
+      );
+      let touched: Client;
+      let next: Client[];
+      if (idx >= 0) {
+        const searchedKeywords = Array.from(
+          new Set(
+            [...(prev[idx].searchedKeywords || []), prev[idx].searchKeyword, kw].filter(
+              Boolean
+            ) as string[]
+          )
+        );
+        touched = {
+          ...prev[idx],
+          ...patch,
+          hasAnalyzed: true,
+          hasBackgroundCheck: true,
+          lastBackgroundCheckAt: now,
+          ownerUsername: prev[idx].ownerUsername || currentUser?.username,
+          departmentId: prev[idx].departmentId || currentUser?.departmentId,
+          contacts: mergeDecisionMakers(prev[idx].contacts || [], analysis.decisionMakers || []),
+          searchKeyword: kw || prev[idx].searchKeyword,
+          searchedKeywords,
+          tags: analysis.searchTags || prev[idx].tags,
+          activityLog:
+            (prev[idx].activityLog || '') + ` [Analyzed ${new Date().toLocaleDateString()}]`,
+        };
+        next = [...prev];
+        next[idx] = touched;
+      } else {
+        touched = stampOwnership({
+          id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          type: '进口商',
+          status: '新建/潜在',
+          isSampleNeeded: false,
+          lastOrderDate: '',
+          lastContactSent: '',
+          lastContactReceived: '',
+          nextFollowUpDate: new Date().toISOString().split('T')[0],
+          activityLog: `Auto-added after background check ${new Date().toLocaleDateString()}.`,
+          ...patch,
+          name: analysis.companyInfo?.name || website || '未命名客户',
+          website,
+          searchKeyword: kw || patch.searchKeyword,
+        } as Client);
+        next = [touched, ...prev];
+      }
+      crmClientsRef.current = next;
+      setCrmClients(next);
+      try {
+        await enqueueCrmClientCloudPush(touched);
+      } catch (e) {
+        console.warn('[crm] immediate cloud push failed', e);
+      }
+      return touched;
   };
 
   /** 批量/单次分析完成后写入历史（IndexedDB + Supabase） */
@@ -2805,7 +2828,7 @@ const App: React.FC = () => {
     };
   };
 
-  const importAnalysisToCrmFromPipeline = (analysis: AnalysisResult) => {
+  const importAnalysisToCrmFromPipeline = async (analysis: AnalysisResult) => {
     const dms = analysis.decisionMakers || [];
     if (!dms.some((d) => d.name || d.emailGuess?.includes('@'))) return;
     if (!canAccessModule(currentUser, ModuleType.CLIENT_CRM)) return;
@@ -2821,7 +2844,27 @@ const App: React.FC = () => {
       ),
       source: 'batch',
     });
-    setCrmClients((prev) => mergeHistoryItemsIntoCrm(prev, [histItem], stampOwnership).clients);
+    const merged = mergeHistoryItemsIntoCrm(
+      crmClientsRef.current || [],
+      [histItem],
+      stampOwnership
+    );
+    crmClientsRef.current = merged.clients;
+    setCrmClients(merged.clients);
+    const host = normalizeCrmHost(analysis.companyInfo?.website || '');
+    const name = (analysis.companyInfo?.name || '').trim().toLowerCase();
+    const touched = merged.clients.find(
+      (c) =>
+        (host && normalizeCrmHost(c.website) === host) ||
+        (name && (c.name || '').trim().toLowerCase() === name)
+    );
+    if (touched) {
+      try {
+        await enqueueCrmClientCloudPush(touched);
+      } catch {
+        /* 本机已合并 */
+      }
+    }
   };
 
   /** 单条背调（供流水线并行调用）；静默补全联系人 → 可选挖邮箱 / 入 CRM */
@@ -2908,7 +2951,7 @@ const App: React.FC = () => {
       }
 
       incrementUsage('analysis');
-      updateCrmStatus(result);
+      await updateCrmStatus(result);
 
       let enrichedResult = result;
       let seededDecisionMakers: DecisionMaker[] = result.decisionMakers || [];
@@ -2944,7 +2987,7 @@ const App: React.FC = () => {
                   h.id === historyId ? nextHist : h
                 );
                 setHistory(historyRef.current);
-                void persistHistoryItem(nextHist).catch(() => undefined);
+                await persistHistoryItem(nextHist).catch(() => undefined);
               }
             }
             setAutomationResults((prev) => {
@@ -2967,7 +3010,7 @@ const App: React.FC = () => {
                   d.emailGuess?.includes('@')
               )
             ) {
-              importAnalysisToCrmFromPipeline({
+              await importAnalysisToCrmFromPipeline({
                 ...enrichedResult,
                 decisionMakers: seededDecisionMakers,
               });
@@ -3025,7 +3068,7 @@ const App: React.FC = () => {
               opts.doCrmImport &&
               job.resultDecisionMakers.some((d) => d.name || d.emailGuess?.includes('@'))
             ) {
-              importAnalysisToCrmFromPipeline({
+              await importAnalysisToCrmFromPipeline({
                 ...enrichedResult,
                 decisionMakers: job.resultDecisionMakers,
                 decisionMakerEmailSearchAt: job.searchedAt,
@@ -3408,7 +3451,7 @@ const App: React.FC = () => {
                   syncAutomationResults((prev) =>
                     prev.map((t) => (t.id === task.id ? withContacts : t))
                   );
-                  void saveAutomationTask(withContacts).catch(() => undefined);
+                  await saveAutomationTask(withContacts).catch(() => undefined);
                 }
               }
             } catch (seedErr) {
@@ -3416,7 +3459,7 @@ const App: React.FC = () => {
             }
 
             incrementUsage('analysis');
-            updateCrmStatus(result);
+            await updateCrmStatus(result);
             // Excel 行业/品类/备注等非联系人字段补进 CRM
             if (task.importSeed) {
               const seed = {
@@ -3440,17 +3483,23 @@ const App: React.FC = () => {
                 seed.postalCode ||
                 seed.fax
               ) {
-                setCrmClients((prev) => {
-                  const idx = findCrmClientIndex(
-                    prev,
-                    result.companyInfo?.website || task.website,
-                    result.companyInfo?.name || task.clientName
-                  );
-                  if (idx < 0) return prev;
+                const prev = crmClientsRef.current || [];
+                const idx = findCrmClientIndex(
+                  prev,
+                  result.companyInfo?.website || task.website,
+                  result.companyInfo?.name || task.clientName
+                );
+                if (idx >= 0) {
                   const next = [...prev];
                   next[idx] = applyBatchSeedToClient(next[idx], seed);
-                  return next;
-                });
+                  crmClientsRef.current = next;
+                  setCrmClients(next);
+                  try {
+                    await enqueueCrmClientCloudPush(next[idx]);
+                  } catch {
+                    /* 本机已写 */
+                  }
+                }
               }
             }
             notifyExcelNightBatchIfDone(task.nightBatchId);
