@@ -63,17 +63,20 @@ export const SphereNav: React.FC<Props> = ({
     [visibleSections, sectionId]
   );
 
+  // 仅在「当前模块」变化时同步板块；不要把 sectionId 放进依赖，
+  // 否则点其它板块会因 activeModule 仍属指挥舱而被立刻拽回去。
   useEffect(() => {
-    // 双入口模块：若当前板块已包含该模块，不要强行切到另一板块（商机点匹配勿跳产品）
-    if (sectionId) {
-      const current = visibleSections.find((s) => s.id === sectionId);
-      if (current?.items.some((i) => i.id === activeModule)) return;
-    }
-    const sec = findSectionByModule(activeModule, sectionId);
-    if (sec && visibleSections.some((s) => s.id === sec.id)) {
-      setSectionId(sec.id);
-    }
-  }, [activeModule, visibleSections, sectionId]);
+    setSectionId((prev) => {
+      if (prev) {
+        const current = visibleSections.find((s) => s.id === prev);
+        // 双入口模块：当前板块已包含该模块则保留（商机点匹配勿跳产品）
+        if (current?.items.some((i) => i.id === activeModule)) return prev;
+      }
+      const sec = findSectionByModule(activeModule, prev);
+      if (sec && visibleSections.some((s) => s.id === sec.id)) return sec.id;
+      return prev;
+    });
+  }, [activeModule, visibleSections]);
 
   const openStart = () => {
     setPhase('sections');
