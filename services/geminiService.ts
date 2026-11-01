@@ -1333,12 +1333,15 @@ export const researchDecisionMakerEmails = async (opts: {
   const hasAnymail = !!getEmailSearchKeys().anymailFinder;
   const hasHunter = !!getEmailSearchKeys().hunter;
 
-  // 清理背调 AI 占位人（无真实姓名、无邮箱）——避免干扰公司域名搜索结果与「再次搜索」
+  // 清理背调 AI 占位人（无真实姓名、无邮箱）——保留领英公开定位占位（有主页/可用姓名）
   for (let i = merged.length - 1; i >= 0; i--) {
     const dm = merged[i];
     const name = dm.name || [dm.firstName, dm.lastName].filter(Boolean).join(' ');
+    const isLinkedInKeep =
+      dm.source === 'LinkedIn' || /linkedin\.com\/in\//i.test(dm.linkedin || '');
     const isJunkPlaceholder =
       !dm.emailGuess &&
+      !isLinkedInKeep &&
       (dm.source === 'AI' || dm.source === 'AI (Pattern Guess)') &&
       (isPlaceholderPersonName(name) || /待补充|Company Contact/i.test(dm.title || ''));
     if (isJunkPlaceholder) {

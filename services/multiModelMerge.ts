@@ -138,7 +138,9 @@ export const mergeDecisionMakers = (a: any[], b: any[]): DecisionMaker[] => {
   const put = (dm: any) => {
     if (!dm) return;
     const name = preferString(dm.name, [dm.firstName, dm.lastName].filter(Boolean).join(' '));
-    if (isEmptyPlaceholder(name) && !asStr(dm.emailGuess).includes('@')) return;
+    const hasLi = /linkedin\.com\/in\//i.test(asStr(dm.linkedin));
+    // 领英占位：可无邮箱，但必须有主页或可用姓名
+    if (isEmptyPlaceholder(name) && !asStr(dm.emailGuess).includes('@') && !hasLi) return;
     const k = keyOf({ ...dm, name });
     const prev = map.get(k);
     if (!prev) {

@@ -268,6 +268,11 @@ export interface AutomationPipelineConfig {
   productContext: string;
   /** 搜索完成后立即背调 */
   doBackgroundCheck: boolean;
+  /**
+   * 背调后先公开检索定位领英员工并写入决策人占位（姓名/职位/主页），
+   * 再交由 doDmMine 按占位序列补邮箱。
+   */
+  doLinkedInLocate: boolean;
   /** 背调后挖掘决策人邮箱 */
   doDmMine: boolean;
   /** 挖掘到有决策人的直接导入 CRM */
@@ -287,8 +292,15 @@ export interface DecisionMaker {
   whatsapp?: string;
   linkedin?: string;
   type: 'CEO' | 'Buyer' | 'Other';
-  /** 联系人发现来源（AI / 平台域名搜索等） */
-  source: 'AI' | 'AI (Pattern Guess)' | 'Hunter.io' | 'Findymail' | 'AnymailFinder' | 'Manual';
+  /** 联系人发现来源（AI / 平台域名搜索 / 领英公开定位等） */
+  source:
+    | 'AI'
+    | 'AI (Pattern Guess)'
+    | 'Hunter.io'
+    | 'Findymail'
+    | 'AnymailFinder'
+    | 'Manual'
+    | 'LinkedIn';
   /** 邮箱具体来自哪个平台（展示用） */
   emailSource?: 'AnymailFinder' | 'Hunter.io' | 'Findymail' | 'AI (Pattern Guess)' | 'Manual' | string;
   /** Anymail / 平台返回的校验状态 */

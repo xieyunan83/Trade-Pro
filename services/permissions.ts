@@ -337,6 +337,7 @@ export const abbreviateEmailPlatform = (source?: string): string => {
   if (lower.includes('hunter')) return 'H';
   if (lower.includes('findy')) return 'F';
   if (lower === 'manual' || lower.includes('手动')) return 'M';
+  if (lower.includes('linkedin') || lower.includes('领英')) return 'LI';
   if (lower.includes('pattern') || lower === 'ai' || lower.startsWith('ai ')) return 'AI';
   // 其它来源：取首个字母/汉字
   const letter = s.replace(/[^A-Za-z\u4e00-\u9fa5]/g, '').charAt(0);

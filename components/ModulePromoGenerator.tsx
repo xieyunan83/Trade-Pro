@@ -46,6 +46,7 @@ import {
   applyPlaybook,
 } from '../services/acquisitionPlaybooks';
 import { loadTradeJourney, patchTradeJourney } from '../services/tradeJourney';
+import { AcquisitionMethodsPanel } from './AcquisitionMethodsPanel';
 
 interface ModulePromoGeneratorProps {
   onStartAutomation: (config: AutomationPipelineConfig) => void;
@@ -99,6 +100,7 @@ const emptyDraft = (): Omit<AutomationPipelineConfig, never> => ({
   perCountryLimit: 5,
   productContext: '',
   doBackgroundCheck: true,
+  doLinkedInLocate: true,
   doDmMine: false,
   doCrmImport: false,
 });
@@ -166,6 +168,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
     const journey = loadTradeJourney();
     const next = applyPlaybook(pb, {
       keyword: (journey.productFocus || pb.config.keyword).trim(),
+      doLinkedInLocate: pb.config.doLinkedInLocate !== false,
       doDmMine: canDmMine ? pb.config.doDmMine : false,
       doCrmImport: canCrmImport ? pb.config.doCrmImport : false,
     });
@@ -506,12 +509,14 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   const patchDraft = (partial: Partial<AutomationPipelineConfig>) => {
     setDraft((prev) => {
       const next = { ...prev, ...partial };
-      // CRM 依赖决策人挖掘
-      if (partial.doDmMine === false) next.doCrmImport = false;
+      // 关背调则后续全关；CRM 需领英占位或邮箱深挖其一
       if (partial.doBackgroundCheck === false) {
+        next.doLinkedInLocate = false;
         next.doDmMine = false;
         next.doCrmImport = false;
       }
+      if (partial.doDmMine === false && !next.doLinkedInLocate) next.doCrmImport = false;
+      if (partial.doLinkedInLocate === false && !next.doDmMine) next.doCrmImport = false;
       return next;
     });
   };
@@ -555,8 +560,13 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
       keyword: draft.keyword.trim(),
       industry: draft.industry.trim(),
       productContext: draft.productContext.trim(),
+      doLinkedInLocate: draft.doBackgroundCheck && draft.doLinkedInLocate,
       doDmMine: draft.doBackgroundCheck && draft.doDmMine && canDmMine,
-      doCrmImport: draft.doBackgroundCheck && draft.doDmMine && draft.doCrmImport && canCrmImport,
+      doCrmImport:
+        draft.doBackgroundCheck &&
+        draft.doCrmImport &&
+        canCrmImport &&
+        (draft.doDmMine || draft.doLinkedInLocate),
     };
     setDialogOpen(false);
     setConfirming(false);
@@ -570,7 +580,8 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
           <Ruler className="text-blue-600" /> 自动化获客工作流
         </h2>
         <p className="text-sm text-slate-500 font-medium mb-4 leading-relaxed">
-          澄海玩具出口剧本一键开跑：按国家搜索 → 并行背调 / 决策人 / 入 CRM。也可自定义全部选项。
+          澄海玩具出口剧本一键开跑：按国家搜索 → 并行背调 → 领英员工占位 → 决策人邮箱 / 入
+          CRM。也可自定义全部选项。
         </p>
 
         <div className="mb-5">
@@ -608,11 +619,16 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
         <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-4 sm:p-5 mb-6 space-y-2 text-sm text-slate-600 font-medium">
           <div className="flex items-start gap-2">
             <ListChecks size={16} className="text-blue-600 mt-0.5 flex-shrink-0" />
-            <span>配置：关键词 · 行业词 · 客户类型 · 国家 · 每国数量 · 背调 / 决策人 / CRM</span>
+            <span>
+              配置：关键词 · 行业词 · 客户类型 · 国家 · 每国数量 · 背调 / 领英占位 / 决策人 /
+              CRM
+            </span>
           </div>
           <div className="flex items-start gap-2">
             <Search size={16} className="text-cyan-600 mt-0.5 flex-shrink-0" />
-            <span>执行：国家串行搜索 → 每国结果立即进入后续任务（可并行）</span>
+            <span>
+              执行：国家串行搜索 → 背调 → 领英员工占位写入决策人序列 → 再挖邮箱（可并行）
+            </span>
           </div>
         </div>
 
@@ -626,6 +642,11 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
           {isAutomating ? '自动化执行中…' : '自定义配置并启动'}
         </button>
       </div>
+
+      <AcquisitionMethodsPanel
+        productKeyword={draft.keyword}
+        countryHint={draft.countries[0] || ''}
+      />
 
       {dialogOpen && (
         <div className="fixed inset-0 z-[80] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-900/50 backdrop-blur-sm">
@@ -766,6 +787,23 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                     </label>
                     <label
                       className={`flex items-start gap-3 ${
+                        draft.doBackgroundCheck ? 'cursor-pointer' : 'opacity-40'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        className="mt-1 rounded border-slate-300"
+                        disabled={!draft.doBackgroundCheck}
+                        checked={draft.doLinkedInLocate}
+                        onChange={(e) => patchDraft({ doLinkedInLocate: e.target.checked })}
+                      />
+                      <span className="text-sm font-bold text-slate-700">
+                        <Users size={14} className="inline mr-1 text-blue-600" />
+                        背调后先定位领英员工并占位（写入决策人序列，暂可不含邮箱）
+                      </span>
+                    </label>
+                    <label
+                      className={`flex items-start gap-3 ${
                         draft.doBackgroundCheck && canDmMine ? 'cursor-pointer' : 'opacity-40'
                       }`}
                     >
@@ -778,7 +816,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                       />
                       <span className="text-sm font-bold text-slate-700">
                         <Users size={14} className="inline mr-1 text-amber-600" />
-                        背调后挖掘决策人邮箱
+                        再挖掘决策人邮箱（优先对领英占位补全）
                         {!canDmMine && (
                           <span className="block text-[11px] text-slate-400 font-bold mt-0.5">
                             当前账号无决策人邮箱搜索权限
@@ -788,7 +826,9 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                     </label>
                     <label
                       className={`flex items-start gap-3 ${
-                        draft.doBackgroundCheck && draft.doDmMine && canCrmImport
+                        draft.doBackgroundCheck &&
+                        (draft.doDmMine || draft.doLinkedInLocate) &&
+                        canCrmImport
                           ? 'cursor-pointer'
                           : 'opacity-40'
                       }`}
@@ -796,13 +836,17 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                       <input
                         type="checkbox"
                         className="mt-1 rounded border-slate-300"
-                        disabled={!draft.doBackgroundCheck || !draft.doDmMine || !canCrmImport}
+                        disabled={
+                          !draft.doBackgroundCheck ||
+                          !(draft.doDmMine || draft.doLinkedInLocate) ||
+                          !canCrmImport
+                        }
                         checked={draft.doCrmImport && canCrmImport}
                         onChange={(e) => patchDraft({ doCrmImport: e.target.checked })}
                       />
                       <span className="text-sm font-bold text-slate-700">
                         <ShieldCheck size={14} className="inline mr-1 text-emerald-600" />
-                        挖掘到有决策人的直接导入 CRM
+                        有决策人（含领英占位）即导入 CRM
                         {!canCrmImport && (
                           <span className="block text-[11px] text-slate-400 font-bold mt-0.5">
                             当前账号无 CRM 模块权限
@@ -846,14 +890,24 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                     },
                     {
                       n: 7,
-                      t: '背调后挖决策人',
-                      v: draft.doBackgroundCheck && draft.doDmMine && canDmMine ? '是 · 后台并行' : '否',
+                      t: '领英员工占位',
+                      v: draft.doBackgroundCheck && draft.doLinkedInLocate
+                        ? '是 · 先写入决策人序列'
+                        : '否',
                     },
                     {
                       n: 8,
+                      t: '再挖决策人邮箱',
+                      v: draft.doBackgroundCheck && draft.doDmMine && canDmMine ? '是 · 后台并行' : '否',
+                    },
+                    {
+                      n: 9,
                       t: '有决策人导入 CRM',
                       v:
-                        draft.doBackgroundCheck && draft.doDmMine && draft.doCrmImport && canCrmImport
+                        draft.doBackgroundCheck &&
+                        draft.doCrmImport &&
+                        canCrmImport &&
+                        (draft.doDmMine || draft.doLinkedInLocate)
                           ? '是'
                           : '否',
                     },

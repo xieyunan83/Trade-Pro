@@ -7,6 +7,7 @@ import {
   subscribeDmEmailSearchJobs,
 } from '../services/dmEmailSearchQueue';
 import { maskEmailAddress, abbreviateEmailPlatform } from '../services/permissions';
+import { locateLinkedInEmployees } from '../services/linkedinEmployeeLocator';
 
 interface ModuleDecisionMakersProps {
   data: AnalysisResult;
@@ -90,6 +91,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
   );
   const [queueMsg, setQueueMsg] = useState('');
   const [jobActive, setJobActive] = useState(false);
+  const [liLocating, setLiLocating] = useState(false);
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
   const [listFilter, setListFilter] = useState<'all' | 'buyer' | 'verified'>('all');
   const lastAppliedJobIdRef = React.useRef<string | null>(null);
@@ -219,6 +221,45 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
     setQueueMsg(`已批量删除 ${count} 位决策人`);
   };
 
+  const handleLocateLinkedIn = async () => {
+    const domain = data.companyInfo?.website || '';
+    const companyName = data.companyInfo?.name || '';
+    if (!domain && !companyName) {
+      setQueueMsg('缺少公司官网或名称，无法定位领英员工。');
+      return;
+    }
+    setLiLocating(true);
+    setQueueMsg('正在公开检索目标公司领英员工并写入占位…');
+    try {
+      const res = await locateLinkedInEmployees({
+        domain,
+        companyName,
+        productKeyword: data.searchKeyword || data.businessScope?.coreProducts?.[0],
+        country: data.searchCountry || data.companyInfo?.headquarters,
+        existing: decisionMakers,
+        maxQueries: 5,
+      });
+      commit(res.decisionMakers);
+      const liCount = res.decisionMakers.filter(
+        (d) => d.source === 'LinkedIn' || /linkedin\.com\/in\//i.test(d.linkedin || '')
+      ).length;
+      if (res.stats.added > 0 || liCount > 0) {
+        setQueueMsg(
+          `领英定位完成：新增占位 ${res.stats.added} 人，列表共 ${res.decisionMakers.length} 人（含领英主页约 ${liCount}）。可继续「深挖邮箱」补联系方式。`
+        );
+      } else {
+        setQueueMsg(
+          '领英定位暂无新增主页。可检查官网域名，或到营销工具用检索公式手动打开后再手工新增。'
+        );
+      }
+    } catch (e: any) {
+      console.error('linkedin locate failed', e);
+      setQueueMsg(e?.message || '领英员工定位失败，请稍后重试');
+    } finally {
+      setLiLocating(false);
+    }
+  };
+
   const handleEnqueueSearch = () => {
     setQueueMsg('');
     if (!canDmEmailSearch) {
@@ -229,9 +270,18 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
       const junk = decisionMakers.filter(
         (d) =>
           !d.emailGuess &&
-          (d.source === 'AI' || d.source === 'AI (Pattern Guess)' || /Company Contact|公开信息未找到|待补充/i.test(`${d.name} ${d.title}`))
+          d.source !== 'LinkedIn' &&
+          !/linkedin\.com\/in\//i.test(d.linkedin || '') &&
+          (d.source === 'AI' ||
+            d.source === 'AI (Pattern Guess)' ||
+            /Company Contact|公开信息未找到|待补充/i.test(`${d.name} ${d.title}`))
       ).length;
-      if (junk > 0 || decisionMakers.length > 8) {
+      const liPlaceholders = decisionMakers.filter(
+        (d) =>
+          !d.emailGuess?.includes('@') &&
+          (d.source === 'LinkedIn' || /linkedin\.com\/in\//i.test(d.linkedin || ''))
+      ).length;
+      if (junk > 0 || (decisionMakers.length > 8 && liPlaceholders === 0)) {
         const ok = window.confirm(
           `当前已有 ${decisionMakers.length} 位决策人（其中约 ${junk} 位疑似无用占位）。\n建议先「清空全部」再搜索，避免旧数据干扰。\n\n仍要在现有列表上继续搜索吗？`
         );
@@ -239,11 +289,13 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
           setQueueMsg('已取消搜索。可先删除或清空无用决策人后再试。');
           return;
         }
+      } else if (liPlaceholders > 0) {
+        setQueueMsg(`将按 ${liPlaceholders} 位领英占位优先补全邮箱…`);
       }
     }
     if (onEnqueueEmailSearch) {
       const res = onEnqueueEmailSearch();
-      setQueueMsg(res.message);
+      setQueueMsg((prev) => (prev ? `${prev} ${res.message}` : res.message));
       return;
     }
     setQueueMsg('无法发起搜索，请联系管理员。');
@@ -351,11 +403,21 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
                 <Trash2 size={16} /> 批量删除 ({selectedIndices.size})
               </button>
             )}
+            <button
+              type="button"
+              onClick={() => void handleLocateLinkedIn()}
+              disabled={liLocating || jobActive}
+              className="inline-flex items-center justify-center gap-2 bg-blue-50 hover:bg-blue-100 border border-blue-200 disabled:opacity-60 text-blue-800 px-4 py-2.5 rounded-xl text-sm font-semibold touch-manipulation shadow-sm"
+              title="公开检索目标公司领英员工主页，写入决策人占位序列，供后续挖邮箱"
+            >
+              {liLocating ? <Loader2 size={16} className="animate-spin" /> : <Linkedin size={16} />}
+              {liLocating ? '定位中…' : '定位领英员工占位'}
+            </button>
             {canDmEmailSearch && (
               <button
                 type="button"
                 onClick={handleEnqueueSearch}
-                disabled={jobActive}
+                disabled={jobActive || liLocating}
                 className="inline-flex items-center justify-center gap-2 bg-cyan-600 hover:bg-cyan-700 disabled:opacity-60 text-white px-4 py-2.5 rounded-xl text-sm font-semibold touch-manipulation shadow-sm"
               >
                 {jobActive ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
@@ -384,9 +446,12 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
           </div>
         </div>
 
+        <div className="mb-4 rounded-2xl border border-blue-100 bg-blue-50/70 px-4 py-3 text-xs font-semibold text-blue-900 leading-relaxed">
+          推荐顺序：先「定位领英员工占位」锁定采购相关主页 → 再「深挖邮箱」按占位序列补联系方式。占位可无邮箱，只要有姓名/职位/主页即可进入目标序列。
+        </div>
         {jobActive && canDmEmailSearch && (
           <div className="mb-4 rounded-2xl border border-cyan-200/80 bg-cyan-50/80 px-4 py-3 text-xs font-semibold text-cyan-900">
-            已在后台按「公司域名 → 补职位/领英」搜索，可切换其它客户继续浏览；完成后可点「再次深挖」按角色补充更多决策人。
+            已在后台按「占位名单 / 公司域名 → 补邮箱与职位」搜索，可切换其它客户继续浏览；完成后可点「再次深挖」补充更多决策人。
           </div>
         )}
 
@@ -590,6 +655,15 @@ const DecisionMakerCard: React.FC<{
         </div>
         <div className="flex flex-col items-end gap-2 flex-shrink-0">
           <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black ${typeBadge(dm.type)}`}>{dm.type}</span>
+          {(dm.source === 'LinkedIn' || /linkedin\.com\/in\//i.test(dm.linkedin || '')) &&
+            !dm.emailGuess?.includes('@') && (
+              <span
+                className="px-2 py-0.5 rounded-lg text-[10px] font-black bg-blue-50 text-blue-700 border border-blue-100"
+                title="领英占位：已锁定主页，待深挖邮箱"
+              >
+                领英占位
+              </span>
+            )}
           {dm.emailGuess ? (
             verify.ok ? (
               <div className="bg-green-100 text-green-600 p-1.5 rounded-lg" title="已验证"><UserCheck size={16} /></div>

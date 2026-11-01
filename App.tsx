@@ -71,6 +71,7 @@ import {
 } from './services/dmSearchPersist';
 import { mergeDecisionMakers } from './services/multiModelMerge';
 import { enqueueDmEmailSearch, type DmEmailSearchJob } from './services/dmEmailSearchQueue';
+import { locateLinkedInEmployees } from './services/linkedinEmployeeLocator';
 import {
   enqueueProductDigBatch,
   setProductDigHistoryResolver,
@@ -1701,8 +1702,8 @@ const App: React.FC = () => {
 
   const persistDecisionMakerResearch = async (patch: {
     decisionMakers: DecisionMaker[];
-    decisionMakerEmailSearchAt: number;
-    decisionMakerEmailSearchHistory: number[];
+    decisionMakerEmailSearchAt?: number;
+    decisionMakerEmailSearchHistory?: number[];
   }, opts?: { historyId?: string | null; domain?: string; companyName?: string }) => {
     const matchId = opts?.historyId ?? viewingHistoryIdRef.current;
     const cleanHost = (url?: string | null) =>
@@ -1734,8 +1735,12 @@ const App: React.FC = () => {
       return {
         ...prev,
         decisionMakers: patch.decisionMakers,
-        decisionMakerEmailSearchAt: patch.decisionMakerEmailSearchAt,
-        decisionMakerEmailSearchHistory: patch.decisionMakerEmailSearchHistory,
+        ...(patch.decisionMakerEmailSearchAt != null
+          ? { decisionMakerEmailSearchAt: patch.decisionMakerEmailSearchAt }
+          : {}),
+        ...(patch.decisionMakerEmailSearchHistory
+          ? { decisionMakerEmailSearchHistory: patch.decisionMakerEmailSearchHistory }
+          : {}),
       };
     });
 
@@ -1765,8 +1770,12 @@ const App: React.FC = () => {
               description: 'N/A',
             },
             decisionMakers: patch.decisionMakers,
-            decisionMakerEmailSearchAt: patch.decisionMakerEmailSearchAt,
-            decisionMakerEmailSearchHistory: patch.decisionMakerEmailSearchHistory,
+            ...(patch.decisionMakerEmailSearchAt != null
+              ? { decisionMakerEmailSearchAt: patch.decisionMakerEmailSearchAt }
+              : {}),
+            ...(patch.decisionMakerEmailSearchHistory
+              ? { decisionMakerEmailSearchHistory: patch.decisionMakerEmailSearchHistory }
+              : {}),
           } as AnalysisResult,
         };
         return updatedItem;
@@ -1776,8 +1785,12 @@ const App: React.FC = () => {
         data: {
           ...h.data,
           decisionMakers: patch.decisionMakers,
-          decisionMakerEmailSearchAt: patch.decisionMakerEmailSearchAt,
-          decisionMakerEmailSearchHistory: patch.decisionMakerEmailSearchHistory,
+          ...(patch.decisionMakerEmailSearchAt != null
+            ? { decisionMakerEmailSearchAt: patch.decisionMakerEmailSearchAt }
+            : {}),
+          ...(patch.decisionMakerEmailSearchHistory
+            ? { decisionMakerEmailSearchHistory: patch.decisionMakerEmailSearchHistory }
+            : {}),
         },
       };
       return updatedItem;
@@ -2495,10 +2508,13 @@ const App: React.FC = () => {
     setCrmClients((prev) => mergeHistoryItemsIntoCrm(prev, [histItem], stampOwnership).clients);
   };
 
-  /** 单条背调（供流水线并行调用）；可选后续挖决策人 / 入 CRM */
+  /** 单条背调（供流水线并行调用）；可选领英占位 → 挖决策人 / 入 CRM */
   const runOneAutomationAnalysis = async (
     task: AutomationResult,
-    opts: Pick<AutomationPipelineConfig, 'doDmMine' | 'doCrmImport' | 'keyword'>
+    opts: Pick<
+      AutomationPipelineConfig,
+      'doLinkedInLocate' | 'doDmMine' | 'doCrmImport' | 'keyword'
+    >
   ) => {
     if (shouldStopRef.current) return;
     const limit = checkLimit('analysis');
@@ -2578,22 +2594,73 @@ const App: React.FC = () => {
       incrementUsage('analysis');
       updateCrmStatus(result);
 
+      let seededDecisionMakers: DecisionMaker[] = result.decisionMakers || [];
+      const domain = result.companyInfo?.website || task.website || '';
+      const companyName = result.companyInfo?.name || task.clientName || domain;
+
+      // 先领英公开定位员工占位，再交给邮箱深挖（目标序列）
+      if (opts.doLinkedInLocate && (domain || companyName)) {
+        try {
+          const located = await locateLinkedInEmployees({
+            domain,
+            companyName,
+            productKeyword: opts.keyword || task.keyword || result.searchKeyword,
+            country: task.country || result.searchCountry,
+            existing: seededDecisionMakers,
+            maxQueries: 4,
+          });
+          if (located.decisionMakers.length) {
+            seededDecisionMakers = located.decisionMakers;
+            await persistDecisionMakerResearch(
+              { decisionMakers: seededDecisionMakers },
+              { historyId: historyId || undefined, domain, companyName }
+            );
+            setAutomationResults((prev) => {
+              void mergeDecisionMakersIntoAutomationTasks(prev, {
+                taskId: task.id,
+                domain,
+                companyName,
+                decisionMakers: seededDecisionMakers,
+                searchedAt: located.searchedAt,
+              }).then((merged) => setAutomationResults(merged));
+              return prev;
+            });
+            // 仅占位、不挖邮箱时：有姓名/主页即可按开关入 CRM
+            if (
+              opts.doCrmImport &&
+              !opts.doDmMine &&
+              seededDecisionMakers.some(
+                (d) =>
+                  !!(d.name || '').trim() ||
+                  /linkedin\.com\/in\//i.test(d.linkedin || '') ||
+                  d.emailGuess?.includes('@')
+              )
+            ) {
+              importAnalysisToCrmFromPipeline({
+                ...result,
+                decisionMakers: seededDecisionMakers,
+              });
+            }
+          }
+        } catch (liErr) {
+          console.warn('[pipeline] linkedin locate skipped', domain, liErr);
+        }
+      }
+
       if (opts.doDmMine && hasPermission(currentUser, 'feature.dm_email_search')) {
-        const domain = result.companyInfo?.website || task.website || '';
-        const companyName = result.companyInfo?.name || task.clientName || domain;
         enqueueDmEmailSearch({
           domain,
           companyName,
           historyId,
           deepDig: true,
           authorized: true,
-          existingDecisionMakers: result.decisionMakers || [],
+          existingDecisionMakers: seededDecisionMakers,
           resolveExisting: () => {
             if (historyId) {
               const item = historyRef.current.find((h) => h.id === historyId);
-              if (item?.data?.decisionMakers) return item.data.decisionMakers;
+              if (item?.data?.decisionMakers?.length) return item.data.decisionMakers;
             }
-            return result.decisionMakers || [];
+            return seededDecisionMakers;
           },
           onComplete: async (job: DmEmailSearchJob) => {
             if (job.status !== 'completed' || !job.resultDecisionMakers || !job.searchedAt) return;
@@ -2761,6 +2828,7 @@ const App: React.FC = () => {
               followUps.push(
                 runLimited(() =>
                   runOneAutomationAnalysis(task, {
+                    doLinkedInLocate: config.doLinkedInLocate,
                     doDmMine: config.doDmMine,
                     doCrmImport: config.doCrmImport,
                     keyword: kw,
@@ -2781,7 +2849,8 @@ const App: React.FC = () => {
       const parts = [`搜索入队 ${searchedCount} 家`];
       if (config.doBackgroundCheck) parts.push('背调已并行处理');
       else parts.push('未开启背调（可点「继续待处理任务」）');
-      if (config.doDmMine) parts.push('决策人挖掘已后台排队');
+      if (config.doLinkedInLocate) parts.push('领英员工已占位写入决策人');
+      if (config.doDmMine) parts.push('决策人邮箱挖掘已后台排队');
       if (config.doCrmImport) parts.push('有决策人将自动入 CRM');
       alert(`自动化流程结束：${parts.join('；')}。`);
     } catch (e: any) {
