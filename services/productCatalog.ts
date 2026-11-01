@@ -21,6 +21,7 @@ import {
   saveProductProfileCloud,
   syncProductProfilesCloud,
 } from './supabase';
+import type { CatalogSku } from './productCatalogTypes';
 
 const domainKey = (raw?: string) =>
   (raw || '')
@@ -1017,6 +1018,68 @@ export const matchOurProductToProfiles = (
   }
 
   return hits.sort((a, b) => b.score - a.score);
+};
+
+/** 我方产品库 SKU → 单一客户画像（背调页「产品匹配」用） */
+export type CatalogSkuClientHit = {
+  sku: CatalogSku;
+  score: number;
+  reasons: string[];
+  matchedCategories: string[];
+  priceOverlap: boolean;
+};
+
+export const matchCatalogSkusToClientProfile = (
+  skus: CatalogSku[],
+  profile: CustomerProductProfile,
+  opts?: { limit?: number; minScore?: number }
+): CatalogSkuClientHit[] => {
+  const minScore = opts?.minScore ?? 22;
+  const limit = opts?.limit ?? 40;
+  const hits: CatalogSkuClientHit[] = [];
+  for (const sku of skus) {
+    const factoryCny =
+      sku.factoryPrice != null && sku.factoryPrice > 0
+        ? sku.currency === 'USD'
+          ? sku.factoryPrice * 7.2
+          : sku.currency === 'EUR'
+            ? sku.factoryPrice * 7.8
+            : sku.factoryPrice
+        : undefined;
+    const packHints = (sku.packing || '')
+      .split(/[,，、/;|]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 4);
+    const colorHints = (sku.colors || '')
+      .split(/[,，、/;|]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 4);
+    const ranked = matchOurProductToProfiles(
+      {
+        name: sku.name || sku.skuCode || '',
+        category: sku.category,
+        priceMinCny: factoryCny,
+        priceMaxCny: factoryCny,
+        packagingHints: packHints.length ? packHints : undefined,
+        colorHints: colorHints.length ? colorHints : undefined,
+        notes: [sku.specs, sku.nameEn].filter(Boolean).join(' '),
+        countries: profile.country ? [profile.country] : undefined,
+      },
+      [profile]
+    );
+    const hit = ranked[0];
+    if (!hit || hit.score < minScore) continue;
+    hits.push({
+      sku,
+      score: hit.score,
+      reasons: hit.reasons,
+      matchedCategories: hit.matchedCategories,
+      priceOverlap: hit.priceOverlap,
+    });
+  }
+  return hits.sort((a, b) => b.score - a.score).slice(0, limit);
 };
 
 /** 内存缓存：避免匹配页每次击键/适市卡都 getAll 两千条画像卡死 UI */

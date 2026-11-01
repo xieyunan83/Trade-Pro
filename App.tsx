@@ -5357,11 +5357,13 @@ const App: React.FC = () => {
                         history={history}
                         crmClients={crmClients}
                         currentUser={currentUser}
+                        focusAnalysis={analysisData}
                         onCrmClientsChange={setCrmClients}
                         onStartDesignFill={handleStartDesignFill}
                         onOpenHistory={loadFromHistory}
                         onGoCrm={() => navigateModule(ModuleType.CLIENT_CRM)}
                         onNavigateModule={navigateModule}
+                        onBackToReport={() => navigateModule(ModuleType.BACKGROUND)}
                     />
                 </ModulePane>
                 <ModulePane id={ModuleType.EMAIL_CAMPAIGN} activeId={activeModule} maxAlive={10}>

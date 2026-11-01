@@ -1,5 +1,5 @@
-import React, { useCallback, useMemo, useState } from 'react';
-import type { Client, HistoryItem, MailGroup, User } from '../types';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import type { AnalysisResult, Client, HistoryItem, MailGroup, User } from '../types';
 import { ModuleType } from '../types';
 import {
   runGtmLaunchPack,
@@ -10,6 +10,14 @@ import {
   type GtmClientMatch,
   type GtmLaunchPack,
 } from '../services/gtmExpertStore';
+import {
+  buildProductProfileFromAnalysis,
+  loadProductCatalog,
+  matchCatalogSkusToClientProfile,
+  type CatalogSkuClientHit,
+  productCatalogDomainKey,
+} from '../services/productCatalog';
+import { loadCatalogSkus } from '../services/productCatalogTypes';
 import { CreativePipelineBar } from './CreativeRefPicker';
 import { CatalogCoveragePanel } from './CatalogCoveragePanel';
 import { DesignConstraintCardPanel } from './DesignConstraintCardPanel';
@@ -26,17 +34,24 @@ import {
   ExternalLink,
   Compass,
   BadgeDollarSign,
+  ArrowLeft,
+  Package,
+  Target,
 } from 'lucide-react';
 
 interface ModuleProductMatchProps {
   history: HistoryItem[];
   crmClients: Client[];
   currentUser?: User;
+  /** 当前打开的背调报告：有则进入「对该客户匹配我方产品」模式 */
+  focusAnalysis?: AnalysisResult | null;
   onCrmClientsChange?: (clients: Client[]) => void;
   onStartDesignFill?: (blankClients: Client[]) => void;
   onOpenHistory?: (item: HistoryItem) => void;
   onGoCrm?: () => void;
   onNavigateModule?: (mod: ModuleType) => void;
+  /** 返回当前客户背调 */
+  onBackToReport?: () => void;
 }
 
 const copyText = async (text: string) => {
@@ -107,12 +122,18 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
   history,
   crmClients,
   currentUser,
+  focusAnalysis = null,
   onCrmClientsChange,
   onStartDesignFill,
   onOpenHistory,
   onGoCrm,
   onNavigateModule,
+  onBackToReport,
 }) => {
+  const focusCompany = (focusAnalysis?.companyInfo?.name || '').trim();
+  const focusWebsite = (focusAnalysis?.companyInfo?.website || '').trim();
+  const clientMode = !!(focusCompany || focusWebsite);
+
   const suggested = useMemo(() => suggestGtmInputFromCreative(), []);
   const formInitial = useMemo<MatchFormValues>(
     () => ({
@@ -129,12 +150,79 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [pack, setPack] = useState<GtmLaunchPack | null>(() => loadGtmLaunchPacks()[0] || null);
   const [expandedMail, setExpandedMail] = useState<string | null>(null);
+  const [clientHits, setClientHits] = useState<CatalogSkuClientHit[]>([]);
+  const [clientBusy, setClientBusy] = useState(false);
+  const [clientError, setClientError] = useState<string | null>(null);
+  const [clientMeta, setClientMeta] = useState<{ quality: number; skuCount: number } | null>(
+    null
+  );
+  /** 背调上下文中也可切到「新品找客户」全库模式 */
+  const [forceLaunchMode, setForceLaunchMode] = useState(false);
+  const showClientMatch = clientMode && !forceLaunchMode;
 
   const openHistoryFor = (m: GtmClientMatch) => {
     if (!m.historyId || !onOpenHistory) return;
     const item = history.find((h) => h.id === m.historyId);
     if (item) onOpenHistory(item);
   };
+
+  const runClientMatch = useCallback(async () => {
+    if (!focusAnalysis) return;
+    setClientBusy(true);
+    setClientError(null);
+    try {
+      const built = buildProductProfileFromAnalysis(focusAnalysis);
+      const domain = productCatalogDomainKey(focusWebsite);
+      const stored = await loadProductCatalog();
+      const fromStore =
+        stored.find(
+          (p) =>
+            (domain && productCatalogDomainKey(p.website) === domain) ||
+            (focusCompany &&
+              (p.companyName || '').toLowerCase() === focusCompany.toLowerCase())
+        ) || null;
+      const profile =
+        fromStore && (fromStore.catalogQuality || 0) >= (built?.catalogQuality || 0)
+          ? fromStore
+          : built || fromStore;
+      if (!profile) {
+        setClientHits([]);
+        setClientMeta(null);
+        setClientError('当前客户尚无可用产品画像，请先完成背调或产品深挖。');
+        return;
+      }
+      const ourSkus = loadCatalogSkus();
+      setClientMeta({
+        quality: profile.catalogQuality || 0,
+        skuCount: ourSkus.length,
+      });
+      if (!ourSkus.length) {
+        setClientHits([]);
+        setClientError('产品库暂无 SKU。请先在「产品库」导入或录入，再回来匹配。');
+        return;
+      }
+      const hits = matchCatalogSkusToClientProfile(ourSkus, profile, {
+        limit: 40,
+        minScore: 22,
+      });
+      setClientHits(hits);
+      if (!hits.length) {
+        setClientError(
+          '暂无足够匹配的我方产品。可补充产品库品类，或对该客户做产品深挖后再试。'
+        );
+      }
+    } catch (e: unknown) {
+      setClientError(e instanceof Error ? e.message : '匹配失败，请稍后重试');
+      setClientHits([]);
+    } finally {
+      setClientBusy(false);
+    }
+  }, [focusAnalysis, focusCompany, focusWebsite]);
+
+  useEffect(() => {
+    if (!showClientMatch) return;
+    void runClientMatch();
+  }, [showClientMatch, focusCompany, focusWebsite, runClientMatch]);
 
   const run = useCallback(
     async (values: MatchFormValues) => {
@@ -175,19 +263,202 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
     [crmClients, history]
   );
 
+  if (showClientMatch) {
+    return (
+      <div className="space-y-6 animate-fade-in max-w-6xl mx-auto">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {onBackToReport && (
+              <button
+                type="button"
+                onClick={onBackToReport}
+                className="inline-flex items-center gap-1.5 text-[11px] font-black text-slate-600 hover:text-slate-900"
+              >
+                <ArrowLeft size={14} /> 返回背调
+              </button>
+            )}
+            {onNavigateModule && (
+              <button
+                type="button"
+                onClick={() => onNavigateModule(ModuleType.PRODUCTS)}
+                className="text-[11px] font-bold text-cyan-700 hover:underline"
+              >
+                查看该客户产品分析
+              </button>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setForceLaunchMode(true)}
+            className="text-[11px] font-bold text-slate-400 hover:text-slate-700"
+          >
+            切换：新品找客户
+          </button>
+        </div>
+
+        <div className="bg-white rounded-3xl border border-emerald-100 shadow-sm p-6 space-y-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-slate-900 font-black text-xl">
+                <Target className="text-emerald-600" size={22} />
+                对本客户匹配我方产品
+              </div>
+              <p className="text-sm text-slate-500 font-medium mt-1 leading-relaxed">
+                基于「{focusCompany || focusWebsite}」背调入库的在售/采购画像，从产品库挑选适合开发的
+                SKU。
+              </p>
+              {focusWebsite && (
+                <div className="text-xs font-bold text-blue-600 mt-1 truncate">{focusWebsite}</div>
+              )}
+            </div>
+            <button
+              type="button"
+              disabled={clientBusy}
+              onClick={() => void runClientMatch()}
+              className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-4 py-2.5 text-sm font-black"
+            >
+              {clientBusy ? <Loader2 size={16} className="animate-spin" /> : <Package size={16} />}
+              {clientBusy ? '匹配中…' : '重新匹配'}
+            </button>
+          </div>
+          {clientMeta && (
+            <div className="flex flex-wrap gap-2 text-[10px] font-black">
+              <span className="rounded-full bg-emerald-50 text-emerald-800 border border-emerald-100 px-2.5 py-1">
+                客户画像完整度 {clientMeta.quality}
+              </span>
+              <span className="rounded-full bg-slate-50 text-slate-600 border border-slate-200 px-2.5 py-1">
+                我方 SKU {clientMeta.skuCount}
+              </span>
+              <span className="rounded-full bg-cyan-50 text-cyan-800 border border-cyan-100 px-2.5 py-1">
+                命中 {clientHits.length}
+              </span>
+            </div>
+          )}
+          {clientError && (
+            <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800">
+              {clientError}
+            </div>
+          )}
+        </div>
+
+        <section className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-2">
+            <h3 className="font-black text-slate-800 flex items-center gap-2">
+              <Package size={16} className="text-emerald-600" />
+              推荐我方产品 {clientHits.length ? `(${clientHits.length})` : ''}
+            </h3>
+            <span className="text-[10px] font-bold text-slate-400">按该客户画像打分 · 可追溯理由</span>
+          </div>
+          {clientBusy && !clientHits.length ? (
+            <div className="p-10 flex items-center justify-center gap-2 text-slate-400 text-sm font-bold">
+              <Loader2 className="animate-spin text-emerald-600" size={18} /> 正在对照客户画像…
+            </div>
+          ) : !clientHits.length ? (
+            <div className="p-10 text-center text-slate-400 font-bold text-sm">
+              暂无命中。可先完善产品库，或返回背调补充品类后再匹配。
+            </div>
+          ) : (
+            <ul className="divide-y divide-slate-100">
+              {clientHits.map((h) => (
+                <li key={h.sku.id} className="p-5 flex flex-wrap gap-4">
+                  {h.sku.images?.[0] ? (
+                    <img
+                      src={h.sku.images[0]}
+                      alt=""
+                      className="w-16 h-16 rounded-xl object-cover border border-slate-100 bg-slate-50 shrink-0"
+                    />
+                  ) : (
+                    <div className="w-16 h-16 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-300 shrink-0">
+                      <Package size={22} />
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-black text-slate-900">{h.sku.name}</span>
+                      {h.sku.skuCode && (
+                        <span className="text-[10px] font-bold text-slate-400">#{h.sku.skuCode}</span>
+                      )}
+                      <span
+                        className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
+                          h.score >= 70
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : h.score >= 40
+                              ? 'bg-amber-100 text-amber-800'
+                              : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        匹配度 {h.score}
+                      </span>
+                      {h.priceOverlap && (
+                        <span className="text-[10px] font-black text-teal-700 bg-teal-50 px-2 py-0.5 rounded-full">
+                          价带重叠
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs text-slate-500 font-bold mt-0.5">
+                      {h.sku.category || '未分类'}
+                      {h.sku.factoryPrice != null
+                        ? ` · 出厂 ${h.sku.currency || 'CNY'} ${h.sku.factoryPrice}`
+                        : ''}
+                    </div>
+                    <ul className="mt-2 space-y-0.5">
+                      {h.reasons.map((r) => (
+                        <li key={r} className="text-xs text-slate-500 font-medium">
+                          · {r}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        {onNavigateModule && (
+          <div className="flex flex-wrap gap-3 text-[11px] font-bold">
+            <button
+              type="button"
+              onClick={() => onNavigateModule(ModuleType.PRODUCT_CATALOG)}
+              className="text-violet-700 hover:underline"
+            >
+              去产品库补充 SKU
+            </button>
+            {onBackToReport && (
+              <button type="button" onClick={onBackToReport} className="text-slate-500 hover:underline">
+                返回该客户背调报告
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6 animate-fade-in max-w-6xl mx-auto">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <CreativePipelineBar current="match" onNavigate={onNavigateModule} />
-        {onNavigateModule && (
-          <button
-            type="button"
-            onClick={() => onNavigateModule(ModuleType.PRODUCT_DESIGN_2D)}
-            className="text-[11px] font-bold text-violet-700 hover:underline"
-          >
-            回平面设计补充视觉
-          </button>
-        )}
+        <div className="flex flex-wrap items-center gap-3">
+          {clientMode && forceLaunchMode && (
+            <button
+              type="button"
+              onClick={() => setForceLaunchMode(false)}
+              className="text-[11px] font-bold text-emerald-700 hover:underline"
+            >
+              回到「{focusCompany || '当前客户'}」匹配
+            </button>
+          )}
+          {onNavigateModule && (
+            <button
+              type="button"
+              onClick={() => onNavigateModule(ModuleType.PRODUCT_DESIGN_2D)}
+              className="text-[11px] font-bold text-violet-700 hover:underline"
+            >
+              回平面设计补充视觉
+            </button>
+          )}
+        </div>
       </div>
 
       <MatchInputForm
