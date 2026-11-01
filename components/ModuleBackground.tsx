@@ -130,7 +130,7 @@ export const ModuleBackground: React.FC<ModuleBackgroundProps> = ({
           />
         </div>
         {evidenceItems.length > 0 ? (
-          <ul className="space-y-2 max-h-64 overflow-auto pr-1">
+          <ul className="space-y-2 max-h-96 overflow-auto pr-1">
             {evidenceItems.map((item) => (
               <li
                 key={item.url}

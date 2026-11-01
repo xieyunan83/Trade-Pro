@@ -78,15 +78,42 @@ export const mergeEvidenceItems = (...lists: EvidenceItem[][]): EvidenceItem[] =
       });
     }
   }
-  return [...map.values()].slice(0, 24);
+  return [...map.values()].slice(0, 36);
+};
+
+/** 按域名补一批常见公开页，避免证据链只剩「官网」一条 */
+export const seedDomainEvidenceItems = (
+  domainOrUrl: string,
+  source: EvidenceItem['source'] = 'official'
+): EvidenceItem[] => {
+  const raw = (domainOrUrl || '').trim();
+  if (!raw || raw === 'N/A') return [];
+  let host = raw.replace(/^https?:\/\//i, '').replace(/^www\./i, '').split('/')[0].toLowerCase();
+  if (!host.includes('.') || /\s/.test(host)) return [];
+  const paths = [
+    { path: '', title: `官方网站 ${host}`, confidence: 0.9 },
+    { path: '/about', title: `${host}/about`, confidence: 0.72 },
+    { path: '/contact', title: `${host}/contact`, confidence: 0.72 },
+    { path: '/products', title: `${host}/products`, confidence: 0.7 },
+    { path: '/shop', title: `${host}/shop`, confidence: 0.7 },
+    { path: '/catalog', title: `${host}/catalog`, confidence: 0.68 },
+    { path: '/collections', title: `${host}/collections`, confidence: 0.68 },
+    { path: '/wholesale', title: `${host}/wholesale`, confidence: 0.65 },
+    { path: '/company', title: `${host}/company`, confidence: 0.65 },
+  ];
+  return paths.map((p) => ({
+    title: p.title,
+    url: p.path ? `https://${host}${p.path}` : `https://${host}`,
+    source,
+    confidence: p.confidence,
+  }));
 };
 
 export const buildFallbackEvidenceFromReport = (data: AnalysisResult): EvidenceItem[] => {
   const items: EvidenceItem[] = [];
   const site = (data.companyInfo?.website || '').trim();
   if (site && site !== 'N/A') {
-    const url = /^https?:\/\//i.test(site) ? site : `https://${site}`;
-    items.push({ title: '官方网站', url, source: 'official', confidence: 0.9 });
+    items.push(...seedDomainEvidenceItems(site, 'official'));
   }
   const socials = data.socials || {};
   for (const [label, raw] of Object.entries(socials)) {

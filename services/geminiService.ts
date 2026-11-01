@@ -79,6 +79,7 @@ import {
   mergeEvidenceItems,
   parseEvidenceItemsFromText,
   scoreEvidenceConfidence,
+  seedDomainEvidenceItems,
   summarizeEvidence,
 } from '../utils/evidenceChain';
 import { normalizeAnalysisResult } from './analysisNormalize';
@@ -3712,14 +3713,23 @@ ${productFocusBlock}
   // 3. 背调阶段不调用 Anymail、不自动生成开发信（开发信由用户在策略模块按需手动生成）
   result.decisionMakers = rankDecisionMakers(result.decisionMakers);
 
-  // 4. 证据链：检索链接 + 官网/社媒回退
+  // 4. 证据链：检索链接 + 域名常见页种子 + 官网/社媒回退（禁止只剩 1 条官网）
   const evidenceChain = mergeEvidenceItems(
     collectedEvidenceItems,
+    hasDomain ? seedDomainEvidenceItems(canonicalDomain, 'official') : [],
     buildFallbackEvidenceFromReport(result)
   );
   result.evidenceChain = evidenceChain;
   result.evidenceConfidence = scoreEvidenceConfidence(result, evidenceChain);
   result.evidenceSummary = summarizeEvidence(evidenceChain, result.evidenceConfidence);
+  if (evidenceChain.length < 3) {
+    console.warn('[analyzeCompany] thin evidence chain', {
+      n: evidenceChain.length,
+      domain: canonicalDomain,
+      collected: collectedEvidenceItems.length,
+      identityChars: identityEvidence.length,
+    });
+  }
 
   let normalized = normalizeAnalysisResult(result);
 
@@ -4414,6 +4424,7 @@ export const digProductIntelligence = async (
   const companyName = existing?.companyInfo?.name || rawInput;
 
   let productEvidence = '';
+  let digEvidenceItems: Array<{ title?: string; url?: string; content?: string; score?: number }> = [];
   if (hasDomain) {
     try {
       const tavilyBundle = await gatherTavilyCompanyEvidenceBundle({
@@ -4424,6 +4435,7 @@ export const digProductIntelligence = async (
       });
       // 控制体量：过大证据会把 /api/qwen 请求打到边缘，加重代理压力
       productEvidence = String(tavilyBundle.text || '').slice(0, 8_000);
+      digEvidenceItems = tavilyBundle.items || [];
     } catch (e) {
       console.warn('[digProductIntelligence] Tavily skipped', e);
     }
@@ -4677,6 +4689,16 @@ Output JSON only:
     financials: base.financials,
     socials: base.socials,
   };
+
+  const digChain = mergeEvidenceItems(
+    merged.evidenceChain || [],
+    evidenceItemsFromTavilyResults(digEvidenceItems),
+    hasDomain ? seedDomainEvidenceItems(canonicalDomain, 'tavily') : [],
+    buildFallbackEvidenceFromReport(merged)
+  );
+  merged.evidenceChain = digChain;
+  merged.evidenceConfidence = scoreEvidenceConfidence(merged, digChain);
+  merged.evidenceSummary = summarizeEvidence(digChain, merged.evidenceConfidence);
 
   if (searchKeyword && merged.products?.length) {
     const tokens = searchKeyword

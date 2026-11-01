@@ -444,8 +444,32 @@ export const gatherTavilyCompanyEvidenceBundle = async (opts: {
   const seenUrls = new Set<string>();
   let topUrls: string[] = [];
   const querySlice = queries.slice(0, 5);
+
+  // 先写入官网与常见路径，避免检索额度耗尽时证据链只剩空包
+  const official = `https://${domain}`;
+  const seedPaths = [
+    '',
+    '/about',
+    '/contact',
+    '/products',
+    '/shop',
+    '/catalog',
+    '/collections',
+    '/company',
+    '/wholesale',
+  ];
+  for (const path of seedPaths) {
+    const url = path ? `https://${domain}${path}` : official;
+    if (seenUrls.has(url)) continue;
+    seenUrls.add(url);
+    items.push({
+      title: path ? `${domain}${path}` : `官方网站 ${domain}`,
+      url,
+    });
+  }
+
   const runCompanyQuery = async (q: string) => {
-    const data = await tavilySearch(q, { maxResults: 6, searchDepth: 'basic', includeAnswer: true });
+    const data = await tavilySearch(q, { maxResults: 8, searchDepth: 'basic', includeAnswer: true });
     const block = formatTavilyEvidence(data, `TAVILY:${q.slice(0, 40)}`);
     if (block) chunks.push(block);
     for (const r of data.results || []) {
@@ -459,26 +483,30 @@ export const gatherTavilyCompanyEvidenceBundle = async (opts: {
           score: typeof r.score === 'number' ? r.score : undefined,
         });
       }
-      if (url && /https?:\/\//i.test(url) && topUrls.length < 3) {
+      if (url && /https?:\/\//i.test(url) && topUrls.length < 5) {
         if (!topUrls.includes(url)) topUrls.push(url);
       }
     }
   };
 
-  const settled = await Promise.allSettled(querySlice.map((q) => runCompanyQuery(q)));
-  for (let i = 0; i < settled.length; i++) {
-    const s = settled[i];
-    if (s.status === 'rejected') {
+  // 并发限 2：降低 Key 池瞬时打满；耗尽时保留已采结果，绝不整包清空
+  let poolExhausted = false;
+  for (let i = 0; i < querySlice.length; i += 2) {
+    if (poolExhausted) break;
+    const batch = querySlice.slice(i, i + 2);
+    const settled = await Promise.allSettled(batch.map((q) => runCompanyQuery(q)));
+    settled.forEach((s, idx) => {
+      if (s.status !== 'rejected') return;
       const msg = String((s.reason as any)?.message || s.reason);
       if (msg.includes('TAVILY_POOL_EXHAUSTED')) {
-        console.warn('[tavily] pool exhausted, fall back to Qwen web search');
-        return { text: '', items: [] };
+        poolExhausted = true;
+        console.warn('[tavily] pool exhausted — keeping partial company evidence');
+      } else {
+        console.warn('[tavily] company search failed', batch[idx], s.reason);
       }
-      console.warn('[tavily] company search failed', querySlice[i], s.reason);
-    }
+    });
   }
 
-  const official = `https://${domain}`;
   // 优先抽取商品相关路径
   const productPathHints = [
     '/shop',
@@ -491,33 +519,38 @@ export const gatherTavilyCompanyEvidenceBundle = async (opts: {
     '/category',
     '/categories',
     '/department',
+    '/about',
+    '/contact',
   ];
   const productish = [...seenUrls].filter((u) =>
     productPathHints.some((h) => u.toLowerCase().includes(h))
   );
-  topUrls = [...new Set([official, ...productish, ...topUrls])].slice(0, 6);
-  if (!seenUrls.has(official)) {
-    seenUrls.add(official);
-    items.unshift({ title: `官方网站 ${domain}`, url: official });
-  }
-  try {
-    const extracted = await tavilyExtract(topUrls);
-    const results = extracted?.results || extracted?.data || [];
-    if (Array.isArray(results) && results.length) {
-      const parts = results
-        .map((r: any) => {
-          const url = r.url || '';
-          const raw = String(r.raw_content || r.content || r.text || '').slice(0, 3200);
-          return raw ? `EXTRACT ${url}:\n${raw}` : '';
-        })
-        .filter(Boolean);
-      if (parts.length) chunks.push(`=== TAVILY EXTRACT (prefer product/catalog pages) ===\n${parts.join('\n\n')}\n=== END EXTRACT ===`);
+  topUrls = [...new Set([official, ...productish, ...topUrls])].slice(0, 8);
+  if (!poolExhausted) {
+    try {
+      const extracted = await tavilyExtract(topUrls);
+      const results = extracted?.results || extracted?.data || [];
+      if (Array.isArray(results) && results.length) {
+        const parts = results
+          .map((r: any) => {
+            const url = r.url || '';
+            const raw = String(r.raw_content || r.content || r.text || '').slice(0, 3200);
+            return raw ? `EXTRACT ${url}:\n${raw}` : '';
+          })
+          .filter(Boolean);
+        if (parts.length) {
+          chunks.push(
+            `=== TAVILY EXTRACT (prefer product/catalog pages) ===\n${parts.join('\n\n')}\n=== END EXTRACT ===`
+          );
+        }
+      }
+    } catch (e) {
+      if (String((e as any)?.message || e).includes('TAVILY_POOL_EXHAUSTED')) {
+        console.warn('[tavily] extract pool exhausted — keeping search evidence');
+      } else {
+        console.warn('[tavily] extract skipped', e);
+      }
     }
-  } catch (e) {
-    if (String((e as any)?.message || e).includes('TAVILY_POOL_EXHAUSTED')) {
-      return { text: chunks.join('\n\n').slice(0, MAX_EVIDENCE_CHARS), items };
-    }
-    console.warn('[tavily] extract skipped', e);
   }
 
   return { text: chunks.join('\n\n').slice(0, MAX_EVIDENCE_CHARS), items };

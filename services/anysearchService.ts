@@ -203,6 +203,21 @@ export const gatherIdentityEvidence = async (
 
   if (!parts.length) return '';
 
+  // 附带可解析 URL 清单，供证据链从正文正则提取（提取页本身往往不含链接）
+  const urlIndex = [
+    siteWww,
+    site,
+    `${siteWww}/about`,
+    `${site}/about`,
+    `${siteWww}/contact`,
+    `${site}/contact`,
+    `${siteWww}/products`,
+    `${site}/products`,
+    `${siteWww}/shop`,
+    `${site}/shop`,
+  ];
+  parts.push(`## Source URLs\n${urlIndex.map((u) => `- ${u}`).join('\n')}`);
+
   const evidence = [
     `ANYSEARCH IDENTITY EVIDENCE for domain ${clean} (trust official site extract over third-party snippets; never mix same-name brands in other countries):`,
     ...parts,
