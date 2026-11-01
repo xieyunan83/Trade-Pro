@@ -71,7 +71,10 @@ import {
 } from './services/dmSearchPersist';
 import { mergeDecisionMakers } from './services/multiModelMerge';
 import { enqueueDmEmailSearch, type DmEmailSearchJob } from './services/dmEmailSearchQueue';
-import { locateLinkedInEmployees } from './services/linkedinEmployeeLocator';
+import {
+  gatherSilentCompanyChannelIntel,
+  mergeSilentIntelIntoAnalysis,
+} from './services/silentAcquisitionEngine';
 import {
   startNightSilentUpgrade,
   stopNightSilentUpgrade,
@@ -2686,38 +2689,53 @@ const App: React.FC = () => {
       incrementUsage('analysis');
       updateCrmStatus(result);
 
+      let enrichedResult = result;
       let seededDecisionMakers: DecisionMaker[] = result.decisionMakers || [];
       const domain = result.companyInfo?.website || task.website || '';
       const companyName = result.companyInfo?.name || task.clientName || domain;
 
-      // 背调后静默补全公司联系人（姓名/职位/主页），再按需挖邮箱
+      // 背调后静默四通道补全（联系人 + 社媒主页），用户无感知
       if (opts.doLinkedInLocate && (domain || companyName)) {
         try {
-          const located = await locateLinkedInEmployees({
+          const intel = await gatherSilentCompanyChannelIntel({
             domain,
             companyName,
             productKeyword: opts.keyword || task.keyword || result.searchKeyword,
             country: task.country || result.searchCountry,
-            existing: seededDecisionMakers,
-            maxQueries: 4,
+            existingDecisionMakers: seededDecisionMakers,
           });
-          if (located.decisionMakers.length) {
-            seededDecisionMakers = located.decisionMakers;
+          enrichedResult = mergeSilentIntelIntoAnalysis(result, intel);
+          seededDecisionMakers = enrichedResult.decisionMakers || [];
+          if (seededDecisionMakers.length || intel.socials.facebook || intel.socials.linkedin) {
             await persistDecisionMakerResearch(
               { decisionMakers: seededDecisionMakers },
               { historyId: historyId || undefined, domain, companyName }
             );
+            // 回写含社媒的报告
+            if (historyId) {
+              const histItem = historyRef.current.find((h) => h.id === historyId);
+              if (histItem?.data) {
+                const nextHist = {
+                  ...histItem,
+                  data: { ...enrichedResult, decisionMakers: seededDecisionMakers },
+                };
+                historyRef.current = historyRef.current.map((h) =>
+                  h.id === historyId ? nextHist : h
+                );
+                setHistory(historyRef.current);
+                void persistHistoryItem(nextHist).catch(() => undefined);
+              }
+            }
             setAutomationResults((prev) => {
               void mergeDecisionMakersIntoAutomationTasks(prev, {
                 taskId: task.id,
                 domain,
                 companyName,
                 decisionMakers: seededDecisionMakers,
-                searchedAt: located.searchedAt,
+                searchedAt: Date.now(),
               }).then((merged) => setAutomationResults(merged));
               return prev;
             });
-            // 仅占位、不挖邮箱时：有姓名/主页即可按开关入 CRM
             if (
               opts.doCrmImport &&
               !opts.doDmMine &&
@@ -2729,13 +2747,13 @@ const App: React.FC = () => {
               )
             ) {
               importAnalysisToCrmFromPipeline({
-                ...result,
+                ...enrichedResult,
                 decisionMakers: seededDecisionMakers,
               });
             }
           }
         } catch (liErr) {
-          console.warn('[pipeline] linkedin locate skipped', domain, liErr);
+          console.warn('[pipeline] silent channel intel skipped', domain, liErr);
         }
       }
 
@@ -2787,7 +2805,7 @@ const App: React.FC = () => {
               job.resultDecisionMakers.some((d) => d.name || d.emailGuess?.includes('@'))
             ) {
               importAnalysisToCrmFromPipeline({
-                ...result,
+                ...enrichedResult,
                 decisionMakers: job.resultDecisionMakers,
                 decisionMakerEmailSearchAt: job.searchedAt,
               });
@@ -3097,27 +3115,31 @@ const App: React.FC = () => {
               console.error('批量结果写入历史失败，但任务队列已保存', histErr);
             }
 
-            // 背调完成后静默补全公司联系人（不暴露前台开关）
+            // 背调后静默四通道补全（联系人 + 社媒），用户无感知
             try {
               const domain = result.companyInfo?.website || task.website || '';
               const companyName = result.companyInfo?.name || task.clientName || domain;
               if (domain || companyName) {
-                const located = await locateLinkedInEmployees({
+                const intel = await gatherSilentCompanyChannelIntel({
                   domain,
                   companyName,
                   productKeyword: kw || task.keyword || result.searchKeyword,
                   country: task.country || result.searchCountry,
-                  existing: result.decisionMakers || [],
-                  maxQueries: 3,
+                  existingDecisionMakers: result.decisionMakers || [],
                 });
-                if (located.decisionMakers.length) {
+                const mergedAnalysis = mergeSilentIntelIntoAnalysis(result, intel);
+                if (
+                  intel.decisionMakers.length ||
+                  intel.socials.facebook ||
+                  intel.socials.linkedin
+                ) {
                   await persistDecisionMakerResearch(
-                    { decisionMakers: located.decisionMakers },
+                    { decisionMakers: mergedAnalysis.decisionMakers || [] },
                     { historyId: histId, domain, companyName }
                   );
                   const withContacts: AutomationResult = {
                     ...completedTask,
-                    analysis: { ...result, decisionMakers: located.decisionMakers },
+                    analysis: mergedAnalysis,
                   };
                   batchSeedByIdRef.current.set(task.id, withContacts);
                   syncAutomationResults((prev) =>
@@ -3127,7 +3149,7 @@ const App: React.FC = () => {
                 }
               }
             } catch (seedErr) {
-              console.warn('[batch] silent contact seed skipped', seedErr);
+              console.warn('[batch] silent channel intel skipped', seedErr);
             }
 
             incrementUsage('analysis');

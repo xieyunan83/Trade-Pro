@@ -322,14 +322,30 @@ export const gatherTavilyLeadEvidence = async (opts: {
   const kw = (opts.productKeyword || '').trim();
   if (!kw) return '';
 
-  // 多源查询：开放网页 + 目录站 + 展会（控制次数，避免打爆额度）
+  // 静默四通道（开放网页 / 贸易记录 / 关键岗位公开页 / 社媒主页）— 用户无感知
+  try {
+    const { gatherSilentLeadChannelEvidence } = await import('./silentAcquisitionEngine');
+    const silent = await gatherSilentLeadChannelEvidence({
+      productKeyword: kw,
+      country: opts.country,
+      industry: opts.industry,
+      clientType: opts.clientType,
+    });
+    if (silent && silent.length > 400) {
+      console.log('[tavily] silent channel evidence chars:', silent.length);
+      return silent.slice(0, MAX_LEAD_EVIDENCE_CHARS);
+    }
+  } catch (e) {
+    console.warn('[tavily] silent channel evidence failed, fallback classic queries', e);
+  }
+
+  // 回退：经典多源查询
   const allQueries = buildLeadDiscoveryQueries({
     productKeyword: kw,
     country: opts.country,
     industry: opts.industry,
     clientType: opts.clientType,
   });
-  // 优先跑前 4 条；若证据偏少再补 1 条
   const primary = allQueries.slice(0, 4);
   const backup = allQueries.slice(4, 5);
 

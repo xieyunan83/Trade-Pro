@@ -145,10 +145,12 @@ export const buildLeadDiscoveryQueries = (opts: LeadSearchInput): string[] => {
 
 /** 给模型的证据使用说明（追加在 prompt 末尾） */
 export const LEAD_EVIDENCE_USAGE_HINT = `
-MULTI-SOURCE EXTRACTION RULES (when directory / exhibition / yellow-page evidence is present):
+MULTI-SOURCE EXTRACTION RULES (when directory / exhibition / yellow-page / trade-record / social evidence is present):
 1) Prefer real company names + official websites extracted from directory listings, association member lists, and trade-show exhibitor pages.
 2) A directory page that lists multiple companies can yield MULTIPLE leads — extract as many distinct buyers as the evidence supports (up to the ask limit).
 3) Skip marketplace seller pages that are clearly Chinese exporters only (Alibaba storefronts of Chinese factories) unless they are overseas importers/distributors.
 4) Still enforce TARGET MARKET + PRODUCT fit. Do not invent domains.
 5) PRODUCT FIT GATE: Never extract a company whose core business is a different category than the product keyword (e.g. food supermarket for "car toy"). Prefer omitting over returning a mismatch.
+6) TRADE_RECORD_HITS / customs-like snippets: treat as candidate importers with real shipment history; still verify product fit; do not invent emails.
+7) LinkedIn/Facebook public pages in evidence: use to confirm company identity and buyer type; never invent person names not present in evidence.
 `.trim();

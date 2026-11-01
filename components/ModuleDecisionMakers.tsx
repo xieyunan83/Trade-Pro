@@ -7,7 +7,10 @@ import {
   subscribeDmEmailSearchJobs,
 } from '../services/dmEmailSearchQueue';
 import { maskEmailAddress, abbreviateEmailPlatform } from '../services/permissions';
-import { locateLinkedInEmployees } from '../services/linkedinEmployeeLocator';
+import {
+  gatherSilentCompanyChannelIntel,
+  mergeSilentIntelIntoAnalysis,
+} from '../services/silentAcquisitionEngine';
 
 interface ModuleDecisionMakersProps {
   data: AnalysisResult;
@@ -250,19 +253,20 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
     setBootstrapping(true);
     void (async () => {
       try {
-        const res = await locateLinkedInEmployees({
+        const intel = await gatherSilentCompanyChannelIntel({
           domain,
           companyName,
           productKeyword: data.searchKeyword || data.businessScope?.coreProducts?.[0],
           country: data.searchCountry || data.companyInfo?.headquarters,
-          existing,
-          maxQueries: 4,
+          existingDecisionMakers: existing,
         });
         if (cancelled) return;
-        if (res.decisionMakers.length > existing.length || res.stats.added > 0) {
-          commit(res.decisionMakers);
+        const merged = mergeSilentIntelIntoAnalysis(data, intel);
+        const nextDms = (merged.decisionMakers || []).filter(isUsableDecisionMaker);
+        if (nextDms.length > existing.length) {
+          commit(nextDms);
           setQueueMsg(
-            `已展示 ${res.decisionMakers.length} 位公司联系人（可先查看姓名/职位/主页；邮箱请点「搜索决策人邮箱」补全）`
+            `已展示 ${nextDms.length} 位公司联系人（可先查看公开信息；邮箱请点「搜索决策人邮箱」补全）`
           );
         }
       } catch (e) {
