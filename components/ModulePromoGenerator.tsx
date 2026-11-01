@@ -36,7 +36,11 @@ import { IndustryMultiSelect } from './IndustryMultiSelect';
 import { PaginationBar } from './PaginationBar';
 import { maskEmailAddress } from '../services/permissions';
 import { DmStatusChip } from './DmStatusChip';
-import { buildPromoListRows, type PromoListRow } from '../utils/promoListRows';
+import {
+  buildPromoListRows,
+  summarizePromoCrmAlignment,
+  type PromoListRow,
+} from '../utils/promoListRows';
 import {
   ACQUISITION_PLAYBOOKS,
   applyPlaybook,
@@ -203,9 +207,15 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
     [automationResults, crmClients, history]
   );
 
-  const completedCount = automationResults.filter((r) => r.status === 'completed' && r.analysis).length;
-  const crmOnlyCount = allRows.filter((r) => r.source === 'crm').length;
-  const inCrmOnListCount = allRows.filter((r) => r.intel.inCrm).length;
+  const alignStats = useMemo(
+    () => summarizePromoCrmAlignment(allRows, crmClients),
+    [allRows, crmClients]
+  );
+  const completedCount = alignStats.completedWithReport;
+  const crmOnlyCount = alignStats.crmOnlyRowCount;
+  /** 队列行「已挂上正式客户」的条数（可因同域名多任务 > 正式客户数） */
+  const inCrmOnListCount = alignStats.queueLinkedTaskCount;
+  const officialCrmCount = alignStats.officialCrmCount;
 
   const countryOptions = useMemo(
     () =>
@@ -923,18 +933,24 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
             <div className="min-w-0 space-y-1.5">
               <h3 className="text-lg font-black text-slate-800 flex items-center gap-2 flex-wrap">
                 <Clock className="text-slate-400 shrink-0" /> 背调作业 ({allRows.length})
-                {automationResults.length > 0 && (
+                <span
+                  className="text-xs font-black text-teal-800 bg-teal-50 px-2 py-1 rounded-lg border border-teal-100"
+                  title="与「客户管理」同一份正式客户库"
+                >
+                  正式客户 {officialCrmCount}
+                </span>
+                {alignStats.queueTaskCount > 0 && (
                   <span
                     className="text-xs font-black text-slate-500 bg-slate-100 px-2 py-1 rounded-lg"
-                    title="自动化流水线任务总数（含待跑/失败/进行中/已完成）"
+                    title="获客流水线任务数；同一公司可能对应多条任务"
                   >
-                    队列任务 {automationResults.length}
+                    队列任务 {alignStats.queueTaskCount}
                   </span>
                 )}
                 {completedCount > 0 && (
                   <span
                     className="text-xs font-black text-green-600 bg-green-50 px-2 py-1 rounded-lg"
-                    title="队列中已跑完且有背调报告的任务数（≠ 已进 CRM）"
+                    title="已完成背调报告的任务数，不是正式客户数"
                   >
                     已出报告 {completedCount}
                   </span>
@@ -942,15 +958,18 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                 {inCrmOnListCount > 0 && (
                   <span
                     className="text-xs font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg"
-                    title="本列表中已对应到客户管理正式客户的行数"
+                    title={`已关联正式客户的队列任务行数（同一公司多任务会重复计数）。对应唯一客户约 ${alignStats.uniqueCrmIdsFromQueue} 家`}
                   >
-                    已入 CRM {inCrmOnListCount}
+                    队列已关联 {inCrmOnListCount}
+                    {alignStats.uniqueCrmIdsFromQueue > 0
+                      ? ` · 唯一 ${alignStats.uniqueCrmIdsFromQueue}`
+                      : ''}
                   </span>
                 )}
                 {crmOnlyCount > 0 && (
                   <span
                     className="text-xs font-black text-violet-600 bg-violet-50 px-2 py-1 rounded-lg"
-                    title="客户管理里有、但队列里没有对应任务的补录行（不是 CRM 总数）"
+                    title="客户管理中有、队列中暂无对应任务的补录行"
                   >
                     仅 CRM 补录 {crmOnlyCount}
                   </span>
@@ -962,8 +981,8 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                 )}
               </h3>
               <p className="text-[11px] font-semibold text-slate-400 leading-relaxed">
-                本页统计的是背调作业（队列为主），不是正式客户数。正式客户看「客户管理」；未入 CRM
-                的背调档案看「记录中心」。
+                <strong className="text-slate-600">正式客户 {officialCrmCount}</strong>
+                与客户管理一致。队列任务可对应同一家公司，故「队列已关联」可大于正式客户数；已出报告只表示背调完成。
               </p>
             </div>
             <div className="flex flex-wrap gap-2 shrink-0">

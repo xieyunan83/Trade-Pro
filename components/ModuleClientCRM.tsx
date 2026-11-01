@@ -683,7 +683,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
           <div className="min-w-0">
             <h3 className="text-sm font-black text-slate-800">正式客户 · 商机漏斗</h3>
             <p className="text-[10px] font-semibold text-slate-400 mt-0.5">
-              只统计已加入 CRM 的公司。背调作业在「营销工具」；未入 CRM 的档案在「记录中心」。
+              正式客户数与营销工具顶部「正式客户」同源。背调作业进度在「营销工具」；未入客户库的档案在「记录中心」。列表为空时请先点「清除全部筛选」。
             </p>
           </div>
           <div className="text-[11px] font-bold text-slate-400">

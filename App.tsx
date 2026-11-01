@@ -4565,7 +4565,7 @@ const App: React.FC = () => {
     handleBatchProductDigFromCRM(clients);
   };
 
-  /** 营销工具：批量加入 CRM（已完成队列且未入 CRM） */
+  /** 营销工具：批量加入 CRM（已完成队列且未入 CRM；按官网去重，避免队列重复行虚增） */
   const handleBatchAddToCrmFromPromo = (tasks: AutomationResult[]) => {
     if (!tasks?.length) return;
     if (!canAccessModule(currentUser, ModuleType.CLIENT_CRM)) {
@@ -4573,18 +4573,23 @@ const App: React.FC = () => {
       return;
     }
     const historyItems: HistoryItem[] = [];
+    const seenHosts = new Set<string>();
+    const seenNames = new Set<string>();
     for (const task of tasks) {
       if (!task.analysis) continue;
-      const domainKey = (task.analysis.companyInfo?.website || task.website || '')
-        .toLowerCase()
-        .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
-        .split('/')[0];
-      const nameKey = (task.analysis.companyInfo?.name || task.clientName || '').trim().toLowerCase();
+      const domainKey = normalizeCrmHost(
+        task.analysis.companyInfo?.website || task.website || ''
+      );
+      const nameKey = (task.analysis.companyInfo?.name || task.clientName || '')
+        .trim()
+        .toLowerCase();
+      if (domainKey && seenHosts.has(domainKey)) continue;
+      if (!domainKey && nameKey && seenNames.has(nameKey)) continue;
+      if (domainKey) seenHosts.add(domainKey);
+      if (nameKey) seenNames.add(nameKey);
+
       const matched = historyRef.current.find((h) => {
-        const hHost = (h.domain || h.data?.companyInfo?.website || '')
-          .toLowerCase()
-          .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
-          .split('/')[0];
+        const hHost = normalizeCrmHost(h.domain || h.data?.companyInfo?.website);
         const hName = (h.data?.companyInfo?.name || '').trim().toLowerCase();
         return (
           (domainKey && hHost && domainKey === hHost) || (nameKey && hName && nameKey === hName)
@@ -4613,10 +4618,14 @@ const App: React.FC = () => {
       );
     }
     if (!historyItems.length) {
-      alert('没有可导入的报告数据');
+      alert('没有可导入的报告数据（已按官网去重）');
       return;
     }
-    if (!confirm(`将把 ${historyItems.length} 条已完成背调加入客户管理？`)) return;
+    const dupHint =
+      tasks.length > historyItems.length
+        ? `（已从 ${tasks.length} 条队列任务按官网去重）`
+        : '';
+    if (!confirm(`将把 ${historyItems.length} 家公司加入客户管理？${dupHint}`)) return;
     handleBatchImportRecordsToCrm(historyItems, []);
   };
 

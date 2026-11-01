@@ -110,3 +110,33 @@ export const buildPromoListRows = (
 
   return rows;
 };
+
+/** 营销页统计：正式客户数必须以 CRM 数组为准，勿用「队列行数」冒充 */
+export const summarizePromoCrmAlignment = (
+  rows: PromoListRow[],
+  crmClients: Client[]
+): {
+  officialCrmCount: number;
+  queueTaskCount: number;
+  queueLinkedTaskCount: number;
+  uniqueCrmIdsFromQueue: number;
+  crmOnlyRowCount: number;
+  completedWithReport: number;
+} => {
+  const queueRows = rows.filter((r) => r.source === 'queue');
+  const linkedIds = new Set(
+    queueRows
+      .map((r) => r.intel.crmClient?.id)
+      .filter((id): id is string => !!(id && String(id).trim()))
+  );
+  return {
+    officialCrmCount: crmClients.length,
+    queueTaskCount: queueRows.length,
+    queueLinkedTaskCount: queueRows.filter((r) => r.intel.inCrm).length,
+    uniqueCrmIdsFromQueue: linkedIds.size,
+    crmOnlyRowCount: rows.filter((r) => r.source === 'crm').length,
+    completedWithReport: queueRows.filter(
+      (r) => r.status === 'completed' && !!(r.task?.analysis || r.intel.bestAnalysis)
+    ).length,
+  };
+};

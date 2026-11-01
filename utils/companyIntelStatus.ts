@@ -4,9 +4,9 @@ import {
   buildHistoryLookupIndex,
   clientHasBackgroundCheckIndexed,
   countAnalysisDecisionMakers,
+  findCrmClientIndex,
   historyHasDmSearch,
   lookupHistoryForClient,
-  normalizeCrmHost,
   resolveDmDigStatus,
   type DmDigStatus,
   type HistoryLookupIndex,
@@ -26,23 +26,14 @@ export type CompanyIntelStatus = {
   primaryContact?: DecisionMaker | null;
 };
 
-const hostOf = (website?: string | null) => normalizeCrmHost(website);
-
-/** 在 CRM 中按官网 / 名称匹配客户 */
+/** 在 CRM 中按官网 / 名称匹配客户（与导入去重同一套规则） */
 export const findCrmClientMatch = (
   clients: Client[],
   website?: string | null,
   name?: string | null
 ): Client | undefined => {
-  if (!clients?.length) return undefined;
-  const host = hostOf(website);
-  const nameKey = (name || '').trim().toLowerCase();
-  return clients.find((c) => {
-    const cHost = hostOf(c.website);
-    if (host && cHost && host === cHost) return true;
-    if (nameKey && (c.name || '').trim().toLowerCase() === nameKey) return true;
-    return false;
-  });
+  const idx = findCrmClientIndex(clients, website, name);
+  return idx >= 0 ? clients[idx] : undefined;
 };
 
 const pickPrimaryContact = (

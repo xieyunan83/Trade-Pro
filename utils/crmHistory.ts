@@ -25,20 +25,36 @@ export const normalizeCrmHost = (url?: string | null): string =>
     .split('/')[0]
     .toLowerCase();
 
-const findClientIndex = (
+/** 弱名称禁止裸匹配，避免「公开信息未找到」等把不同公司误判为同一家 */
+export const isWeakCrmMatchName = (nameKey: string) =>
+  !nameKey ||
+  nameKey.length < 3 ||
+  /^(公开信息未找到|未知|不详|n\/?a|unknown|not found|unnamed|—|-)$/i.test(nameKey);
+
+/**
+ * 官网优先；无官网时仅用非弱名称精确匹配。
+ * 营销工具「是否已入 CRM」与导入去重必须共用此规则。
+ */
+export const findCrmClientIndex = (
   clients: Client[],
   website?: string | null,
   name?: string | null
 ): number => {
+  if (!clients?.length) return -1;
   const host = normalizeCrmHost(website);
   const nameKey = (name || '').trim().toLowerCase();
-  return clients.findIndex((c) => {
-    const cHost = normalizeCrmHost(c.website);
-    if (host && cHost && host === cHost) return true;
-    if (nameKey && (c.name || '').trim().toLowerCase() === nameKey) return true;
-    return false;
-  });
+  if (host) {
+    const byHost = clients.findIndex((c) => {
+      const cHost = normalizeCrmHost(c.website);
+      return !!(cHost && host === cHost);
+    });
+    if (byHost >= 0) return byHost;
+  }
+  if (isWeakCrmMatchName(nameKey)) return -1;
+  return clients.findIndex((c) => (c.name || '').trim().toLowerCase() === nameKey);
 };
+
+const findClientIndex = findCrmClientIndex;
 
 const mapDiscoveryType = (t?: string): Client['type'] => {
   const s = (t || '').toLowerCase();
