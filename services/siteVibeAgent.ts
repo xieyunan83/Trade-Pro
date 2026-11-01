@@ -15,6 +15,8 @@ export type SiteVibeGenerateInput = {
   referenceUrl?: string;
   localeHint?: 'zh' | 'en' | 'auto';
   brandHint?: string;
+  /** 一键建站已生成的素材清单（URL），要求写入 HTML */
+  assetManifest?: string;
   onProgress?: (msg: string) => void;
 };
 
@@ -123,6 +125,9 @@ export const generateSiteHtmlWithLlm = async (
     products.length
       ? `必须展示的产品（做成卡片）：\n${products.map((p, i) => `${i + 1}. ${p}`).join('\n')}`
       : '未挂产品库时，按行业虚构 6 个合理的泡泡/玩具类目产品名（勿用假证书编号）。',
+    input.assetManifest
+      ? `已准备好的媒体素材（必须嵌入，勿用占位图替换）：\n${input.assetManifest}`
+      : '',
     isEdit
       ? `上一版 HTML（可能已截断，请保持可运行并完整输出新版）：\n${input.previousHtml!.slice(0, 14000)}`
       : '',

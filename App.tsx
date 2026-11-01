@@ -108,6 +108,7 @@ import {
 import { crmTagsFromDecision } from './services/analysisDecisionEnrich';
 import { ManagerSystemPanel } from './components/ManagerSystemPanel';
 import { NightUpgradePanel } from './components/NightUpgradePanel';
+import { SiteBuildPanel } from './components/SiteBuildPanel';
 import {
   hydrateDeptApiKeysFromCloud,
   setKeyResolutionContext,
@@ -5950,6 +5951,7 @@ const App: React.FC = () => {
         sphereNavPhase === 'submenu' ? 'md:left-[16.5rem]' : 'md:left-[5rem]'
       }`}>
         {hasPermission(currentUser, 'feature.dm_email_search') && <DmEmailSearchPanel />}
+        <SiteBuildPanel />
         <DesignSignalPanel />
         <ProductDigPanel />
         <EnrichmentPanel />

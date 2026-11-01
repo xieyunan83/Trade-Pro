@@ -19,6 +19,7 @@ import {
   Link2,
   ShieldCheck,
   HardDrive,
+  Wand2,
 } from 'lucide-react';
 import type { User } from '../types';
 import { loadCatalogSkus } from '../services/productCatalogTypes';
@@ -57,6 +58,8 @@ import {
   hardenPreviewHtml,
 } from '../services/siteVibeAgent';
 import { deleteSiteHtml, getSiteHtml, putSiteHtml } from '../services/siteProjectVault';
+import { SiteOneClickForm } from './SiteOneClickForm';
+import { getSiteBuildCapabilityStatus } from '../services/siteBuildPipeline';
 
 type Props = { currentUser: User };
 
@@ -134,10 +137,32 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
   const [vaultHtml, setVaultHtml] = useState<string | null>(null);
   const [persistHint, setPersistHint] = useState('');
   const [buildStatus, setBuildStatus] = useState('');
+  const [oneClickOpen, setOneClickOpen] = useState(false);
   const skus = useMemo(() => loadCatalogSkus(), []);
   const active = projects.find((p) => p.id === activeId) || null;
   const deployMeta = getDeployOption(active?.deployId || deployId);
   const llmStatus = useMemo(() => getSiteVibeLlmStatus(), [busy, activeId]);
+  const buildCap = useMemo(() => getSiteBuildCapabilityStatus(), [oneClickOpen, busy]);
+
+  useEffect(() => {
+    const onOpen = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ projectId?: string }>).detail;
+      const pid = detail?.projectId;
+      if (!pid) return;
+      const next = loadSiteProjects();
+      setProjects(next);
+      setActiveId(pid);
+    };
+    const onDone = () => {
+      setProjects(loadSiteProjects());
+    };
+    window.addEventListener('tp-open-site-project', onOpen as EventListener);
+    window.addEventListener('tp-site-build-completed', onDone as EventListener);
+    return () => {
+      window.removeEventListener('tp-open-site-project', onOpen as EventListener);
+      window.removeEventListener('tp-site-build-completed', onDone as EventListener);
+    };
+  }, []);
 
   const persistMeta = (next: SiteProject[]) => {
     setProjects(next);
@@ -538,6 +563,12 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
     return (
       <div className="max-w-[96rem] mx-auto animate-fade-in px-1 space-y-5">
         {deployCatalogModal}
+        <SiteOneClickForm
+          open={oneClickOpen}
+          onClose={() => setOneClickOpen(false)}
+          ownerUsername={currentUser.username}
+          initialBrief={homePrompt}
+        />
         <div className="relative overflow-hidden rounded-[2rem] border border-slate-800 bg-[#070b14] text-slate-100 shadow-xl">
           <div
             className="pointer-events-none absolute inset-0 opacity-70"
@@ -563,7 +594,7 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
               网站设计开发
             </h2>
             <p className="text-sm text-slate-400 font-medium max-w-2xl mx-auto leading-relaxed">
-              用对话模型从零编写完整单页网站（真正写 HTML/CSS，不是套几套死模板）。可粘贴参考站 URL、挂产品库 SKU；生成后继续对话改版，再导出或推送上线。
+              一键汇集图片、视频、3D 与整站代码，像品牌演示站一样出片；也可只用对话从零写站、粘贴参考 URL、挂产品库后继续改版。
             </p>
             <p
               className={`text-[11px] font-bold max-w-2xl mx-auto ${
@@ -571,13 +602,28 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
               }`}
             >
               {llmStatus.ready
-                ? '对话写站服务已就绪 · 首次生成通常 30～90 秒'
+                ? `${buildCap.detail} · 一键建站请保持客户端打开`
                 : llmStatus.detail}
             </p>
 
+            <div className="max-w-2xl mx-auto">
+              <button
+                type="button"
+                disabled={!llmStatus.ready}
+                onClick={() => setOneClickOpen(true)}
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-teal-400 to-cyan-300 text-slate-950 text-sm font-black px-6 py-3.5 shadow-lg shadow-teal-900/30 hover:brightness-105 disabled:opacity-40"
+              >
+                <Wand2 size={16} />
+                一键建站（图 / 视频 / 3D → 成品站）
+              </button>
+              <p className="mt-2 text-[10px] text-slate-500 font-bold">
+                先填确认表单，再后台生成全部素材并汇集成站
+              </p>
+            </div>
+
             <div className="max-w-2xl mx-auto text-left rounded-2xl border border-white/10 bg-white/5 backdrop-blur-md p-2.5 shadow-2xl">
               <div className="flex items-center gap-1.5 px-3 pt-1 text-[10px] font-bold text-teal-200/80">
-                <Link2 size={11} /> 支持粘贴 https://… 参考或仿作
+                <Link2 size={11} /> 或仅用对话写站 · 支持粘贴 https://… 参考
               </div>
               <textarea
                 value={homePrompt}
@@ -597,17 +643,17 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
                   {busy
                     ? buildStatus || '编写中…'
                     : stackReady
-                      ? '⌘/Ctrl + Enter 生成（调用对话模型）'
+                      ? '⌘/Ctrl + Enter 仅写站代码'
                       : '请先完成下方技术选型'}
                 </span>
                 <button
                   type="button"
                   disabled={!homePrompt.trim() || !stackReady || busy || !llmStatus.ready}
                   onClick={() => void createFromPrompt(homePrompt)}
-                  className="inline-flex items-center gap-1.5 rounded-xl bg-teal-400 hover:bg-teal-300 text-slate-950 text-xs font-black px-4 py-2.5 disabled:opacity-40"
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-black px-4 py-2.5 disabled:opacity-40 border border-white/10"
                 >
                   {busy ? <Loader2 size={14} className="animate-spin" /> : null}
-                  {busy ? '编写中…' : '开始构建'} <ArrowRight size={14} />
+                  {busy ? '编写中…' : '仅生成代码'} <ArrowRight size={14} />
                 </button>
               </div>
             </div>
@@ -749,6 +795,11 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
   /* —— 对话 + 预览 —— */
   return (
     <div className="max-w-[96rem] mx-auto space-y-3 animate-fade-in px-1">
+      <SiteOneClickForm
+        open={oneClickOpen}
+        onClose={() => setOneClickOpen(false)}
+        ownerUsername={currentUser.username}
+      />
       {deployCatalogModal}
       {publishPanel}
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3">
@@ -789,6 +840,14 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
               </option>
             ))}
           </select>
+          <button
+            type="button"
+            onClick={() => setOneClickOpen(true)}
+            disabled={!llmStatus.ready}
+            className="rounded-lg border border-teal-200 bg-teal-50 text-teal-800 text-xs font-black px-2.5 py-1.5 hover:bg-teal-100 disabled:opacity-40"
+          >
+            <Wand2 size={12} className="inline mr-1" /> 一键建站
+          </button>
           <button
             type="button"
             onClick={() => setActiveId(null)}
