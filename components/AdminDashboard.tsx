@@ -1489,6 +1489,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       填 qwen3.7-plus / qwen3.8-flash / qwen3.8-max 时：上海时区 22:00–08:00 优先
                       qwen3.8-flash（夜间折扣），其余时间 qwen3.7-plus。批量背调强制避开重推理
                       qwen3.8-max，失败自动回退 plus。其它型号不改。
+                      同窗口业务端会静默补旧客户（领英占位 / 邮箱「千问猜候选 +
+                      Anymail 校验」/ 品类 / 背调补全）；千问不能单独验证邮箱。
                     </div>
                     <div className="md:col-span-2 rounded-xl border border-violet-100 bg-violet-50/60 p-4 space-y-3">
                       <div className="text-xs font-black text-violet-900">结构化决策模型（背调补全 / 匹配打分）</div>

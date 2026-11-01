@@ -1700,6 +1700,31 @@ export const researchDecisionMakerEmails = async (opts: {
         }
       }
     }
+    // ——— 5) 千问/规则猜候选 + Anymail 校验（仅 valid 入库；无校验 Key 则跳过）———
+    const stillMissing = merged.filter(
+      (d) =>
+        isLikelyRealPerson(d) &&
+        !emailKey(d) &&
+        !!(d.firstName || d.lastName || (d.name || '').trim().split(/\s+/).length >= 2 || d.linkedin)
+    );
+    if (stillMissing.length && hasAnymail && domain && domain.includes('.')) {
+      try {
+        const { fillMissingEmailsByPatternGuess } = await import('./emailPatternGuess');
+        const filled = await fillMissingEmailsByPatternGuess(merged, {
+          domain,
+          companyName,
+          maxPeople: Math.min(5, stillMissing.length),
+          useQwen: true,
+        });
+        if (filled.filled > 0) {
+          merged.splice(0, merged.length, ...filled.decisionMakers);
+          stats.upgraded += filled.filled;
+          stats.verified += filled.filled;
+        }
+      } catch (patternErr) {
+        console.info('[DM] pattern guess+verify skipped', patternErr);
+      }
+    }
   } catch (e) {
     console.error('researchDecisionMakerEmails failed', e);
   }

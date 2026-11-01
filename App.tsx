@@ -73,6 +73,11 @@ import { mergeDecisionMakers } from './services/multiModelMerge';
 import { enqueueDmEmailSearch, type DmEmailSearchJob } from './services/dmEmailSearchQueue';
 import { locateLinkedInEmployees } from './services/linkedinEmployeeLocator';
 import {
+  startNightSilentUpgrade,
+  stopNightSilentUpgrade,
+} from './services/nightSilentUpgrade';
+import {
+  enqueueProductDig,
   enqueueProductDigBatch,
   setProductDigHistoryResolver,
   stopProductDigQueue,
@@ -89,6 +94,7 @@ import {
   type DesignSignalCompletePayload,
 } from './services/designSignalQueue';
 import {
+  enqueueEnrichment,
   enqueueEnrichmentBatch,
   hydrateEnrichmentQueue,
   isEnrichmentQueueBusy,
@@ -98,6 +104,7 @@ import {
 } from './services/analysisEnrichmentQueue';
 import { crmTagsFromDecision } from './services/analysisDecisionEnrich';
 import { ManagerSystemPanel } from './components/ManagerSystemPanel';
+import { NightUpgradePanel } from './components/NightUpgradePanel';
 import {
   hydrateDeptApiKeysFromCloud,
   setKeyResolutionContext,
@@ -435,6 +442,91 @@ const App: React.FC = () => {
       setProductDigProgress(getProductDigProgress());
     });
   }, []);
+
+  /** 夜间 22:00–08:00 静默补齐旧客户缺口（领英占位 / 邮箱猜验 / 品类 / 背调补全） */
+  useEffect(() => {
+    if (!currentUser) {
+      stopNightSilentUpgrade();
+      return;
+    }
+    startNightSilentUpgrade({
+      getClients: () => crmClientsRef.current || [],
+      getHistory: () => historyRef.current || [],
+      canDm: () => hasPermission(currentUser, 'feature.dm_email_search'),
+      canProduct: () => hasPermission(currentUser, 'feature.product_redig'),
+      canEnrich: () =>
+        hasPermission(currentUser, 'feature.product_redig') ||
+        hasPermission(currentUser, 'feature.analyze_company'),
+      onLinkedInDone: async ({ client, decisionMakers, historyId }) => {
+        await persistDecisionMakerResearch(
+          { decisionMakers },
+          {
+            historyId: historyId || null,
+            domain: client.website,
+            companyName: client.name,
+          }
+        );
+      },
+      enqueueDm: (client, hist) => {
+        if (!hasPermission(currentUser, 'feature.dm_email_search')) return false;
+        const domain = (
+          client.website ||
+          hist?.domain ||
+          hist?.data?.companyInfo?.website ||
+          ''
+        ).trim();
+        if (!domain.includes('.')) return false;
+        const res = enqueueDmEmailSearch({
+          domain,
+          companyName: client.name || domain,
+          historyId: hist?.id || null,
+          companyLinkedin:
+            hist?.data?.socials?.linkedin ||
+            hist?.data?.tradeIntelligence?.companyLinkedin,
+          deepDig: true,
+          authorized: true,
+          existingDecisionMakers: hist?.data?.decisionMakers || client.contacts || [],
+          resolveExisting: () => {
+            const h = findHistoryForClient(client, historyRef.current);
+            return h?.data?.decisionMakers || client.contacts || [];
+          },
+          onComplete: async (job: DmEmailSearchJob) => {
+            if (job.status !== 'completed' || !job.resultDecisionMakers || !job.searchedAt) return;
+            const item = job.historyId
+              ? historyRef.current.find((h) => h.id === job.historyId)
+              : historyRef.current.find(
+                  (h) => (h.domain || '').toLowerCase() === job.domain.toLowerCase()
+                );
+            const prevHistory = item?.data?.decisionMakerEmailSearchHistory || [];
+            await persistDecisionMakerResearch(
+              {
+                decisionMakers: job.resultDecisionMakers,
+                decisionMakerEmailSearchAt: job.searchedAt,
+                decisionMakerEmailSearchHistory: [...prevHistory, job.searchedAt].slice(-30),
+              },
+              { historyId: job.historyId, domain: job.domain, companyName: job.companyName }
+            );
+          },
+        });
+        return !!res.ok;
+      },
+      enqueueProduct: (client) => {
+        if (!hasPermission(currentUser, 'feature.product_redig')) return false;
+        const res = enqueueProductDig({ client, authorized: true });
+        return !!res.ok;
+      },
+      enqueueEnrichment: (client) => {
+        const ok =
+          hasPermission(currentUser, 'feature.product_redig') ||
+          hasPermission(currentUser, 'feature.analyze_company');
+        if (!ok) return false;
+        const res = enqueueEnrichment({ client, authorized: true });
+        return !!res.ok;
+      },
+    });
+    return () => stopNightSilentUpgrade();
+  }, [currentUser?.username]);
+
   useEffect(() => {
     viewingHistoryIdRef.current = viewingHistoryId;
   }, [viewingHistoryId]);
@@ -5748,6 +5840,7 @@ const App: React.FC = () => {
         <DesignSignalPanel />
         <ProductDigPanel />
         <EnrichmentPanel />
+        <NightUpgradePanel />
       </div>
 
       {reportConfirm && (
