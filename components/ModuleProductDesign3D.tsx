@@ -124,11 +124,17 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
           setActiveId(revived[0].id);
         }
 
-        // 仅对 ready 任务后台落库，不阻塞界面
+        // 仅对仍是远程链的 ready 任务后台落库；已 vault/blob 的跳过，避免进模块就串行重下
         void (async () => {
           const migrated: Model3dJob[] = [];
           for (const j of recovered) {
-            if (j.status === 'ready' && (j.modelUrl || j.pbrModelUrl)) {
+            const primary = (j.pbrModelUrl || j.modelUrl || j.baseModelUrl || '').trim();
+            const alreadyLocal =
+              !primary ||
+              isVaultRef(primary) ||
+              primary.startsWith('blob:') ||
+              primary.startsWith('data:');
+            if (j.status === 'ready' && primary && !alreadyLocal) {
               migrated.push(await persistModel3dJob(j));
             } else {
               migrated.push(j);
@@ -142,6 +148,8 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         console.warn('3d jobs recover/migrate', e);
       }
     })();
+    // 预热预览组件，避免首次打开再等 chunk
+    void import('@google/model-viewer').catch(() => undefined);
     return () => {
       cancelled = true;
     };
@@ -239,7 +247,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     });
   };
 
-  /** 导入已有 GLB：本机预览 / 下载后进切片软件做 3D 打印 */
+  /** 导入已有 GLB：先用 blob: 立刻预览，后台再写入素材库 */
   const onPickGlb = async (files: FileList | null) => {
     const file = files?.[0];
     if (!file) return;
@@ -262,43 +270,53 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     }
     setBusy(true);
     setMsgTone('info');
-    setMsg('正在导入本地 GLB…');
-    try {
-      const vaultRef = await putBlobInVault({
-        blob: file,
-        kind: 'model3d',
-        sourceHint: file.name,
-        mime:
-          file.type ||
-          (lower.endsWith('.gltf') ? 'model/gltf+json' : 'model/gltf-binary'),
-      });
-      const now = Date.now();
-      const job: Model3dJob = {
-        id: newCreativeId('m3d'),
-        title: `本地导入 · ${file.name.replace(/\.(glb|gltf)$/i, '')}`,
-        mode: 'image',
-        quality: 'engine_ready',
-        prompt: '',
-        status: 'ready',
-        progress: 100,
-        modelUrl: vaultRef,
-        exportFormats: ['GLB'],
-        previewHint: '本地 GLB · 可环视预览 · 下载后可导入切片软件做 3D 打印',
-        ownerUsername: currentUser.username,
-        createdAt: now,
-        updatedAt: now,
-      };
-      persist([job, ...jobs.filter((j) => j.id !== job.id)]);
-      setActiveId(job.id);
-      setMsgTone('ok');
-      setMsg('本地 GLB 已导入，右侧可环视；下载后可用切片软件做 3D 打印');
-    } catch (e: any) {
-      setMsgTone('error');
-      setMsg(e?.message || '导入 GLB 失败');
-      window.alert(e?.message || '导入 GLB 失败');
-    } finally {
-      setBusy(false);
-    }
+    setMsg('正在打开本地 GLB…');
+    const now = Date.now();
+    const jobId = newCreativeId('m3d');
+    const mime =
+      file.type || (lower.endsWith('.gltf') ? 'model/gltf+json' : 'model/gltf-binary');
+    const objectUrl = URL.createObjectURL(file);
+    const job: Model3dJob = {
+      id: jobId,
+      title: `本地导入 · ${file.name.replace(/\.(glb|gltf)$/i, '')}`,
+      mode: 'image',
+      quality: 'engine_ready',
+      prompt: '',
+      status: 'ready',
+      progress: 100,
+      modelUrl: objectUrl,
+      exportFormats: ['GLB'],
+      previewHint: '本地 GLB · 可环视预览 · 下载后可导入切片软件做 3D 打印',
+      ownerUsername: currentUser.username,
+      createdAt: now,
+      updatedAt: now,
+    };
+    persist([job, ...jobs.filter((j) => j.id !== job.id)]);
+    setActiveId(jobId);
+    setMsgTone('ok');
+    setMsg('本地 GLB 已打开预览；正在写入本机素材库…');
+    setBusy(false);
+    void (async () => {
+      try {
+        const vaultRef = await putBlobInVault({
+          blob: file,
+          kind: 'model3d',
+          id: `imp_${jobId}`,
+          sourceHint: file.name,
+          mime,
+        });
+        patchJob(jobId, {
+          modelUrl: vaultRef,
+          previewHint: '本地 GLB · 已存本机 · 可环视 / 下载打印',
+        });
+        setMsgTone('ok');
+        setMsg('本地 GLB 已写入本机素材库，刷新后仍可预览');
+      } catch (e: any) {
+        console.warn('[3d] import vault failed', e);
+        setMsgTone('info');
+        setMsg('预览可用；本机素材库未写入，请尽快下载 GLB 备份');
+      }
+    })();
   };
 
   const runGenerate = async () => {
@@ -612,7 +630,19 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
   };
 
   const rawDownloadUrl = active?.pbrModelUrl || active?.modelUrl || active?.baseModelUrl;
+  /** 预览优先已本机化的地址，避免落库前后反复换链重载 */
+  const rawPreviewUrl = useMemo(() => {
+    if (!active) return undefined;
+    const candidates = [active.modelUrl, active.pbrModelUrl, active.baseModelUrl].filter(
+      Boolean
+    ) as string[];
+    const local = candidates.find(
+      (u) => isVaultRef(u) || u.startsWith('blob:') || u.startsWith('data:')
+    );
+    return local || rawDownloadUrl;
+  }, [active, rawDownloadUrl]);
   const downloadUrl = useVaultUrl(rawDownloadUrl);
+  const previewUrl = useVaultUrl(rawPreviewUrl);
   const previewPoster = useVaultUrl(active?.previewImageUrl || active?.sourceImage);
 
   return (
@@ -1034,12 +1064,13 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                   />
                 </div>
               </div>
-            ) : active?.status === 'ready' && downloadUrl ? (
+            ) : active?.status === 'ready' && (previewUrl || downloadUrl) ? (
               <Model3dOrbitViewer
-                src={downloadUrl}
+                src={previewUrl || downloadUrl}
+                stableKey={active.id}
                 poster={previewPoster || undefined}
                 className="flex-1"
-                downloadHref={downloadUrl}
+                downloadHref={downloadUrl || previewUrl}
                 onLocalBlob={(blob) => {
                   if (!activeId) return;
                   if (
@@ -1054,6 +1085,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                       const vaultRef = await putBlobInVault({
                         blob,
                         kind: 'model3d',
+                        id: `mesh_${activeId}`,
                         sourceHint: active?.providerTaskId || activeId,
                         mime: blob.type || 'model/gltf-binary',
                       });

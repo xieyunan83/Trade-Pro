@@ -34,7 +34,7 @@ export const CreativeStorageBadge: React.FC<Props> = ({ className = '', compact 
 
   useEffect(() => {
     void refresh();
-    const t = window.setInterval(() => void refresh(), 12_000);
+    const t = window.setInterval(() => void refresh(), 60_000);
     return () => window.clearInterval(t);
   }, [refresh]);
 

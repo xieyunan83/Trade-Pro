@@ -1,10 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Download, Loader2, Move3d, RotateCcw } from 'lucide-react';
-import { fetchRemoteBlob } from '../services/fetchRemoteBlob';
+import { fetchRemoteBlob, rememberRemoteBlob } from '../services/fetchRemoteBlob';
 
 type Props = {
   /** GLB / GLTF 地址（临时签名链也可） */
   src: string;
+  /**
+   * 任务级稳定键。落库后 URL 从 https→vault 变化时不要重载预览
+   *（否则会二次下载 + 重置 60s 超时，体感像卡十几分钟）。
+   */
+  stableKey?: string;
   /** 平面预览图作加载中海报 */
   poster?: string;
   className?: string;
@@ -13,15 +18,16 @@ type Props = {
   /** 直链下载（预览失败时强调） */
   downloadHref?: string;
   /** 成功拉到本机 Blob 时回调（用于写入素材库） */
-  onLocalBlob?: (blob: Blob) => void;
+  onLocalBlob?: (blob: Blob, sourceUrl: string) => void;
 };
 
 /**
  * 可拖动环视的真实 3D 预览（@google/model-viewer）。
- * 先把远程 GLB 拉成 blob: 再交给 viewer，避免跨域/慢加载一直转圈。
+ * 远程 GLB 拉成 blob: 再交给 viewer；同 URL 会话内只拉一次。
  */
 export const Model3dOrbitViewer: React.FC<Props> = ({
   src,
+  stableKey,
   poster,
   className = '',
   autoRotate = true,
@@ -38,6 +44,8 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
   const [viewSrc, setViewSrc] = useState('');
   const [pullPct, setPullPct] = useState(0);
   const [phase, setPhase] = useState<'pull' | 'viewer' | 'done' | 'error'>('pull');
+
+  const loadKey = stableKey || src;
 
   useEffect(() => {
     let cancelled = false;
@@ -76,7 +84,6 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
 
     (async () => {
       try {
-        // 已是本机地址则直接预览
         if (raw.startsWith('blob:') || raw.startsWith('data:')) {
           if (!cancelled) {
             setViewSrc(raw);
@@ -92,18 +99,18 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
           },
         });
         if (cancelled) return;
+        rememberRemoteBlob(raw, blob);
         objectUrl = URL.createObjectURL(blob);
         setViewSrc(objectUrl);
         setPhase('viewer');
         setPullPct(100);
         try {
-          onBlobRef.current?.(blob);
+          onBlobRef.current?.(blob, raw);
         } catch {
           /* ignore */
         }
       } catch (e: any) {
         if (cancelled) return;
-        // 回退直连 model-viewer（部分 CDN 仅允许标签加载）
         setViewSrc(raw);
         setPhase('viewer');
         setLoadErr(
@@ -123,7 +130,9 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
         }
       }
     };
-  }, [src]);
+    // 故意只用 loadKey：同一任务落库改 URL 不重载
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadKey]);
 
   useEffect(() => {
     if (!libOk || !hostRef.current || !viewSrc || phase === 'pull') return;
@@ -142,12 +151,13 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
     };
     el.addEventListener('load', onLoad);
     el.addEventListener('error', onError);
+    // 大模型解析可能超过 60s；有下载进度时给更长窗口
     const timer = window.setTimeout(() => {
       if (!readyRef.current) {
         setLoadErr('预览超时。请立即下载 GLB 保存到电脑，再用本地查看器打开。');
         setPhase('error');
       }
-    }, 60_000);
+    }, 120_000);
     return () => {
       el.removeEventListener('load', onLoad);
       el.removeEventListener('error', onError);

@@ -24,6 +24,8 @@ type VaultRow = VaultMeta & { blob: Blob };
 const DB_NAME = 'trade_pro_creative_vault_v1';
 const DB_VER = 1;
 const STORE = 'assets';
+/** 仅存元数据，避免 list/配额扫描时 getAll() 把全部 GLB blob 拖进内存 */
+const META_LS = 'trade_pro_creative_vault_meta_v1';
 
 /** 演示期软上限：约 450MB，防磁盘/配额溢出 */
 export const VAULT_SOFT_QUOTA_BYTES = 450 * 1024 * 1024;
@@ -31,8 +33,43 @@ export const VAULT_SOFT_QUOTA_BYTES = 450 * 1024 * 1024;
 const MAX_SINGLE_BYTES = 120 * 1024 * 1024;
 
 const objectUrlCache = new Map<string, string>();
+let metaMemory: VaultMeta[] | null = null;
 
 const isBrowser = () => typeof indexedDB !== 'undefined';
+
+const readMetaLs = (): VaultMeta[] | null => {
+  if (typeof localStorage === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(META_LS);
+    if (!raw) return null;
+    const p = JSON.parse(raw);
+    return Array.isArray(p) ? (p as VaultMeta[]) : null;
+  } catch {
+    return null;
+  }
+};
+
+const writeMetaLs = (rows: VaultMeta[]) => {
+  metaMemory = rows;
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(META_LS, JSON.stringify(rows));
+  } catch {
+    /* quota */
+  }
+};
+
+const upsertMeta = (m: VaultMeta) => {
+  const rows = metaMemory || readMetaLs() || [];
+  const next = rows.filter((r) => r.id !== m.id);
+  next.push(m);
+  writeMetaLs(next);
+};
+
+const removeMeta = (id: string) => {
+  const rows = metaMemory || readMetaLs() || [];
+  writeMetaLs(rows.filter((r) => r.id !== id));
+};
 
 export const isVaultRef = (url: string | undefined | null): boolean =>
   !!url && url.startsWith(VAULT_PREFIX);
@@ -83,11 +120,20 @@ const guessMime = (kind: VaultKind, blobType: string, url: string): string => {
 
 export const listVaultMeta = async (): Promise<VaultMeta[]> => {
   if (!isBrowser()) return [];
+  if (metaMemory) return metaMemory.map((m) => ({ ...m }));
+  const fromLs = readMetaLs();
+  if (fromLs) {
+    metaMemory = fromLs;
+    return fromLs.map((m) => ({ ...m }));
+  }
+  // 冷启动重建索引（只此一次会扫 blob；之后走 LS）
   const db = await openDb();
   try {
     const tx = db.transaction(STORE, 'readonly');
     const all = await idbReq(tx.objectStore(STORE).getAll());
-    return (all as VaultRow[]).map(({ blob: _b, ...m }) => m);
+    const meta = (all as VaultRow[]).map(({ blob: _b, ...m }) => m);
+    writeMetaLs(meta);
+    return meta.map((m) => ({ ...m }));
   } finally {
     db.close();
   }
@@ -114,6 +160,8 @@ const putRow = async (row: VaultRow): Promise<void> => {
   try {
     const tx = db.transaction(STORE, 'readwrite');
     await idbReq(tx.objectStore(STORE).put(row));
+    const { blob: _b, ...meta } = row;
+    upsertMeta(meta);
   } finally {
     db.close();
   }
@@ -144,6 +192,7 @@ const deleteRow = async (id: string): Promise<void> => {
   try {
     const tx = db.transaction(STORE, 'readwrite');
     await idbReq(tx.objectStore(STORE).delete(id));
+    removeMeta(id);
   } finally {
     db.close();
   }
@@ -151,13 +200,15 @@ const deleteRow = async (id: string): Promise<void> => {
 
 /** 超出软上限时淘汰最久未访问的条目，直到腾出空间 */
 export const enforceVaultQuota = async (extraBytes = 0): Promise<number> => {
-  const stats = await getVaultStats();
-  let need = stats.bytes + extraBytes - VAULT_SOFT_QUOTA_BYTES;
+  const rows = await listVaultMeta();
+  let bytes = 0;
+  for (const r of rows) bytes += r.size || 0;
+  let need = bytes + extraBytes - VAULT_SOFT_QUOTA_BYTES;
   if (need <= 0) return 0;
-  const rows = (await listVaultMeta()).sort((a, b) => a.lastAccessAt - b.lastAccessAt);
+  const sorted = [...rows].sort((a, b) => a.lastAccessAt - b.lastAccessAt);
   let freed = 0;
   let removed = 0;
-  for (const r of rows) {
+  for (const r of sorted) {
     if (need <= 0) break;
     await deleteRow(r.id);
     freed += r.size;
@@ -347,10 +398,12 @@ export const resolveToDataUrlOrHttps = async (
 
 const touchAccess = async (id: string) => {
   try {
-    const row = await getRow(id);
-    if (!row) return;
-    row.lastAccessAt = Date.now();
-    await putRow(row);
+    // 只刷新元数据时间戳，切勿 get+put 整行（会把几十 MB GLB 再写一遍 IDB）
+    const rows = metaMemory || readMetaLs() || [];
+    const hit = rows.find((r) => r.id === id);
+    if (hit) {
+      upsertMeta({ ...hit, lastAccessAt: Date.now() });
+    }
   } catch {
     /* ignore */
   }
@@ -374,6 +427,7 @@ export const clearVault = async (): Promise<void> => {
     }
   }
   objectUrlCache.clear();
+  writeMetaLs([]);
   const db = await openDb();
   try {
     const tx = db.transaction(STORE, 'readwrite');
