@@ -17,8 +17,8 @@ import { resolveCrmClientIntel } from '../utils/companyIntelStatus';
 import { hasRichProductCatalog } from './productCatalog';
 
 /** 功能缺口版本：新能力上线时 +1，旧客户会重新进入夜间队列 */
-/** v5：全品类 vs 平台类目/产品库匹配（夜间静默） */
-export const NIGHT_UPGRADE_SCHEMA_VERSION = 5;
+/** v6：存量 CRM 全站产品/价格带/关键词打标（仅重跑 catalog_match） */
+export const NIGHT_UPGRADE_SCHEMA_VERSION = 6;
 
 export type NightGapKind =
   | 'linkedin_locate'
@@ -92,8 +92,10 @@ type Handlers = {
 const LS_KEY = 'trade_scout_night_silent_upgrade_v1';
 const TICK_MS = 45_000;
 const JOB_GAP_MS = 8_000;
-const MAX_JOBS_PER_NIGHT = 80;
-const MAX_PER_SCAN = 40;
+const MAX_JOBS_PER_NIGHT = 200;
+const MAX_PER_SCAN = 60;
+/** 本地品类匹配无烧 Token，每轮可连跑多条 */
+const CATALOG_MATCH_BURST = 25;
 
 let handlers: Handlers | null = null;
 let tickTimer: ReturnType<typeof setInterval> | null = null;
@@ -128,7 +130,7 @@ const loadState = (): PersistedState => {
               status: j.status === 'running' ? 'queued' : j.status,
             }))
             .filter((j: NightUpgradeJob) => j.id && j.clientId)
-            .slice(-120)
+            .slice(-400)
         : [],
     };
   } catch {
@@ -142,7 +144,7 @@ const saveState = () => {
       LS_KEY,
       JSON.stringify({
         ...state,
-        jobs: state.jobs.slice(-120).map((j) => ({
+        jobs: state.jobs.slice(-400).map((j) => ({
           ...j,
           status: j.status === 'running' ? 'queued' : j.status,
         })),
@@ -204,8 +206,14 @@ export const setNightSilentUpgradeEnabled = (enabled: boolean) => {
 
 const progressOf = (clientId: string): ClientProgress => {
   const p = state.clientProgress[clientId];
-  if (!p || p.version < NIGHT_UPGRADE_SCHEMA_VERSION) {
-    return { version: NIGHT_UPGRADE_SCHEMA_VERSION, done: [], lastAt: 0 };
+  if (!p) return { version: NIGHT_UPGRADE_SCHEMA_VERSION, done: [], lastAt: 0 };
+  if (p.version < NIGHT_UPGRADE_SCHEMA_VERSION) {
+    // v6：只强制重做 catalog_match（全站产品/价格/关键词打标），其它缺口保留
+    return {
+      version: NIGHT_UPGRADE_SCHEMA_VERSION,
+      done: (p.done || []).filter((k) => k !== 'catalog_match'),
+      lastAt: p.lastAt || 0,
+    };
   }
   return p;
 };
@@ -303,8 +311,15 @@ export const assessClientNightGaps = (
     gaps.push('enrichment');
   }
 
-  // 5) 全品类 vs 平台产品/阿里类目匹配（有背调报告即可）
-  if (!done.has('catalog_match') && (intel.hasBg || !!hist?.data)) {
+  // 5) 全品类 vs 平台产品/阿里类目匹配（有背调或 CRM 品类/关键词即可）
+  if (
+    !done.has('catalog_match') &&
+    (intel.hasBg ||
+      !!hist?.data ||
+      !!(client.productType || '').trim() ||
+      !!(client.searchKeyword || '').trim() ||
+      (client.searchedKeywords || []).length > 0)
+  ) {
     gaps.push('catalog_match');
   }
 
@@ -495,6 +510,30 @@ export const pumpNightUpgrade = async () => {
 
   pumping = true;
   try {
+    // 每晚窗口内定期扫缺口
+    if (Date.now() - (state.lastScanAt || 0) > 8 * 60 * 1000) {
+      scanAndEnqueue();
+    }
+
+    // 本地品类匹配不烧 Token：优先连跑一批，与批量背调并行不抢 Key
+    let catalogBurst = state.jobs
+      .filter((j) => j.status === 'queued' && j.kind === 'catalog_match')
+      .slice(0, CATALOG_MATCH_BURST);
+    if (!catalogBurst.length) {
+      scanAndEnqueue();
+      catalogBurst = state.jobs
+        .filter((j) => j.status === 'queued' && j.kind === 'catalog_match')
+        .slice(0, CATALOG_MATCH_BURST);
+    }
+    if (catalogBurst.length) {
+      for (const job of catalogBurst) {
+        if (shouldStop) break;
+        await runOneJob(job);
+      }
+      await new Promise((r) => setTimeout(r, 400));
+      return;
+    }
+
     // 与批量背调双轨：共享冷却 / AI 槽位，避免同一 Key 撞限流
     const { getHeavyJobCount, getSharedCooldownUntil, waitForLocalAiSlot } = await import(
       './loadGovernor'
@@ -506,10 +545,6 @@ export const pumpNightUpgrade = async () => {
     await waitForLocalAiSlot(() => shouldStop, 1);
     if (shouldStop) return;
 
-    // 每晚窗口内定期扫缺口
-    if (Date.now() - (state.lastScanAt || 0) > 10 * 60 * 1000) {
-      scanAndEnqueue();
-    }
     const next = state.jobs.find((j) => j.status === 'queued');
     if (!next) {
       scanAndEnqueue();

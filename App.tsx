@@ -34,15 +34,14 @@ import {
   hasRichProductCatalog,
   removeProductProfile,
   productCatalogDomainKey,
-  matchCatalogSkusToClientProfile,
   buildProductProfileFromAnalysis,
 } from './services/productCatalog';
 import { saveProductProfilesBulk } from './services/db';
 import { addCustomKeyword, addCustomCountry } from './services/taxonomyStore';
 import {
-  extractClientProductSignals,
-  matchClientSignalsToAlibabaCategories,
-} from './services/toyCategoryMatch';
+  applyCatalogMatchTagsToClient,
+  buildCrmCatalogMatchReport,
+} from './services/crmCatalogMatch';
 import { normalizeCountryZh } from './utils/countryNormalize';
 import { buildSearchTags, stampSearchResults } from './utils/searchTags';
 import { mergeDiscoveryResultsIntoCrm, mergeHistoryItemsIntoCrm, findCrmIdsForHistoryItem, findCrmIdsForDiscoveryResults, lookupBackgroundCheck, formatBackgroundCheckTime, findHistoryForClient, clientPatchFromAnalysis, reconcileCrmProductTypesFromHistory, CRM_JUNE_2026_CUTOFF_MS, isSearchResultInCrm, normalizeCrmHost, mergeCrmClientsByDomain, findCrmClientIndex } from './utils/crmHistory';
@@ -587,49 +586,33 @@ const App: React.FC = () => {
       },
       runCatalogMatch: async (client, hist) => {
         const analysis = hist?.data;
-        if (!analysis) return null;
-        const signals = extractClientProductSignals(analysis);
-        if (!signals.length) return null;
-        const aliHits = matchClientSignalsToAlibabaCategories(signals, { limit: 8, minScore: 22 });
-        let profile = buildProductProfileFromAnalysis(analysis, {
+        const report = buildCrmCatalogMatchReport(client, analysis, {
           historyId: hist?.id,
-          crmClientId: client.id,
-          ownerUsername: client.ownerUsername || currentUser.username,
-          departmentId: client.departmentId || currentUser.departmentId,
+          ownerUsername: currentUser.username,
+          departmentId: currentUser.departmentId,
         });
-        if (profile) {
+        if (!report) return null;
+        // 写入客户产品画像，供产品匹配模块使用
+        if (analysis) {
           try {
-            const { upsertProductProfile } = await import('./services/productCatalog');
-            await upsertProductProfile(profile);
+            const profile = buildProductProfileFromAnalysis(analysis, {
+              historyId: hist?.id,
+              crmClientId: client.id,
+              ownerUsername: client.ownerUsername || currentUser.username,
+              departmentId: client.departmentId || currentUser.departmentId,
+            });
+            if (profile) {
+              const { upsertProductProfile } = await import('./services/productCatalog');
+              await upsertProductProfile(profile);
+            }
           } catch {
             /* ignore */
           }
         }
-        const skus = loadCatalogSkus();
-        const skuHits =
-          profile && skus.length
-            ? matchCatalogSkusToClientProfile(skus, profile, { limit: 12, minScore: 22 })
-            : [];
-        const aliTags = aliHits.slice(0, 4).map((h) => `类目:${h.l1}/${h.l2}`);
-        const skuTags = skuHits.slice(0, 3).map((h) => `匹配SKU:${h.sku.skuCode || h.sku.name}`);
-        const newTags = [...aliTags, ...skuTags, skuHits.length ? `产品匹配:${skuHits.length}` : '']
-          .filter(Boolean)
-          .slice(0, 12);
-        const note = `阿里类目 ${aliHits.length} · 产品库命中 ${skuHits.length}`;
         setCrmClients((prev) =>
-          prev.map((c) => {
-            if (c.id !== client.id) return c;
-            return {
-              ...c,
-              tags: Array.from(new Set([...(c.tags || []), ...newTags])).slice(0, 64),
-              activityLog:
-                (c.activityLog || '') +
-                `\n[夜间品类匹配 ${new Date().toLocaleString('zh-CN')}] ${note}` +
-                (aliHits[0] ? ` · 首选 ${aliHits[0].l1}/${aliHits[0].l2}` : ''),
-            };
-          })
+          prev.map((c) => (c.id === client.id ? applyCatalogMatchTagsToClient(c, report) : c))
         );
-        return { note };
+        return { note: report.note };
       },
     });
     return () => stopNightSilentUpgrade();
