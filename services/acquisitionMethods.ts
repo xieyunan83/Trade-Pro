@@ -227,6 +227,38 @@ export const FORMULA_CATEGORY_LABEL: Record<SearchFormulaCategory, string> = {
   pdf_lists: 'PDF 名录',
 };
 
+const PREFERRED_CATS_KEY = 'trade_scout_acq_formula_cats_v1';
+
+/** 营销工具点「平台检索」时写入，客户搜索静默取证优先本组公式 */
+export const setPreferredAcquisitionCategories = (
+  cats?: SearchFormulaCategory[] | null
+): void => {
+  try {
+    if (!cats?.length) {
+      sessionStorage.removeItem(PREFERRED_CATS_KEY);
+      return;
+    }
+    sessionStorage.setItem(PREFERRED_CATS_KEY, JSON.stringify(cats));
+  } catch {
+    /* ignore */
+  }
+};
+
+export const consumePreferredAcquisitionCategories = (): SearchFormulaCategory[] | null => {
+  try {
+    const raw = sessionStorage.getItem(PREFERRED_CATS_KEY);
+    sessionStorage.removeItem(PREFERRED_CATS_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || !parsed.length) return null;
+    return parsed.filter((c): c is SearchFormulaCategory =>
+      ['linkedin', 'social', 'amazon', 'local_lang', 'pdf_lists'].includes(String(c))
+    );
+  } catch {
+    return null;
+  }
+};
+
 export const UNIVERSAL_SEARCH_FORMULA =
   '[产品关键词] + [买家身份词/地区词] + [限定指令/排除指令]';
 
@@ -244,8 +276,71 @@ export const fillSearchFormula = (
   return out.replace(/\s+/g, ' ').trim();
 };
 
+/** @deprecated 前台不再跳外网搜索引擎；仅保留兼容 */
 export const googleSearchUrl = (query: string): string =>
   `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+
+/**
+ * 把营销工具五类公式填成可执行的公开网页检索式（供客户搜索 / 背调静默取证）。
+ * 未填必填占位（如缺公司域名）的公式会跳过。
+ */
+export const buildAcquisitionFormulaQueries = (opts: {
+  productKeyword: string;
+  country?: string;
+  categories?: SearchFormulaCategory[];
+  domain?: string;
+  companyName?: string;
+  competitorBrand?: string;
+  competitorSite?: string;
+  limit?: number;
+}): string[] => {
+  const kw = (opts.productKeyword || '').trim();
+  if (!kw) return [];
+  const country = (opts.country || '').trim();
+  const domain = (opts.domain || '')
+    .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
+    .split('/')[0]
+    .toLowerCase();
+  const cats = opts.categories?.length
+    ? opts.categories
+    : (['linkedin', 'social', 'amazon', 'local_lang', 'pdf_lists'] as SearchFormulaCategory[]);
+  const vars: Record<string, string> = {
+    产品词: kw,
+    国家: country || '',
+    职位: 'buyer',
+    公司域名: domain || '',
+    竞品品牌: (opts.competitorBrand || kw).trim(),
+    竞品官网: (opts.competitorSite || 'alibaba.com').trim(),
+    德语产品词: kw,
+    法语产品词: kw,
+    日语产品词: kw,
+    葡语产品词: kw,
+  };
+
+  const out: string[] = [];
+  for (const f of SEARCH_FORMULAS) {
+    if (!cats.includes(f.category)) continue;
+    // 按域名找职员：无域名则跳过
+    if (f.id === 'li-domain' && !domain) continue;
+    // 竞品式：无竞品品牌时用产品词顶上，仍可用
+    const q = fillSearchFormula(f.template, vars);
+    if (!q || /\[[^\]]+\]/.test(q)) continue;
+    out.push(q);
+  }
+
+  // 公司已知时补几条社媒/主页定位（背调侧）
+  const hostOrName = domain || (opts.companyName || '').trim();
+  if (hostOrName) {
+    out.push(`"${hostOrName}" site:linkedin.com/company`);
+    out.push(`"${hostOrName}" site:facebook.com`);
+    out.push(`buyer OR purchasing OR procurement at ${domain || hostOrName} site:linkedin.com/in`);
+  }
+
+  return [...new Set(out.map((q) => q.replace(/\s+/g, ' ').trim()).filter(Boolean))].slice(
+    0,
+    Math.max(6, Math.min(opts.limit ?? 20, 28))
+  );
+};
 
 const DEFAULT_LI_TITLES = [
   'purchasing manager',

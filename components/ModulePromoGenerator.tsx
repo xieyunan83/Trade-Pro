@@ -46,10 +46,15 @@ import {
   applyPlaybook,
 } from '../services/acquisitionPlaybooks';
 import { loadTradeJourney, patchTradeJourney } from '../services/tradeJourney';
-import { AcquisitionMethodsPanel } from './AcquisitionMethodsPanel';
+import {
+  AcquisitionMethodsPanel,
+  type PlatformAcquisitionSearchRequest,
+} from './AcquisitionMethodsPanel';
 
 interface ModulePromoGeneratorProps {
   onStartAutomation: (config: AutomationPipelineConfig) => void;
+  /** 获客公式 → 平台客户搜索（不跳外网） */
+  onPlatformAcquisitionSearch?: (req: PlatformAcquisitionSearchRequest) => void;
   /** 指挥舱传入的剧本 id：打开后自动填入并弹配置窗 */
   initialPlaybookId?: string | null;
   onInitialPlaybookConsumed?: () => void;
@@ -127,6 +132,7 @@ const StatusMini: React.FC<{ done: boolean; yes: string; no: string; tone: 'emer
 
 export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   onStartAutomation,
+  onPlatformAcquisitionSearch,
   initialPlaybookId = null,
   onInitialPlaybookConsumed,
   automationResults,
@@ -638,6 +644,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
       <AcquisitionMethodsPanel
         productKeyword={draft.keyword}
         countryHint={draft.countries[0] || ''}
+        onPlatformSearch={onPlatformAcquisitionSearch}
       />
 
       {dialogOpen && (

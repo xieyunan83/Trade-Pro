@@ -145,6 +145,8 @@ import { ModuleComingSoon } from './components/ModuleComingSoon';
 import { ModuleLandingHub } from './components/ModuleLandingHub';
 import { ModulePane } from './components/ModulePane';
 import { loadCatalogSkus } from './services/productCatalogTypes';
+import { setPreferredAcquisitionCategories } from './services/acquisitionMethods';
+import type { PlatformAcquisitionSearchRequest } from './components/AcquisitionMethodsPanel';
 import { SphereNav, type SphereNavPhase } from './components/SphereNav';
 import { prefetchCoreModules, prefetchModule } from './services/modulePrefetch';
 import { lazyWithRetry } from './utils/lazyWithRetry';
@@ -298,6 +300,8 @@ const App: React.FC = () => {
   
   const [discoveryState, setDiscoveryState] = useState<DiscoveryState>(emptyDiscoveryState);
   const [discoveryArchives, setDiscoveryArchives] = useState<DiscoveryArchiveItem[]>([]);
+  /** 营销工具获客公式 → 客户搜索自动开跑 */
+  const [discoveryAutoSearchNonce, setDiscoveryAutoSearchNonce] = useState(0);
 
   const [automationResults, setAutomationResults] = useState<AutomationResult[]>([]);
   const [isAutomating, setIsAutomating] = useState(false);
@@ -620,6 +624,47 @@ const App: React.FC = () => {
   const handleDiscoveryStateChange = (state: DiscoveryState) => {
     setDiscoveryState(state);
   };
+
+  /** 营销工具五类公式：写入偏好类别 → 跳转客户搜索 → 自动开跑（平台内，不跳外网） */
+  const handlePlatformAcquisitionSearch = useCallback(
+    (req: PlatformAcquisitionSearchRequest) => {
+      const kw = req.productKeyword.trim();
+      const country = req.country.trim();
+      if (!kw) {
+        setSystemNotice('请先填写产品词');
+        return;
+      }
+      if (req.category) {
+        setPreferredAcquisitionCategories([req.category]);
+      } else {
+        setPreferredAcquisitionCategories([
+          'linkedin',
+          'social',
+          'amazon',
+          'local_lang',
+          'pdf_lists',
+        ]);
+      }
+      setDiscoveryState((prev) => ({
+        ...prev,
+        product: kw,
+        country: country || prev.country,
+        countries: country ? [country] : prev.countries?.length ? prev.countries : [],
+        results: [],
+        hasSearched: false,
+      }));
+      setDiscoveryAutoSearchNonce((n) => n + 1);
+      navigateModule(ModuleType.DISCOVERY);
+      setSystemNotice(
+        req.formulaTitle
+          ? `已按「${req.formulaTitle}」进入客户搜索并开始平台检索`
+          : req.category
+            ? `已按「获客公式组」进入客户搜索并开始平台检索`
+            : '已进入客户搜索，正按五类获客公式做平台检索…'
+      );
+    },
+    [navigateModule]
+  );
 
   /** 可靠归档：每次按国搜索完成后立刻写入本地 + 云端 */
   const handleSearchArchived = (archive: DiscoveryArchiveItem) => {
@@ -5322,6 +5367,8 @@ const App: React.FC = () => {
                         onOpenExistingReport={handleOpenExistingFromSearch}
                         onBatchAddToCRM={handleBatchAddToCRM}
                         onBatchAnalyze={handleBatchAnalyzeExisting}
+                        autoSearchNonce={discoveryAutoSearchNonce}
+                        onAutoSearchConsumed={() => setDiscoveryAutoSearchNonce(0)}
                     />
                 </ModulePane>
                 <ModulePane id={ModuleType.CLIENT_CRM} activeId={activeModule} maxAlive={10}>
@@ -5462,6 +5509,7 @@ const App: React.FC = () => {
                 <ModulePane id={ModuleType.PROMO_GENERATOR} activeId={activeModule} maxAlive={10}>
                     <ModulePromoGenerator 
                         onStartAutomation={handleStartQueueGeneration}
+                        onPlatformAcquisitionSearch={handlePlatformAcquisitionSearch}
                         initialPlaybookId={pendingPlaybookId}
                         onInitialPlaybookConsumed={() => setPendingPlaybookId(null)}
                         automationResults={automationResults}

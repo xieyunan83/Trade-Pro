@@ -10,6 +10,10 @@ import { locateLinkedInEmployees } from './linkedinEmployeeLocator';
 import { enrichDecisionMakersTitleAndWhatsApp } from './decisionMakerWebEnrich';
 import { mergeDecisionMakers } from './multiModelMerge';
 import {
+  buildAcquisitionFormulaQueries,
+  consumePreferredAcquisitionCategories,
+} from './acquisitionMethods';
+import {
   searchCustomsCacheForLeads,
   collectInternalLeads,
 } from './internalLeadSources';
@@ -67,7 +71,16 @@ export const buildSilentChannelQueries = (opts: LeadSearchInput): string[] => {
   add(`${kw} (distributor OR wholesale OR "private label") site:facebook.com ${market}`);
   add(`${kw} drinkware OR toys OR wholesale phone site:facebook.com ${market}`);
 
-  return [...base, ...extra].slice(0, 18);
+  // 营销工具五类公式（领英/社媒/电商/母语/PDF）→ 平台内检索，不跳外网
+  for (const q of buildAcquisitionFormulaQueries({
+    productKeyword: kw,
+    country: market,
+    limit: 16,
+  })) {
+    add(q);
+  }
+
+  return [...base, ...extra].slice(0, 24);
 };
 
 const guessTld = (market: string): string => {
@@ -138,6 +151,15 @@ export const gatherSilentLeadChannelEvidence = async (opts: {
   clientType?: string;
 }): Promise<string> => {
   if (!hasTavilyKey()) return '';
+  const preferredCats = consumePreferredAcquisitionCategories();
+  const focusedQs = preferredCats?.length
+    ? buildAcquisitionFormulaQueries({
+        productKeyword: opts.productKeyword,
+        country: opts.country,
+        categories: preferredCats,
+        limit: 14,
+      })
+    : [];
   const ruleQs = buildSilentChannelQueries({
     productKeyword: opts.productKeyword,
     country: opts.country,
@@ -159,7 +181,8 @@ export const gatherSilentLeadChannelEvidence = async (opts: {
     aiQs = [];
   }
 
-  const queries = [...new Set([...aiQs, ...ruleQs])].slice(0, 8);
+  // 营销工具指定类别优先，再规则通道 / AI 式
+  const queries = [...new Set([...focusedQs, ...ruleQs, ...aiQs])].slice(0, 14);
   const chunks: string[] = [];
 
   // 海关本地缓存摘要（静默注入，不展示来源品牌）

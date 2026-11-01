@@ -62,6 +62,9 @@ interface ClientFinderProps {
   onOpenExistingReport?: (result: ClientSearchResult) => void;
   onBatchAddToCRM: (results: ClientSearchResult[]) => void;
   onBatchAnalyze: (results: ClientSearchResult[]) => void;
+  /** 营销工具「平台检索」跳转后自动开跑 */
+  autoSearchNonce?: number;
+  onAutoSearchConsumed?: () => void;
 }
 
 const normalizeCountries = (state: DiscoveryState): string[] => {
@@ -92,9 +95,12 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
   onOpenExistingReport,
   onBatchAddToCRM,
   onBatchAnalyze,
+  autoSearchNonce = 0,
+  onAutoSearchConsumed,
 }) => {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const lastAutoNonce = useRef(0);
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
   const [countryOpen, setCountryOpen] = useState(false);
   const [activeContinentId, setActiveContinentId] = useState(CONTINENTS[0].id);
@@ -291,6 +297,16 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
       setLoading(false);
     }
   };
+
+  // 营销工具「平台检索」：带入关键词后自动开始搜索
+  useEffect(() => {
+    if (!autoSearchNonce || autoSearchNonce === lastAutoNonce.current) return;
+    if (!state.product.trim() || loading) return;
+    lastAutoNonce.current = autoSearchNonce;
+    onAutoSearchConsumed?.();
+    void handleSearch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅响应 nonce
+  }, [autoSearchNonce, state.product, loading]);
 
   const toggleSelect = (idx: number) => {
     const next = new Set(selectedIndices);

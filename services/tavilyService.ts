@@ -437,6 +437,10 @@ export const gatherTavilyCompanyEvidenceBundle = async (opts: {
     // 关键词查询仅作补充匹配，不替代全站品类采集
     queries.push(`site:${domain} ${kw} (price OR shop OR product OR catalog OR buy)`);
     queries.push(`"${name}" ${kw} ${country}`.replace(/\s+/g, ' ').trim());
+    // 营销工具公式意图：按公司对齐公开职业主页 / 社媒（平台内执行）
+    queries.push(`buyer OR purchasing OR procurement at ${domain} site:linkedin.com/in`);
+    queries.push(`"${name}" ${kw} site:facebook.com`);
+    queries.push(`"${name}" distributor OR importer ${kw} -alibaba`);
   }
 
   const chunks: string[] = [];
