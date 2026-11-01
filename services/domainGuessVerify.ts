@@ -383,7 +383,29 @@ export const resolveMissingDomainFromImport = async (
   return null;
 };
 
-/** 批量：仅为缺网址的行猜测；控制并发 */
+/** 仅用邮箱后缀软推断域名（不开网页；大批量导入秒级完成，避免挂死） */
+export const softGuessDomainFromEmail = (
+  input: DomainGuessInput
+): DomainGuessResult | null => {
+  if (normalizeCrmHost(input.website)) return null;
+  for (const c of input.contacts || []) {
+    const host = emailToCorporateHost(c.emailGuess);
+    if (!host) continue;
+    return {
+      website: `https://${host}`,
+      host,
+      source: 'email',
+      confidence: 42,
+      evidence: ['邮箱@后缀软推断（未开网页核验）'],
+    };
+  }
+  return null;
+};
+
+/** 缺网址行数超过该阈值时自动改用软推断，避免上千次开网页卡死客户端 */
+export const DOMAIN_VERIFY_AUTO_SOFT_THRESHOLD = 60;
+
+/** 批量：仅为缺网址的行猜测；大批量默认软推断（可 mode:'verify' 强制开网页） */
 export const enrichImportRowsWithGuessedDomains = async <
   T extends {
     companyName: string;
@@ -394,18 +416,61 @@ export const enrichImportRowsWithGuessedDomains = async <
   },
 >(
   rows: T[],
-  opts?: { concurrency?: number; onProgress?: (done: number, total: number) => void }
-): Promise<{ rows: T[]; guessed: number }> => {
+  opts?: {
+    concurrency?: number;
+    onProgress?: (done: number, total: number) => void;
+    /** soft=仅邮箱后缀；verify=开网页核验；auto=超量自动 soft */
+    mode?: 'auto' | 'soft' | 'verify';
+  }
+): Promise<{ rows: T[]; guessed: number; modeUsed: 'soft' | 'verify' }> => {
   const needIdx = rows
     .map((r, i) => ({ r, i }))
     .filter(({ r }) => !normalizeCrmHost(r.website));
-  if (!needIdx.length) return { rows, guessed: 0 };
+  if (!needIdx.length) return { rows, guessed: 0, modeUsed: 'soft' };
 
-  const concurrency = Math.max(1, Math.min(opts?.concurrency || 2, 3));
+  const modeOpt = opts?.mode || 'auto';
+  const useSoft =
+    modeOpt === 'soft' ||
+    (modeOpt === 'auto' && needIdx.length >= DOMAIN_VERIFY_AUTO_SOFT_THRESHOLD);
+
+  const next = [...rows];
   let guessed = 0;
   let done = 0;
-  const next = [...rows];
 
+  if (useSoft) {
+    for (const { r, i: idx } of needIdx) {
+      try {
+        const hit = softGuessDomainFromEmail({
+          companyName: r.companyName,
+          website: r.website,
+          country: r.country,
+          address: r.address,
+          contacts: r.contacts,
+        });
+        if (hit) {
+          next[idx] = { ...next[idx], website: hit.website };
+          guessed += 1;
+          const noteBit = `[域名推断:${hit.host}·软推断]`;
+          const prevNote = (next[idx] as any).note || '';
+          if (typeof (next[idx] as any).note === 'string' && !prevNote.includes('[域名推断:')) {
+            (next[idx] as any).note = prevNote ? `${prevNote} ${noteBit}` : noteBit;
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+      done += 1;
+      if (done % 200 === 0 || done === needIdx.length) {
+        opts?.onProgress?.(done, needIdx.length);
+        // 让出主线程，避免 UI 假死
+        await new Promise((r) => setTimeout(r, 0));
+      }
+    }
+    opts?.onProgress?.(needIdx.length, needIdx.length);
+    return { rows: next, guessed, modeUsed: 'soft' };
+  }
+
+  const concurrency = Math.max(1, Math.min(opts?.concurrency || 2, 3));
   for (let i = 0; i < needIdx.length; i += concurrency) {
     const slice = needIdx.slice(i, i + concurrency);
     await Promise.all(
@@ -440,5 +505,5 @@ export const enrichImportRowsWithGuessedDomains = async <
     );
   }
 
-  return { rows: next, guessed };
+  return { rows: next, guessed, modeUsed: 'verify' };
 };

@@ -521,14 +521,15 @@ export const coalesceBatchBgRows = (rows: BatchBgExcelRow[]): BatchBgExcelRow[] 
 export const enrichBatchRowsMissingDomains = async (
   rows: BatchBgExcelRow[],
   onProgress?: (done: number, total: number) => void
-): Promise<{ rows: BatchBgExcelRow[]; guessed: number }> => {
+): Promise<{ rows: BatchBgExcelRow[]; guessed: number; modeUsed: 'soft' | 'verify' }> => {
   const forGuess = rows.map((r) => ({
     ...r,
     address: [r.address, r.postalCode].filter(Boolean).join(' '),
   }));
-  const { rows: next, guessed } = await enrichImportRowsWithGuessedDomains(forGuess, {
+  const { rows: next, guessed, modeUsed } = await enrichImportRowsWithGuessedDomains(forGuess, {
     concurrency: 2,
     onProgress,
+    mode: 'auto',
   });
   const marked = next.map((r) => {
     const orig = rows.find((x) => x.rowIndex === r.rowIndex);
@@ -543,7 +544,7 @@ export const enrichBatchRowsMissingDomains = async (
     }
     return restored;
   });
-  return { rows: marked, guessed };
+  return { rows: marked, guessed, modeUsed };
 };
 
 const mapClientType = (t?: string): Client['type'] | undefined => {

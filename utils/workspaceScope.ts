@@ -8,6 +8,8 @@ export const emptyDiscoveryState = (): DiscoveryState => ({
   country: '',
   countries: [],
   industry: '',
+  categoryL1: '',
+  categoryL2: '',
   clientType: '',
   clientTypes: [],
   results: [],

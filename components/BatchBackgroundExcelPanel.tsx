@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Download,
   Upload,
@@ -21,6 +21,11 @@ import {
   classifyBatchBackgroundRows,
   summarizeBatchBgClasses,
 } from '../services/batchBackgroundExcel';
+import {
+  clearExcelBatchDraft,
+  loadExcelBatchDraft,
+  saveExcelBatchDraft,
+} from '../services/excelBatchDraftStore';
 
 type Props = {
   open: boolean;
@@ -55,13 +60,30 @@ export const BatchBackgroundExcelPanel: React.FC<Props> = ({
   const [fileName, setFileName] = useState('');
   const [mode, setMode] = useState<'economy' | 'detailed'>('economy');
 
+  // 打开面板时恢复未开始的草稿（防休眠/刷新白干）
+  useEffect(() => {
+    if (!open) return;
+    if (rows.length || busy) return;
+    const draft = loadExcelBatchDraft();
+    if (!draft?.rows?.length) return;
+    setRows(draft.rows);
+    setStats(draft.stats);
+    setFileName(draft.fileName || '');
+    setMode(draft.mode || 'economy');
+    setMsg(
+      draft.msg ||
+        `已恢复上次导入草稿（${draft.stats.total} 行，${new Date(draft.savedAt).toLocaleString('zh-CN')}），可直接开始批量处理。`
+    );
+  }, [open]);
+
   if (!open) return null;
 
-  const reset = () => {
+  const reset = (clearDraft = false) => {
     setRows([]);
     setStats(null);
     setMsg(null);
     setFileName('');
+    if (clearDraft) clearExcelBatchDraft();
   };
 
   const onPickFile = async (file: File | null) => {
@@ -72,23 +94,42 @@ export const BatchBackgroundExcelPanel: React.FC<Props> = ({
       const parsed = await parseBatchBackgroundExcel(file);
       const missing = parsed.filter((r) => !(r.website || '').trim()).length;
       if (missing > 0) {
-        setMsg(`已读入 ${parsed.length} 行，正在根据邮箱后缀/公司名推断并核验官网（${missing} 行缺网址）…`);
+        setMsg(
+          `已读入 ${parsed.length} 行（缺网址 ${missing}）。大批量将用邮箱@后缀快速推断域名，几秒到一两分钟内可点开始…`
+        );
       }
-      const { rows: enriched, guessed } = await enrichBatchRowsMissingDomains(
+      const { rows: enriched, guessed, modeUsed } = await enrichBatchRowsMissingDomains(
         parsed,
         (done, total) => {
-          setMsg(`域名推断核验中 ${done}/${total}…`);
+          if (done === total || done % 500 === 0) {
+            setMsg(`域名快速推断中 ${done}/${total}…`);
+          }
         }
       );
       const classified = classifyBatchBackgroundRows(enriched, history, crmClients);
       const s = summarizeBatchBgClasses(classified);
+      const summary =
+        `已解析 ${s.total} 行：待背调 ${s.needAnalyze} · 仅补充 ${s.mergeUpdate} · 跳过 ${s.skipCrm + s.skipHistory} · 无效 ${s.invalid}` +
+        (guessed
+          ? ` · 域名${modeUsed === 'soft' ? '软推断' : '核验'}成功 ${guessed}`
+          : missing
+            ? ' · 部分缺网址未能推断域名'
+            : '') +
+        (modeUsed === 'soft' && missing > 60
+          ? '（大批量已跳过逐条开网页，避免卡死；任务入队后可挂机/夜间续跑）'
+          : '');
       setRows(classified);
       setStats(s);
       setFileName(file.name);
-      setMsg(
-        `已解析 ${s.total} 行：待背调 ${s.needAnalyze} · 仅补充 ${s.mergeUpdate} · 跳过 ${s.skipCrm + s.skipHistory} · 无效 ${s.invalid}` +
-          (guessed ? ` · 域名推断成功 ${guessed}` : missing ? ' · 部分缺网址未能核验域名' : '')
-      );
+      setMsg(summary);
+      saveExcelBatchDraft({
+        savedAt: Date.now(),
+        fileName: file.name,
+        mode,
+        stats: s,
+        rows: classified,
+        msg: summary,
+      });
     } catch (e: any) {
       setRows([]);
       setStats(null);
@@ -117,7 +158,7 @@ export const BatchBackgroundExcelPanel: React.FC<Props> = ({
       return;
     }
     onStart({ toAnalyze, toMergeUpdate, toCrmFromHistory, stats, mode });
-    reset();
+    reset(true);
     onClose();
   };
 
@@ -147,7 +188,7 @@ export const BatchBackgroundExcelPanel: React.FC<Props> = ({
           <button
             type="button"
             onClick={() => {
-              reset();
+              // 关闭不删草稿，休眠回来可继续
               onClose();
             }}
             className="p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-50"
@@ -315,7 +356,8 @@ export const BatchBackgroundExcelPanel: React.FC<Props> = ({
           <button
             type="button"
             onClick={() => {
-              reset();
+              if (rows.length && !confirm('取消将清除本机导入草稿，确定？')) return;
+              reset(true);
               onClose();
             }}
             className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-black text-slate-600 hover:bg-slate-50"

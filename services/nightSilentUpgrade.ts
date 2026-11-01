@@ -17,10 +17,15 @@ import { resolveCrmClientIntel } from '../utils/companyIntelStatus';
 import { hasRichProductCatalog } from './productCatalog';
 
 /** 功能缺口版本：新能力上线时 +1，旧客户会重新进入夜间队列 */
-/** v4：定位后全网补职位 + WhatsApp */
-export const NIGHT_UPGRADE_SCHEMA_VERSION = 4;
+/** v5：全品类 vs 平台类目/产品库匹配（夜间静默） */
+export const NIGHT_UPGRADE_SCHEMA_VERSION = 5;
 
-export type NightGapKind = 'linkedin_locate' | 'dm_email' | 'product_dig' | 'enrichment';
+export type NightGapKind =
+  | 'linkedin_locate'
+  | 'dm_email'
+  | 'product_dig'
+  | 'enrichment'
+  | 'catalog_match';
 
 export type NightUpgradeJob = {
   id: string;
@@ -80,6 +85,8 @@ type Handlers = {
   enqueueProduct: (client: Client) => boolean;
   /** 入队背调补全 */
   enqueueEnrichment: (client: Client) => boolean;
+  /** 全品类匹配平台类目 + 产品库（夜间静默） */
+  runCatalogMatch?: (client: Client, history?: HistoryItem) => Promise<{ note: string } | null>;
 };
 
 const LS_KEY = 'trade_scout_night_silent_upgrade_v1';
@@ -296,6 +303,11 @@ export const assessClientNightGaps = (
     gaps.push('enrichment');
   }
 
+  // 5) 全品类 vs 平台产品/阿里类目匹配（有背调报告即可）
+  if (!done.has('catalog_match') && (intel.hasBg || !!hist?.data)) {
+    gaps.push('catalog_match');
+  }
+
   return gaps;
 };
 
@@ -336,6 +348,7 @@ const scanAndEnqueue = () => {
       const score = (g: NightGapKind[]) =>
         (g.includes('linkedin_locate') ? 8 : 0) +
         (g.includes('dm_email') ? 6 : 0) +
+        (g.includes('catalog_match') ? 5 : 0) +
         (g.includes('product_dig') ? 3 : 0) +
         (g.includes('enrichment') ? 2 : 0);
       return score(b.gaps) - score(a.gaps);
@@ -439,6 +452,21 @@ const runOneJob = async (job: NightUpgradeJob) => {
         job.status = 'completed';
         job.note = '已交背调补全队列';
       }
+    } else if (job.kind === 'catalog_match') {
+      if (!handlers.runCatalogMatch) {
+        job.status = 'skipped';
+        job.error = '未挂载品类匹配';
+      } else {
+        const res = await handlers.runCatalogMatch(client, hist);
+        if (!res) {
+          job.status = 'skipped';
+          job.error = '无可匹配品类信号';
+        } else {
+          markDone(client.id, 'catalog_match');
+          job.status = 'completed';
+          job.note = res.note;
+        }
+      }
     }
   } catch (e: any) {
     job.status = 'failed';
@@ -522,4 +550,4 @@ export const stopNightSilentUpgrade = () => {
 };
 
 export const describeNightSilentUpgrade = (): string =>
-  `夜间静默升级（上海 22:00–08:00）· schema v${NIGHT_UPGRADE_SCHEMA_VERSION} · 公司联系人 / 邮箱 / 品类 / 背调补全 · 与批量背调双轨错峰`;
+  `夜间静默升级（上海 22:00–08:00）· schema v${NIGHT_UPGRADE_SCHEMA_VERSION} · 联系人 / 邮箱 / 品类深挖 / 背调补全 / 全品类产品匹配 · 与批量背调双轨错峰`;

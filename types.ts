@@ -797,6 +797,10 @@ export interface DiscoveryState {
   /** 多选目标国家（英文名，供搜索） */
   countries: string[];
   industry: string;
+  /** 阿里玩具一级类目（英文名） */
+  categoryL1?: string;
+  /** 阿里玩具二级类目（英文名） */
+  categoryL2?: string;
   /** @deprecated 兼容旧数据；优先用 clientTypes */
   clientType: string;
   /** 多选客户类型 */
