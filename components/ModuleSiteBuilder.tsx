@@ -142,7 +142,8 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
   const active = projects.find((p) => p.id === activeId) || null;
   const deployMeta = getDeployOption(active?.deployId || deployId);
   const llmStatus = useMemo(() => getSiteVibeLlmStatus(), [busy, activeId]);
-  const buildCap = useMemo(() => getSiteBuildCapabilityStatus(), [oneClickOpen, busy]);
+  const buildCap = useMemo(() => getSiteBuildCapabilityStatus(), [busy]);
+  const closeOneClick = () => setOneClickOpen(false);
 
   useEffect(() => {
     const onOpen = (ev: Event) => {
@@ -565,7 +566,7 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
         {deployCatalogModal}
         <SiteOneClickForm
           open={oneClickOpen}
-          onClose={() => setOneClickOpen(false)}
+          onClose={closeOneClick}
           ownerUsername={currentUser.username}
           initialBrief={homePrompt}
         />
@@ -797,7 +798,7 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
     <div className="max-w-[96rem] mx-auto space-y-3 animate-fade-in px-1">
       <SiteOneClickForm
         open={oneClickOpen}
-        onClose={() => setOneClickOpen(false)}
+        onClose={closeOneClick}
         ownerUsername={currentUser.username}
       />
       {deployCatalogModal}

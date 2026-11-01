@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Sparkles,
   X,
@@ -39,7 +39,7 @@ export const SiteOneClickForm: React.FC<Props> = ({
   initialBrief,
   initialReferenceUrl,
 }) => {
-  const cap = useMemo(() => getSiteBuildCapabilityStatus(), [open]);
+  const cap = useMemo(() => (open ? getSiteBuildCapabilityStatus() : null), [open]);
   const [form, setForm] = useState<SiteBuildConfirmForm>(() =>
     defaultSiteBuildForm({
       brief: initialBrief || '',
@@ -49,21 +49,65 @@ export const SiteOneClickForm: React.FC<Props> = ({
   );
   const [submitting, setSubmitting] = useState(false);
   const [queuedHint, setQueuedHint] = useState('');
+  const [shakeHint, setShakeHint] = useState('');
 
-  if (!open) return null;
+  useEffect(() => {
+    if (!open) return;
+    setForm(
+      defaultSiteBuildForm({
+        brief: initialBrief || '',
+        referenceUrl: initialReferenceUrl || '',
+        ownerUsername,
+      })
+    );
+    setSubmitting(false);
+    setQueuedHint('');
+    setShakeHint('');
+  }, [open, initialBrief, initialReferenceUrl, ownerUsername]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [open, onClose]);
+
+  if (!open || !cap) return null;
 
   const patch = <K extends keyof SiteBuildConfirmForm>(key: K, value: SiteBuildConfirmForm[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
+    setShakeHint('');
   };
 
-  const canSubmit =
-    !!form.brandName.trim() &&
-    (!!form.brief.trim() || !!form.tagline.trim()) &&
-    cap.llm &&
-    !submitting;
+  const missingBrand = !form.brandName.trim();
+  const missingBrief = !form.brief.trim() && !form.tagline.trim();
+  const canSubmit = !missingBrand && !missingBrief && cap.llm && !submitting;
+
+  const submitBlockReason = !cap.llm
+    ? '写站服务未就绪，请联系管理员开通'
+    : missingBrand
+      ? '请先填写品牌 / 公司名'
+      : missingBrief
+        ? '请填写一句话定位或详细需求'
+        : submitting
+          ? '正在提交…'
+          : '';
 
   const submit = () => {
-    if (!canSubmit) return;
+    if (!canSubmit) {
+      setShakeHint(submitBlockReason);
+      return;
+    }
     setSubmitting(true);
     try {
       const job = enqueueSiteBuildJob({ ...form, ownerUsername });
@@ -74,7 +118,7 @@ export const SiteOneClickForm: React.FC<Props> = ({
         setSubmitting(false);
         onClose();
         setQueuedHint('');
-      }, 1200);
+      }, 900);
     } catch (e: any) {
       setSubmitting(false);
       window.alert(e?.message || String(e));
@@ -86,32 +130,46 @@ export const SiteOneClickForm: React.FC<Props> = ({
       className="fixed inset-0 z-[85] flex items-end sm:items-center justify-center bg-slate-950/55 backdrop-blur-sm p-3"
       role="dialog"
       aria-modal="true"
-      onClick={onClose}
+      aria-labelledby="site-oneclick-title"
     >
+      {/* 仅点遮罩空白处关闭；卡片内点击不冒泡 */}
+      <button
+        type="button"
+        className="absolute inset-0 cursor-default"
+        aria-label="关闭表单"
+        onClick={onClose}
+      />
       <div
-        className="w-full max-w-2xl max-h-[92vh] overflow-y-auto rounded-2xl bg-white shadow-2xl border border-slate-200"
+        className="relative w-full max-w-2xl max-h-[min(92vh,880px)] flex flex-col rounded-2xl bg-white shadow-2xl border border-slate-200 overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="sticky top-0 z-10 flex items-start justify-between gap-3 px-4 py-3 border-b border-slate-100 bg-white">
+        <div className="shrink-0 flex items-start justify-between gap-3 px-4 py-3 border-b border-slate-100 bg-white">
           <div className="flex items-start gap-2 min-w-0">
             <div className="mt-0.5 rounded-xl bg-teal-50 text-teal-700 p-2">
               <Sparkles size={16} />
             </div>
             <div className="min-w-0">
-              <div className="text-sm font-extrabold text-slate-900">一键建站 · 确认表单</div>
+              <div id="site-oneclick-title" className="text-sm font-extrabold text-slate-900">
+                一键建站 · 确认表单
+              </div>
               <p className="text-[11px] text-slate-500 leading-snug mt-0.5">
-                确认品牌与素材需求后，系统在后台依次生成图片、视频
+                确认后后台生成图片、视频
                 {cap.model3d ? '、3D' : ''}
-                并汇集成品网站。执行期间请勿关闭客户端。
+                并汇集成站。按 Esc 或点「取消」可关闭。
               </p>
             </div>
           </div>
-          <button type="button" onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100">
-            <X size={16} />
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-2 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-800 shrink-0"
+            aria-label="关闭"
+          >
+            <X size={18} />
           </button>
         </div>
 
-        <div className="px-4 py-4 space-y-4">
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-4 space-y-4">
           <div
             className={`rounded-xl border px-3 py-2 text-[11px] font-bold ${
               cap.llm
@@ -129,10 +187,13 @@ export const SiteOneClickForm: React.FC<Props> = ({
               <label className="block space-y-1">
                 <span className="text-[10px] font-bold text-slate-500">品牌 / 公司名 *</span>
                 <input
+                  autoFocus
                   value={form.brandName}
                   onChange={(e) => patch('brandName', e.target.value)}
                   placeholder="例如：中创云海"
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold outline-none focus:border-teal-400"
+                  className={`w-full rounded-xl border px-3 py-2 text-sm font-semibold outline-none focus:border-teal-400 ${
+                    missingBrand && shakeHint ? 'border-rose-400 ring-2 ring-rose-100' : 'border-slate-200'
+                  }`}
                 />
               </label>
               <label className="block space-y-1">
@@ -152,7 +213,9 @@ export const SiteOneClickForm: React.FC<Props> = ({
                 onChange={(e) => patch('brief', e.target.value)}
                 rows={3}
                 placeholder="描述官网用途、目标买家、要强调的卖点、语言偏好…"
-                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-teal-400 resize-y min-h-[5rem]"
+                className={`w-full rounded-xl border px-3 py-2 text-sm outline-none focus:border-teal-400 resize-y min-h-[5rem] ${
+                  missingBrief && shakeHint ? 'border-rose-400 ring-2 ring-rose-100' : 'border-slate-200'
+                }`}
               />
             </label>
             <div className="grid sm:grid-cols-2 gap-3">
@@ -318,7 +381,7 @@ export const SiteOneClickForm: React.FC<Props> = ({
             <div>
               <div className="font-black">后台执行提醒</div>
               <p className="mt-0.5 leading-snug">
-                提交后任务在本客户端后台运行（含视频时可能数分钟）。请勿关闭或刷新页面；可切换到其它模块继续工作，左下角可查看进度。
+                提交后任务在本客户端后台运行（含视频时可能数分钟）。请勿关闭或刷新页面；可切换到其它模块，左下角查看进度。
               </p>
             </div>
           </div>
@@ -331,23 +394,33 @@ export const SiteOneClickForm: React.FC<Props> = ({
           ) : null}
         </div>
 
-        <div className="sticky bottom-0 flex items-center justify-end gap-2 px-4 py-3 border-t border-slate-100 bg-white">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-xl px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-100"
-          >
-            取消
-          </button>
-          <button
-            type="button"
-            disabled={!canSubmit}
-            onClick={submit}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-black px-4 py-2.5 disabled:opacity-40"
-          >
-            {submitting ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-            {submitting ? '已提交后台…' : '确认并开始生成'}
-          </button>
+        <div className="shrink-0 border-t border-slate-100 bg-white px-4 py-3 space-y-2">
+          {shakeHint || submitBlockReason ? (
+            <p className="text-[11px] font-bold text-amber-700 text-right">
+              {shakeHint || (canSubmit ? '' : submitBlockReason)}
+            </p>
+          ) : null}
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-xl px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-100 border border-slate-200"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              onClick={submit}
+              className={`inline-flex items-center gap-1.5 rounded-xl text-white text-xs font-black px-4 py-2.5 ${
+                canSubmit
+                  ? 'bg-teal-600 hover:bg-teal-500'
+                  : 'bg-slate-400 cursor-not-allowed'
+              }`}
+            >
+              {submitting ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+              {submitting ? '已提交后台…' : '确认并开始生成'}
+            </button>
+          </div>
         </div>
       </div>
     </div>
