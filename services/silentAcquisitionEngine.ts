@@ -7,6 +7,8 @@ import type { AnalysisResult, ClientSearchResult, DecisionMaker } from '../types
 import { buildLeadDiscoveryQueries, type LeadSearchInput } from './leadDiscoverySources';
 import { hasTavilyKey, tavilySearch, formatTavilyEvidence } from './tavilyService';
 import { locateLinkedInEmployees } from './linkedinEmployeeLocator';
+import { enrichDecisionMakersTitleAndWhatsApp } from './decisionMakerWebEnrich';
+import { mergeDecisionMakers } from './multiModelMerge';
 import {
   searchCustomsCacheForLeads,
   collectInternalLeads,
@@ -244,6 +246,32 @@ export const gatherSilentCompanyChannelIntel = async (opts: {
     console.warn('[silent-acq] contact locate skipped', e);
   }
 
+  // 1b) 全网补全职位 + WhatsApp（不挖邮箱；仅公开信息）
+  if (out.decisionMakers.length > 0) {
+    try {
+      const before = out.decisionMakers;
+      const waBefore = before.filter((d) => (d.whatsapp || '').trim()).length;
+      const titleBefore = before.filter(
+        (d) => (d.title || '').trim() && !/待确认|待补充/i.test(d.title)
+      ).length;
+      const enriched = await enrichDecisionMakersTitleAndWhatsApp({
+        domain,
+        companyName: name,
+        decisionMakers: before,
+        limit: 8,
+      });
+      out.decisionMakers = enriched;
+      const waAfter = enriched.filter((d) => (d.whatsapp || '').trim()).length;
+      const titleAfter = enriched.filter(
+        (d) => (d.title || '').trim() && !/待确认|待补充/i.test(d.title)
+      ).length;
+      if (titleAfter > titleBefore) out.intelNotes.push(`titles+${titleAfter - titleBefore}`);
+      if (waAfter > waBefore) out.intelNotes.push(`whatsapp+${waAfter - waBefore}`);
+    } catch (e) {
+      console.warn('[silent-acq] title/whatsapp enrich skipped', e);
+    }
+  }
+
   if (!hasTavilyKey()) return out;
 
   // 2) 公司主页 / Facebook 公开页
@@ -288,13 +316,19 @@ export const mergeSilentIntelIntoAnalysis = (
     linkedin: analysis.socials?.linkedin || intel.socials.linkedin,
     facebook: analysis.socials?.facebook || intel.socials.facebook,
   };
+  // 静默侧已含定位+职位/WhatsApp 补全，与背调原列表按字段择优合并
   const dms =
-    intel.decisionMakers?.length > (analysis.decisionMakers?.length || 0)
-      ? intel.decisionMakers
-      : analysis.decisionMakers || intel.decisionMakers || [];
+    (intel.decisionMakers?.length || 0) > 0
+      ? mergeDecisionMakers(analysis.decisionMakers || [], intel.decisionMakers)
+      : analysis.decisionMakers || [];
   let evidenceSummary = analysis.evidenceSummary || '';
-  if (intel.socials.facebook && !/facebook/i.test(evidenceSummary)) {
-    evidenceSummary = [evidenceSummary, '已核对公开企业主页线索'].filter(Boolean).join(' · ');
+  if (
+    (intel.socials.facebook || intel.intelNotes.some((n) => /titles|whatsapp|contacts/i.test(n))) &&
+    !/公开联系人|企业主页/i.test(evidenceSummary)
+  ) {
+    evidenceSummary = [evidenceSummary, '已核对公开企业主页与联系人线索']
+      .filter(Boolean)
+      .join(' · ');
   }
   return {
     ...analysis,

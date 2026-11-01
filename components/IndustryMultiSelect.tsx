@@ -32,13 +32,14 @@ export const IndustryMultiSelect: React.FC<IndustryMultiSelectProps> = ({
 
   const selected = useMemo(() => parseIndustrySelection(value), [value]);
 
+  // 用 click：避免与下方「开始搜索」抢 mousedown 导致按钮 click 丢失
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
     };
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
+    document.addEventListener('click', onDoc);
+    return () => document.removeEventListener('click', onDoc);
   }, [open]);
 
   const toggle = (en: string) => {

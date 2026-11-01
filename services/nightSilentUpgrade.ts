@@ -8,6 +8,7 @@
 import type { Client, DecisionMaker, HistoryItem } from '../types';
 import { isQwenNightPromoWindow } from './qwenModelSchedule';
 import { locateLinkedInEmployees } from './linkedinEmployeeLocator';
+import { enrichDecisionMakersTitleAndWhatsApp } from './decisionMakerWebEnrich';
 import {
   buildHistoryLookupIndex,
   findHistoryForClient,
@@ -16,7 +17,8 @@ import { resolveCrmClientIntel } from '../utils/companyIntelStatus';
 import { hasRichProductCatalog } from './productCatalog';
 
 /** 功能缺口版本：新能力上线时 +1，旧客户会重新进入夜间队列 */
-export const NIGHT_UPGRADE_SCHEMA_VERSION = 3;
+/** v4：定位后全网补职位 + WhatsApp */
+export const NIGHT_UPGRADE_SCHEMA_VERSION = 4;
 
 export type NightGapKind = 'linkedin_locate' | 'dm_email' | 'product_dig' | 'enrichment';
 
@@ -230,17 +232,24 @@ export const assessClientNightGaps = (
     const n = (d.name || '').trim();
     return n && !/公开信息未找到|未知|待补充/i.test(n);
   });
+  const needsTitleOrWhatsApp = dms.some((d) => {
+    const n = (d.name || '').trim();
+    if (!n || /公开信息未找到|未知|待补充/i.test(n)) return false;
+    const weakTitle =
+      !(d.title || '').trim() || /待确认|待补充|Employee|Staff|Company Contact/i.test(d.title || '');
+    const noWa = !(d.whatsapp || '').trim() && !(d.phone || '').trim();
+    return weakTitle || noWa;
+  });
   const domain = (client.website || hist?.domain || '').trim();
   const gaps: NightGapKind[] = [];
   const done = new Set(progressOf(client.id).done);
 
-  // 1) 公司联系人：有官网、尚无可用联系人主页/姓名
+  // 1) 公司联系人：缺主页/姓名，或已有人对齐但缺具体职位/WhatsApp
   if (
     !done.has('linkedin_locate') &&
     domain.includes('.') &&
-    !hasLi &&
-    !hasNamedContact &&
-    (intel.hasBg || !!hist)
+    (intel.hasBg || !!hist) &&
+    ((!hasLi && !hasNamedContact) || ((hasLi || hasNamedContact) && needsTitleOrWhatsApp))
   ) {
     gaps.push('linkedin_locate');
   }
@@ -373,20 +382,28 @@ const runOneJob = async (job: NightUpgradeJob) => {
   try {
     if (job.kind === 'linkedin_locate') {
       const existing = hist?.data?.decisionMakers || client.contacts || [];
+      const domain = client.website || hist?.domain || '';
       const located = await locateLinkedInEmployees({
-        domain: client.website || hist?.domain,
+        domain,
         companyName: client.name,
         productKeyword: client.searchKeyword || hist?.keyword,
         country: client.country || hist?.country,
         existing,
         maxQueries: 3,
       });
+      const enriched = await enrichDecisionMakersTitleAndWhatsApp({
+        domain,
+        companyName: client.name,
+        decisionMakers: located.decisionMakers,
+        limit: 8,
+      });
       await handlers.onLinkedInDone({
         client,
-        decisionMakers: located.decisionMakers,
+        decisionMakers: enriched,
         historyId: hist?.id,
       });
-      job.note = `联系人 +${located.stats.added}`;
+      const waN = enriched.filter((d) => (d.whatsapp || '').trim()).length;
+      job.note = `联系人 +${located.stats.added}${waN ? ` · WhatsApp ${waN}` : ''}`;
       markDone(client.id, 'linkedin_locate');
       job.status = 'completed';
     } else if (job.kind === 'dm_email') {

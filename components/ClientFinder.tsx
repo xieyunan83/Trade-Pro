@@ -155,14 +155,15 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
     );
   }, [activeContinent, countryFilter]);
 
+  // 用 click 而非 mousedown：避免关闭「文档流内」国家面板时布局上移，导致开始搜索的 click 丢失
   useEffect(() => {
     const onDocClick = (e: MouseEvent) => {
       if (!countryPanelRef.current?.contains(e.target as Node)) {
         setCountryOpen(false);
       }
     };
-    if (countryOpen) document.addEventListener('mousedown', onDocClick);
-    return () => document.removeEventListener('mousedown', onDocClick);
+    if (countryOpen) document.addEventListener('click', onDocClick);
+    return () => document.removeEventListener('click', onDocClick);
   }, [countryOpen]);
 
   const patchState = (partial: Partial<DiscoveryState>) => {
@@ -202,9 +203,16 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
   };
 
   const handleSearch = async () => {
-    if (!state.product) return;
+    const product = state.product.trim();
+    if (!product) {
+      setErrorMsg('请先填写产品关键词');
+      return;
+    }
+    setCountryOpen(false);
     setLoading(true);
     setErrorMsg(null);
+    // 先清空旧结果，避免误以为「点了没反应」
+    patchState({ results: [], hasSearched: true, product });
     try {
       const typeArg = selectedTypes.join(', ') || '';
       // 多国并行搜索（限 2），缩短总等待；仍按国分别归档
@@ -216,14 +224,14 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
       const searchOneCountry = async (country: string) => {
         const searchId = `disc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         const raw = await searchPotentialClients(
-          state.product,
+          product,
           country,
           state.industry,
           typeArg,
           18
         );
         const stamped = stampSearchResults(raw, {
-          keyword: state.product,
+          keyword: product,
           targetCountry: country || 'Global',
           clientTypes: selectedTypes,
           searchId,
@@ -231,7 +239,7 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
         const archive: DiscoveryArchiveItem = {
           id: searchId,
           timestamp: Date.now(),
-          product: state.product,
+          product,
           countries: country ? [country] : [],
           country: country || '',
           industry: state.industry,
@@ -376,13 +384,19 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
           <div>
             <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">产品关键词</label>
             <div className="relative">
-              <Search className="absolute left-4 top-3.5 text-signal-500/70" size={18} />
+              <Search className="absolute left-4 top-3.5 text-signal-500/70 pointer-events-none" size={18} />
               <input
                 type="text"
                 value={state.product}
                 onChange={(e) => patchState({ product: e.target.value })}
                 className="w-full pl-12 pr-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-cyan-500/30 font-bold"
                 placeholder="例如: Silicone Baby Bibs"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    void handleSearch();
+                  }
+                }}
               />
             </div>
           </div>
@@ -586,9 +600,10 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
         </div>
 
         <button
-          onClick={handleSearch}
-          disabled={loading || !state.product}
-          className="w-full mt-4 sm:mt-6 tp-btn-primary text-white py-3 sm:py-4 rounded-xl font-black transition-all flex items-center justify-center gap-2 touch-manipulation disabled:opacity-50"
+          type="button"
+          onClick={() => void handleSearch()}
+          disabled={loading || !state.product.trim()}
+          className="relative z-[60] w-full mt-4 sm:mt-6 tp-btn-primary text-white py-3 sm:py-4 rounded-xl font-black transition-all flex items-center justify-center gap-2 touch-manipulation disabled:opacity-50"
         >
           {loading ? (
             <>

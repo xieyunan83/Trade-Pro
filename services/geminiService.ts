@@ -732,7 +732,9 @@ const isIncompletePersonName = (name?: string): boolean => {
 
 const isWeakJobTitle = (title?: string): boolean =>
   !title?.trim() ||
-  /Company Contact|待补充|Domain Search|Employee|Professional|^Manager$/i.test(title.trim());
+  /Company Contact|待补充|待确认|Domain Search|Employee|Professional|^Manager$|Staff/i.test(
+    title.trim()
+  );
 
 const needsProfileEnrichment = (dm: DecisionMaker): boolean =>
   isIncompletePersonName(dm.name) ||
