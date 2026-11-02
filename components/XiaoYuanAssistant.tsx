@@ -18,8 +18,9 @@ type Props = {
 type Pos = { x: number; y: number };
 
 const POS_KEY = 'trade_scout_xiaoyuan_fab_pos_v1';
-const FAB_W = 72;
-const FAB_H = 92;
+/** 与左侧 SphereNav 圆形板块图标（.tp-sphere-core-sm = 3.45rem）同径 */
+const FAB_W = 58;
+const FAB_H = 78;
 
 const WELCOME: XiaoYuanMsg = {
   id: 'welcome',
@@ -34,7 +35,9 @@ const XiaoYuanFace: React.FC<{
   ringClass?: string;
   className?: string;
   showOnlineDot?: boolean;
-}> = ({ sizeClass, ringClass = '', className = '', showOnlineDot }) => (
+  /** 侧栏小头像用更小的在线点 */
+  compactDot?: boolean;
+}> = ({ sizeClass, ringClass = '', className = '', showOnlineDot, compactDot }) => (
   <span
     className={`relative inline-block overflow-hidden rounded-full bg-slate-800 shrink-0 ${sizeClass} ${ringClass} ${className}`}
   >
@@ -50,7 +53,11 @@ const XiaoYuanFace: React.FC<{
       draggable={false}
     />
     {showOnlineDot ? (
-      <span className="absolute bottom-1 right-1 w-3 h-3 rounded-full bg-emerald-400 ring-2 ring-slate-900" />
+      <span
+        className={`absolute rounded-full bg-emerald-400 ring-2 ring-slate-900 ${
+          compactDot ? 'bottom-0.5 right-0.5 w-2 h-2' : 'bottom-1 right-1 w-3.5 h-3.5'
+        }`}
+      />
     ) : null}
   </span>
 );
@@ -236,11 +243,12 @@ export const XiaoYuanAssistant: React.FC<Props> = ({ visible = true }) => {
         }}
       >
         <XiaoYuanFace
-          sizeClass="w-16 h-16 sm:w-[4.5rem] sm:h-[4.5rem]"
-          ringClass="ring-[3px] ring-cyan-300/80 shadow-lg shadow-cyan-900/30 group-hover:scale-105 transition-transform bg-slate-900"
+          sizeClass="w-[3.45rem] h-[3.45rem]"
+          ringClass="ring-2 ring-cyan-300/75 shadow-md shadow-cyan-900/25 group-hover:scale-105 transition-transform bg-slate-900"
           showOnlineDot
+          compactDot
         />
-        <span className="text-[11px] sm:text-xs font-black text-cyan-100/95 bg-slate-950/85 px-2 py-0.5 rounded-md border border-cyan-400/30 leading-none">
+        <span className="text-[9px] font-black text-cyan-100/95 bg-slate-950/85 px-1.5 py-0.5 rounded-md border border-cyan-400/30 leading-none">
           {XIAOYUAN_NAME}
         </span>
       </button>
@@ -254,8 +262,9 @@ export const XiaoYuanAssistant: React.FC<Props> = ({ visible = true }) => {
         >
           <header className="shrink-0 flex items-center gap-3.5 px-4 py-3.5 bg-gradient-to-r from-slate-900 to-slate-800 text-white">
             <XiaoYuanFace
-              sizeClass="w-14 h-14 sm:w-16 sm:h-16"
-              ringClass="ring-2 ring-teal-400/60 shadow-md"
+              sizeClass="w-[4.25rem] h-[4.25rem] sm:w-[4.5rem] sm:h-[4.5rem]"
+              ringClass="ring-2 ring-teal-400/70 shadow-lg"
+              showOnlineDot
             />
             <div className="min-w-0 flex-1">
               <div className="text-base sm:text-lg font-black flex items-center gap-2">
