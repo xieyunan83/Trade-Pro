@@ -16,6 +16,7 @@ import {
   identityLockBlock,
   mergeNegatives,
   multiImageRoleBlock,
+  referenceEditDirectiveBlock,
 } from './creativeQualityKit';
 
 export type DesignGenerateOpts = {
@@ -30,6 +31,8 @@ export type DesignGenerateOpts = {
   series?: boolean;
   /** 末张参考图为版式/海报方案（前面为产品） */
   lastRefIsLayout?: boolean;
+  /** 用户二次创作说明：改颜色/部位/包装/功能等（有参考图时强制执行） */
+  userEditBrief?: string;
 };
 
 export type DesignGenerateResult = {
@@ -173,25 +176,39 @@ const hardenDesignPrompt = (
     series?: boolean;
     referenceCount?: number;
     lastRefIsLayout?: boolean;
+    userEditBrief?: string;
   }
 ): string => {
   const alreadyHardened =
     /NEGATIVE CONSTRAINTS/i.test(prompt) && /IDENTITY LOCK/i.test(prompt);
   if (alreadyHardened) {
     const extraNeg = mergeNegatives(opts.negativePrompt);
-    const withNeg =
+    let withNeg =
       extraNeg && !prompt.includes(extraNeg.slice(0, 24))
         ? `${prompt}\nAlso avoid: ${extraNeg}`
         : prompt;
-    if ((opts.referenceCount || 0) > 0 && !/MULTI-IMAGE ROLES/i.test(withNeg)) {
-      return `${withNeg}\n${multiImageRoleBlock(opts.referenceCount || 0, {
+    // 有参考图时始终把用户改点钉在最前（即使 Brief 已含 IDENTITY LOCK）
+    if (hasRefs) {
+      const editBlock = referenceEditDirectiveBlock(opts.userEditBrief);
+      if (!/USER EDIT REQUEST/i.test(withNeg)) {
+        withNeg = `${editBlock}\n${withNeg}`;
+      } else if (opts.userEditBrief?.trim() && !withNeg.includes(opts.userEditBrief.trim().slice(0, 40))) {
+        withNeg = `${editBlock}\n${withNeg}`;
+      }
+    }
+    if ((opts.referenceCount || 0) > 0 && !/MULTI-IMAGE ROLES|REFERENCE: Image 1/i.test(withNeg)) {
+      withNeg = `${withNeg}\n${multiImageRoleBlock(opts.referenceCount || 0, {
         lastIsLayout: opts.lastRefIsLayout,
       })}`;
+    }
+    if (hasRefs && !/IDENTITY LOCK/i.test(withNeg)) {
+      withNeg = `${withNeg}\n${identityLockBlock(true, 'image')}`;
     }
     return withNeg;
   }
   return composeImageGenerationPrompt({
     baseToolPrompt: prompt,
+    userBrief: opts.userEditBrief,
     hasReferenceImages: hasRefs,
     referenceCount: opts.referenceCount,
     lastRefIsLayout: opts.lastRefIsLayout,
@@ -217,6 +234,7 @@ export const generateDesignImages = async (
       series: opts.series || n > 1,
       referenceCount: refs?.length || 0,
       lastRefIsLayout: !!opts.lastRefIsLayout && (refs?.length || 0) >= 2,
+      userEditBrief: opts.userEditBrief,
     });
     const result = await generateWanImage(
       {
@@ -271,6 +289,11 @@ export const generateMultiAngleDesignImages = async (
         ? `${identityLockBlock(true, 'image')} Only change camera orbit / viewing angle — do not redesign or recolor the product.`
         : 'Establish the definitive product look for this SKU; later angles will lock to this image.';
       const prompt = [
+        opts.userEditBrief?.trim()
+          ? referenceEditDirectiveBlock(opts.userEditBrief)
+          : userRefs?.length
+            ? referenceEditDirectiveBlock()
+            : '',
         productBase,
         `This request generates exactly one image for camera angle「${view.label}」only.`,
         view.prompt,

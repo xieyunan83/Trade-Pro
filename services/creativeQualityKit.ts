@@ -13,7 +13,7 @@ export type CreativePromptParts = {
 
 /** 全站通用负向：产品身份漂移、乱码字、水印、低质伪认证 */
 export const UNIVERSAL_IMAGE_NEGATIVES =
-  'watermark, logo spam, garbled text, illegible letters, random glyphs, extra limbs, deformed geometry, morphing product, redesigning the SKU, wrong colors vs reference, stock collage, contact sheet, multi-panel grid, low-res, heavy jpeg artifacts, oversaturated neon gel lighting, fake certification seals, fake awards badges, marketplace UI chrome, AI plastic skin, text hallucination, blurry logo print';
+  'watermark, logo spam, garbled text, illegible letters, random glyphs, extra limbs, deformed geometry, morphing product, redesigning the SKU, unrequested color changes, unrequested part swaps, wrong colors vs reference, wrong packaging vs reference, stock collage, contact sheet, multi-panel grid, low-res, heavy jpeg artifacts, oversaturated neon gel lighting, fake certification seals, fake awards badges, marketplace UI chrome, AI plastic skin, text hallucination, blurry logo print, different product family';
 
 export const UNIVERSAL_VIDEO_NEGATIVES =
   'watermark, on-screen text spam, morphing product, identity drift between frames, extra limbs, jittery camera, flicker, melting plastics, wrong SKU redesign, blurry logo, low bitrate mush, fake UI overlays, seizure cuts, garbled subtitles';
@@ -25,7 +25,7 @@ export const UNIVERSAL_3D_NEGATIVES =
 export const COMMERCIAL_CRAFT_FOOTER =
   'Commercial China toy/gift export quality: catalog sharpness, true plastics/fabrics/metals, locked product identity, soft dual softbox + gentle rim, clean silhouette, no watermark, no gibberish text, ready for marketplace and trade-fair use.';
 
-/** 有参考图时的身份锁（Lovart 式「以参考为真相」） */
+/** 有参考图时的身份锁（以参考图为唯一真相） */
 export const identityLockBlock = (hasRefs: boolean, domain: 'image' | 'video' | '3d' = 'image'): string => {
   if (!hasRefs) return '';
   if (domain === 'video') {
@@ -34,7 +34,29 @@ export const identityLockBlock = (hasRefs: boolean, domain: 'image' | 'video' | 
   if (domain === '3d') {
     return 'IDENTITY LOCK: Reconstruct the exact product from references — proportions, parts, colors and surface finish. Do not invent alternate tooling.';
   }
-  return 'IDENTITY LOCK: Treat reference image(s) as the sole ground truth for silhouette, proportions, colors, materials, logos/decals placement and tooling. Do not invent a different product. Only change camera, framing, backdrop or lighting as instructed.';
+  return [
+    'IDENTITY LOCK (STRICT): The attached product reference image(s) are the ONLY ground truth for silhouette, proportions, part count, tooling, materials, logos/decals, packaging structure and print layout.',
+    'Do NOT invent a different product, swap molds, restyle faces, or freely recolor unmentioned parts.',
+    'Preserve every region the user did NOT ask to change.',
+  ].join(' ');
+};
+
+/**
+ * 参考图二次创作指令：用户写「改哪里」，模型只改那里，其余像素级一致。
+ */
+export const referenceEditDirectiveBlock = (userEditBrief?: string): string => {
+  const edit = (userEditBrief || '').trim();
+  return joinBlocks([
+    'TASK TYPE: Reference-based secondary creation / controlled product edit (NOT text-only fantasy design).',
+    edit
+      ? `USER EDIT REQUEST (MUST follow exactly; apply ONLY these changes): ${edit}`
+      : 'USER EDIT REQUEST: Keep the product identical to reference; only improve commercial studio lighting / crop if needed — do not redesign.',
+    'EDIT SCOPE RULES:',
+    '- Change ONLY what the user explicitly requests (e.g. specific part color, packaging graphic, function feature, accessory, background, camera angle).',
+    '- Everything else MUST stay consistent with the reference: unmentioned colors, materials, logos, proportions, packaging structure, buttons, windows, prints.',
+    '- If the request is ambiguous, prefer LESS change over creative reinterpretation.',
+    '- Output must still look like the SAME SKU after edits — a buyer comparing to the reference photo must recognize it instantly.',
+  ]);
 };
 
 /**
@@ -124,8 +146,12 @@ export const composeImageGenerationPrompt = (opts: {
       ? `Product identity: ${[opts.skuName, opts.skuCode].filter(Boolean).join(' / ')}. Keep SKU appearance consistent.`
       : '';
 
+  const editDirective = hasRefs ? referenceEditDirectiveBlock(opts.userBrief) : '';
+
   const positive = opts.baseToolPrompt?.trim()
     ? joinBlocks([
+        // 有参考时：先钉死「只改用户要求」，再叠 Brief，避免编排结果冲掉编辑范围
+        hasRefs ? editDirective : '',
         opts.baseToolPrompt,
         roles,
         identity,
@@ -133,14 +159,19 @@ export const composeImageGenerationPrompt = (opts: {
         COMMERCIAL_CRAFT_FOOTER,
       ])
     : joinBlocks([
-        opts.skillDefaultPrompt,
+        hasRefs ? editDirective : '',
+        hasRefs
+          ? opts.skillDefaultPrompt
+            ? `Skill framing (secondary to edit request + identity lock): ${opts.skillDefaultPrompt}`
+            : 'Produce a commercial catalog-ready product visual after applying the edit request.'
+          : opts.skillDefaultPrompt ||
+            'Create a polished commercial product design visual',
         opts.craftNotes ? `Craft / channel brief: ${opts.craftNotes}` : '',
-        opts.userBrief ? `User creative direction: ${opts.userBrief}` : '',
+        !hasRefs && opts.userBrief ? `User creative direction: ${opts.userBrief}` : '',
         skuLine,
         opts.productNotes ? `Product notes: ${opts.productNotes}` : '',
         opts.channel ? `Retail channel context: ${opts.channel}` : '',
         opts.palette ? `Color / finish direction: ${opts.palette}` : '',
-        hasRefs ? 'Follow attached reference images for product shape, colors, and branding.' : '',
         roles,
         identity,
         opts.series ? SERIES_CONSISTENCY_BLOCK : '',
@@ -184,8 +215,9 @@ export const CREATIVE_LLM_SYSTEM_PLAN = `你是澄海玩具出口场景的「设
   "qaChecklist": ["质检项1", "质检项2", "质检项3", "质检项4"]
 }
 硬性规则：
-1) 有参考图时：toolPrompt 必须强调以参考图为唯一外形真相，禁止换脸/换色/换结构。
-2) 保留 SKU 身份；贴合 Skill；适合跨境电商/展会。
-3) 不要编造认证文字、平台徽章、水印或乱码字。
-4) 光影默认电商柔箱 + 轻轮廓光；避免霓虹凝胶与廉价贴纸风。
-5) summaryZh / titleZh 禁止出现任何大模型或供应商商品名。`;
+1) 有参考图时（二次创作）：toolPrompt 必须以「Reference-based edit」开头；明确 USER EDIT REQUEST；只改用户点名的部位/颜色/包装/功能/背景等；未点名区域必须与参考图一致；禁止整体换模、随意换色、换脸。
+2) 无参考图时：按文字描述创作，仍保持商业玩具出口画质。
+3) 保留 SKU 身份；贴合 Skill；适合跨境电商/展会。
+4) 不要编造认证文字、平台徽章、水印或乱码字。
+5) 光影默认电商柔箱 + 轻轮廓光；避免霓虹凝胶与廉价贴纸风。
+6) summaryZh / titleZh 禁止出现任何大模型或供应商商品名。`;

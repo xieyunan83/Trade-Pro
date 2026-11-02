@@ -184,6 +184,10 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     const skuMeta = resolveSkuMeta();
     const skuRow = skus.find((s) => s.id === skuPick || s.skuCode === skuPick);
     const hasRefs = refUploads.length > 0 || !!(skuRow?.images?.length);
+    const refCountHint = Math.max(
+      refUploads.length,
+      hasRefs ? Math.min(skuRow?.images?.length || 0, MAX_DESIGN_REF_IMAGES) : 0
+    );
     return composeImageGenerationPrompt({
       skillDefaultPrompt:
         skill.defaultPrompt || 'Create a polished commercial product design visual',
@@ -192,6 +196,8 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
       skuName: skuMeta.name,
       skuCode: skuMeta.code,
       hasReferenceImages: hasRefs,
+      referenceCount: refCountHint || (hasRefs ? 1 : 0),
+      lastRefIsLayout: effectiveLastIsLayout && refCountHint >= 2,
       skillNegative: negativePrompt.trim() || skill.negativePrompt,
       series: skillId === 'listing_set',
     }).prompt;
@@ -206,6 +212,17 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
       createProject(skillId);
     }
     setError(null);
+    const skuRowEarly = skus.find((s) => s.id === skuPick || s.skuCode === skuPick);
+    const hasRefsEarly =
+      refUploads.length > 0 || !!(skuRowEarly?.images?.length);
+    if (!hasRefsEarly) {
+      setError('请先上传产品参考图，或从产品库选择带图 SKU，再写明要改的部位/颜色/包装/功能。');
+      return;
+    }
+    if (!prompt.trim()) {
+      setError('请写明二次创作要求，例如：包装改红色、去掉某配件、增加灯光功能等。未写明的部分将保持与参考图一致。');
+      return;
+    }
     setPlanning(true);
     try {
       const skuMeta = resolveSkuMeta();
@@ -240,9 +257,23 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
         skillHint: skill.hint,
         skillDefaultPrompt: skill.defaultPrompt,
         skillNegativePrompt: negativePrompt.trim() || skill.negativePrompt,
-        skillCraftNotes: skill.craftNotes,
+        skillCraftNotes: [
+          skill.craftNotes,
+          hasRefs
+            ? '二次创作：以参考图为唯一外形真相；用户提示词仅为改动清单（颜色/部位/包装/功能等）；未提及处保持一致。'
+            : '',
+        ]
+          .filter(Boolean)
+          .join('\n'),
         skillQaChecklist: skill.qaChecklist,
-        userBrief: [prompt.trim(), marketNote].filter(Boolean).join('\n'),
+        userBrief: [
+          hasRefs
+            ? `【参考图二次创作·改动清单】${prompt.trim()}`
+            : prompt.trim(),
+          marketNote,
+        ]
+          .filter(Boolean)
+          .join('\n'),
         skuCode: skuMeta.code,
         skuName: skuMeta.name,
         hasReferenceImages: hasRefs,
@@ -368,6 +399,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             thinkingMode: false,
             referenceImages: refImages.length ? refImages : undefined,
             negativePrompt: negativePrompt.trim() || skill.negativePrompt,
+            userEditBrief: prompt.trim(),
             onProgress: (done, total, label) => {
               setError(null);
               void done;
@@ -384,6 +416,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             negativePrompt: negativePrompt.trim() || skill.negativePrompt,
             series: skillId === 'listing_set' || count > 1,
             lastRefIsLayout: effectiveLastIsLayout && refImages.length >= 2,
+            userEditBrief: prompt.trim(),
           });
       const now = Date.now();
       const newAssetsRaw: DesignAsset[] = result.images.map((url, i) => ({
@@ -1000,9 +1033,12 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             rows={4}
-            placeholder="例如：遥控车主图，白底，包装盒完整可见，适合亚马逊主图…"
+            placeholder="基于参考图二次创作，只写要改的：如「机身改哑光黑、包装盒改红金配色、增加声光按钮、去掉肩带」——未写的部位/颜色/包装将严格保持与参考图一致"
             className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-medium resize-y min-h-[5rem]"
           />
+          <p className="text-[9px] text-violet-700/90 font-medium -mt-1 leading-relaxed">
+            二次创作规则：必须有产品参考图；提示词只描述改动点，系统会强制锁外形，禁止整体换模。
+          </p>
           <div>
             <div className="flex items-center justify-between gap-2 mb-1">
               <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
