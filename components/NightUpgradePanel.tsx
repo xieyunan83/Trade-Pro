@@ -25,15 +25,23 @@ export const NightUpgradePanel: React.FC = () => {
         <Moon size={14} className="text-indigo-300 mt-0.5 shrink-0" />
         <div className="min-w-0 flex-1">
           <div className="text-[11px] font-black truncate">
-            {status.inWindow ? '夜间静默升级中' : '昨夜静默升级'}
+            {status.inWindow ? '夜间静默补全中' : '昨夜静默补全'}
           </div>
           <div className="text-[10px] font-semibold text-slate-400 mt-0.5 leading-snug">
             {status.inWindow
-              ? `队列 ${status.queued} · 完成 ${status.completedTonight}${
+              ? `待补 ${status.queued} · 今晚完成 ${status.completedTonight}${
                   status.failedTonight ? ` · 失败 ${status.failedTonight}` : ''
                 }`
               : `完成 ${status.completedTonight} 家旧客户补齐`}
-            {status.current ? ` · ${status.current.clientName}` : ''}
+            {status.current
+              ? ` · ${status.current.clientName}${
+                  status.current.kind === 'linkedin_locate'
+                    ? '（联系人）'
+                    : status.current.kind === 'catalog_match'
+                      ? '（品类匹配）'
+                      : ''
+                }`
+              : ''}
           </div>
           {status.running > 0 && (
             <div className="mt-1 inline-flex items-center gap-1 text-[10px] text-indigo-200 font-bold">

@@ -3388,8 +3388,8 @@ const App: React.FC = () => {
       };
 
       try {
-        // 夜间窗口与静默补全双轨：降并发，错峰共用 Key
-        const BATCH_ANALYZE_CONCURRENCY = isQwenNightPromoWindow() ? 1 : 2;
+        // 夜间窗口与静默补全双轨：夜间也保持 2 路背调（补全侧已降重），避免一整晚只啃几十家
+        const BATCH_ANALYZE_CONCURRENCY = 2;
         const runOneBatchTask = async (task: AutomationResult) => {
           const analyzingTask: AutomationResult = { ...task, status: 'analyzing' };
           batchSeedByIdRef.current.set(task.id, analyzingTask);
@@ -3400,7 +3400,7 @@ const App: React.FC = () => {
           void saveAutomationTask(analyzingTask).catch(() => undefined);
 
           try {
-            await waitForLocalAiSlot(() => shouldStopRef.current, isQwenNightPromoWindow() ? 1 : 2);
+            await waitForLocalAiSlot(() => shouldStopRef.current, 2);
             if (shouldStopRef.current) {
               const paused: AutomationResult = { ...task, status: 'pending', error: undefined };
               batchSeedByIdRef.current.set(task.id, paused);
@@ -3601,7 +3601,7 @@ const App: React.FC = () => {
           // 日间：夜间限定任务不跑；若本波无可跑任务则停泵，等 22:00 续跑
           const inNight = isQwenNightPromoWindow();
           const wave: AutomationResult[] = [];
-          const concurrency = inNight ? 1 : BATCH_ANALYZE_CONCURRENCY;
+          const concurrency = BATCH_ANALYZE_CONCURRENCY;
           for (let i = 0; i < concurrency; i++) {
             const limit = checkLimit('analysis');
             if (!limit.allowed) {

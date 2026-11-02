@@ -90,12 +90,23 @@ type Handlers = {
 };
 
 const LS_KEY = 'trade_scout_night_silent_upgrade_v1';
-const TICK_MS = 45_000;
-const JOB_GAP_MS = 8_000;
-const MAX_JOBS_PER_NIGHT = 200;
-const MAX_PER_SCAN = 60;
+/** 泵间隔：过长会把整晚吞吐卡死在「空转等待」 */
+const TICK_MS = 12_000;
+/** 重任务间隙；轻任务（仅入队）几乎不等 */
+const JOB_GAP_MS = 2_500;
+/**
+ * 每晚完成上限（含失败）。旧值 200 会把整晚卡死；
+ * 本地 catalog_match 几乎不烧 Token，允许更高；真正烧 Token 的仍受 Key/限流约束。
+ */
+const MAX_JOBS_PER_NIGHT = 2_500;
+const MAX_PER_SCAN = 150;
 /** 本地品类匹配无烧 Token，每轮可连跑多条 */
-const CATALOG_MATCH_BURST = 25;
+const CATALOG_MATCH_BURST = 80;
+/** 仅入队、几乎瞬时的缺口种类（真正干活在各自队列） */
+const LIGHT_ENQUEUE_KINDS: NightGapKind[] = ['dm_email', 'product_dig', 'enrichment'];
+const LIGHT_BURST = 12;
+/** 每轮最多跑几条 LinkedIn/WhatsApp 重补全（仍串行，避免撞限流） */
+const HEAVY_PER_TICK = 1;
 
 let handlers: Handlers | null = null;
 let tickTimer: ReturnType<typeof setInterval> | null = null;
@@ -371,21 +382,30 @@ const scanAndEnqueue = () => {
 
   for (const { c, gaps } of scored) {
     if (added >= MAX_PER_SCAN) break;
-    const kind = gaps[0];
-    const key = `${c.id}:${kind}`;
-    if (existingKeys.has(key)) continue;
+    // 本地 catalog_match 几乎免费：与最高优先级重缺口一并入队，避免永远被 LinkedIn 堵死
+    const kindsToAdd: NightGapKind[] = [];
+    if (gaps.includes('catalog_match')) kindsToAdd.push('catalog_match');
+    const primary = gaps.find((g) => g !== 'catalog_match');
+    if (primary) kindsToAdd.push(primary);
+    if (!kindsToAdd.length && gaps[0]) kindsToAdd.push(gaps[0]);
+
     const domain = (c.website || '').replace(/^(?:https?:\/\/)?(?:www\.)?/i, '').split('/')[0];
-    state.jobs.push({
-      id: `nu_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-      clientId: c.id,
-      clientName: c.name || domain || c.id,
-      domain,
-      kind,
-      status: 'queued',
-      createdAt: Date.now(),
-    });
-    existingKeys.add(key);
-    added += 1;
+    for (const kind of kindsToAdd) {
+      if (added >= MAX_PER_SCAN) break;
+      const key = `${c.id}:${kind}`;
+      if (existingKeys.has(key)) continue;
+      state.jobs.push({
+        id: `nu_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        clientId: c.id,
+        clientName: c.name || domain || c.id,
+        domain,
+        kind,
+        status: 'queued',
+        createdAt: Date.now(),
+      });
+      existingKeys.add(key);
+      added += 1;
+    }
   }
   if (added) notify();
 };
@@ -419,14 +439,16 @@ const runOneJob = async (job: NightUpgradeJob) => {
           productKeyword: client.searchKeyword || hist?.keyword,
           country: client.country || hist?.country,
           existing,
-          maxQueries: 3,
+          // 夜间批量：2 次检索足够找采购线索，少一次显著提速
+          maxQueries: 2,
         });
         const { filterDecisionMakersForCompany } = await import('./linkedinEmployeeLocator');
         const enriched = await enrichDecisionMakersTitleAndWhatsApp({
           domain,
           companyName: client.name,
           decisionMakers: located.decisionMakers,
-          limit: 10,
+          // 夜间先补核心 5 人；其余可手动或次夜再挖
+          limit: 5,
           requireWhatsApp: true,
         });
         const scoped = filterDecisionMakersForCompany(enriched, {
@@ -540,8 +562,16 @@ export const pumpNightUpgrade = async () => {
         if (shouldStop) break;
         await runOneJob(job);
       }
-      await new Promise((r) => setTimeout(r, 400));
-      return;
+      // 同轮继续跑轻入队 / 重补全，不再整轮只干匹配
+    }
+
+    // 轻任务：只是把缺口丢进邮箱/品类/补全队列，几乎瞬时，可连跑
+    const lightJobs = state.jobs
+      .filter((j) => j.status === 'queued' && LIGHT_ENQUEUE_KINDS.includes(j.kind))
+      .slice(0, LIGHT_BURST);
+    for (const job of lightJobs) {
+      if (shouldStop) break;
+      await runOneJob(job);
     }
 
     // 与批量背调双轨：共享冷却 / AI 槽位，避免同一 Key 撞限流
@@ -551,19 +581,24 @@ export const pumpNightUpgrade = async () => {
     if (Date.now() < getSharedCooldownUntil()) {
       return;
     }
-    // 批量背调占用 AI 时先让出；软上限 1，给挂机批量留槽
-    await waitForLocalAiSlot(() => shouldStop, 1);
+    // 夜间软上限 2：允许与批量背调（automation）错峰并存；LinkedIn 补全仍按 HEAVY_PER_TICK 串行
+    await waitForLocalAiSlot(() => shouldStop, 2);
     if (shouldStop) return;
 
-    const next = state.jobs.find((j) => j.status === 'queued');
-    if (!next) {
+    if (!state.jobs.some((j) => j.status === 'queued')) {
       scanAndEnqueue();
     }
-    const job = state.jobs.find((j) => j.status === 'queued');
-    if (job) {
+
+    let heavyRan = 0;
+    while (heavyRan < HEAVY_PER_TICK && !shouldStop) {
+      const job = state.jobs.find(
+        (j) => j.status === 'queued' && j.kind === 'linkedin_locate'
+      );
+      if (!job) break;
       await runOneJob(job);
+      heavyRan += 1;
       const busy = getHeavyJobCount('ai') > 0 || getHeavyJobCount('automation') > 0;
-      const gap = busy ? JOB_GAP_MS * 2.5 : JOB_GAP_MS;
+      const gap = busy ? JOB_GAP_MS * 1.6 : JOB_GAP_MS;
       await new Promise((r) => setTimeout(r, gap));
     }
   } finally {
@@ -595,4 +630,4 @@ export const stopNightSilentUpgrade = () => {
 };
 
 export const describeNightSilentUpgrade = (): string =>
-  `夜间静默升级（上海 22:00–08:00）· schema v${NIGHT_UPGRADE_SCHEMA_VERSION} · 联系人 / 邮箱 / 品类深挖 / 背调补全 / 全品类产品匹配 · 与批量背调双轨错峰`;
+  `夜间静默补全（上海 22:00–08:00）· schema v${NIGHT_UPGRADE_SCHEMA_VERSION} · 联系人/邮箱/品类/背调补全/产品匹配 · 与批量背调双轨 · 每晚上限约 ${MAX_JOBS_PER_NIGHT}`;
