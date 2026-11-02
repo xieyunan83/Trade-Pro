@@ -72,6 +72,7 @@ import {
 import { LEAD_EVIDENCE_USAGE_HINT, resolveDirectorySitesForMarket } from './leadDiscoverySources';
 import { collectInternalLeads, mergeInternalOverOnline } from './internalLeadSources';
 import { hasRichProductCatalog } from './productCatalog';
+import { applyEstimatedFobFromRetail, FOB_OVER_RETAIL } from './tradePricingTheory';
 import { mergeAnalysisRaws, mergeClientSearchResults, isEmptyPlaceholder, preferString } from './multiModelMerge';
 import {
   buildFallbackEvidenceFromReport,
@@ -3395,7 +3396,8 @@ ${evidenceBlock}
      - phone / whatsapp only when publicly listed; otherwise leave empty.
   6. PRODUCTS & PRICING (HIGHEST PRIORITY for catalog DB — do NOT skip):
      - Crawl/use official product, shop, catalog, collection pages from web evidence.
-     - Extract concrete SKU/product names + category + retail/FOB price band in CNY.
+     - Extract concrete SKU/product names + category + retail price (retailPrice / retailPriceCNY).
+     - estimatedFOBPriceCNY: ONLY when retail is known; use FOB ≈ retailCNY × ${FOB_OVER_RETAIL.center} (transparent-market rule). Else 0.
      - Fill websiteCategories, businessScope.coreProducts/relevantProducts, priceSensitivity.
 ${productFocusBlock}
   7. Financial trends last 5 years — estimate if needed, never all zeros.
@@ -3602,18 +3604,21 @@ ${productFocusBlock}
             : roleRaw === 'both'
               ? ('both' as const)
               : ('sell' as const);
-        return {
+        return applyEstimatedFobFromRetail({
           ...p,
           category: p.category || '',
           role,
           tags: Array.isArray(p.tags) ? p.tags.map(String).filter(Boolean).slice(0, 8) : [],
+          retailPrice: String(p.retailPrice || ''),
+          retailPriceCNY: Number(p.retailPriceCNY) || 0,
+          estimatedFOBPriceCNY: Number(p.estimatedFOBPriceCNY) || 0,
           priceMinCNY: typeof p.priceMinCNY === 'number' ? p.priceMinCNY : undefined,
           priceMaxCNY: typeof p.priceMaxCNY === 'number' ? p.priceMaxCNY : undefined,
           features: p.features || "N/A",
           colors: p.colors || "N/A",
           packaging: p.packaging || "N/A",
           keywordMatch: !!p.keywordMatch,
-        };
+        });
     }),
     marketTrends: aiResult.marketTrends || "N/A",
     decisionMakers: (aiResult.decisionMakers || [])
@@ -4503,7 +4508,7 @@ Output JSON only:
     const tags = Array.isArray(p.tags)
       ? p.tags.map((t: unknown) => String(t || '').trim()).filter(Boolean).slice(0, 8)
       : [];
-    return {
+    return applyEstimatedFobFromRetail({
       name: String(p.name || '').trim(),
       category: String(p.category || '').trim(),
       role,
@@ -4522,7 +4527,7 @@ Output JSON only:
       imageUrl: p.imageUrl || '',
       competitorLink: p.competitorLink || '',
       keywordMatch: !!p.keywordMatch,
-    };
+    });
   }).filter((p: { name: string }) => p.name);
 
   const sideFrom = (raw: any) => ({
@@ -4763,12 +4768,11 @@ ${designEvidence ? `=== WEB EVIDENCE ===\n${designEvidence}\n=== END ===` : ''}
 - 数字字段：无证据则填 0，并在对应字符串写「公开信息未找到」；禁止用「典型价」凑数。
 
 【定价推算（仅当页面有明确零售价时可推 FOB；否则 estimatedFOBPriceCNY=0）】
-采用零售业 Keystone / 渠道毛利反推（可审计）：
-  买方采购价(WS) ≈ 零售价(MSRP) × (1 − 零售毛利率)
-  玩具/礼品常用零售毛利率约 45%–55% → WS ≈ MSRP × 0.45～0.55
-  出口 FOB/出厂参考 ≈ WS × 0.70～0.95（预留对方运保税；取保守）
-  若仅有外币零售价：先按页面币种保留 retailPrice 原文，retailPriceCNY 用明示汇率或标注不确定时填 0。
-禁止使用「随便÷4」且不声明假设。
+现价透明市场规则（可审计）：
+  出口 FOB/出厂参考 ≈ 终端零售(MSRP) × ${FOB_OVER_RETAIL.center}（建议带 ×${FOB_OVER_RETAIL.min}～${FOB_OVER_RETAIL.max}）
+  有明确零售人民币价时：estimatedFOBPriceCNY = round(retailPriceCNY × ${FOB_OVER_RETAIL.center})
+  若仅有外币零售价：保留 retailPrice 原文；retailPriceCNY 无可靠折算则填 0，同时 estimatedFOBPriceCNY=0。
+禁止随意编造倍率。
 
 【包装/配色】只描述页面可见：盒型、吸塑、袋装、开窗、主色块；不可见写「公开信息未找到」。
 
@@ -4836,32 +4840,26 @@ products 最多 8 条；role=sell|procure|both。宁缺毋滥。
         : [];
       const retailPrice = String(p.retailPrice || '').trim();
       let retailPriceCNY = Number(p.retailPriceCNY) || 0;
-      let estimatedFOBPriceCNY = Number(p.estimatedFOBPriceCNY) || 0;
       let priceMinCNY = typeof p.priceMinCNY === 'number' ? p.priceMinCNY : undefined;
       let priceMaxCNY = typeof p.priceMaxCNY === 'number' ? p.priceMaxCNY : undefined;
-      // 无零售原文却有「整齐」推算价 → 视为幻觉，清零
+      // 无零售原文却有「整齐」推算价 → 视为幻觉，清零价带
       if (looksMissing(retailPrice) && retailPriceCNY <= 0) {
-        estimatedFOBPriceCNY = 0;
         priceMinCNY = undefined;
         priceMaxCNY = undefined;
       }
-      if (retailPriceCNY > 0 && estimatedFOBPriceCNY > retailPriceCNY) {
-        // FOB 不应高于零售；违反经济学常识则丢弃推算
-        estimatedFOBPriceCNY = 0;
-      }
-      if (retailPriceCNY > 0 && estimatedFOBPriceCNY > 0) {
-        const ratio = estimatedFOBPriceCNY / retailPriceCNY;
-        // Keystone 反推后 FOB 通常约在零售的 15%–55%；离谱则清零
-        if (ratio < 0.08 || ratio > 0.65) estimatedFOBPriceCNY = 0;
-      }
+      const priced = applyEstimatedFobFromRetail({
+        retailPrice: retailPrice || '公开信息未找到',
+        retailPriceCNY,
+        estimatedFOBPriceCNY: Number(p.estimatedFOBPriceCNY) || 0,
+      });
       return {
         name: String(p.name || '').trim(),
         category: String(p.category || '').trim(),
         role,
         tags,
-        retailPrice: retailPrice || '公开信息未找到',
-        retailPriceCNY,
-        estimatedFOBPriceCNY,
+        retailPrice: priced.retailPrice,
+        retailPriceCNY: priced.retailPriceCNY,
+        estimatedFOBPriceCNY: priced.estimatedFOBPriceCNY,
         priceMinCNY,
         priceMaxCNY,
         pricingStrategy: p.pricingStrategy || '',

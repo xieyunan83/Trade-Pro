@@ -123,7 +123,7 @@ export const toCnyApprox = (
 };
 
 /**
- * 建议出厂价：观察采购优先 → Keystone 渠道毛利反推 → 拒绝无证据臆造。
+ * 建议出厂价：观察采购优先 → 零售×0.2 透明市场反推 → 拒绝无证据臆造。
  */
 export const buildPricingAdvice = (opts: {
   category: string;

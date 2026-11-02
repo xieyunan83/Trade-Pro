@@ -3,13 +3,24 @@
  *
  * 依据（方法论，非实时行情）：
  * - ICC Incoterms® 2020：FOB / CIF / DDP 风险与费用分界
- * - 零售 Keystone：批发价 × 2 ≈ MSRP → 零售毛利率 50%（美零售传统）
+ * - 现价透明市场：出口 FOB 常见约为终端零售的 ~0.2 倍（中心倍率；建议带 0.15–0.28）
  * - Margin vs Markup：Margin=(P−C)/P；Markup=(P−C)/C（不可混用）
- * - 出口渠道阶梯（CLDP/DOC 出口定价讲义）：Landed×2≈Wholesale，Wholesale×2≈Retail
- * - 玩具业常见规划：MSRP ≈ Landed×4～5（规划用，非定律；须证据校准）
+ * - 历史 Keystone / 渠道阶梯仅作交叉参考，默认推算以 FOB≈零售×0.2 为准
  *
  * 本模块只提供「可复现计算」；无证据时不得伪造价。
  */
+
+/** 现价透明环境下：出口 FOB 相对终端零售的倍率 */
+export const FOB_OVER_RETAIL = {
+  /** 中心倍率：FOB ≈ 零售 × 0.2 */
+  center: 0.2,
+  /** 建议带下限 */
+  min: 0.15,
+  /** 建议带上限 */
+  max: 0.28,
+  /** 迁移版本：变更公式时递增，触发全库重算 */
+  migrationKey: 'fob_retail_x0.2_v1',
+} as const;
 
 export type EvidenceTier = 'observed' | 'derived' | 'assumed' | 'insufficient';
 
@@ -81,26 +92,64 @@ export const retailFromWholesale = (
 };
 
 /**
- * 由终端零售反推「买方付给上游」的采购价带（近似 FOB/出厂成交带的上沿参考）。
- * WS = MSRP × (1 − retailerMargin)
- * 我方可报出厂通常 ≤ 对方采购价（还需覆盖对方运保税，故出厂带再乘折扣系数）
+ * 由终端零售反推出口 FOB / 出厂建议带。
+ * 现价透明市场默认：FOB ≈ 零售 × 0.2，建议带 ×0.15–0.28。
  */
 export const factoryBandFromRetail = (
   retailMin: number,
   retailMax: number,
   channel: ChannelProfile = CHANNEL_PROFILES.toy_default
 ): { min: number; max: number; tier: EvidenceTier; formula: string } => {
-  // 对方采购价 ≈ 批发价带
-  const buyMin = wholesaleFromRetail(retailMin, channel.retailerMarginMax); // 对方要更高毛利 → 压采购价
-  const buyMax = wholesaleFromRetail(retailMax, channel.retailerMarginMin);
-  // 出口方可报出厂：取对方采购价的 70%–95%（预留对方运保税/加价空间）——保守，且标明 assumed
-  const factoryMin = buyMin * 0.7;
-  const factoryMax = buyMax * 0.95;
+  const lo = Math.min(retailMin, retailMax);
+  const hi = Math.max(retailMin, retailMax);
   return {
-    min: round2(Math.min(factoryMin, factoryMax)),
-    max: round2(Math.max(factoryMin, factoryMax)),
+    min: round2(lo * FOB_OVER_RETAIL.min),
+    max: round2(hi * FOB_OVER_RETAIL.max),
     tier: 'derived',
-    formula: `WS=MSRP×(1−零售毛利[${channel.retailerMarginMin * 100}–${channel.retailerMarginMax * 100}%])；出厂≈WS×70–95%（${channel.label}）`,
+    formula: `现价透明市场：出口FOB≈零售×${FOB_OVER_RETAIL.center}（建议带×${FOB_OVER_RETAIL.min}–${FOB_OVER_RETAIL.max}；${channel.label}）`,
+  };
+};
+
+/** 有明确零售人民币价时，推算单点 FOB（取中心倍率 0.2） */
+export const estimateFobCnyFromRetailCny = (retailCny: number): number => {
+  if (!(retailCny > 0) || !Number.isFinite(retailCny)) return 0;
+  return Math.max(1, Math.round(retailCny * FOB_OVER_RETAIL.center));
+};
+
+/** 从 retailPriceCNY 或零售价原文解析人民币零售价 */
+export const resolveRetailPriceCny = (p: {
+  retailPrice?: string;
+  retailPriceCNY?: number | null;
+}): number => {
+  const direct = Number(p.retailPriceCNY);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  const parsed = parsePriceBandNumbers(p.retailPrice);
+  const n = parsed.lo ?? parsed.hi;
+  if (!(n != null && n > 0)) return 0;
+  const cur =
+    parsed.currencyHint ||
+    (/\$|usd|美元/i.test(p.retailPrice || '') ? 'USD' : /€|eur|欧元/i.test(p.retailPrice || '') ? 'EUR' : 'CNY');
+  return convertToCny(n, cur).cny;
+};
+
+/** 强制按零售×0.2 写回 estimatedFOBPriceCNY；无零售则清零 */
+export const applyEstimatedFobFromRetail = <
+  T extends {
+    retailPrice?: string;
+    retailPriceCNY?: number;
+    estimatedFOBPriceCNY?: number;
+  },
+>(
+  p: T
+): T => {
+  const retailCny = resolveRetailPriceCny(p);
+  if (!(retailCny > 0)) {
+    return { ...p, estimatedFOBPriceCNY: 0 };
+  }
+  return {
+    ...p,
+    retailPriceCNY: p.retailPriceCNY && p.retailPriceCNY > 0 ? p.retailPriceCNY : Math.round(retailCny),
+    estimatedFOBPriceCNY: estimateFobCnyFromRetailCny(retailCny),
   };
 };
 
@@ -119,23 +168,19 @@ export const factoryBandFromObservedBuyCost = (
 });
 
 /**
- * 无观察采购、仅有零售时：用玩具业 MSRP/Landed 规划倍率反推 Landed，再视作出厂上沿近似。
- * Landed ≈ MSRP / k；出口 FOB 通常低于 Landed，取 Landed×0.55–0.75 作保守出厂带。
+ * 交叉校验带：与透明市场 FOB/零售中心倍率对齐（×0.15–0.28）。
+ * 保留函数名供定价顾问引用；不再走旧 Keystone/Landed 阶梯。
  */
 export const factoryBandFromRetailLandedLadder = (
   retailMin: number,
   retailMax: number,
   channel: ChannelProfile = CHANNEL_PROFILES.toy_default
 ): { min: number; max: number; tier: EvidenceTier; formula: string } => {
-  const landedMin = retailMin / channel.msrpOverLandedMax;
-  const landedMax = retailMax / channel.msrpOverLandedMin;
-  const fMin = landedMin * 0.55;
-  const fMax = landedMax * 0.75;
+  const band = factoryBandFromRetail(retailMin, retailMax, channel);
   return {
-    min: round2(Math.min(fMin, fMax)),
-    max: round2(Math.max(fMin, fMax)),
+    ...band,
     tier: 'assumed',
-    formula: `规划阶梯：Landed≈MSRP÷[${channel.msrpOverLandedMin}–${channel.msrpOverLandedMax}]；FOB≈Landed×55–75%（无采购证据，置信须下调）`,
+    formula: `交叉校验：${band.formula}`,
   };
 };
 

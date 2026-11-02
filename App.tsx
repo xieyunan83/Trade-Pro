@@ -1280,19 +1280,36 @@ const App: React.FC = () => {
                 }
             }
 
-            // 产品画像补洞：勿阻塞登录首屏（大历史会卡死主线程）
+            // FOB≈零售×0.2 全库重算 + 产品画像补洞（勿阻塞登录首屏）
             void (async () => {
               try {
-                const existingProfiles = await loadProductCatalog();
                 const histNow = await getHistory();
                 if (!histNow.length) return;
+                try {
+                  const { recomputeAllStoredFobPrices } = await import('./services/fobPriceRecompute');
+                  const mig = await recomputeAllStoredFobPrices({
+                    history: histNow,
+                    onHistoryUpdated: (items) => {
+                      if (!cancelled) setHistory(scope(items));
+                    },
+                  });
+                  if (mig.historyTouched > 0) {
+                    console.log(
+                      `[fob] recompute done: history=${mig.historyTouched}, products=${mig.productsTouched}`
+                    );
+                  }
+                } catch (e) {
+                  console.warn('FOB library recompute failed', e);
+                }
+                const histAfter = await getHistory();
+                const existingProfiles = await loadProductCatalog();
                 if (existingProfiles.length === 0) {
-                  await rebuildProductCatalogFromHistory(histNow, {
+                  await rebuildProductCatalogFromHistory(histAfter, {
                     ownerUsername: currentUser.username,
                     departmentId: currentUser.departmentId,
                   });
                 } else {
-                  await backfillProductCatalogFromHistory(histNow, {
+                  await backfillProductCatalogFromHistory(histAfter, {
                     ownerUsername: currentUser.username,
                     departmentId: currentUser.departmentId,
                   });
