@@ -24,6 +24,7 @@ export type DesignSkillId =
   | 'detail_long'
   | 'social_square'
   | 'booth_cover'
+  | 'multi_product_poster'
   | 'multi_angle'
   | 'free';
 
@@ -160,6 +161,25 @@ export const DESIGN_SKILLS: DesignSkillDef[] = [
       '展会画册封面：B2B 信任感、留标题区、产品英雄角。避免消费级嘈杂贴纸风。',
     qaChecklist: ['封面层级清晰', '有标题安全区', '灯光专业', '气质偏外贸展会而非地摊'],
     aspectHint: '3:4',
+  },
+  {
+    id: 'multi_product_poster',
+    label: '多品海报拼版',
+    category: '营销',
+    hint: '多张产品图 + 末张版式参考 → 一张海报（每张产品都要出现）',
+    defaultPrompt:
+      'Commercial multi-SKU promotional poster for toy/gift export: arrange EVERY provided product into one cohesive poster layout, matching the style/composition of the layout reference image, fill missing decorative or supporting elements in the same visual system, catalog-sharp product fidelity, bilingual title-safe margins, no watermark',
+    negativePrompt:
+      'dropping any product SKU, hybrid chimera products, redesigning tooling, ignoring layout reference, watermark, garbled micro-text wall, fake awards',
+    craftNotes:
+      '上传顺序：前 N 张为独立产品图（全部必须出现在成图中），最后 1 张为海报/宣传版式参考。按末张的构图、层级、背景与装饰方案排布全部产品；缺失元素按该方案风格补齐，禁止改产品外形。',
+    qaChecklist: [
+      '每一张产品参考图对应的产品都出现在成图中',
+      '产品外形/配色与各自参考一致',
+      '整体版式贴近末张版式参考',
+      '无水印乱码、无假认证',
+    ],
+    aspectHint: '按版式参考 / 1:1·竖版',
   },
   {
     id: 'multi_angle',

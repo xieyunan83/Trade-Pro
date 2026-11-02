@@ -15,6 +15,7 @@ import {
   composeImageGenerationPrompt,
   identityLockBlock,
   mergeNegatives,
+  multiImageRoleBlock,
 } from './creativeQualityKit';
 
 export type DesignGenerateOpts = {
@@ -27,6 +28,8 @@ export type DesignGenerateOpts = {
   negativePrompt?: string;
   /** Listing 等系列一致性 */
   series?: boolean;
+  /** 末张参考图为版式/海报方案（前面为产品） */
+  lastRefIsLayout?: boolean;
 };
 
 export type DesignGenerateResult = {
@@ -81,7 +84,7 @@ const toUserFacingDesignError = (raw: string): string => {
     return '当前生图模型不可用，请联系管理员调整配置后重试。';
   }
   if (/413|Payload Too Large|FUNCTION_PAYLOAD_TOO_LARGE|Request Entity Too Large/i.test(msg)) {
-    return '参考图总大小超限。请只保留 1～2 张清晰产品图后重试。';
+    return '参考图总大小超限。请减少张数或换更小图后重试（系统会自动压缩）。';
   }
   return msg
     .replace(/万相|Token Plan|sk-sp-[\w-]*|阿里云|dashscope|wan2\.7[\w-]*/gi, '生图服务')
@@ -100,38 +103,44 @@ const wanOverride = () => {
   return undefined;
 };
 
-/** 云函数 body 上限约 4.5MB；多张原图 dataURL 极易 413 FUNCTION_PAYLOAD_TOO_LARGE */
-const MAX_REF_IMAGES = 2;
-const MAX_REF_DATA_CHARS = 900_000; // 单张约 <0.9MB，两张留余量给 prompt
+/**
+ * 云函数 body 上限约 4.5MB。支持最多 9 张（如 8 产品 + 1 版式），
+ * 总 dataURL 预算约 3.2MB，单张再压到可塞进预算。
+ */
+export const MAX_DESIGN_REF_IMAGES = 9;
+const MAX_REF_TOTAL_DATA_CHARS = 3_200_000;
+const MAX_REF_SINGLE_CHARS = 480_000;
 
-const shrinkRefForUpload = async (url: string): Promise<string> => {
+const shrinkRefForUpload = async (url: string, many: boolean): Promise<string> => {
   if (/^https?:\/\//i.test(url)) return url;
   if (!url.startsWith('data:image/')) return url;
   let out = url;
-  if (out.length > 280_000) out = await compressImageDataUrl(out, 1024, 0.72);
-  if (out.length > 450_000) out = await compressImageDataUrl(out, 768, 0.65);
-  if (out.length > MAX_REF_DATA_CHARS) out = await compressImageDataUrl(out, 640, 0.58);
+  const edge1 = many ? 768 : 1024;
+  const edge2 = many ? 560 : 768;
+  const edge3 = many ? 448 : 640;
+  if (out.length > 220_000) out = await compressImageDataUrl(out, edge1, many ? 0.62 : 0.72);
+  if (out.length > 360_000) out = await compressImageDataUrl(out, edge2, many ? 0.55 : 0.65);
+  if (out.length > MAX_REF_SINGLE_CHARS) out = await compressImageDataUrl(out, edge3, 0.5);
   return out;
 };
 
 const prepareReferenceImages = async (urls?: string[]): Promise<string[] | undefined> => {
   if (!urls?.length) return undefined;
+  const capped = urls.filter(Boolean).slice(0, MAX_DESIGN_REF_IMAGES);
+  const many = capped.length >= 4;
   const out: string[] = [];
-  let dataBudget = MAX_REF_DATA_CHARS * MAX_REF_IMAGES;
-  for (const u of urls) {
-    if (out.length >= MAX_REF_IMAGES) break;
+  let dataBudget = MAX_REF_TOTAL_DATA_CHARS;
+  for (const u of capped) {
+    if (out.length >= MAX_DESIGN_REF_IMAGES) break;
     try {
       const resolved = await resolveToDataUrlOrHttps(u);
       if (!resolved) continue;
       if (!/^https?:\/\//i.test(resolved) && !resolved.startsWith('data:image/')) continue;
-      const shrunk = await shrinkRefForUpload(resolved);
+      let shrunk = await shrinkRefForUpload(resolved, many);
       if (shrunk.startsWith('data:image/')) {
         if (shrunk.length > dataBudget) {
-          const tighter = await compressImageDataUrl(shrunk, 512, 0.55);
-          if (tighter.length > dataBudget) continue;
-          out.push(tighter);
-          dataBudget -= tighter.length;
-          continue;
+          shrunk = await compressImageDataUrl(shrunk, 384, 0.48);
+          if (shrunk.length > dataBudget) continue;
         }
         dataBudget -= shrunk.length;
       }
@@ -159,19 +168,33 @@ const stripMultiViewCollageLanguage = (prompt: string): string =>
 const hardenDesignPrompt = (
   prompt: string,
   hasRefs: boolean,
-  opts: { negativePrompt?: string; series?: boolean }
+  opts: {
+    negativePrompt?: string;
+    series?: boolean;
+    referenceCount?: number;
+    lastRefIsLayout?: boolean;
+  }
 ): string => {
   const alreadyHardened =
     /NEGATIVE CONSTRAINTS/i.test(prompt) && /IDENTITY LOCK/i.test(prompt);
   if (alreadyHardened) {
     const extraNeg = mergeNegatives(opts.negativePrompt);
-    return extraNeg && !prompt.includes(extraNeg.slice(0, 24))
-      ? `${prompt}\nAlso avoid: ${extraNeg}`
-      : prompt;
+    const withNeg =
+      extraNeg && !prompt.includes(extraNeg.slice(0, 24))
+        ? `${prompt}\nAlso avoid: ${extraNeg}`
+        : prompt;
+    if ((opts.referenceCount || 0) > 0 && !/MULTI-IMAGE ROLES/i.test(withNeg)) {
+      return `${withNeg}\n${multiImageRoleBlock(opts.referenceCount || 0, {
+        lastIsLayout: opts.lastRefIsLayout,
+      })}`;
+    }
+    return withNeg;
   }
   return composeImageGenerationPrompt({
     baseToolPrompt: prompt,
     hasReferenceImages: hasRefs,
+    referenceCount: opts.referenceCount,
+    lastRefIsLayout: opts.lastRefIsLayout,
     skillNegative: opts.negativePrompt,
     series: !!opts.series,
   }).prompt;
@@ -192,6 +215,8 @@ export const generateDesignImages = async (
     const prompt = hardenDesignPrompt(opts.prompt, hasRefs, {
       negativePrompt: opts.negativePrompt,
       series: opts.series || n > 1,
+      referenceCount: refs?.length || 0,
+      lastRefIsLayout: !!opts.lastRefIsLayout && (refs?.length || 0) >= 2,
     });
     const result = await generateWanImage(
       {
@@ -210,7 +235,7 @@ export const generateDesignImages = async (
     const raw = e?.message || String(e);
     if (/413|Payload Too Large|FUNCTION_PAYLOAD_TOO_LARGE|Request Entity Too Large/i.test(raw)) {
       throw new Error(
-        '参考图总大小超限。请只保留 1～2 张清晰产品图后重试（已自动压缩仍过大时请换更小图）。'
+        '参考图总大小超限。请减少张数或换更小图后重试（系统已自动压缩）。'
       );
     }
     throw new Error(toUserFacingDesignError(raw));

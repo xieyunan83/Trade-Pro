@@ -44,7 +44,7 @@ export type Model3dJob = {
   updatedAt: number;
 };
 
-export type VideoMode = 'text' | 'image' | 'reference';
+export type VideoMode = 'text' | 'image' | 'keyframes' | 'reference';
 export type VideoJobStatus = 'draft' | 'rendering' | 'ready' | 'failed';
 
 export type VideoJob = {
@@ -58,7 +58,10 @@ export type VideoJob = {
   skillId?: string;
   sellingPoints?: string[];
   aspect: '16:9' | '9:16' | '1:1';
+  /** 图生/多参考：参考图；首尾帧时 [0] 为首帧 */
   sourceImages: string[];
+  /** 首尾帧模式：尾帧图 */
+  lastFrameImage?: string;
   skuCode?: string;
   skuName?: string;
   status: VideoJobStatus;

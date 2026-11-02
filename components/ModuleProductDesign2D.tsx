@@ -30,6 +30,7 @@ import {
 } from '../services/designAgentStore';
 import {
   generateDesignImages,
+  MAX_DESIGN_REF_IMAGES,
   generateMultiAngleDesignImages,
   getDesignAgentConfigStatus,
 } from '../services/designAgentService';
@@ -81,8 +82,10 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [skuPick, setSkuPick] = useState('');
-  /** 用户上传的参考图（data URL），可与文字描述组合图生图 */
+  /** 用户上传的参考图（data URL），可与文字描述组合图生图；最多 9 张 */
   const [refUploads, setRefUploads] = useState<string[]>([]);
+  /** 末张为版式/海报方案参考（多品海报默认开启） */
+  const [lastRefIsLayout, setLastRefIsLayout] = useState(false);
   const [refBusy, setRefBusy] = useState(false);
   /** 画布多选：用于删除 / 推送到下游模块 */
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -164,6 +167,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     setLeftTab('projects');
     if (sk.defaultPrompt) setPrompt(sk.defaultPrompt);
     setNegativePrompt(sk.negativePrompt || '');
+    if (sid === 'multi_product_poster') setLastRefIsLayout(true);
   };
 
   const resolveSkuMeta = () => {
@@ -290,8 +294,9 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     setError(null);
     try {
       const next = [...refUploads];
+      const many = files.length + next.length >= 4;
       for (const file of Array.from(files)) {
-        if (next.length >= 3) break;
+        if (next.length >= MAX_DESIGN_REF_IMAGES) break;
         if (!file.type.startsWith('image/')) continue;
         const raw = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader();
@@ -300,10 +305,14 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
           reader.readAsDataURL(file);
         });
         if (!raw.startsWith('data:image/')) continue;
-        const compressed = await compressImageDataUrl(raw);
+        const compressed = await compressImageDataUrl(
+          raw,
+          many ? 768 : 1024,
+          many ? 0.62 : 0.72
+        );
         next.push(compressed);
       }
-      setRefUploads(next.slice(0, 3));
+      setRefUploads(next.slice(0, MAX_DESIGN_REF_IMAGES));
     } catch (e: any) {
       setError(e?.message || '参考图处理失败');
     } finally {
@@ -318,13 +327,17 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
       skus.find((s) => s.skuCode === proj.skuCode);
     const fromSku = (boundSku?.images || []).filter(Boolean);
     const merged: string[] = [];
+    // 上传参考优先（含版式末张）；产品库图仅在仍有空位时补入
     for (const u of [...refUploads, ...fromSku]) {
       if (!u || merged.includes(u)) continue;
       merged.push(u);
-      if (merged.length >= 3) break;
+      if (merged.length >= MAX_DESIGN_REF_IMAGES) break;
     }
     return merged;
   };
+
+  const effectiveLastIsLayout =
+    lastRefIsLayout || skillId === 'multi_product_poster';
 
   const runGenerate = async () => {
     setConfirmOpen(false);
@@ -370,6 +383,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             referenceImages: refImages.length ? refImages : undefined,
             negativePrompt: negativePrompt.trim() || skill.negativePrompt,
             series: skillId === 'listing_set' || count > 1,
+            lastRefIsLayout: effectiveLastIsLayout && refImages.length >= 2,
           });
       const now = Date.now();
       const newAssetsRaw: DesignAsset[] = result.images.map((url, i) => ({
@@ -614,6 +628,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                     setSkillId(s.id);
                     if (s.defaultPrompt) setPrompt(s.defaultPrompt);
                     setNegativePrompt(s.negativePrompt || '');
+                    if (s.id === 'multi_product_poster') setLastRefIsLayout(true);
                   }}
                   onDoubleClick={() => createProject(s.id)}
                   className={`w-full text-left rounded-xl px-3 py-2.5 border ${
@@ -914,7 +929,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
           </div>
           <div>
             <label className="text-[10px] font-black text-slate-400 uppercase flex items-center gap-1">
-              <ImagePlus size={10} /> 参考图（可选，最多 3 张）
+              <ImagePlus size={10} /> 参考图（最多 {MAX_DESIGN_REF_IMAGES} 张，每张都会参与）
             </label>
             <input
               ref={refInputRef}
@@ -925,20 +940,34 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
               onChange={(e) => void onPickRefFiles(e.target.files)}
             />
             <div className="mt-1.5 flex flex-wrap gap-2">
-              {refUploads.map((src, i) => (
-                <div key={`${i}-${src.slice(-24)}`} className="relative w-14 h-14 rounded-lg overflow-hidden border border-violet-200 bg-slate-50">
-                  <img src={src} alt="" className="w-full h-full object-contain" />
-                  <button
-                    type="button"
-                    aria-label="移除参考图"
-                    onClick={() => setRefUploads((prev) => prev.filter((_, j) => j !== i))}
-                    className="absolute top-0.5 right-0.5 rounded-full bg-slate-900/80 text-white p-0.5"
+              {refUploads.map((src, i) => {
+                const isLayout =
+                  effectiveLastIsLayout &&
+                  refUploads.length >= 2 &&
+                  i === refUploads.length - 1;
+                return (
+                  <div
+                    key={`${i}-${src.slice(-24)}`}
+                    className={`relative w-14 h-14 rounded-lg overflow-hidden border bg-slate-50 ${
+                      isLayout ? 'border-amber-400 ring-1 ring-amber-200' : 'border-violet-200'
+                    }`}
                   >
-                    <X size={10} />
-                  </button>
-                </div>
-              ))}
-              {refUploads.length < 3 && (
+                    <img src={src} alt="" className="w-full h-full object-contain" />
+                    <span className="absolute bottom-0 left-0 right-0 text-[7px] font-black text-center text-white bg-slate-900/75 py-0.5">
+                      {isLayout ? '版式' : `产品${i + 1}`}
+                    </span>
+                    <button
+                      type="button"
+                      aria-label="移除参考图"
+                      onClick={() => setRefUploads((prev) => prev.filter((_, j) => j !== i))}
+                      className="absolute top-0.5 right-0.5 rounded-full bg-slate-900/80 text-white p-0.5"
+                    >
+                      <X size={10} />
+                    </button>
+                  </div>
+                );
+              })}
+              {refUploads.length < MAX_DESIGN_REF_IMAGES && (
                 <button
                   type="button"
                   disabled={refBusy || loading}
@@ -950,8 +979,21 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                 </button>
               )}
             </div>
+            <label className="mt-2 flex items-start gap-2 text-[10px] font-medium text-slate-600 cursor-pointer">
+              <input
+                type="checkbox"
+                className="mt-0.5 rounded border-slate-300"
+                checked={effectiveLastIsLayout}
+                disabled={skillId === 'multi_product_poster'}
+                onChange={(e) => setLastRefIsLayout(e.target.checked)}
+              />
+              <span>
+                最后一张为<strong className="text-violet-800">版式/海报方案</strong>
+                （前几张产品全部出现在成图中，按末张构图补齐元素）
+              </span>
+            </label>
             <p className="text-[9px] text-slate-400 font-medium mt-1 leading-relaxed">
-              有参考图时按「图 + 文」改稿；无参考图则纯文字生图。上传图会自动压缩以节省额度。
+              例：8 张独立产品图 + 1 张宣传海报参考。系统会强制每张参考图生效并锁产品外形。上传自动压缩。
             </p>
           </div>
           <textarea

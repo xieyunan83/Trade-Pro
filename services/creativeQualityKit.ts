@@ -37,6 +37,33 @@ export const identityLockBlock = (hasRefs: boolean, domain: 'image' | 'video' | 
   return 'IDENTITY LOCK: Treat reference image(s) as the sole ground truth for silhouette, proportions, colors, materials, logos/decals placement and tooling. Do not invent a different product. Only change camera, framing, backdrop or lighting as instructed.';
 };
 
+/**
+ * 多参考图角色说明：确保每张图都进入指令，避免模型只吃前 1～2 张。
+ * lastIsLayout：末张为版式/海报方案，前面全部为需出现的独立产品。
+ */
+export const multiImageRoleBlock = (
+  count: number,
+  opts?: { lastIsLayout?: boolean }
+): string => {
+  if (count <= 0) return '';
+  const lastIsLayout = !!opts?.lastIsLayout && count >= 2;
+  if (lastIsLayout) {
+    const nProd = count - 1;
+    const list = Array.from({ length: nProd }, (_, i) => `Image ${i + 1}`).join(', ');
+    return [
+      `MULTI-IMAGE ROLES (ALL must contribute): ${list} are SEPARATE product SKUs.`,
+      `For EACH of Images 1–${nProd}: lock exact silhouette, proportions, colors, materials, logos/decals — no merging products into one hybrid, no dropping any SKU.`,
+      `Image ${count} is LAYOUT / POSTER STYLE REFERENCE ONLY (composition, hierarchy, background treatment, decorative motif, typography zones) — NOT a product to replace the others.`,
+      `Output ONE poster/promotional frame that places ALL products from Images 1–${nProd} following Image ${count}'s layout scheme; invent missing props/decor only in that scheme's style; never redesign the products.`,
+    ].join(' ');
+  }
+  if (count === 1) {
+    return 'REFERENCE: Image 1 is the product ground truth — keep identity locked.';
+  }
+  const list = Array.from({ length: count }, (_, i) => `Image ${i + 1}`).join(', ');
+  return `MULTI-IMAGE ROLES (ALL must contribute): ${list} are attached references. Use every image — do not ignore later ones. Prefer product identity consistency across all product photos; if angles differ, fuse complementary views of the SAME SKU without inventing a new design.`;
+};
+
 /** 系列一致性（Listing 套图 / 多张连出） */
 export const SERIES_CONSISTENCY_BLOCK =
   'SERIES CONSISTENCY: If producing a set, keep identical product identity, color temperature, softbox look and crop margins across frames; vary only the selling-point focus.';
@@ -77,6 +104,10 @@ export const composeImageGenerationPrompt = (opts: {
   channel?: string;
   palette?: string;
   hasReferenceImages?: boolean;
+  /** 参考图张数；用于强制「每张都生效」 */
+  referenceCount?: number;
+  /** 末张为版式/海报方案参考 */
+  lastRefIsLayout?: boolean;
   skillNegative?: string;
   series?: boolean;
   /** 已由 Brief 拼好的主提示；传入则不再重复 Skill 底稿 */
@@ -85,7 +116,9 @@ export const composeImageGenerationPrompt = (opts: {
   negativeAsFieldOnly?: boolean;
 }): CreativePromptParts => {
   const hasRefs = !!opts.hasReferenceImages;
+  const refCount = Math.max(0, opts.referenceCount || (hasRefs ? 1 : 0));
   const identity = identityLockBlock(hasRefs, 'image');
+  const roles = multiImageRoleBlock(refCount, { lastIsLayout: opts.lastRefIsLayout });
   const skuLine =
     opts.skuName || opts.skuCode
       ? `Product identity: ${[opts.skuName, opts.skuCode].filter(Boolean).join(' / ')}. Keep SKU appearance consistent.`
@@ -94,6 +127,7 @@ export const composeImageGenerationPrompt = (opts: {
   const positive = opts.baseToolPrompt?.trim()
     ? joinBlocks([
         opts.baseToolPrompt,
+        roles,
         identity,
         opts.series ? SERIES_CONSISTENCY_BLOCK : '',
         COMMERCIAL_CRAFT_FOOTER,
@@ -107,6 +141,7 @@ export const composeImageGenerationPrompt = (opts: {
         opts.channel ? `Retail channel context: ${opts.channel}` : '',
         opts.palette ? `Color / finish direction: ${opts.palette}` : '',
         hasRefs ? 'Follow attached reference images for product shape, colors, and branding.' : '',
+        roles,
         identity,
         opts.series ? SERIES_CONSISTENCY_BLOCK : '',
         COMMERCIAL_CRAFT_FOOTER,

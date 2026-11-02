@@ -15,12 +15,15 @@ import { extractAliyunOrigin } from './wanImageService';
 import { compressImageDataUrl } from './catalogExcelService';
 import { humanizeCreativeProviderError } from './providerErrorMessage';
 
-export type VideoGenerateMode = 'text' | 'image' | 'reference';
+export type VideoGenerateMode = 'text' | 'image' | 'keyframes' | 'reference';
 
 export type VideoGenerateInput = {
   mode: VideoGenerateMode;
   prompt: string;
+  /** 图生 / 首尾帧：首帧 */
   sourceImage?: string;
+  /** 首尾帧：尾帧（与 first_frame 同请求，勿与 reference_image 混用） */
+  lastFrameImage?: string;
   referenceImages?: string[];
   durationSec: 4 | 5 | 6 | 8 | 10 | 12 | 15;
   aspect: '16:9' | '9:16' | '1:1';
@@ -268,10 +271,25 @@ const pickVideoUrl = (out: any): string => {
   return String(url);
 };
 
+const prepareOneVideoImage = async (img: string): Promise<string> => {
+  const { resolveToUploadableImage } = await import('./creativeAssetVault');
+  let resolved: string;
+  try {
+    resolved = await resolveToUploadableImage(img);
+  } catch {
+    throw new Error('参考图格式无效，请重新选择或上传 JPG/PNG');
+  }
+  if (!/^https?:\/\//i.test(resolved) && !/^data:image\//i.test(resolved)) {
+    throw new Error('参考图格式无效，请重新选择或上传 JPG/PNG');
+  }
+  return prepareVideoImage(resolved);
+};
+
 /**
  * 真实异步生成产品视频（wan3.0-video）。
  * - text：仅 prompt
  * - image：首帧 first_frame（与 reference_* 互斥）
+ * - keyframes：首帧 + 尾帧（中间自动过渡）
  * - reference：全部用 reference_image
  */
 export const generateProductVideo = async (input: VideoGenerateInput): Promise<VideoGenerateResult> => {
@@ -288,15 +306,33 @@ export const generateProductVideo = async (input: VideoGenerateInput): Promise<V
   let taskInput: Record<string, unknown>;
   // 有参考图时关闭 prompt_extend，减少模型改写导致的身份漂移（一致性优先）
   const hasMediaRefs = input.mode !== 'text';
+  // 首尾帧官方建议 ratio=adaptive，更贴合输入画幅
   const parameters: Record<string, unknown> = {
     resolution,
-    ratio: aspectToRatio(input.aspect),
+    ratio: input.mode === 'keyframes' ? 'adaptive' : aspectToRatio(input.aspect),
     duration,
     prompt_extend: !hasMediaRefs,
   };
 
   if (input.mode === 'text') {
     taskInput = { prompt };
+    if (input.negativePrompt?.trim()) {
+      taskInput.negative_prompt = input.negativePrompt.trim();
+    }
+  } else if (input.mode === 'keyframes') {
+    const first = (input.sourceImage || '').trim();
+    const last = (input.lastFrameImage || '').trim();
+    if (!first) throw new Error('请上传首帧图片');
+    if (!last) throw new Error('请上传尾帧图片');
+    input.onProgress?.(4, 'preparing');
+    const firstUrl = await prepareOneVideoImage(first);
+    const lastUrl = await prepareOneVideoImage(last);
+    prompt = `${prompt}\nStrict keyframes: open on the first_frame image and end on the last_frame image; invent only the in-between motion while keeping product identity locked.`;
+    const media: MediaItem[] = [
+      { type: 'first_frame', url: firstUrl },
+      { type: 'last_frame', url: lastUrl },
+    ];
+    taskInput = { prompt, media };
     if (input.negativePrompt?.trim()) {
       taskInput.negative_prompt = input.negativePrompt.trim();
     }
@@ -307,20 +343,9 @@ export const generateProductVideo = async (input: VideoGenerateInput): Promise<V
     if (!imgs.length) throw new Error('请至少上传一张参考图');
 
     input.onProgress?.(4, 'preparing');
-    const { resolveToUploadableImage } = await import('./creativeAssetVault');
     const prepared: string[] = [];
     for (const img of imgs.slice(0, input.mode === 'reference' ? 5 : 1)) {
-      let resolved: string;
-      try {
-        // vault: / blob: → data:image；产品库与平面设计落库后常为 vault:
-        resolved = await resolveToUploadableImage(img);
-      } catch {
-        throw new Error('参考图格式无效，请重新选择或上传 JPG/PNG');
-      }
-      if (!/^https?:\/\//i.test(resolved) && !/^data:image\//i.test(resolved)) {
-        throw new Error('参考图格式无效，请重新选择或上传 JPG/PNG');
-      }
-      prepared.push(await prepareVideoImage(resolved));
+      prepared.push(await prepareOneVideoImage(img));
     }
 
     // first_frame 与 reference_image 互斥，不可同请求
@@ -330,7 +355,7 @@ export const generateProductVideo = async (input: VideoGenerateInput): Promise<V
         : [{ type: 'first_frame', url: prepared[0] }];
 
     if (input.mode === 'reference' && prepared.length > 1) {
-      prompt = `${prompt}\n参考图顺序：图1起保持产品外观一致。`;
+      prompt = `${prompt}\n参考图顺序：图1起保持产品外观一致；每张参考图都要发挥作用。`;
     }
 
     taskInput = { prompt, media };

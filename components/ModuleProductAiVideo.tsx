@@ -13,6 +13,7 @@ import {
   ChevronDown,
   ChevronUp,
   Sparkles,
+  Film,
 } from 'lucide-react';
 import type { User } from '../types';
 import { ModuleType } from '../types';
@@ -67,9 +68,12 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
   const [durationSec, setDurationSec] = useState<VideoDurationSec>(10);
   const [aspect, setAspect] = useState<'16:9' | '9:16' | '1:1'>('16:9');
   const [images, setImages] = useState<string[]>([]);
+  /** 首尾帧模式：尾帧 */
+  const [lastFrameImage, setLastFrameImage] = useState<string | null>(null);
   const [skuPick, setSkuPick] = useState('');
   const [skuName, setSkuName] = useState<string | undefined>();
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const lastFrameFileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(jobs[0]?.id || null);
@@ -213,17 +217,36 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
       setMsg('请选择场景 Skill，或在高级选项填写镜头描述');
       return;
     }
-    if ((mode === 'image' || mode === 'reference') && images.length === 0) {
+    if (mode === 'keyframes') {
+      if (!images[0]) {
+        setMsg('请上传首帧图片');
+        return;
+      }
+      if (!lastFrameImage) {
+        setMsg('请上传尾帧图片');
+        return;
+      }
+    } else if ((mode === 'image' || mode === 'reference') && images.length === 0) {
       setMsg(mode === 'reference' ? '请上传至少 1 张参考图（建议多角度）' : '请上传产品图');
       return;
     }
     if (activeVideoSkill.preferImage && mode === 'text') {
-      setMsg('该场景建议使用产品图生成，请切换到「图生」并上传参考图');
+      setMsg('该场景建议使用产品图生成，请切换到「图生 / 首尾帧」并上传参考图');
       return;
     }
     const effectiveMode: VideoMode =
-      mode === 'text' ? 'text' : images.length > 1 ? 'reference' : mode === 'reference' ? 'reference' : 'image';
-    if (effectiveMode === 'reference' && mode !== 'reference') setMode('reference');
+      mode === 'text'
+        ? 'text'
+        : mode === 'keyframes'
+          ? 'keyframes'
+          : images.length > 1
+            ? 'reference'
+            : mode === 'reference'
+              ? 'reference'
+              : 'image';
+    if (effectiveMode === 'reference' && mode !== 'reference' && mode !== 'keyframes') {
+      setMode('reference');
+    }
     const sku = skus.find((s) => s.id === skuPick || s.skuCode === skuPick);
     const now = Date.now();
     const pts = sellingPoints.map((p) => p.trim()).filter(Boolean);
@@ -239,7 +262,8 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
       storyboard: assembled.storyboard || undefined,
       durationSec: assembled.durationSec,
       aspect: assembled.aspect,
-      sourceImages: images,
+      sourceImages: effectiveMode === 'keyframes' ? [images[0]].filter(Boolean) : images,
+      lastFrameImage: effectiveMode === 'keyframes' ? lastFrameImage || undefined : undefined,
       skuCode: sku?.skuCode || skuPick || undefined,
       skuName: sku?.name || skuName || productName.trim() || undefined,
       skillId: videoSkillId,
@@ -259,18 +283,25 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
     setActiveId(job.id);
     setBusy(true);
     setMsg(
-      effectiveMode === 'reference'
-        ? `正在提交多参考样片（${images.length} 张）…`
-        : '正在提交样片任务…'
+      effectiveMode === 'keyframes'
+        ? '正在提交首尾帧样片…'
+        : effectiveMode === 'reference'
+          ? `正在提交多参考样片（${images.length} 张）…`
+          : '正在提交样片任务…'
     );
 
     try {
-      const parts = buildVideoPromptParts(images.length > 0);
+      const parts = buildVideoPromptParts(
+        effectiveMode === 'keyframes'
+          ? !!(images[0] && lastFrameImage)
+          : images.length > 0
+      );
       const result = await generateProductVideo({
         mode: effectiveMode,
         prompt: parts.prompt || 'Product showcase, smooth camera orbit, studio lighting',
         sourceImage: images[0],
-        referenceImages: images.slice(1),
+        lastFrameImage: effectiveMode === 'keyframes' ? lastFrameImage || undefined : undefined,
+        referenceImages: effectiveMode === 'reference' ? images.slice(1) : undefined,
         durationSec: assembled.durationSec,
         aspect: assembled.aspect,
         resolution: '720P',
@@ -343,7 +374,9 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
         mode: active.mode,
         prompt: fullParts.prompt,
         sourceImage: active.sourceImages[0],
-        referenceImages: active.sourceImages.slice(1),
+        lastFrameImage: active.mode === 'keyframes' ? active.lastFrameImage : undefined,
+        referenceImages:
+          active.mode === 'reference' ? active.sourceImages.slice(1) : undefined,
         durationSec: active.durationSec,
         aspect: active.aspect,
         resolution: '1080P',
@@ -435,11 +468,12 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
       <div className="grid lg:grid-cols-12 gap-4">
         <div className="lg:col-span-4 space-y-3">
           <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
-            <div className="grid grid-cols-3 gap-1.5">
+            <div className="grid grid-cols-4 gap-1.5">
               {(
                 [
                   { id: 'text' as const, label: '文生', icon: Type },
-                  { id: 'image' as const, label: '图生', icon: ImageIcon },
+                  { id: 'image' as const, label: '首帧', icon: ImageIcon },
+                  { id: 'keyframes' as const, label: '首尾帧', icon: Film },
                   { id: 'reference' as const, label: '多参考', icon: Layers },
                 ] as const
               ).map((m) => (
@@ -494,6 +528,111 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
               )}
             </div>
 
+            {mode === 'keyframes' && (
+              <div className="space-y-2">
+                <p className="text-[10px] text-slate-500 font-medium leading-relaxed">
+                  上传<strong className="text-rose-800">首帧</strong>与
+                  <strong className="text-rose-800">尾帧</strong>
+                  ，系统生成中间过渡运动（产品外形锁定）。
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="rounded-xl border border-rose-100 bg-rose-50/40 p-2 space-y-1.5">
+                    <div className="text-[10px] font-black text-rose-800">首帧</div>
+                    {images[0] ? (
+                      <div className="relative aspect-square rounded-lg overflow-hidden bg-white border border-rose-100">
+                        <VaultImg src={images[0]} alt="" className="w-full h-full object-contain" />
+                        <button
+                          type="button"
+                          className="absolute top-1 right-1 rounded-full bg-slate-900/80 text-white text-[9px] font-bold px-1.5 py-0.5"
+                          onClick={() => setImages([])}
+                        >
+                          清除
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => fileRef.current?.click()}
+                        className="w-full aspect-square rounded-lg border-2 border-dashed border-rose-200 text-[10px] font-black text-rose-700"
+                      >
+                        上传首帧
+                      </button>
+                    )}
+                  </div>
+                  <div className="rounded-xl border border-amber-100 bg-amber-50/40 p-2 space-y-1.5">
+                    <div className="text-[10px] font-black text-amber-900">尾帧</div>
+                    {lastFrameImage ? (
+                      <div className="relative aspect-square rounded-lg overflow-hidden bg-white border border-amber-100">
+                        <VaultImg
+                          src={lastFrameImage}
+                          alt=""
+                          className="w-full h-full object-contain"
+                        />
+                        <button
+                          type="button"
+                          className="absolute top-1 right-1 rounded-full bg-slate-900/80 text-white text-[9px] font-bold px-1.5 py-0.5"
+                          onClick={() => setLastFrameImage(null)}
+                        >
+                          清除
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => lastFrameFileRef.current?.click()}
+                        className="w-full aspect-square rounded-lg border-2 border-dashed border-amber-200 text-[10px] font-black text-amber-800"
+                      >
+                        上传尾帧
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/bmp"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    e.target.value = '';
+                    if (!f?.type.startsWith('image/')) return;
+                    const reader = new FileReader();
+                    reader.onload = () => setImages([String(reader.result || '')]);
+                    reader.readAsDataURL(f);
+                  }}
+                />
+                <input
+                  ref={lastFrameFileRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/bmp"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    e.target.value = '';
+                    if (!f?.type.startsWith('image/')) return;
+                    const reader = new FileReader();
+                    reader.onload = () => setLastFrameImage(String(reader.result || ''));
+                    reader.readAsDataURL(f);
+                  }}
+                />
+                <CreativeRefPicker
+                  value={images[0] ? [images[0]] : []}
+                  onChange={(urls) => setImages(urls.slice(0, 1))}
+                  multiple={false}
+                  max={1}
+                  accent="rose"
+                  title="或从平面/产品库选首帧"
+                  onSkuMeta={(meta) => {
+                    if (meta?.skuCode) setSkuPick(meta.skuCode);
+                    if (meta?.skuName) {
+                      setSkuName(meta.skuName);
+                      if (!productName.trim()) setProductName(meta.skuName);
+                    }
+                  }}
+                />
+              </div>
+            )}
+
             {(mode === 'image' || mode === 'reference') && (
               <div className="space-y-2">
                 <CreativeRefPicker
@@ -505,7 +644,11 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
                   multiple
                   max={6}
                   accent="rose"
-                  title="从平面设计 / 产品库多选（可点 × 去掉多余图）"
+                  title={
+                    mode === 'image'
+                      ? '首帧：从平面设计 / 产品库选择'
+                      : '从平面设计 / 产品库多选（可点 × 去掉多余图）'
+                  }
                   onSkuMeta={(meta) => {
                     if (meta?.skuCode) setSkuPick(meta.skuCode);
                     if (meta?.skuName) {

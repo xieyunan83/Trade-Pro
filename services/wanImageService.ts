@@ -176,11 +176,12 @@ const networkFailMessage = (e: any, action: string): string => {
   return `${action}失败：${msg}${qwenCorsHint(msg)}`;
 };
 
+/** 与 designAgent 对齐：最多 9 张（如 8 产品 + 1 版式），由上游压缩控制体积 */
 const sanitizeRefImages = (imgs?: string[]): string[] =>
   (imgs || [])
     .map((s) => (s || '').trim())
     .filter((s) => /^https?:\/\//i.test(s) || s.startsWith('data:image/'))
-    .slice(0, 2);
+    .slice(0, 9);
 
 const extractImageUrls = (data: any): string[] => {
   const urls: string[] = [];
