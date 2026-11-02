@@ -22,7 +22,7 @@ export type VideoGenerateInput = {
   prompt: string;
   sourceImage?: string;
   referenceImages?: string[];
-  durationSec: 4 | 5 | 8 | 10 | 15;
+  durationSec: 4 | 5 | 6 | 8 | 10 | 12 | 15;
   aspect: '16:9' | '9:16' | '1:1';
   resolution: '720P' | '1080P';
   tier: 'draft' | 'full';

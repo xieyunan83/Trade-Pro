@@ -10,6 +10,9 @@ import {
   Trash2,
   Package,
   Download,
+  ChevronDown,
+  ChevronUp,
+  Sparkles,
 } from 'lucide-react';
 import type { User } from '../types';
 import { ModuleType } from '../types';
@@ -33,7 +36,13 @@ import {
 import { humanizeCreativeProviderError } from '../services/providerErrorMessage';
 import { consumeCreativeHandoff } from '../services/creativeAssetBridge';
 import { CreativePipelineBar, CreativeRefPicker } from './CreativeRefPicker';
-import { VIDEO_SKILLS, type VideoSkillId } from '../services/creativeSkills/videoSkills';
+import {
+  VIDEO_SKILLS,
+  assembleVideoSkillPayload,
+  getVideoSkill,
+  type VideoDurationSec,
+  type VideoSkillId,
+} from '../services/creativeSkills/videoSkills';
 import { composeVideoGenerationPrompt } from '../services/creativeQualityKit';
 
 type Props = {
@@ -47,17 +56,20 @@ type Props = {
 export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateModule }) => {
   const [jobs, setJobs] = useState<VideoJob[]>(() => loadVideoJobs());
   const [mode, setMode] = useState<VideoMode>('image');
-  const [videoSkillId, setVideoSkillId] = useState<VideoSkillId>('hero_orbit');
+  const [videoSkillId, setVideoSkillId] = useState<VideoSkillId>('amazon_gallery');
+  const [productName, setProductName] = useState('');
+  const [sellingPoints, setSellingPoints] = useState<string[]>(['', '', '']);
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState(
-    () => VIDEO_SKILLS.find((s) => s.id === 'hero_orbit')?.negativeHints || ''
+    () => getVideoSkill('amazon_gallery').negativeHints
   );
   const [storyboard, setStoryboard] = useState('');
-  const [durationSec, setDurationSec] = useState<4 | 5 | 8 | 10>(5);
+  const [durationSec, setDurationSec] = useState<VideoDurationSec>(10);
   const [aspect, setAspect] = useState<'16:9' | '9:16' | '1:1'>('16:9');
   const [images, setImages] = useState<string[]>([]);
   const [skuPick, setSkuPick] = useState('');
   const [skuName, setSkuName] = useState<string | undefined>();
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(jobs[0]?.id || null);
@@ -65,6 +77,21 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
   const fileRef = useRef<HTMLInputElement>(null);
   const skus = useMemo(() => loadCatalogSkus(), []);
   const active = jobs.find((j) => j.id === activeId) || null;
+  const activeVideoSkill = getVideoSkill(videoSkillId);
+
+  const applySkill = (id: VideoSkillId) => {
+    const s = getVideoSkill(id);
+    setVideoSkillId(id);
+    setAspect(s.defaultAspect);
+    setDurationSec(s.defaultDurationSec);
+    setNegativePrompt(s.negativeHints || '');
+    const assembled = assembleVideoSkillPayload(s, {
+      productName: productName || skuName,
+      sellingPoints,
+    });
+    setPrompt(assembled.prompt);
+    setStoryboard(assembled.storyboardZh);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -100,17 +127,11 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
     })();
     if (handoff.skuCode) setSkuPick(handoff.skuCode);
     if (handoff.skuName) setSkuName(handoff.skuName);
-    if (!prompt.trim()) {
-      setPrompt(
-        handoff.images.length > 1
-          ? 'Keep product identity consistent, smooth orbit around product, studio lighting, clean background'
-          : 'Product hero video, gentle camera push-in, studio lighting, clean background'
-      );
-    }
+    applySkill(videoSkillId);
     setMsg(
       handoff.note
         ? `已从平面设计带入 ${handoff.images.length} 张参考图：${handoff.note}`
-        : `已带入 ${handoff.images.length} 张参考图，可直接生成样片`
+        : `已带入 ${handoff.images.length} 张参考图，选场景后即可生成样片`
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅启动时消费一次交接包
   }, []);
@@ -149,28 +170,55 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
     });
   };
 
-  const activeVideoSkill =
-    VIDEO_SKILLS.find((s) => s.id === videoSkillId) || VIDEO_SKILLS[0];
-
-  const buildVideoPromptParts = (hasRefs: boolean) =>
-    composeVideoGenerationPrompt({
-      basePrompt: prompt.trim() || activeVideoSkill.defaultPrompt,
-      storyboard: storyboard.trim() || undefined,
-      hasReferenceImages: hasRefs,
-      skillNegative: negativePrompt.trim() || activeVideoSkill.negativeHints,
+  const buildAssembled = () => {
+    const skill = activeVideoSkill;
+    const assembled = assembleVideoSkillPayload(skill, {
+      productName: productName.trim() || skuName,
+      sellingPoints,
+      categoryHint: skill.category,
     });
+    // 自由分镜或高级区有手改时，以当前框为准；否则用组装结果
+    const useAssembled = skill.id !== 'free' && !showAdvanced;
+    return {
+      prompt: useAssembled
+        ? assembled.prompt
+        : prompt.trim() || assembled.prompt || skill.defaultPrompt,
+      storyboard: useAssembled
+        ? assembled.storyboardZh
+        : storyboard.trim() || assembled.storyboardZh,
+      negative: negativePrompt.trim() || assembled.negative,
+      aspect: useAssembled ? assembled.aspect : aspect,
+      durationSec: useAssembled ? assembled.durationSec : durationSec,
+    };
+  };
+
+  const buildVideoPromptParts = (hasRefs: boolean) => {
+    const a = buildAssembled();
+    return composeVideoGenerationPrompt({
+      basePrompt: a.prompt,
+      storyboard: a.storyboard || undefined,
+      hasReferenceImages: hasRefs,
+      skillNegative: a.negative,
+      skillFrameworkNote: `${activeVideoSkill.channel} framework: ${activeVideoSkill.whyItWorks}`,
+    });
+  };
 
   const createDraft = async () => {
     if (!provider.ready) {
       setMsg(provider.detail);
       return;
     }
-    if (!prompt.trim() && mode === 'text') {
-      setMsg('请填写镜头描述');
+    const assembled = buildAssembled();
+    if (!assembled.prompt.trim() && mode === 'text') {
+      setMsg('请选择场景 Skill，或在高级选项填写镜头描述');
       return;
     }
     if ((mode === 'image' || mode === 'reference') && images.length === 0) {
       setMsg(mode === 'reference' ? '请上传至少 1 张参考图（建议多角度）' : '请上传产品图');
+      return;
+    }
+    if (activeVideoSkill.preferImage && mode === 'text') {
+      setMsg('该场景建议使用产品图生成，请切换到「图生」并上传参考图');
       return;
     }
     const effectiveMode: VideoMode =
@@ -178,21 +226,24 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
     if (effectiveMode === 'reference' && mode !== 'reference') setMode('reference');
     const sku = skus.find((s) => s.id === skuPick || s.skuCode === skuPick);
     const now = Date.now();
+    const pts = sellingPoints.map((p) => p.trim()).filter(Boolean);
     const job: VideoJob = {
       id: newCreativeId('vid'),
       title: sku
-        ? `${sku.skuCode} · ${durationSec}s`
-        : skuPick
-          ? `${skuPick} · ${durationSec}s`
-          : `视频 · ${prompt.trim().slice(0, 20) || '未命名'}`,
+        ? `${sku.skuCode} · ${activeVideoSkill.label} · ${assembled.durationSec}s`
+        : productName.trim()
+          ? `${productName.trim()} · ${assembled.durationSec}s`
+          : `${activeVideoSkill.label} · ${assembled.durationSec}s`,
       mode: effectiveMode,
-      prompt: prompt.trim(),
-      storyboard: storyboard.trim() || undefined,
-      durationSec,
-      aspect,
+      prompt: assembled.prompt,
+      storyboard: assembled.storyboard || undefined,
+      durationSec: assembled.durationSec,
+      aspect: assembled.aspect,
       sourceImages: images,
       skuCode: sku?.skuCode || skuPick || undefined,
-      skuName: sku?.name || skuName,
+      skuName: sku?.name || skuName || productName.trim() || undefined,
+      skillId: videoSkillId,
+      sellingPoints: pts.length ? pts : undefined,
       status: 'rendering',
       progress: 0,
       draftConfirmed: false,
@@ -200,6 +251,10 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
       createdAt: now,
       updatedAt: now,
     };
+    setPrompt(assembled.prompt);
+    setStoryboard(assembled.storyboard);
+    setAspect(assembled.aspect);
+    setDurationSec(assembled.durationSec);
     persist([job, ...jobs]);
     setActiveId(job.id);
     setBusy(true);
@@ -216,8 +271,8 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
         prompt: parts.prompt || 'Product showcase, smooth camera orbit, studio lighting',
         sourceImage: images[0],
         referenceImages: images.slice(1),
-        durationSec,
-        aspect,
+        durationSec: assembled.durationSec,
+        aspect: assembled.aspect,
         resolution: '720P',
         tier: 'draft',
         negativePrompt: parts.negative,
@@ -276,11 +331,13 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
     setMsg('正在提交正片任务…');
 
     try {
+      const skillForJob = getVideoSkill(active.skillId || videoSkillId);
       const fullParts = composeVideoGenerationPrompt({
-        basePrompt: active.prompt || activeVideoSkill.defaultPrompt || 'Product hero video, cinematic lighting',
+        basePrompt: active.prompt || skillForJob.defaultPrompt || 'Product hero video, cinematic lighting',
         storyboard: active.storyboard,
         hasReferenceImages: (active.sourceImages || []).length > 0,
-        skillNegative: negativePrompt.trim() || activeVideoSkill.negativeHints,
+        skillNegative: negativePrompt.trim() || skillForJob.negativeHints,
+        skillFrameworkNote: `${skillForJob.channel} framework: ${skillForJob.whyItWorks}`,
       });
       const result = await generateProductVideo({
         mode: active.mode,
@@ -357,7 +414,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
             </div>
             <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">产品 AI 视频</h2>
             <p className="text-sm text-slate-500 font-medium mt-1 max-w-2xl">
-              可直接选用平面多角度套图或产品库图片；有参考时锁定产品身份并关闭提示扩写防漂移。先出样片确认，再渲正片。
+              选场景 · 上传产品图 · 填 1～3 个卖点即可出片。内置亚马逊主图 / A+、短视频四段式、潮玩 IP、展会循环等专业分镜，无需自己写提示词。先样片后正片。
             </p>
             <div className="mt-2">
               <CreativePipelineBar current="video" onNavigate={onNavigateModule} />
@@ -402,23 +459,15 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
             </div>
 
             <div>
-              <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">
-                Skills
+              <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5 inline-flex items-center gap-1">
+                <Sparkles size={10} /> 一键场景 Skills
               </div>
-              <div className="space-y-1.5 max-h-48 overflow-y-auto custom-scrollbar pr-0.5">
+              <div className="space-y-1.5 max-h-56 overflow-y-auto custom-scrollbar pr-0.5">
                 {VIDEO_SKILLS.map((s) => (
                   <button
                     key={s.id}
                     type="button"
-                    onClick={() => {
-                      setVideoSkillId(s.id);
-                      if (s.defaultPrompt) setPrompt(s.defaultPrompt);
-                      setNegativePrompt(s.negativeHints || '');
-                      if (s.storyboardZh) setStoryboard(s.storyboardZh);
-                      if (s.aspectHint.includes('9:16')) setAspect('9:16');
-                      else if (s.aspectHint.includes('1:1')) setAspect('1:1');
-                      else if (s.aspectHint.includes('16:9')) setAspect('16:9');
-                    }}
+                    onClick={() => applySkill(s.id)}
                     className={`w-full text-left rounded-xl border px-2.5 py-2 transition-colors ${
                       videoSkillId === s.id
                         ? 'border-rose-400 bg-rose-50'
@@ -427,7 +476,9 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs font-black text-slate-800">{s.label}</span>
-                      <span className="text-[9px] font-bold text-rose-600/80">{s.category}</span>
+                      <span className="text-[9px] font-bold text-rose-600/80 shrink-0">
+                        {s.channel}
+                      </span>
                     </div>
                     <p className="text-[10px] text-slate-500 font-medium mt-0.5 leading-snug">
                       {s.hint}
@@ -435,6 +486,12 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
                   </button>
                 ))}
               </div>
+              {activeVideoSkill.id !== 'free' && (
+                <p className="text-[10px] text-slate-500 font-medium mt-2 leading-relaxed bg-slate-50 border border-slate-100 rounded-xl px-2.5 py-2">
+                  <span className="font-black text-slate-700">为何有效：</span>
+                  {activeVideoSkill.whyItWorks}
+                </p>
+              )}
             </div>
 
             {(mode === 'image' || mode === 'reference') && (
@@ -443,7 +500,6 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
                   value={images}
                   onChange={(urls) => {
                     setImages(urls);
-                    // 多选时自动切到多参考，保证下游按多图生成
                     if (urls.length > 1 && mode === 'image') setMode('reference');
                   }}
                   multiple
@@ -452,7 +508,10 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
                   title="从平面设计 / 产品库多选（可点 × 去掉多余图）"
                   onSkuMeta={(meta) => {
                     if (meta?.skuCode) setSkuPick(meta.skuCode);
-                    setSkuName(meta?.skuName);
+                    if (meta?.skuName) {
+                      setSkuName(meta.skuName);
+                      if (!productName.trim()) setProductName(meta.skuName);
+                    }
                   }}
                 />
                 <button
@@ -473,84 +532,59 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
                     e.target.value = '';
                   }}
                 />
-                <p className="text-[10px] text-slate-400 font-medium leading-relaxed">
-                  可连续勾选多张；选 ≥2 张时自动按多参考生成。
-                </p>
               </div>
             )}
 
             <div>
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">镜头描述</label>
-              <textarea
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                rows={3}
-                placeholder="主体动作、镜头运动、光线、禁止元素…"
-                className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm resize-y"
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                产品名称（可选）
+              </label>
+              <input
+                value={productName}
+                onChange={(e) => setProductName(e.target.value)}
+                placeholder="如：泡泡枪 / 软胶潮玩公仔"
+                className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium"
               />
-            </div>
-            <div>
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">分镜（可选）</label>
-              <textarea
-                value={storyboard}
-                onChange={(e) => setStoryboard(e.target.value)}
-                rows={2}
-                placeholder="0–2s：特写… 2–5s：环绕…"
-                className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm resize-y"
-              />
-            </div>
-            <div>
-              <div className="flex items-center justify-between gap-2">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                  负向约束（不想出现的）
-                </label>
-                <button
-                  type="button"
-                  onClick={() => setNegativePrompt(activeVideoSkill.negativeHints || '')}
-                  className="text-[9px] font-bold text-rose-600 hover:text-rose-800"
-                >
-                  恢复 Skill 默认
-                </button>
-              </div>
-              <textarea
-                value={negativePrompt}
-                onChange={(e) => setNegativePrompt(e.target.value)}
-                rows={2}
-                placeholder="如：变形、闪烁、水印、乱码字幕…"
-                className="mt-1 w-full rounded-xl border border-rose-100 bg-rose-50/40 px-3 py-2 text-xs font-medium text-slate-700 resize-y"
-              />
-              <p className="text-[9px] text-slate-400 font-medium mt-1">
-                写入视频负向通道；另叠加通用拒绝项。
-              </p>
             </div>
 
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase">时长</label>
-                <select
-                  value={durationSec}
-                  onChange={(e) => setDurationSec(Number(e.target.value) as 4 | 5 | 8 | 10)}
-                  className="mt-1 w-full rounded-xl border border-slate-200 px-2 py-2 text-sm font-bold"
-                >
-                  {[4, 5, 8, 10].map((n) => (
-                    <option key={n} value={n}>
-                      {n} 秒
-                    </option>
-                  ))}
-                </select>
+            <div>
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                卖点（填中文即可，系统自动编成分镜）
+              </label>
+              <div className="mt-1 space-y-1.5">
+                {Array.from({ length: activeVideoSkill.sellingPointSlots }).map((_, i) => (
+                  <input
+                    key={i}
+                    value={sellingPoints[i] || ''}
+                    onChange={(e) => {
+                      const next = [...sellingPoints];
+                      next[i] = e.target.value;
+                      setSellingPoints(next);
+                    }}
+                    placeholder={
+                      i === 0
+                        ? '主卖点，如：一键变形 / 静音齿轮'
+                        : i === 1
+                          ? '次卖点，如：ABS 厚壁 / 含 6 配件'
+                          : '补充，如：适合 3+ / 货架陈列醒目'
+                    }
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium"
+                  />
+                ))}
               </div>
-              <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase">画幅</label>
-                <select
-                  value={aspect}
-                  onChange={(e) => setAspect(e.target.value as typeof aspect)}
-                  className="mt-1 w-full rounded-xl border border-slate-200 px-2 py-2 text-sm font-bold"
-                >
-                  <option value="16:9">16:9 横版</option>
-                  <option value="9:16">9:16 竖版</option>
-                  <option value="1:1">1:1 方形</option>
-                </select>
+            </div>
+
+            <div className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2 text-[10px] text-slate-600 font-medium space-y-1">
+              <div className="flex flex-wrap gap-x-3 gap-y-0.5 font-bold text-slate-700">
+                <span>画幅 {aspect}</span>
+                <span>时长 {durationSec}s</span>
+                <span>质检 {activeVideoSkill.qaChecklist.length} 项</span>
               </div>
+              <ol className="list-decimal list-inside space-y-0.5">
+                {activeVideoSkill.qaChecklist.slice(0, 3).map((q) => (
+                  <li key={q}>{q}</li>
+                ))}
+              </ol>
             </div>
 
             <div>
@@ -563,6 +597,10 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
                   const id = e.target.value;
                   setSkuPick(id);
                   const s = skus.find((x) => x.id === id);
+                  if (s?.name) {
+                    setSkuName(s.name);
+                    if (!productName.trim()) setProductName(s.name);
+                  }
                   if (s?.images?.length && (mode === 'image' || mode === 'reference')) {
                     setImages(s.images.slice(0, 6));
                   }
@@ -577,12 +615,94 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
                   </option>
                 ))}
               </select>
-              {skuPick && skus.find((s) => s.id === skuPick)?.images?.length ? (
-                <p className="text-[10px] font-bold text-rose-700 mt-1">
-                  已带入产品库图片，可用于图生/多参考视频
-                </p>
-              ) : null}
             </div>
+
+            <button
+              type="button"
+              onClick={() => setShowAdvanced((v) => !v)}
+              className="w-full inline-flex items-center justify-center gap-1 text-[10px] font-bold text-slate-500 hover:text-slate-800 py-1"
+            >
+              {showAdvanced ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+              {showAdvanced ? '收起高级选项' : '高级：手改分镜 / 时长 / 负向'}
+            </button>
+
+            {showAdvanced && (
+              <div className="space-y-2 border-t border-slate-100 pt-2">
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                    镜头描述（英文/中文）
+                  </label>
+                  <textarea
+                    value={prompt}
+                    onChange={(e) => setPrompt(e.target.value)}
+                    rows={3}
+                    placeholder="留空则按场景自动生成"
+                    className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm resize-y"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                    分镜
+                  </label>
+                  <textarea
+                    value={storyboard}
+                    onChange={(e) => setStoryboard(e.target.value)}
+                    rows={2}
+                    className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm resize-y"
+                  />
+                </div>
+                <div>
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                      负向约束
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setNegativePrompt(activeVideoSkill.negativeHints || '')}
+                      className="text-[9px] font-bold text-rose-600 hover:text-rose-800"
+                    >
+                      恢复场景默认
+                    </button>
+                  </div>
+                  <textarea
+                    value={negativePrompt}
+                    onChange={(e) => setNegativePrompt(e.target.value)}
+                    rows={2}
+                    className="mt-1 w-full rounded-xl border border-rose-100 bg-rose-50/40 px-3 py-2 text-xs font-medium text-slate-700 resize-y"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[10px] font-black text-slate-400 uppercase">时长</label>
+                    <select
+                      value={durationSec}
+                      onChange={(e) =>
+                        setDurationSec(Number(e.target.value) as VideoDurationSec)
+                      }
+                      className="mt-1 w-full rounded-xl border border-slate-200 px-2 py-2 text-sm font-bold"
+                    >
+                      {([4, 5, 6, 8, 10, 12, 15] as VideoDurationSec[]).map((n) => (
+                        <option key={n} value={n}>
+                          {n} 秒
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-slate-400 uppercase">画幅</label>
+                    <select
+                      value={aspect}
+                      onChange={(e) => setAspect(e.target.value as typeof aspect)}
+                      className="mt-1 w-full rounded-xl border border-slate-200 px-2 py-2 text-sm font-bold"
+                    >
+                      <option value="16:9">16:9 横版</option>
+                      <option value="9:16">9:16 竖版</option>
+                      <option value="1:1">1:1 方形</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <button
               type="button"
@@ -597,7 +717,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
               )}
               {busy && active?.status === 'rendering' && !active.draftVideoUrl
                 ? `样片中… ${active?.progress ?? 0}%`
-                : '生成样片'}
+                : '一键生成样片'}
             </button>
             {msg && (
               <p className="text-xs font-bold text-rose-900 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2">

@@ -125,12 +125,15 @@ export const composeVideoGenerationPrompt = (opts: {
   storyboard?: string;
   hasReferenceImages?: boolean;
   skillNegative?: string;
+  /** Skill 渠道脚注，如 Amazon Gallery / booth loop */
+  skillFrameworkNote?: string;
 }): CreativePromptParts => {
   const positive = joinBlocks([
     opts.basePrompt,
     opts.storyboard ? `Shot list / storyboard: ${opts.storyboard}` : '',
+    opts.skillFrameworkNote || '',
     identityLockBlock(!!opts.hasReferenceImages, 'video'),
-    'Smooth cinematic motion, stable framing, commercial ecommerce clarity, no watermark.',
+    'Smooth cinematic motion, stable framing, commercial ecommerce clarity, muted-friendly visuals, no watermark.',
   ]);
   const negative = mergeNegatives(UNIVERSAL_VIDEO_NEGATIVES, opts.skillNegative);
   return { prompt: positive, negative };
