@@ -175,13 +175,14 @@ ${evidence || '（证据较少，请自行联网交叉验证；查不到必须�
 ${roster}
 
 硬性要求：
-1. 只补全与该公司相关的真实在职人员；无法确认则 title/whatsapp 留空。
-2. title 必须是具体岗位（如 Purchasing Manager / Import Buyer / Category Manager / Owner）；禁止写 Staff/Employee/待确认职位。
+1. 只补全「确属本公司」的真实在职人员；若证据显示此人在别的公司任职，title/whatsapp/linkedin 全部留空（不要把别家职位写进来）。
+2. title 必须是具体岗位（如 Purchasing Manager / Import Buyer / Category Manager / Owner）；禁止写 Staff/Employee/待确认职位；禁止写成「Xxx at 其它公司名」。
 3. whatsapp：仅提取公开可见的国际格式号码或 wa.me 链接中的号码；查不到留空，严禁编造。
 4. phone：若证据里有固定电话/手机且与 WhatsApp 不同可另填；没有则留空。
-5. linkedin：若证据能确认个人主页则填 linkedin.com/in/...，否则保留原值逻辑由调用方合并。
+5. linkedin：若证据能确认个人主页且属于本公司员工则填 linkedin.com/in/...，否则留空由调用方保留原值。
 6. 采购/买手/品类/进口 → type=Buyer；CEO/Founder/Owner/President → CEO；其它 Other。
 7. 禁止输出邮箱；本任务不挖邮箱。
+8. 严禁把同行业其它公司（如其它玩具店/进口商）的采购经理塞进本公司花名册。
 
 严格返回 JSON 数组（与输入人数相同、顺序一致）：
 [{"name":"...","title":"","phone":"","whatsapp":"","linkedin":"","type":"CEO|Buyer|Other","influenceScore":1-5}]
@@ -283,7 +284,19 @@ ${roster}
     if (enriched > 0) {
       console.log(`[dm-web-enrich] enriched title/whatsapp for ${enriched} contact(s)`);
     }
-    return next;
+    const { filterDecisionMakersForCompany, extractEmployerFromText, companiesFuzzyMatch } =
+      await import('./linkedinEmployeeLocator');
+    // 若模型把职位改成「at 别家公司」，丢掉污染职位；仍属本公司的人保留
+    const cleaned = next.map((c) => {
+      const title = (c.title || '').trim();
+      if (!title) return c;
+      const emp = extractEmployerFromText(title);
+      if (emp && companyName && !companiesFuzzyMatch(emp, companyName)) {
+        return { ...c, title: title.replace(/\s+at\s+.+$/i, '').trim() };
+      }
+      return c;
+    });
+    return filterDecisionMakersForCompany(cleaned, { companyName, domain, mode: 'lenient' });
   } catch (e) {
     console.warn('[dm-web-enrich] failed', e);
     return contacts;

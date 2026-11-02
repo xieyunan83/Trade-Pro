@@ -261,7 +261,11 @@ export const gatherSilentCompanyChannelIntel = async (opts: {
       existing: out.decisionMakers,
       maxQueries: 3,
     });
+    // locate 内部已按同公司过滤；再记拒绝数便于排查串公司
     out.decisionMakers = located.decisionMakers;
+    if (located.stats.rejectedOffCompany > 0) {
+      out.intelNotes.push(`contacts-reject-offco:${located.stats.rejectedOffCompany}`);
+    }
     if (located.stats.added > 0) {
       out.intelNotes.push(`contacts+${located.stats.added}`);
     }

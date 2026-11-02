@@ -11,6 +11,7 @@ import {
   gatherSilentCompanyChannelIntel,
   mergeSilentIntelIntoAnalysis,
 } from '../services/silentAcquisitionEngine';
+import { filterDecisionMakersForCompany } from '../services/linkedinEmployeeLocator';
 
 interface ModuleDecisionMakersProps {
   data: AnalysisResult;
@@ -75,6 +76,15 @@ const isUsableDecisionMaker = (d: DecisionMaker) =>
     (d.name || '').trim() !== '公开信息未找到' &&
     (!!(d.title || '').trim() || !!(d.linkedin || '').trim()));
 
+const companyScopedDecisionMakers = (list: DecisionMaker[], data: AnalysisResult) =>
+  filterDecisionMakersForCompany(
+    (list || []).filter(isUsableDecisionMaker),
+    {
+      companyName: data.companyInfo?.name,
+      domain: data.companyInfo?.website,
+    }
+  );
+
 export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
   data,
   historyId,
@@ -86,7 +96,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
   onAddToCRM,
 }) => {
   const [decisionMakers, setDecisionMakers] = useState(() =>
-    (data.decisionMakers || []).filter(isUsableDecisionMaker)
+    companyScopedDecisionMakers(data.decisionMakers || [], data)
   );
   const [lastSearchAt, setLastSearchAt] = useState(data.decisionMakerEmailSearchAt);
   const [searchHistory, setSearchHistory] = useState<number[]>(
@@ -101,7 +111,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
   const bootstrapKeyRef = React.useRef<string | null>(null);
 
   useEffect(() => {
-    const list = (data.decisionMakers || []).filter(isUsableDecisionMaker);
+    const list = companyScopedDecisionMakers(data.decisionMakers || [], data);
     setDecisionMakers(list);
     const inferredAt =
       data.decisionMakerEmailSearchAt ||
@@ -129,7 +139,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
       );
       if (!job?.resultDecisionMakers || !job.searchedAt) return;
       lastAppliedJobIdRef.current = job.id;
-      setDecisionMakers(job.resultDecisionMakers);
+      setDecisionMakers(companyScopedDecisionMakers(job.resultDecisionMakers, data));
       setLastSearchAt(job.searchedAt);
       if (job.searchedAt) {
         setSearchHistory((prev) => [...prev, job.searchedAt!].slice(-30));
@@ -233,7 +243,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
     if (bootstrapKeyRef.current === key) return;
     if (!domain && !companyName) return;
 
-    const existing = (data.decisionMakers || []).filter(isUsableDecisionMaker);
+    const existing = companyScopedDecisionMakers(data.decisionMakers || [], data);
     const hasEmailSearch = !!data.decisionMakerEmailSearchAt;
     const hasUsefulContacts = existing.some(
       (d) =>
@@ -242,7 +252,10 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
           (!!(d.title || '').trim() || !!(d.linkedin || '').trim() || !!(d.phone || '').trim())) ||
         !!(d.emailGuess || '').includes('@')
     );
-    // 已挖过邮箱或已有可用联系人：不再静默补
+    // 已挖过邮箱或已有可用联系人：不再静默补（但仍把串公司脏数据洗掉）
+    if (existing.length !== (data.decisionMakers || []).filter(isUsableDecisionMaker).length) {
+      commit(existing);
+    }
     if (hasEmailSearch || hasUsefulContacts) {
       bootstrapKeyRef.current = key;
       return;
@@ -262,11 +275,11 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
         });
         if (cancelled) return;
         const merged = mergeSilentIntelIntoAnalysis(data, intel);
-        const nextDms = (merged.decisionMakers || []).filter(isUsableDecisionMaker);
+        const nextDms = companyScopedDecisionMakers(merged.decisionMakers || [], data);
         if (nextDms.length > existing.length) {
           commit(nextDms);
           setQueueMsg(
-            `已展示 ${nextDms.length} 位公司联系人（可先查看公开信息；邮箱请点「搜索决策人邮箱」补全）`
+            `已展示 ${nextDms.length} 位本公司联系人（可先查看公开信息；邮箱请点「搜索决策人邮箱」补全）`
           );
         }
       } catch (e) {

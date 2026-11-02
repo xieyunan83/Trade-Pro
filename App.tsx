@@ -2040,15 +2040,25 @@ const App: React.FC = () => {
         .trim();
     const domainKey = cleanHost(opts?.domain || analysisDataRef.current?.companyInfo?.website || domainInput || '');
     const nameKey = (opts?.companyName || analysisDataRef.current?.companyInfo?.name || '').trim().toLowerCase();
+    const companyLabel =
+      opts?.companyName || analysisDataRef.current?.companyInfo?.name || '';
+    // 入库前剔除「at 别家公司」的串公司脏数据，避免写回 CRM/历史
+    const { filterDecisionMakersForCompany } = await import('./services/linkedinEmployeeLocator');
+    const scopedDms = filterDecisionMakersForCompany(patch.decisionMakers || [], {
+      companyName: companyLabel,
+      domain: domainKey,
+      mode: 'lenient',
+    });
+    const safePatch = { ...patch, decisionMakers: scopedDms };
 
     // 1) 先写入耐久化 ledger（刷新后可恢复，避免积分白费）
     upsertDmPersistRecord({
       historyId: matchId,
       domain: domainKey,
       companyName: opts?.companyName || analysisDataRef.current?.companyInfo?.name,
-      searchedAt: patch.decisionMakerEmailSearchAt,
-      decisionMakers: patch.decisionMakers,
-      searchHistory: patch.decisionMakerEmailSearchHistory,
+      searchedAt: safePatch.decisionMakerEmailSearchAt,
+      decisionMakers: safePatch.decisionMakers,
+      searchHistory: safePatch.decisionMakerEmailSearchHistory,
     });
 
     setAnalysisData((prev) => {
@@ -2060,12 +2070,12 @@ const App: React.FC = () => {
       if (!sameView) return prev;
       return {
         ...prev,
-        decisionMakers: patch.decisionMakers,
-        ...(patch.decisionMakerEmailSearchAt != null
-          ? { decisionMakerEmailSearchAt: patch.decisionMakerEmailSearchAt }
+        decisionMakers: safePatch.decisionMakers,
+        ...(safePatch.decisionMakerEmailSearchAt != null
+          ? { decisionMakerEmailSearchAt: safePatch.decisionMakerEmailSearchAt }
           : {}),
-        ...(patch.decisionMakerEmailSearchHistory
-          ? { decisionMakerEmailSearchHistory: patch.decisionMakerEmailSearchHistory }
+        ...(safePatch.decisionMakerEmailSearchHistory
+          ? { decisionMakerEmailSearchHistory: safePatch.decisionMakerEmailSearchHistory }
           : {}),
       };
     });
@@ -2095,12 +2105,12 @@ const App: React.FC = () => {
               website: h.domain || domainKey || 'N/A',
               description: 'N/A',
             },
-            decisionMakers: patch.decisionMakers,
-            ...(patch.decisionMakerEmailSearchAt != null
-              ? { decisionMakerEmailSearchAt: patch.decisionMakerEmailSearchAt }
+            decisionMakers: safePatch.decisionMakers,
+            ...(safePatch.decisionMakerEmailSearchAt != null
+              ? { decisionMakerEmailSearchAt: safePatch.decisionMakerEmailSearchAt }
               : {}),
-            ...(patch.decisionMakerEmailSearchHistory
-              ? { decisionMakerEmailSearchHistory: patch.decisionMakerEmailSearchHistory }
+            ...(safePatch.decisionMakerEmailSearchHistory
+              ? { decisionMakerEmailSearchHistory: safePatch.decisionMakerEmailSearchHistory }
               : {}),
           } as AnalysisResult,
         };
@@ -2110,12 +2120,12 @@ const App: React.FC = () => {
         ...h,
         data: {
           ...h.data,
-          decisionMakers: patch.decisionMakers,
-          ...(patch.decisionMakerEmailSearchAt != null
-            ? { decisionMakerEmailSearchAt: patch.decisionMakerEmailSearchAt }
+          decisionMakers: safePatch.decisionMakers,
+          ...(safePatch.decisionMakerEmailSearchAt != null
+            ? { decisionMakerEmailSearchAt: safePatch.decisionMakerEmailSearchAt }
             : {}),
-          ...(patch.decisionMakerEmailSearchHistory
-            ? { decisionMakerEmailSearchHistory: patch.decisionMakerEmailSearchHistory }
+          ...(safePatch.decisionMakerEmailSearchHistory
+            ? { decisionMakerEmailSearchHistory: safePatch.decisionMakerEmailSearchHistory }
             : {}),
         },
       };
@@ -2149,10 +2159,10 @@ const App: React.FC = () => {
         if (!hit) return c;
         const nextC = {
           ...c,
-          contacts: patch.decisionMakers,
+          contacts: safePatch.decisionMakers,
           activityLog:
             (c.activityLog || '') +
-            ` [决策人挖掘 ${new Date(patch.decisionMakerEmailSearchAt).toLocaleString('zh-CN')}]`,
+            ` [决策人挖掘 ${new Date(safePatch.decisionMakerEmailSearchAt || Date.now()).toLocaleString('zh-CN')}]`,
         };
         touched.push(nextC);
         return nextC;
@@ -2175,9 +2185,9 @@ const App: React.FC = () => {
       void mergeDecisionMakersIntoAutomationTasks(prev, {
         domain: domainKey || undefined,
         companyName: nameKey || undefined,
-        decisionMakers: patch.decisionMakers,
-        searchedAt: patch.decisionMakerEmailSearchAt,
-        searchHistory: patch.decisionMakerEmailSearchHistory,
+        decisionMakers: safePatch.decisionMakers,
+        searchedAt: safePatch.decisionMakerEmailSearchAt,
+        searchHistory: safePatch.decisionMakerEmailSearchHistory,
       }).then((merged) => setAutomationResults(merged));
       return prev;
     });

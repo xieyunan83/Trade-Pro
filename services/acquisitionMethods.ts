@@ -368,24 +368,31 @@ export const buildCompanyLinkedInQueries = (opts: {
   const titles = opts.titles?.length ? opts.titles : DEFAULT_LI_TITLES;
   const queries: string[] = [];
 
+  // 只按「公司名 / 域名」定位员工；禁止用产品词全球搜采购经理（会串到别的玩具店）
   for (const title of titles.slice(0, 4)) {
     if (domain) {
-      queries.push(`"${title}" at ${domain} site:linkedin.com/in`);
-      queries.push(`${title} ${domain} site:linkedin.com/in`);
+      queries.push(`"${title}" "${domain}" site:linkedin.com/in`);
+      queries.push(`"${title}" at "${domain}" site:linkedin.com/in`);
     }
     if (name) {
       queries.push(`"${title}" "${name}" site:linkedin.com/in`);
+      queries.push(`"${title}" at "${name}" site:linkedin.com/in`);
     }
   }
 
-  if (product && (domain || name)) {
-    const hostOrName = domain || name;
-    queries.push(
-      fillSearchFormula(
-        '[产品词] importer site:linkedin.com/in purchasing manager [国家] -alibaba -made-in-china',
-        { 产品词: product, 国家: country || hostOrName }
-      )
-    );
+  if (name) {
+    queries.push(`"${name}" (purchasing OR buyer OR procurement OR owner OR CEO) site:linkedin.com/in`);
+  }
+  if (domain) {
+    queries.push(`"${domain}" (purchasing OR buyer OR procurement OR owner OR CEO) site:linkedin.com/in`);
+  }
+
+  // product/country 仅作弱约束，且必须与公司名同框，避免串公司
+  if (product && name) {
+    queries.push(`"${name}" "${product}" (buyer OR purchasing) site:linkedin.com/in`);
+  }
+  if (country && name) {
+    queries.push(`"${name}" ${country} (buyer OR purchasing OR owner) site:linkedin.com/in`);
   }
 
   return [...new Set(queries.map((q) => q.replace(/\s+/g, ' ').trim()).filter(Boolean))].slice(
