@@ -464,15 +464,10 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
 
   const downloadUrl = async (url: string, idx: number) => {
     try {
-      const res = await fetch(url);
-      const blob = await res.blob();
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = `design-2d-${idx + 1}.png`;
-      a.click();
-      URL.revokeObjectURL(a.href);
-    } catch {
-      window.open(url, '_blank');
+      const { downloadMediaFile } = await import('../services/creativeAssetVault');
+      await downloadMediaFile(url, `design-2d-${idx + 1}`);
+    } catch (e: any) {
+      setError(e?.message || '下载失败。请确认本机素材未清理后重试。');
     }
   };
 

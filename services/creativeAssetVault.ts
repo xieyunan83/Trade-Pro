@@ -417,6 +417,85 @@ export const resolveMediaUrls = async (
   return out;
 };
 
+/**
+ * 安全下载本机/云端素材。禁止把 vault: 交给系统打开（否则 macOS 弹「未设定用来打开此 URL」）。
+ * 只解析并触发浏览器下载，不删除、不改写 vault 库内容。
+ */
+export const downloadMediaFile = async (
+  url: string | undefined | null,
+  filename: string
+): Promise<void> => {
+  const raw = (url || '').trim();
+  if (!raw) throw new Error('没有可下载的文件');
+
+  let blob: Blob | null = null;
+  let objectUrlToRevoke: string | null = null;
+
+  try {
+    if (isVaultRef(raw)) {
+      const id = vaultIdFromRef(raw);
+      const row = await getRow(id);
+      if (!row?.blob) throw new Error('本机素材库找不到该文件，请确认未清理本地缓存');
+      void touchAccess(id);
+      blob = row.blob;
+    } else if (raw.startsWith('data:')) {
+      const res = await fetch(raw);
+      if (!res.ok) throw new Error('读取内嵌文件失败');
+      blob = await res.blob();
+    } else if (raw.startsWith('blob:') || /^https?:\/\//i.test(raw)) {
+      const res = await fetch(raw);
+      if (!res.ok) throw new Error(`下载失败（HTTP ${res.status}）`);
+      blob = await res.blob();
+    } else {
+      // 未知协议：先尝试 vault 解析链，绝不 window.open(vault:)
+      const resolved = await resolveMediaUrl(raw);
+      if (!resolved || resolved.startsWith('vault:')) {
+        throw new Error('无法解析该素材地址');
+      }
+      const res = await fetch(resolved);
+      if (!res.ok) throw new Error('下载失败');
+      blob = await res.blob();
+      if (resolved.startsWith('blob:') && resolved !== raw) objectUrlToRevoke = resolved;
+    }
+
+    if (!blob) throw new Error('下载内容为空');
+
+    const extFromType = (): string => {
+      const t = (blob!.type || '').toLowerCase();
+      if (t.includes('png')) return 'png';
+      if (t.includes('jpeg') || t.includes('jpg')) return 'jpg';
+      if (t.includes('webp')) return 'webp';
+      if (t.includes('mp4')) return 'mp4';
+      if (t.includes('webm')) return 'webm';
+      if (t.includes('gltf') || t.includes('model')) return 'glb';
+      return '';
+    };
+    let name = (filename || 'download').trim() || 'download';
+    if (!/\.[a-z0-9]{2,5}$/i.test(name)) {
+      const ext = extFromType() || 'png';
+      name = `${name}.${ext}`;
+    }
+
+    const href = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = href;
+    a.download = name;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(href), 2_000);
+  } finally {
+    if (objectUrlToRevoke) {
+      try {
+        URL.revokeObjectURL(objectUrlToRevoke);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+};
+
 /** 清空全部本地素材（管理员紧急清理） */
 export const clearVault = async (): Promise<void> => {
   for (const [, obj] of objectUrlCache) {
