@@ -273,7 +273,7 @@ export const gatherSilentCompanyChannelIntel = async (opts: {
     console.warn('[silent-acq] contact locate skipped', e);
   }
 
-  // 1b) 全网补全职位 + WhatsApp（不挖邮箱；仅公开信息）
+  // 1b) 对齐联系人后必挖 WhatsApp + 补职位（不挖邮箱；仅公开信息）
   if (out.decisionMakers.length > 0) {
     try {
       const before = out.decisionMakers;
@@ -285,7 +285,8 @@ export const gatherSilentCompanyChannelIntel = async (opts: {
         domain,
         companyName: name,
         decisionMakers: before,
-        limit: 8,
+        limit: 10,
+        requireWhatsApp: true,
       });
       out.decisionMakers = enriched;
       const waAfter = enriched.filter((d) => (d.whatsapp || '').trim()).length;
@@ -294,6 +295,10 @@ export const gatherSilentCompanyChannelIntel = async (opts: {
       ).length;
       if (titleAfter > titleBefore) out.intelNotes.push(`titles+${titleAfter - titleBefore}`);
       if (waAfter > waBefore) out.intelNotes.push(`whatsapp+${waAfter - waBefore}`);
+      const stillMissingWa = enriched.filter((d) => !(d.whatsapp || '').trim()).length;
+      if (stillMissingWa > 0) {
+        out.intelNotes.push(`whatsapp-miss:${stillMissingWa}`);
+      }
     } catch (e) {
       console.warn('[silent-acq] title/whatsapp enrich skipped', e);
     }

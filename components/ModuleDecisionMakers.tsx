@@ -12,6 +12,7 @@ import {
   mergeSilentIntelIntoAnalysis,
 } from '../services/silentAcquisitionEngine';
 import { filterDecisionMakersForCompany } from '../services/linkedinEmployeeLocator';
+import { enrichDecisionMakersTitleAndWhatsApp } from '../services/decisionMakerWebEnrich';
 
 interface ModuleDecisionMakersProps {
   data: AnalysisResult;
@@ -276,10 +277,14 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
         if (cancelled) return;
         const merged = mergeSilentIntelIntoAnalysis(data, intel);
         const nextDms = companyScopedDecisionMakers(merged.decisionMakers || [], data);
-        if (nextDms.length > existing.length) {
+        if (nextDms.length > existing.length || nextDms.some((d) => (d.whatsapp || '').trim())) {
           commit(nextDms);
+          const waN = nextDms.filter((d) => (d.whatsapp || '').trim()).length;
+          const miss = nextDms.filter((d) => !(d.whatsapp || '').trim()).length;
           setQueueMsg(
-            `已展示 ${nextDms.length} 位本公司联系人（可先查看公开信息；邮箱请点「搜索决策人邮箱」补全）`
+            `已对齐 ${nextDms.length} 位本公司联系人 · 公开 WhatsApp ${waN} 位${
+              miss ? `（${miss} 位暂无公开号）` : ''
+            }；邮箱请点「搜索决策人邮箱」补全`
           );
         }
       } catch (e) {
@@ -293,6 +298,45 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅随公司切换触发一次
   }, [data.companyInfo?.website, data.companyInfo?.name, historyId, data.decisionMakerEmailSearchAt]);
+
+  const handleMineWhatsApp = () => {
+    if (!decisionMakers.length) {
+      setQueueMsg('请先对齐出本公司联系人，再挖掘 WhatsApp。');
+      return;
+    }
+    const domain = (data.companyInfo?.website || '').trim();
+    const companyName = (data.companyInfo?.name || '').trim();
+    if (!domain && !companyName) {
+      setQueueMsg('缺少公司名/官网，无法定向挖掘 WhatsApp。');
+      return;
+    }
+    setBootstrapping(true);
+    setQueueMsg('');
+    void (async () => {
+      try {
+        const next = await enrichDecisionMakersTitleAndWhatsApp({
+          domain,
+          companyName,
+          decisionMakers,
+          limit: 10,
+          requireWhatsApp: true,
+        });
+        const scoped = companyScopedDecisionMakers(next, data);
+        commit(scoped);
+        const waN = scoped.filter((d) => (d.whatsapp || '').trim()).length;
+        const miss = scoped.filter((d) => !(d.whatsapp || '').trim()).length;
+        setQueueMsg(
+          miss
+            ? `WhatsApp 挖掘完成：已有 ${waN} 位公开号，${miss} 位暂无公开信息（不会编造）`
+            : `WhatsApp 挖掘完成：${waN} 位联系人均已补上公开号码`
+        );
+      } catch (e: any) {
+        setQueueMsg(e?.message || 'WhatsApp 挖掘失败，请稍后重试');
+      } finally {
+        setBootstrapping(false);
+      }
+    })();
+  };
 
   const handleEnqueueSearch = () => {
     setQueueMsg('');
@@ -389,7 +433,8 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
               </div>
             ) : bootstrapping ? (
               <div className="mt-2 text-[11px] font-semibold text-slate-500 inline-flex items-center gap-1.5">
-                <Loader2 size={12} className="animate-spin" /> 正在补全公司联系人…
+                <Loader2 size={12} className="animate-spin" />{' '}
+                正在对齐本公司联系人并挖掘公开 WhatsApp…
               </div>
             ) : (
               <div className="mt-2 text-[11px] font-semibold text-amber-600">
@@ -417,6 +462,17 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
             >
               <Plus size={16} /> 手动新增决策人
             </button>
+            {decisionMakers.length > 0 && (
+              <button
+                type="button"
+                onClick={handleMineWhatsApp}
+                disabled={bootstrapping || jobActive}
+                className="inline-flex items-center justify-center gap-2 bg-emerald-50 border border-emerald-300 hover:bg-emerald-100 text-emerald-800 px-4 py-2.5 rounded-xl text-sm font-semibold touch-manipulation disabled:opacity-60"
+              >
+                {bootstrapping ? <Loader2 size={16} className="animate-spin" /> : <Phone size={16} />}
+                补全 WhatsApp
+              </button>
+            )}
             {decisionMakers.length > 0 && (
               <button
                 type="button"
@@ -469,7 +525,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
         </div>
 
         <div className="mb-4 rounded-2xl border border-slate-100 bg-slate-50/80 px-4 py-3 text-xs font-semibold text-slate-600 leading-relaxed">
-          先展示能找到的公司联系人（姓名、职位、电话、主页等）；邮箱可稍后点「搜索决策人邮箱」补全。
+          对齐本公司联系人时会同步挖掘公开 WhatsApp（官网 Contact / wa.me 等）；查不到的不会编造。邮箱请点「搜索决策人邮箱」补全；也可点「补全 WhatsApp」再挖一轮。
         </div>
         {jobActive && canDmEmailSearch && (
           <div className="mb-4 rounded-2xl border border-cyan-200/80 bg-cyan-50/80 px-4 py-3 text-xs font-semibold text-cyan-900">

@@ -1,6 +1,7 @@
 /**
  * 背调后：对公司对齐的公开联系人（含个人主页占位）做全网补全——具体职位 + WhatsApp。
- * 不挖邮箱；不向前台暴露检索供应商与实现细节。
+ * 对齐联系人时：缺 WhatsApp 必挖（公开网页 / wa.me / Contact 页）；不编造号码；不挖邮箱。
+ * 不向前台暴露检索供应商与实现细节。
  */
 import type { DecisionMaker } from '../types';
 import { anysearchBatchSearch } from './anysearchService';
@@ -20,11 +21,60 @@ const hasPersonalProfile = (dm: DecisionMaker): boolean =>
 const isCompanyAlignedContact = (dm: DecisionMaker): boolean =>
   dm.source === 'LinkedIn' || hasPersonalProfile(dm) || !!(dm.name && dm.name.trim().length >= 3);
 
-/** 缺具体职位或缺 WhatsApp 时需要全网补全 */
+/** 规范化为带 + 的国际号（仅数字与前导 +） */
+export const normalizeWhatsAppNumber = (raw?: string): string => {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  const digits = s.replace(/[^\d]/g, '');
+  if (digits.length < 8 || digits.length > 15) return '';
+  return `+${digits}`;
+};
+
+/** 从公开文本确定性提取 WhatsApp / wa.me 号码 */
+export const extractPublicWhatsAppNumbers = (text: string): string[] => {
+  const raw = text || '';
+  const found: string[] = [];
+  const push = (n?: string) => {
+    const v = normalizeWhatsAppNumber(n);
+    if (v && !found.includes(v)) found.push(v);
+  };
+
+  for (const m of raw.matchAll(
+    /(?:https?:\/\/)?(?:wa\.me|api\.whatsapp\.com\/send\?phone=)\/?(\+?\d{8,15})/gi
+  )) {
+    push(m[1]);
+  }
+  for (const m of raw.matchAll(
+    /(?:whatsapp|whats\s*app|w\.?\s*a\.?)\s*[:：]?\s*(\+?\d[\d\s\-().]{7,22}\d)/gi
+  )) {
+    push(m[1]);
+  }
+  // 页脚常见「Tel / Mobile」国际号，作候选（仍需人名上下文由调用方选用）
+  for (const m of raw.matchAll(
+    /(?:mobile|cell|whatsapp|tel|phone|手机|电话)\s*[:：]?\s*(\+\d[\d\s\-().]{8,20}\d)/gi
+  )) {
+    push(m[1]);
+  }
+  return found;
+};
+
+/**
+ * 手机号可当 WhatsApp 候选：已是国际格式、位数够。
+ * 座机/短号不提升。
+ */
+export const phoneAsWhatsAppCandidate = (phone?: string): string => {
+  const digits = String(phone || '').replace(/[^\d]/g, '');
+  if (digits.length < 10 || digits.length > 15) return '';
+  // 以 0 开头的本地号（无国家码）不提升
+  if (/^0/.test(digits) && digits.length <= 11) return '';
+  return `+${digits}`;
+};
+
+/** 缺具体职位或缺 WhatsApp 时需要全网补全（有 phone 仍要挖 WhatsApp） */
 export const needsTitleOrWhatsAppEnrichment = (dm: DecisionMaker): boolean => {
   if (!isCompanyAlignedContact(dm)) return false;
   if (isWeakTitle(dm.title)) return true;
-  if (!(dm.whatsapp || '').trim() && !(dm.phone || '').trim()) return true;
+  if (!(dm.whatsapp || '').trim()) return true;
   return false;
 };
 
@@ -79,43 +129,42 @@ const gatherEvidence = async (
   const chunks: string[] = [];
   const name = companyName || domain;
 
-  // AnySearch 批量（有 Key 时）
   if (getAnysearchApiKey().trim() || isSupabaseConfigured()) {
     try {
       const queries = [
         {
-          query: `"${name}" ${domain} (team OR leadership OR procurement OR purchasing OR buyer) (WhatsApp OR phone OR mobile OR Tel)`,
-          max_results: 5,
+          query: `"${name}" ${domain} (WhatsApp OR "wa.me" OR whatsapp OR mobile OR Tel OR phone)`,
+          max_results: 6,
         },
         {
-          query: `site:${domain} (contact OR team OR about OR WhatsApp OR "wa.me" OR tel:)`,
-          max_results: 4,
+          query: `site:${domain} (contact OR team OR about OR WhatsApp OR "wa.me" OR tel: OR mobile)`,
+          max_results: 5,
         },
-        ...targets.slice(0, 5).map((c) => ({
-          query: `"${c.name}" ${name} ${domain} (title OR role OR LinkedIn OR WhatsApp OR phone OR mobile)`,
-          max_results: 3,
+        ...targets.slice(0, 6).map((c) => ({
+          query: `"${c.name}" (WhatsApp OR "wa.me" OR whatsapp OR mobile OR phone) ${name} ${domain}`,
+          max_results: 4,
         })),
-      ].slice(0, 5);
+      ].slice(0, 8);
       const batchText = await anysearchBatchSearch(queries);
-      if (batchText?.trim()) chunks.push(batchText.trim().slice(0, 8_000));
+      if (batchText?.trim()) chunks.push(batchText.trim().slice(0, 9_000));
     } catch (e) {
       console.warn('[dm-web-enrich] web batch search failed', e);
     }
   }
 
-  // 公开网页检索补充（职位 / WhatsApp 线索）
   if (hasTavilyKey()) {
     const queries = [
-      `"${name}" ${domain} WhatsApp OR "wa.me" OR "whatsapp" contact`,
-      ...targets.slice(0, 4).map(
+      `"${name}" ${domain} (WhatsApp OR "wa.me" OR whatsapp) (contact OR buyer OR purchasing)`,
+      `site:${domain} (WhatsApp OR "wa.me" OR mobile OR Tel OR phone)`,
+      ...targets.slice(0, 5).map(
         (c) =>
-          `"${c.name}" ${c.linkedin || name} (Purchasing OR Buyer OR Director OR Manager OR WhatsApp OR phone)`
+          `"${c.name}" (WhatsApp OR "wa.me" OR mobile OR phone) ${c.linkedin || name || domain}`
       ),
     ].filter(Boolean);
-    for (const q of queries.slice(0, 4)) {
+    for (const q of queries.slice(0, 6)) {
       try {
         const data = await tavilySearch(q, {
-          maxResults: 5,
+          maxResults: 6,
           searchDepth: 'basic',
           includeAnswer: false,
         });
@@ -127,62 +176,147 @@ const gatherEvidence = async (
     }
   }
 
-  return chunks.join('\n\n').slice(0, 12_000);
+  return chunks.join('\n\n').slice(0, 14_000);
+};
+
+/** 证据里按人名邻近窗口优先匹配 WhatsApp */
+const pickWhatsAppNearName = (
+  evidence: string,
+  personName: string,
+  pool: string[]
+): string => {
+  if (!pool.length) return '';
+  if (pool.length === 1) return pool[0];
+  const name = (personName || '').trim();
+  if (!name) return pool[0];
+  const lower = evidence.toLowerCase();
+  const idx = lower.indexOf(name.toLowerCase());
+  if (idx < 0) {
+    const first = name.split(/\s+/)[0] || '';
+    const i2 = first.length >= 3 ? lower.indexOf(first.toLowerCase()) : -1;
+    if (i2 < 0) return '';
+    const window = evidence.slice(Math.max(0, i2 - 120), i2 + 220);
+    const near = extractPublicWhatsAppNumbers(window);
+    return near.find((n) => pool.includes(n)) || '';
+  }
+  const window = evidence.slice(Math.max(0, idx - 160), idx + 280);
+  const near = extractPublicWhatsAppNumbers(window);
+  return near.find((n) => pool.includes(n)) || '';
+};
+
+const applyDeterministicWhatsApp = (
+  contacts: DecisionMaker[],
+  evidence: string
+): { list: DecisionMaker[]; filled: number } => {
+  const pool = extractPublicWhatsAppNumbers(evidence);
+  let filled = 0;
+  const list = contacts.map((c) => {
+    if ((c.whatsapp || '').trim()) return c;
+    const fromPhone = phoneAsWhatsAppCandidate(c.phone);
+    const fromEvidence = pickWhatsAppNearName(evidence, c.name || '', pool);
+    // 单人场景：证据仅一个号且该人是唯一缺号联系人时可用
+    const alone =
+      !fromEvidence &&
+      pool.length === 1 &&
+      contacts.filter((x) => !(x.whatsapp || '').trim()).length === 1
+        ? pool[0]
+        : '';
+    const wa = fromEvidence || alone || fromPhone;
+    if (!wa) return c;
+    filled += 1;
+    return { ...c, whatsapp: wa, phone: c.phone || wa };
+  });
+  return { list, filled };
 };
 
 /**
  * 对公司对齐联系人全网补全：具体职位 + WhatsApp（公开信息）。
- * 不猜测、不编造号码；查不到则保持原值。
+ * 缺 WhatsApp 的对齐联系人必挖；不猜测、不编造；查不到则保持原值。
  */
 export const enrichDecisionMakersTitleAndWhatsApp = async (opts: {
   domain: string;
   companyName: string;
   decisionMakers: DecisionMaker[];
-  /** 最多补全人数，默认 8 */
+  /** 最多补全人数，默认 10 */
   limit?: number;
+  /** 强制再挖 WhatsApp（即使已有弱职位） */
+  requireWhatsApp?: boolean;
 }): Promise<DecisionMaker[]> => {
   const domain = (opts.domain || '')
     .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
     .split('/')[0]
     .toLowerCase();
   const companyName = (opts.companyName || '').trim();
-  const contacts = opts.decisionMakers || [];
+  let contacts = opts.decisionMakers || [];
   if (!contacts.length || (!domain && !companyName)) return contacts;
 
+  // 先把明显国际手机提升为 WhatsApp 候选
+  contacts = contacts.map((c) => {
+    if ((c.whatsapp || '').trim()) return c;
+    const wa = phoneAsWhatsAppCandidate(c.phone);
+    return wa ? { ...c, whatsapp: wa } : c;
+  });
+
   const targets = contacts
-    .filter(needsTitleOrWhatsAppEnrichment)
+    .filter((c) =>
+      opts.requireWhatsApp !== false
+        ? needsTitleOrWhatsAppEnrichment(c) || !(c.whatsapp || '').trim()
+        : needsTitleOrWhatsAppEnrichment(c)
+    )
     .filter((c) => (c.name || '').trim().length >= 2)
-    .slice(0, Math.max(1, Math.min(opts.limit ?? 8, 12)));
+    .slice(0, Math.max(1, Math.min(opts.limit ?? 10, 12)));
   if (!targets.length) return contacts;
 
   const evidence = await gatherEvidence(domain, companyName, targets);
+
+  // 1) 确定性提取（不依赖模型）
+  const det = applyDeterministicWhatsApp(contacts, evidence);
+  contacts = det.list;
+  if (det.filled > 0) {
+    console.log(`[dm-web-enrich] deterministic WhatsApp +${det.filled}`);
+  }
+
+  const stillNeedWa = contacts.filter(
+    (c) =>
+      targets.some(
+        (t) =>
+          (t.linkedin && c.linkedin && t.linkedin === c.linkedin) ||
+          (t.name && c.name && t.name.toLowerCase() === c.name.toLowerCase())
+      ) && !(c.whatsapp || '').trim()
+  );
+
   const roster = targets
-    .map(
-      (c, i) =>
-        `${i + 1}. name=${c.name}; title=${c.title || ''}; linkedin=${c.linkedin || ''}; phone=${c.phone || ''}; whatsapp=${c.whatsapp || ''}`
-    )
+    .map((c) => {
+      const live = contacts.find(
+        (x) =>
+          (x.linkedin && c.linkedin && x.linkedin === c.linkedin) ||
+          (x.name && c.name && x.name.toLowerCase() === c.name.toLowerCase())
+      ) || c;
+      return `${live.name}; title=${live.title || ''}; linkedin=${live.linkedin || ''}; phone=${live.phone || ''}; whatsapp=${live.whatsapp || ''}`;
+    })
+    .map((line, i) => `${i + 1}. ${line}`)
     .join('\n');
 
-  const prompt = `你是外贸 B2B 情报分析师。请为下列「目标公司相关人员」补全：真实在职职位 + 公开 WhatsApp/手机号。
+  const prompt = `你是外贸 B2B 情报分析师。任务：为下列「已与目标公司对齐」的联系人补全真实在职职位，并尽量挖出公开 WhatsApp 号码。
 
 公司：${companyName || domain}
 官网域名：${domain || '未知'}
 
-公开网页检索证据（优先采信；可能含个人主页摘要、新闻、团队页、Contact、wa.me）：
+公开网页检索证据（优先采信；含个人主页摘要、新闻、团队页、Contact、wa.me）：
 ${evidence || '（证据较少，请自行联网交叉验证；查不到必须留空）'}
 
-待补全人员（已与该公司对齐；可能来自公开职业主页占位，暂无邮箱）：
+待补全人员：
 ${roster}
 
 硬性要求：
-1. 只补全「确属本公司」的真实在职人员；若证据显示此人在别的公司任职，title/whatsapp/linkedin 全部留空（不要把别家职位写进来）。
-2. title 必须是具体岗位（如 Purchasing Manager / Import Buyer / Category Manager / Owner）；禁止写 Staff/Employee/待确认职位；禁止写成「Xxx at 其它公司名」。
-3. whatsapp：仅提取公开可见的国际格式号码或 wa.me 链接中的号码；查不到留空，严禁编造。
-4. phone：若证据里有固定电话/手机且与 WhatsApp 不同可另填；没有则留空。
-5. linkedin：若证据能确认个人主页且属于本公司员工则填 linkedin.com/in/...，否则留空由调用方保留原值。
-6. 采购/买手/品类/进口 → type=Buyer；CEO/Founder/Owner/President → CEO；其它 Other。
-7. 禁止输出邮箱；本任务不挖邮箱。
-8. 严禁把同行业其它公司（如其它玩具店/进口商）的采购经理塞进本公司花名册。
+1. 只补全确属本公司的人员；别家公司任职则 title/whatsapp/linkedin 留空。
+2. title：具体岗位（Purchasing Manager / Import Buyer / Owner 等）；禁止 Staff/Employee/待确认；禁止「Xxx at 其它公司」。
+3. 【WhatsApp 必挖】对每人尽量从证据提取公开 WhatsApp / wa.me / 标注 WhatsApp 的国际手机号；有 phone 国际号可同步填入 whatsapp；查不到留空，严禁编造。
+4. phone：公开固话/手机可另填；没有则留空。
+5. linkedin：确认属于本公司才填 linkedin.com/in/...。
+6. 采购/买手/进口 → Buyer；CEO/Founder/Owner → CEO；其它 Other。
+7. 禁止输出邮箱。
+8. 当前仍缺 WhatsApp 的人数：${stillNeedWa.length}——请优先为这些人找回号码。
 
 严格返回 JSON 数组（与输入人数相同、顺序一致）：
 [{"name":"...","title":"","phone":"","whatsapp":"","linkedin":"","type":"CEO|Buyer|Other","influenceScore":1-5}]
@@ -198,8 +332,9 @@ ${roster}
     });
     const parsed = extractJsonArray(text);
     if (!parsed.length) {
-      console.warn('[dm-web-enrich] empty AI result');
-      return contacts;
+      console.warn('[dm-web-enrich] empty AI result; keep deterministic fills');
+      const { filterDecisionMakersForCompany } = await import('./linkedinEmployeeLocator');
+      return filterDecisionMakersForCompany(contacts, { companyName, domain, mode: 'lenient' });
     }
 
     const byKey = new Map<string, any>();
@@ -216,6 +351,7 @@ ${roster}
     });
 
     let enriched = 0;
+    let waFilled = 0;
     const next = contacts.map((c) => {
       const li = (c.linkedin || '').trim().toLowerCase();
       const name = (c.name || '').trim().toLowerCase();
@@ -232,7 +368,8 @@ ${roster}
 
       const title = String(row.title || '').trim();
       const phone = String(row.phone || '').trim();
-      const whatsapp = String(row.whatsapp || '').trim();
+      const whatsappRaw = String(row.whatsapp || '').trim();
+      const whatsapp = normalizeWhatsAppNumber(whatsappRaw) || whatsappRaw;
       const linkedin = String(row.linkedin || '').trim();
       const typeRaw = String(row.type || '').trim();
       const type: DecisionMaker['type'] =
@@ -248,12 +385,12 @@ ${roster}
           : isWeakTitle(c.title)
             ? title || c.title
             : preferString(c.title, title) || c.title;
-      const nextWhatsapp = preferString(whatsapp, c.whatsapp) || c.whatsapp;
       const nextPhone = preferString(phone, c.phone) || c.phone;
+      const fromPhoneWa = phoneAsWhatsAppCandidate(nextPhone);
+      const nextWhatsapp =
+        preferString(whatsapp, c.whatsapp) || c.whatsapp || fromPhoneWa || undefined;
       const nextLi =
-        linkedin && /linkedin\.com\/in\//i.test(linkedin)
-          ? linkedin
-          : c.linkedin;
+        linkedin && /linkedin\.com\/in\//i.test(linkedin) ? linkedin : c.linkedin;
 
       if (
         (nextTitle && nextTitle !== c.title) ||
@@ -262,6 +399,7 @@ ${roster}
       ) {
         enriched += 1;
       }
+      if (nextWhatsapp && !c.whatsapp) waFilled += 1;
 
       return {
         ...c,
@@ -282,11 +420,12 @@ ${roster}
     });
 
     if (enriched > 0) {
-      console.log(`[dm-web-enrich] enriched title/whatsapp for ${enriched} contact(s)`);
+      console.log(
+        `[dm-web-enrich] enriched title/whatsapp for ${enriched} contact(s); WhatsApp +${waFilled}`
+      );
     }
     const { filterDecisionMakersForCompany, extractEmployerFromText, companiesFuzzyMatch } =
       await import('./linkedinEmployeeLocator');
-    // 若模型把职位改成「at 别家公司」，丢掉污染职位；仍属本公司的人保留
     const cleaned = next.map((c) => {
       const title = (c.title || '').trim();
       if (!title) return c;
@@ -299,6 +438,7 @@ ${roster}
     return filterDecisionMakersForCompany(cleaned, { companyName, domain, mode: 'lenient' });
   } catch (e) {
     console.warn('[dm-web-enrich] failed', e);
-    return contacts;
+    const { filterDecisionMakersForCompany } = await import('./linkedinEmployeeLocator');
+    return filterDecisionMakersForCompany(contacts, { companyName, domain, mode: 'lenient' });
   }
 };

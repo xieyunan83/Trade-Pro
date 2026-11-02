@@ -426,7 +426,8 @@ const runOneJob = async (job: NightUpgradeJob) => {
           domain,
           companyName: client.name,
           decisionMakers: located.decisionMakers,
-          limit: 8,
+          limit: 10,
+          requireWhatsApp: true,
         });
         const scoped = filterDecisionMakersForCompany(enriched, {
           companyName: client.name,
@@ -438,10 +439,11 @@ const runOneJob = async (job: NightUpgradeJob) => {
           historyId: hist?.id,
         });
         const waN = scoped.filter((d) => (d.whatsapp || '').trim()).length;
-        const rejected = Math.max(0, (located.stats.rejectedOffCompany || 0));
-        job.note = `本公司联系人 +${located.stats.added}${waN ? ` · WhatsApp ${waN}` : ''}${
-          rejected ? ` · 已剔除串公司 ${rejected}` : ''
-        }`;
+        const waMiss = scoped.filter((d) => !(d.whatsapp || '').trim()).length;
+        const rejected = Math.max(0, located.stats.rejectedOffCompany || 0);
+        job.note = `本公司联系人 +${located.stats.added} · WhatsApp ${waN}${
+          waMiss ? `（待补 ${waMiss}` : ''
+        }${waMiss ? '）' : ''}${rejected ? ` · 已剔除串公司 ${rejected}` : ''}`;
       });
       markDone(client.id, 'linkedin_locate');
       job.status = 'completed';
