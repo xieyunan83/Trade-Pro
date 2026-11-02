@@ -807,6 +807,8 @@ export interface DiscoveryState {
   clientTypes: string[];
   results: ClientSearchResult[];
   hasSearched: boolean;
+  /** 最近一次写入本机会话的时间（防登录用旧归档冲掉新结果） */
+  updatedAt?: number;
 }
 
 export const CLIENT_TYPE_OPTIONS = [

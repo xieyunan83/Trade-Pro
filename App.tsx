@@ -131,15 +131,17 @@ import {
   hasPermission,
 } from './services/permissions';
 import {
+  archiveToDiscoveryState,
   emptyDiscoveryState,
+  isDiscoverySessionArchiveId,
   loadAllCrmClients,
-  loadUserDiscoveryState,
   mergeSaveCrmClients,
   migrateLegacyCrmOwnership,
   migrateLegacyOwnership,
   purgeAllCrmClientsBeforeDate,
   purgeCrmListBeforeDate,
   previewPurgeCrmBeforeDate,
+  resolveDiscoveryStateOnLogin,
   saveAllCrmClients,
   saveUserDiscoveryState,
 } from './utils/workspaceScope';
@@ -264,7 +266,7 @@ import {
   registerExcelNightBatch,
   summarizeExcelNightBatch,
 } from './services/excelNightBatchStore';
-import { RecordsPanel, archiveToDiscoveryState } from './components/RecordsPanel';
+import { RecordsPanel } from './components/RecordsPanel';
 import { Login } from './components/Login';
 import { AccessGate } from './components/AccessGate';
 import { XiaoYuanAssistant } from './components/XiaoYuanAssistant';
@@ -407,6 +409,8 @@ const App: React.FC = () => {
   const viewingHistoryIdRef = useRef<string | null>(null);
   const analysisDataRef = useRef<AnalysisResult | null>(null);
   const userDataReadyRef = useRef(false);
+  /** 当前搜索界面已从本机/归档正确恢复前，禁止把中间态写回 localStorage */
+  const discoveryHydratedRef = useRef(false);
   /** 登录云端 CRM 合并完成前禁止 persist 写回，避免首屏按墓碑过滤后把全库冲掉 */
   const crmPersistReadyRef = useRef(false);
 
@@ -695,6 +699,7 @@ const App: React.FC = () => {
 
   const resetWorkspaceForUserSwitch = () => {
     userDataReadyRef.current = false;
+    discoveryHydratedRef.current = false;
     crmPersistReadyRef.current = false;
     setAnalysisData(null);
     setViewingHistoryId(null);
@@ -711,7 +716,15 @@ const App: React.FC = () => {
     setErrorMsg(null);
   };
   const handleDiscoveryStateChange = (state: DiscoveryState) => {
-    setDiscoveryState(state);
+    const next: DiscoveryState = {
+      ...state,
+      updatedAt: Date.now(),
+    };
+    setDiscoveryState(next);
+    // 搜索结果一变就立刻落盘，不等登录水合后的 effect（防关客户端丢结果）
+    if (currentUser && discoveryHydratedRef.current) {
+      saveUserDiscoveryState(currentUser.username, next);
+    }
   };
 
   /** 营销工具五类公式：写入偏好类别 → 跳转客户搜索 → 自动开跑（平台内，不跳外网） */
@@ -764,11 +777,22 @@ const App: React.FC = () => {
       if (zh && zh !== '未分类') addCustomCountry(zh);
     });
     saveDiscoveryArchive(stamped).catch((e) => console.error('local discovery archive failed', e));
+    // 会话快照不进「记录」列表，但仍写入 IndexedDB，供下次登录恢复
     setDiscoveryArchives((list) => {
-      const without = list.filter((x) => x.id !== stamped.id);
+      if (isDiscoverySessionArchiveId(stamped.id)) {
+        return list;
+      }
+      const without = list.filter((x) => x.id !== stamped.id && !isDiscoverySessionArchiveId(x.id));
       return [stamped, ...without].slice(0, 200);
     });
-    if (isSupabaseConfigured()) {
+    if (currentUser) {
+      const asState = archiveToDiscoveryState(stamped);
+      // 多国合并会话 / 单国归档都立刻固化到按用户隔离的 localStorage
+      if (isDiscoverySessionArchiveId(stamped.id) || (stamped.results?.length || 0) > 0) {
+        saveUserDiscoveryState(currentUser.username, asState);
+      }
+    }
+    if (isSupabaseConfigured() && !isDiscoverySessionArchiveId(stamped.id)) {
       const stateForCloud: DiscoveryState = {
         product: stamped.product,
         country: stamped.country || (stamped.countries || []).join(', '),
@@ -778,6 +802,7 @@ const App: React.FC = () => {
         clientTypes: stamped.clientTypes || [],
         results: stamped.results || [],
         hasSearched: true,
+        updatedAt: stamped.timestamp,
       };
       saveDiscoverySearch(stateForCloud).catch((e) => console.error('Supabase discovery save failed', e));
     }
@@ -853,6 +878,7 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!currentUser) {
       userDataReadyRef.current = false;
+      discoveryHydratedRef.current = false;
       crmPersistReadyRef.current = false;
       lastWorkspaceUserRef.current = null;
       return;
@@ -905,12 +931,21 @@ const App: React.FC = () => {
                   .sort((a, b) => b.timestamp - a.timestamp);
                 const migratedDisc = migrateLegacyOwnership(discLocal, users, depts());
                 const ownedLocal = scope(migratedDisc.items);
-                setDiscoveryArchives(ownedLocal);
-                if (ownedLocal[0]) {
-                  setDiscoveryState(archiveToDiscoveryState(ownedLocal[0]));
-                }
+                const forUi = ownedLocal.filter((i) => !isDiscoverySessionArchiveId(i.id));
+                setDiscoveryArchives(forUi);
+                // 必须优先本机会话；禁止用旧归档覆盖并写回 localStorage
+                const restored = resolveDiscoveryStateOnLogin(currentUser.username, ownedLocal);
+                setDiscoveryState(restored);
+                discoveryHydratedRef.current = true;
               } catch (e) {
                 console.warn('[discovery] cache-first paint failed', e);
+                try {
+                  const restored = resolveDiscoveryStateOnLogin(currentUser.username, []);
+                  setDiscoveryState(restored);
+                } catch {
+                  /* ignore */
+                }
+                discoveryHydratedRef.current = true;
               }
               userDataReadyRef.current = true;
               setWorkspaceSyncStatus('本机资料已就绪，正在后台同步…');
@@ -1003,21 +1038,21 @@ const App: React.FC = () => {
               const discAll = Array.from(map.values()).sort((a, b) => b.timestamp - a.timestamp);
               const migratedDisc = migrateLegacyOwnership(discAll, users, depts());
               ownedArchives = scope(migratedDisc.items);
-              if (!cancelled) setDiscoveryArchives(ownedArchives);
+              if (!cancelled) {
+                setDiscoveryArchives(
+                  ownedArchives.filter((i) => !isDiscoverySessionArchiveId(i.id))
+                );
+              }
             } catch (e) {
               console.warn('discovery archives load failed', e);
             }
 
             // 恢复「当前用户自己的」搜索界面（禁止拉取全局 latest，避免串号）
+            // 再次 resolve：合并云端后可能有更新；仍优先本机较新会话，避免旧云端结果盖掉
             if (!cancelled) {
-              const savedState = loadUserDiscoveryState(currentUser.username);
-              if (savedState?.hasSearched && (savedState.results?.length || 0) > 0) {
-                setDiscoveryState(savedState);
-              } else if (ownedArchives[0]) {
-                setDiscoveryState(archiveToDiscoveryState(ownedArchives[0]));
-              } else {
-                setDiscoveryState(emptyDiscoveryState());
-              }
+              const restored = resolveDiscoveryStateOnLogin(currentUser.username, ownedArchives);
+              setDiscoveryState(restored);
+              discoveryHydratedRef.current = true;
             }
 
             // 背调归类修复：尽量从报告 searchKeyword 回填关键词；规范化国家为中文（不再强制 Car toy）
@@ -1571,9 +1606,9 @@ const App: React.FC = () => {
       return () => window.clearTimeout(t);
   }, [crmClients, isGitHubConnected, currentUser, users, departments]);
 
-  // 按用户隔离保存当前搜索界面，避免换账号串结果
+  // 按用户隔离保存当前搜索界面，避免换账号串结果（须等水合完成，防旧归档冲掉新结果）
   useEffect(() => {
-    if (!currentUser || !userDataReadyRef.current) return;
+    if (!currentUser || !userDataReadyRef.current || !discoveryHydratedRef.current) return;
     saveUserDiscoveryState(currentUser.username, discoveryState);
   }, [discoveryState, currentUser]);
 
@@ -5606,7 +5641,10 @@ const App: React.FC = () => {
               : undefined
           }
           onRestoreDiscovery={(archive) => {
-            setDiscoveryState(archiveToDiscoveryState(archive));
+            handleDiscoveryStateChange({
+              ...archiveToDiscoveryState(archive),
+              updatedAt: Date.now(),
+            });
             setActiveModule(ModuleType.DISCOVERY);
             setHistoryOpen(false);
             setMobileMenuOpen(false);

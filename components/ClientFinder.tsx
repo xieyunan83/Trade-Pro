@@ -328,6 +328,22 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
       });
       setSelectedIndices(new Set());
 
+      // 整次搜索的合并结果写入「会话快照」，关客户端后仍能恢复（不依赖单国归档）
+      if (username && merged.length > 0) {
+        const { discoverySessionArchiveId } = await import('../utils/workspaceScope');
+        onSearchArchived?.({
+          id: discoverySessionArchiveId(username),
+          timestamp: Date.now(),
+          product,
+          countries: selectedCountries,
+          country: selectedCountries.join(', '),
+          industry: state.industry,
+          clientTypes: selectedTypes,
+          clientType: typeArg,
+          results: merged,
+        });
+      }
+
       if (merged.length === 0 && errors.length) {
         setErrorMsg(errors.join('；'));
       } else if (errors.length) {

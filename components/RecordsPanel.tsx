@@ -1300,13 +1300,4 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   );
 };
 
-export const archiveToDiscoveryState = (a: DiscoveryArchiveItem): DiscoveryState => ({
-  product: a.product || '',
-  country: a.country || (a.countries || []).join(', '),
-  countries: a.countries || [],
-  industry: a.industry?.trim() || 'Toys & Games',
-  clientType: a.clientType || (a.clientTypes || []).join(', '),
-  clientTypes: a.clientTypes || [],
-  results: a.results || [],
-  hasSearched: true,
-});
+export { archiveToDiscoveryState } from '../utils/workspaceScope';

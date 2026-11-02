@@ -1,4 +1,4 @@
-import type { Client, DiscoveryState, User } from '../types';
+import type { Client, DiscoveryArchiveItem, DiscoveryState, User } from '../types';
 import { canViewOwnedRecord, type OwnedRecordMeta } from '../services/permissions';
 import type { Department } from '../types';
 import { splitCrmClientsByCutoff } from './crmHistory';
@@ -15,10 +15,18 @@ export const emptyDiscoveryState = (): DiscoveryState => ({
   clientTypes: [],
   results: [],
   hasSearched: false,
+  updatedAt: 0,
 });
 
 const discoveryStateKey = (username: string) =>
   `trade_scout_discovery_state_v1_${username.trim().toLowerCase()}`;
+
+/** 本机「当前搜索会话」归档 id 前缀（不进记录面板列表） */
+export const discoverySessionArchiveId = (username: string) =>
+  `__discovery_session__${username.trim().toLowerCase()}`;
+
+export const isDiscoverySessionArchiveId = (id?: string) =>
+  !!id && id.startsWith('__discovery_session__');
 
 export const loadUserDiscoveryState = (username: string): DiscoveryState | null => {
   try {
@@ -37,18 +45,98 @@ export const loadUserDiscoveryState = (username: string): DiscoveryState | null 
       results: Array.isArray(parsed.results) ? parsed.results : [],
       countries: Array.isArray(parsed.countries) ? parsed.countries : [],
       clientTypes: Array.isArray(parsed.clientTypes) ? parsed.clientTypes : [],
+      updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0,
     };
   } catch {
     return null;
   }
 };
 
+const slimDiscoveryResults = (state: DiscoveryState): DiscoveryState => ({
+  ...state,
+  results: (state.results || []).slice(0, 60).map((r) => ({
+    ...r,
+    // 截断可能撑爆 localStorage 的超长字段
+    description: (r.description || '').slice(0, 400),
+    mainProducts: (r.mainProducts || '').slice(0, 300),
+    fitReason: (r.fitReason || '').slice(0, 200),
+  })),
+});
+
 export const saveUserDiscoveryState = (username: string, state: DiscoveryState) => {
+  const payload: DiscoveryState = {
+    ...state,
+    updatedAt: state.updatedAt && state.updatedAt > 0 ? state.updatedAt : Date.now(),
+  };
   try {
-    localStorage.setItem(discoveryStateKey(username), JSON.stringify(state));
-  } catch {
-    /* ignore quota */
+    localStorage.setItem(discoveryStateKey(username), JSON.stringify(payload));
+    return;
+  } catch (e) {
+    console.warn('[discovery] localStorage full, retry slim', e);
   }
+  try {
+    localStorage.setItem(discoveryStateKey(username), JSON.stringify(slimDiscoveryResults(payload)));
+  } catch (e2) {
+    console.warn('[discovery] localStorage save failed', e2);
+  }
+};
+
+/** 归档 → 当前搜索界面（含 updatedAt，便于与本机会话比较新旧） */
+export const archiveToDiscoveryState = (a: DiscoveryArchiveItem): DiscoveryState => ({
+  product: a.product || '',
+  country: a.country || (a.countries || []).join(', '),
+  countries: a.countries || [],
+  industry: a.industry?.trim() || DEFAULT_INDUSTRY_EN,
+  clientType: a.clientType || (a.clientTypes || []).join(', '),
+  clientTypes: a.clientTypes || [],
+  results: a.results || [],
+  hasSearched: true,
+  updatedAt: a.timestamp || Date.now(),
+});
+
+/**
+ * 登录恢复当前搜索结果：优先本机最新会话，避免用「很久以前的归档」冲掉刚搜完的结果。
+ * 注意：不得在水合完成前把归档写回 localStorage。
+ */
+export const resolveDiscoveryStateOnLogin = (
+  username: string,
+  archives: DiscoveryArchiveItem[]
+): DiscoveryState => {
+  const saved = loadUserDiscoveryState(username);
+  const sessionId = discoverySessionArchiveId(username);
+  const sessionArch =
+    archives.find((a) => a.id === sessionId) ||
+    archives.find((a) => isDiscoverySessionArchiveId(a.id));
+  const latestArch =
+    sessionArch ||
+    archives.find((a) => !isDiscoverySessionArchiveId(a.id)) ||
+    null;
+
+  const savedOk = !!(saved?.hasSearched && (saved.results?.length || 0) > 0);
+  const archOk = !!(latestArch && (latestArch.results?.length || 0) > 0);
+  const savedAt = saved?.updatedAt || 0;
+  const archAt = latestArch?.timestamp || 0;
+
+  if (savedOk && archOk && latestArch) {
+    // 归档明显更新（例如他机同步）→ 用归档；否则保留本机会话（通常含多国合并结果）
+    if (archAt > savedAt + 3_000) {
+      const fromArch = archiveToDiscoveryState(latestArch);
+      // 本机结果更多且时间接近时，仍偏本机（防单国归档盖掉多国合并）
+      if (
+        !isDiscoverySessionArchiveId(latestArch.id) &&
+        (saved!.results?.length || 0) > (latestArch.results?.length || 0) &&
+        savedAt + 60_000 >= archAt
+      ) {
+        return saved!;
+      }
+      return fromArch;
+    }
+    return saved!;
+  }
+  if (savedOk && saved) return saved;
+  if (archOk && latestArch) return archiveToDiscoveryState(latestArch);
+  if (saved) return { ...emptyDiscoveryState(), ...saved, industry: saved.industry || DEFAULT_INDUSTRY_EN };
+  return emptyDiscoveryState();
 };
 
 const CRM_ALL_KEY = 'tradeScoutClients';
