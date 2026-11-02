@@ -9,7 +9,6 @@ import {
   Package,
   Layers,
   Sparkles,
-  ExternalLink,
   KeyRound,
   Save,
 } from 'lucide-react';
@@ -1137,24 +1136,45 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
           {active?.status === 'ready' && downloadUrl && (
             <div className="px-4 py-3 border-t border-white/10 space-y-2">
               <div className="flex flex-wrap gap-2 items-center">
-                <a
-                  href={downloadUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  download={`${(active.title || 'model').replace(/\s+/g, '_')}.glb`}
+                <button
+                  type="button"
+                  onClick={() => {
+                    void (async () => {
+                      try {
+                        const { downloadMediaFile } = await import('../services/creativeAssetVault');
+                        await downloadMediaFile(
+                          downloadUrl,
+                          `${(active.title || 'model').replace(/\s+/g, '_')}.glb`
+                        );
+                      } catch (e: any) {
+                        window.alert(e?.message || 'GLB 下载失败');
+                      }
+                    })();
+                  }}
                   className="inline-flex items-center gap-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-[11px] font-black px-3 py-2.5 text-white shadow-lg shadow-emerald-500/30"
                 >
                   <Download size={12} /> 下载 GLB
-                </a>
+                </button>
                 {active.previewImageUrl && (
-                  <a
-                    href={active.previewImageUrl}
-                    target="_blank"
-                    rel="noreferrer"
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void (async () => {
+                        try {
+                          const { downloadMediaFile } = await import('../services/creativeAssetVault');
+                          await downloadMediaFile(
+                            active.previewImageUrl,
+                            `${(active.title || 'model').replace(/\s+/g, '_')}-preview`
+                          );
+                        } catch (e: any) {
+                          window.alert(e?.message || '预览图下载失败');
+                        }
+                      })();
+                    }}
                     className="inline-flex items-center gap-1 rounded-lg bg-white/10 hover:bg-white/15 text-[11px] font-black px-3 py-2"
                   >
-                    <ExternalLink size={12} /> 平面渲染图
-                  </a>
+                    <Download size={12} /> 平面渲染图
+                  </button>
                 )}
                 {active.modelVersion && (
                   <span className="text-[9px] font-bold text-slate-500">

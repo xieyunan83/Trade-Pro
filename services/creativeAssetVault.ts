@@ -417,9 +417,110 @@ export const resolveMediaUrls = async (
   return out;
 };
 
+const extFromBlobType = (blob: Blob): string => {
+  const t = (blob.type || '').toLowerCase();
+  if (t.includes('png')) return 'png';
+  if (t.includes('jpeg') || t.includes('jpg')) return 'jpg';
+  if (t.includes('webp')) return 'webp';
+  if (t.includes('gif')) return 'gif';
+  if (t.includes('mp4')) return 'mp4';
+  if (t.includes('webm')) return 'webm';
+  if (t.includes('gltf') || t.includes('model')) return 'glb';
+  return 'png';
+};
+
+const normalizeDownloadName = (filename: string, blob: Blob): string => {
+  let name = (filename || 'download').trim() || 'download';
+  if (!/\.[a-z0-9]{2,5}$/i.test(name)) {
+    name = `${name}.${extFromBlobType(blob)}`;
+  }
+  return name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_');
+};
+
+const blobToBase64 = (blob: Blob): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const s = String(reader.result || '');
+      const i = s.indexOf(',');
+      resolve(i >= 0 ? s.slice(i + 1) : s);
+    };
+    reader.onerror = () => reject(new Error('读取文件失败'));
+    reader.readAsDataURL(blob);
+  });
+
+/** Windows 桌面端 / Chromium：系统「另存为」，不依赖 <a download>（Electron 上常无效） */
+const saveBlobViaPickerOrDesktop = async (blob: Blob, name: string): Promise<boolean> => {
+  // 1) File System Access API（Chrome / 桌面客户端内嵌 Chromium 均可用）
+  const w = typeof window !== 'undefined' ? (window as any) : null;
+  if (w && typeof w.showSaveFilePicker === 'function') {
+    try {
+      const ext = (name.split('.').pop() || 'png').toLowerCase();
+      const mime = blob.type || 'application/octet-stream';
+      const handle = await w.showSaveFilePicker({
+        suggestedName: name,
+        types: [
+          {
+            description: '导出文件',
+            accept: { [mime]: [`.${ext}`] },
+          },
+        ],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return true;
+    } catch (e: any) {
+      if (e?.name === 'AbortError') return true; // 用户取消，视为已处理
+      console.warn('[vault] showSaveFilePicker failed, try desktop IPC', e);
+    }
+  }
+
+  // 2) 桌面客户端 IPC 另存为（需较新安装包；网页刷新即可用上面的 picker）
+  const saveBytes = w?.bwDesktop?.saveBytes;
+  if (typeof saveBytes === 'function') {
+    try {
+      const base64 = await blobToBase64(blob);
+      const res = await saveBytes({
+        filename: name,
+        base64,
+        mime: blob.type || 'application/octet-stream',
+      });
+      if (res?.canceled) return true;
+      if (res?.ok) return true;
+    } catch (e) {
+      console.warn('[vault] bwDesktop.saveBytes failed', e);
+    }
+  }
+
+  return false;
+};
+
+const triggerAnchorDownload = (blob: Blob, name: string) => {
+  const href = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = href;
+  a.download = name;
+  a.rel = 'noopener';
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  // 部分 Windows/Electron 对 programmatic click 更敏感，用 MouseEvent
+  a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+  a.remove();
+  setTimeout(() => {
+    try {
+      URL.revokeObjectURL(href);
+    } catch {
+      /* ignore */
+    }
+  }, 4_000);
+};
+
 /**
- * 安全下载本机/云端素材。禁止把 vault: 交给系统打开（否则 macOS 弹「未设定用来打开此 URL」）。
- * 只解析并触发浏览器下载，不删除、不改写 vault 库内容。
+ * 安全下载本机/云端素材。
+ * - 禁止把 vault: 交给系统打开（macOS/Windows 都会弹「未设定用来打开此 URL」）
+ * - Windows 桌面端优先「另存为」对话框（Electron 上 <a download> 经常无反应）
+ * - 只读导出，不删除、不改写 vault 库内容
  */
 export const downloadMediaFile = async (
   url: string | undefined | null,
@@ -429,71 +530,39 @@ export const downloadMediaFile = async (
   if (!raw) throw new Error('没有可下载的文件');
 
   let blob: Blob | null = null;
-  let objectUrlToRevoke: string | null = null;
 
-  try {
-    if (isVaultRef(raw)) {
-      const id = vaultIdFromRef(raw);
-      const row = await getRow(id);
-      if (!row?.blob) throw new Error('本机素材库找不到该文件，请确认未清理本地缓存');
-      void touchAccess(id);
-      blob = row.blob;
-    } else if (raw.startsWith('data:')) {
-      const res = await fetch(raw);
-      if (!res.ok) throw new Error('读取内嵌文件失败');
-      blob = await res.blob();
-    } else if (raw.startsWith('blob:') || /^https?:\/\//i.test(raw)) {
-      const res = await fetch(raw);
-      if (!res.ok) throw new Error(`下载失败（HTTP ${res.status}）`);
-      blob = await res.blob();
-    } else {
-      // 未知协议：先尝试 vault 解析链，绝不 window.open(vault:)
-      const resolved = await resolveMediaUrl(raw);
-      if (!resolved || resolved.startsWith('vault:')) {
-        throw new Error('无法解析该素材地址');
-      }
-      const res = await fetch(resolved);
-      if (!res.ok) throw new Error('下载失败');
-      blob = await res.blob();
-      if (resolved.startsWith('blob:') && resolved !== raw) objectUrlToRevoke = resolved;
+  if (isVaultRef(raw)) {
+    const id = vaultIdFromRef(raw);
+    const row = await getRow(id);
+    if (!row?.blob) throw new Error('本机素材库找不到该文件，请确认未清理本地缓存');
+    void touchAccess(id);
+    blob = row.blob;
+  } else if (raw.startsWith('data:')) {
+    const res = await fetch(raw);
+    if (!res.ok) throw new Error('读取内嵌文件失败');
+    blob = await res.blob();
+  } else if (raw.startsWith('blob:') || /^https?:\/\//i.test(raw)) {
+    const res = await fetch(raw);
+    if (!res.ok) throw new Error(`下载失败（HTTP ${res.status}）`);
+    blob = await res.blob();
+  } else {
+    const resolved = await resolveMediaUrl(raw);
+    if (!resolved || resolved.startsWith('vault:')) {
+      throw new Error('无法解析该素材地址');
     }
-
-    if (!blob) throw new Error('下载内容为空');
-
-    const extFromType = (): string => {
-      const t = (blob!.type || '').toLowerCase();
-      if (t.includes('png')) return 'png';
-      if (t.includes('jpeg') || t.includes('jpg')) return 'jpg';
-      if (t.includes('webp')) return 'webp';
-      if (t.includes('mp4')) return 'mp4';
-      if (t.includes('webm')) return 'webm';
-      if (t.includes('gltf') || t.includes('model')) return 'glb';
-      return '';
-    };
-    let name = (filename || 'download').trim() || 'download';
-    if (!/\.[a-z0-9]{2,5}$/i.test(name)) {
-      const ext = extFromType() || 'png';
-      name = `${name}.${ext}`;
-    }
-
-    const href = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = href;
-    a.download = name;
-    a.rel = 'noopener';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(href), 2_000);
-  } finally {
-    if (objectUrlToRevoke) {
-      try {
-        URL.revokeObjectURL(objectUrlToRevoke);
-      } catch {
-        /* ignore */
-      }
-    }
+    const res = await fetch(resolved);
+    if (!res.ok) throw new Error('下载失败');
+    blob = await res.blob();
   }
+
+  if (!blob || blob.size <= 0) throw new Error('下载内容为空');
+
+  const name = normalizeDownloadName(filename, blob);
+  const saved = await saveBlobViaPickerOrDesktop(blob, name);
+  if (saved) return;
+
+  // 3) 浏览器兜底（勿 window.open vault:）
+  triggerAnchorDownload(blob, name);
 };
 
 /** 清空全部本地素材（管理员紧急清理） */

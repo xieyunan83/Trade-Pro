@@ -8,7 +8,15 @@ declare global {
     __TP_BOOT_MARK?: (phase?: string) => void;
     __TP_BOOT_FAIL?: (reason?: string) => void;
     __BW_SEED_DONE?: boolean;
-    bwDesktop?: { reportBootOk?: () => void; openExternal?: (url: string) => void };
+    bwDesktop?: {
+      reportBootOk?: () => void;
+      openExternal?: (url: string) => void;
+      saveBytes?: (payload: {
+        filename: string;
+        base64: string;
+        mime?: string;
+      }) => Promise<{ ok?: boolean; canceled?: boolean; filePath?: string; error?: string }>;
+    };
   }
 }
 

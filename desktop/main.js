@@ -378,6 +378,42 @@ ipcMain.on('bw-boot-ok', () => {
   clearLoadWatchdog();
 });
 
+/**
+ * 桌面端另存为：渲染进程把 blob→base64 传来，弹出系统保存对话框写入磁盘。
+ * 解决 Windows 上 <a download> / blob URL 经常无反应的问题。不碰网页 IndexedDB 素材库。
+ */
+ipcMain.handle('bw-save-bytes', async (event, payload) => {
+  try {
+    const filename = String(payload?.filename || 'download.bin')
+      .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
+      .slice(0, 180);
+    const base64 = String(payload?.base64 || '');
+    if (!base64) return { ok: false, error: 'empty' };
+    // 防误传超大文件撑爆 IPC（约 40MB 原始）
+    if (base64.length > 56_000_000) return { ok: false, error: 'too-large' };
+
+    const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+    const defaultDir = app.getPath('downloads');
+    const { canceled, filePath } = await dialog.showSaveDialog(win || undefined, {
+      title: '保存文件',
+      defaultPath: path.join(defaultDir, filename),
+      filters: [
+        { name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] },
+        { name: '视频', extensions: ['mp4', 'webm'] },
+        { name: '全部文件', extensions: ['*'] },
+      ],
+    });
+    if (canceled || !filePath) return { ok: false, canceled: true };
+
+    const buf = Buffer.from(base64, 'base64');
+    fs.writeFileSync(filePath, buf);
+    return { ok: true, filePath };
+  } catch (e) {
+    console.warn('[bw-save-bytes] failed', e);
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
+
 app.whenReady().then(async () => {
   // Windows 工作站休眠/锁屏时杀网络会导致批量背调大面积 FAILED
   try {
@@ -392,6 +428,25 @@ app.whenReady().then(async () => {
   }
 
   const ses = session.defaultSession;
+
+  // 兜底：任何触发的浏览器下载都落到「下载」目录，并给出完成提示
+  ses.on('will-download', (_event, item) => {
+    try {
+      const name = item.getFilename() || `download-${Date.now()}`;
+      const dest = path.join(app.getPath('downloads'), name);
+      item.setSavePath(dest);
+      item.once('done', (_e, state) => {
+        if (state === 'completed') {
+          console.log('[download] saved', dest);
+        } else {
+          console.warn('[download] ended', state, name);
+        }
+      });
+    } catch (e) {
+      console.warn('[download] will-download hook failed', e);
+    }
+  });
+
   /**
    * 不再每次启动都 clearCache：弱网下会逼着重下整站 → 长时间深蓝空白。
    * 仅当上次启动失败标记存在，或手动「强制刷新」时清理。
