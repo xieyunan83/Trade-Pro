@@ -83,7 +83,7 @@ export const IndustryMultiSelect: React.FC<IndustryMultiSelectProps> = ({
   }, []);
 
   return (
-    <div ref={rootRef} className={`relative ${className}`}>
+    <div ref={rootRef} className={`relative ${open ? 'z-[80]' : 'z-10'} ${className}`}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -127,7 +127,7 @@ export const IndustryMultiSelect: React.FC<IndustryMultiSelectProps> = ({
       </button>
 
       {open && (
-        <div className="absolute z-50 mt-2 w-full min-w-[280px] max-h-[360px] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl flex flex-col">
+        <div className="absolute left-0 right-0 z-[90] mt-2 w-full min-w-[280px] max-h-[360px] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl flex flex-col">
           <div className="p-2 border-b border-slate-100 space-y-2">
             <div className="relative">
               <Search className="absolute left-2.5 top-2.5 text-slate-400" size={14} />

@@ -206,6 +206,9 @@ export const INDUSTRY_OPTIONS: IndustryOption[] = [
 
 export const industryLabel = (opt: IndustryOption) => `${opt.zh} · ${opt.en}`;
 
+/** 澄海玩具主业默认行业（触发客户搜索一/二级玩具类目） */
+export const DEFAULT_INDUSTRY_EN = 'Toys & Games';
+
 /** 解析已选行业字符串（兼容旧版单字符串） */
 export const parseIndustrySelection = (raw?: string | string[]): string[] => {
   if (Array.isArray(raw)) return [...new Set(raw.map((s) => s.trim()).filter(Boolean))];

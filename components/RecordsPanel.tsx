@@ -1304,7 +1304,7 @@ export const archiveToDiscoveryState = (a: DiscoveryArchiveItem): DiscoveryState
   product: a.product || '',
   country: a.country || (a.countries || []).join(', '),
   countries: a.countries || [],
-  industry: a.industry || '',
+  industry: a.industry?.trim() || 'Toys & Games',
   clientType: a.clientType || (a.clientTypes || []).join(', '),
   clientTypes: a.clientTypes || [],
   results: a.results || [],

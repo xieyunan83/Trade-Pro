@@ -2,12 +2,13 @@ import type { Client, DiscoveryState, User } from '../types';
 import { canViewOwnedRecord, type OwnedRecordMeta } from '../services/permissions';
 import type { Department } from '../types';
 import { splitCrmClientsByCutoff } from './crmHistory';
+import { DEFAULT_INDUSTRY_EN } from '../data/industries';
 
 export const emptyDiscoveryState = (): DiscoveryState => ({
   product: '',
   country: '',
   countries: [],
-  industry: '',
+  industry: DEFAULT_INDUSTRY_EN,
   categoryL1: '',
   categoryL2: '',
   clientType: '',
@@ -25,9 +26,14 @@ export const loadUserDiscoveryState = (username: string): DiscoveryState | null 
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return null;
+    const industry =
+      typeof parsed.industry === 'string' && parsed.industry.trim()
+        ? parsed.industry
+        : DEFAULT_INDUSTRY_EN;
     return {
       ...emptyDiscoveryState(),
       ...parsed,
+      industry,
       results: Array.isArray(parsed.results) ? parsed.results : [],
       countries: Array.isArray(parsed.countries) ? parsed.countries : [],
       clientTypes: Array.isArray(parsed.clientTypes) ? parsed.clientTypes : [],

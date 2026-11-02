@@ -36,6 +36,7 @@ import {
   lookupFromBgIndex,
 } from '../utils/crmHistory';
 import { IndustryMultiSelect } from './IndustryMultiSelect';
+import { DEFAULT_INDUSTRY_EN } from '../data/industries';
 import {
   applyIcpToDiscoveryState,
   deleteIcpTemplate,
@@ -185,6 +186,14 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
       clientType: nextTypes.join(', '),
     });
   };
+
+  // 行业为空时默认「玩具与游戏」，以便一级/二级玩具类目自动展开
+  useEffect(() => {
+    if (!state.industry?.trim()) {
+      patchState({ industry: DEFAULT_INDUSTRY_EN });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅补空默认值
+  }, [state.industry]);
 
   const toggleCountry = (en: string) => {
     const next = selectedCountries.includes(en)
@@ -447,7 +456,7 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
               />
             </div>
           </div>
-          <div>
+          <div className="relative z-[20]">
             <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
               行业（可多选 / 可手动录入）
             </label>
@@ -513,7 +522,10 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
           )}
 
           {/* 国家多选：一级大洲 / 二级国家 */}
-          <div className="sm:col-span-2" ref={countryPanelRef}>
+          <div
+            className={`sm:col-span-2 ${countryOpen ? 'relative z-[70]' : 'relative z-0'}`}
+            ref={countryPanelRef}
+          >
             <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
               目标国家（可多选）
             </label>
@@ -554,7 +566,7 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
             </button>
 
             {countryOpen && (
-              <div className="mt-2 border border-slate-200 rounded-2xl bg-white shadow-xl overflow-hidden">
+              <div className="mt-2 relative z-[70] border border-slate-200 rounded-2xl bg-white shadow-2xl overflow-hidden">
                 {/* 一级：五大洲 */}
                 <div className="flex flex-wrap gap-1 p-2 bg-slate-50 border-b border-slate-100">
                   {CONTINENTS.map((continent) => {
@@ -704,7 +716,7 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
           type="button"
           onClick={() => void handleSearch()}
           disabled={loading || !state.product.trim()}
-          className="relative z-[60] w-full mt-4 sm:mt-6 tp-btn-primary text-white py-3 sm:py-4 rounded-xl font-black transition-all flex items-center justify-center gap-2 touch-manipulation disabled:opacity-50"
+          className="relative z-0 w-full mt-4 sm:mt-6 tp-btn-primary text-white py-3 sm:py-4 rounded-xl font-black transition-all flex items-center justify-center gap-2 touch-manipulation disabled:opacity-50"
         >
           {loading ? (
             <>
