@@ -6,6 +6,7 @@ import { callQwen } from './geminiService';
 import { listPoolKeys } from './apiKeyPool';
 import { env } from './env';
 import { loadDataProviderLocal } from './dataProviders';
+import { SITE_ANTI_SLOP_RULES } from './siteAntiSlopRules';
 
 export type SiteVibeGenerateInput = {
   userPrompt: string;
@@ -94,12 +95,13 @@ const SYSTEM_SITE = `你是资深前端工程师 + 外贸官网设计师，像 C
 1. 只输出一份完整 HTML5 文档（可包在 \`\`\`html 代码块中），必须含 <!DOCTYPE html>、<html>、<head>、<body>。
 2. CSS 写在 <style>，少量 JS 可写在 <script>；可用 Google Fonts CDN；不要依赖未引入的外部打包器。
 3. 这是给澄海玩具/礼品工厂的 B2B 外贸展厅站：导航、强首屏、产品区、优势/证书、关于工厂、询盘表单（可用 mailto 或前端示意）。
-4. 视觉要专业、时尚、可演示；有真实区块结构，不要把用户「设计一个网站…」整段指令贴成大标题。
+4. 视觉要专业、可演示；有真实区块结构，不要把用户「设计一个网站…」整段指令贴成大标题。
 5. 若用户给了参考站 URL：学习其信息架构与气质（配色节奏、模块组合），但内容换成用户行业与产品，禁止声称已爬取整站源码。
 6. 若提供了产品列表：做成产品卡片网格，写入真实品名/SKU。
 7. 锚点链接只用页面内 #id，并保证对应 id 存在。
 8. 禁止输出解释性前言/后记；不要 markdown 列表说明；不要虚构无法验证的认证编号。
-9. 界面可见文案不要出现任何大模型/云厂商商品名。`;
+9. 界面可见文案不要出现任何大模型/云厂商商品名。
+10. ${SITE_ANTI_SLOP_RULES}`;
 
 export const generateSiteHtmlWithLlm = async (
   input: SiteVibeGenerateInput

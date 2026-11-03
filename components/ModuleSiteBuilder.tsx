@@ -57,6 +57,7 @@ import {
   getSiteVibeLlmStatus,
   hardenPreviewHtml,
 } from '../services/siteVibeAgent';
+import { polishSiteHtmlWithLlm } from '../services/siteUnslopPass';
 import { deleteSiteHtml, getSiteHtml, putSiteHtml } from '../services/siteProjectVault';
 import { SiteOneClickForm } from './SiteOneClickForm';
 import { getSiteBuildCapabilityStatus } from '../services/siteBuildPipeline';
@@ -276,6 +277,53 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
       'Build a modern B2B export showroom for an overseas toy buyer: strong hero, product grid, trust strip, OEM/ODM, and quote form. Fashionable dark theme.',
       templateId
     );
+  };
+
+  /** 路径 A：对当前预览站做专业润色（可事后补选） */
+  const runPolishPass = async () => {
+    if (!active || busy) return;
+    const llm = getSiteVibeLlmStatus();
+    if (!llm.ready) {
+      window.alert(llm.detail);
+      return;
+    }
+    setBusy(true);
+    setBuildStatus('正在专业润色（去模板感）…');
+    try {
+      const prevHtml = vaultHtml || (await getSiteHtml(active.id)) || '';
+      if (prevHtml.length < 400) {
+        window.alert('请先生成网站，再使用专业润色。');
+        return;
+      }
+      const result = await polishSiteHtmlWithLlm({
+        html: prevHtml,
+        brandHint: active.title,
+        onProgress: setBuildStatus,
+      });
+      const html = hardenPreviewHtml(result.html);
+      const agentMsg = {
+        id: newCreativeId('m'),
+        role: 'agent' as const,
+        text: `${result.summaryZh}。可对比预览；不满意可用对话继续微调。`,
+        at: Date.now(),
+      };
+      const next: SiteProject = {
+        ...active,
+        title: result.title || active.title,
+        genMode: 'llm',
+        messages: [...active.messages, agentMsg],
+        updatedAt: Date.now(),
+      };
+      next.htmlPersisted = await persistProjectHtml(next, html);
+      persistMeta(projects.map((p) => (p.id === active.id ? next : p)));
+      setVaultHtml(html);
+      setPersistHint('专业润色完成 · 本机已备份');
+    } catch (e: any) {
+      window.alert(`专业润色失败：${e?.message || e}`);
+    } finally {
+      setBusy(false);
+      setBuildStatus('');
+    }
   };
 
   const send = async () => {
@@ -983,6 +1031,16 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
           <div className="px-3 py-2 border-b border-white/10 flex items-center gap-2 text-xs font-bold text-slate-400">
             <Eye size={12} /> 实时预览
             <div className="ml-auto flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => void runPolishPass()}
+                disabled={busy || !previewHtml || previewHtml.length < 400 || !llmStatus.ready}
+                title="去模板感，保留区块与素材"
+                className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-black text-teal-200 border border-teal-500/30 bg-teal-500/10 hover:bg-teal-500/20 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {busy ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
+                专业润色
+              </button>
               <button
                 type="button"
                 onClick={() => setViewport('desktop')}

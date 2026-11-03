@@ -15,6 +15,15 @@ import {
   getSiteBuildCapabilityStatus,
   type SiteBuildConfirmForm,
 } from '../services/siteBuildPipeline';
+import {
+  DIRECTION_CHARACTER_OPTS,
+  DIRECTION_MOMENT_OPTS,
+  DIRECTION_SIGNATURE_OPTS,
+  DIRECTION_WORLD_OPTS,
+  SITE_VISUAL_PROCESS_OPTS,
+  needsDirectionFields,
+  type SiteVisualProcessMode,
+} from '../services/siteUnslopPass';
 
 type Props = {
   open: boolean;
@@ -281,7 +290,71 @@ export const SiteOneClickForm: React.FC<Props> = ({
           </section>
 
           <section className="space-y-2">
-            <h3 className="text-xs font-black text-slate-800">视觉风格</h3>
+            <h3 className="text-xs font-black text-slate-800">视觉处理（任选其一）</h3>
+            <p className="text-[10px] text-slate-500 leading-snug">
+              默认「先出站再专业润色」。需要一次定调可选「先定风格」；赶时间选「快速出站」。
+            </p>
+            <div className="grid sm:grid-cols-2 gap-2">
+              {SITE_VISUAL_PROCESS_OPTS.map((opt) => {
+                const active = (form.visualProcessMode || 'polish') === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => patch('visualProcessMode', opt.id as SiteVisualProcessMode)}
+                    className={`text-left rounded-xl border px-3 py-2.5 transition-all ${
+                      active
+                        ? 'border-teal-500 ring-2 ring-teal-100 bg-teal-50/50'
+                        : 'border-slate-200 hover:border-slate-300'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <div className="text-xs font-black text-slate-900">{opt.label}</div>
+                      {opt.badge ? (
+                        <span className="text-[9px] font-black px-1.5 py-0.5 rounded-md bg-teal-600 text-white">
+                          {opt.badge}
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="text-[10px] text-slate-500 mt-0.5">{opt.tip}</p>
+                  </button>
+                );
+              })}
+            </div>
+
+            {needsDirectionFields(form.visualProcessMode || 'polish') ? (
+              <div className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-3 space-y-3">
+                <div className="text-[11px] font-black text-slate-700">高级 · 视觉方向（点选即可）</div>
+                <ChipGroup
+                  label="性格"
+                  value={form.directionCharacter || ''}
+                  options={[...DIRECTION_CHARACTER_OPTS]}
+                  onChange={(v) => patch('directionCharacter', v)}
+                />
+                <ChipGroup
+                  label="场景世界"
+                  value={form.directionWorld || ''}
+                  options={[...DIRECTION_WORLD_OPTS]}
+                  onChange={(v) => patch('directionWorld', v)}
+                />
+                <ChipGroup
+                  label="视觉高潮"
+                  value={form.directionMoment || ''}
+                  options={[...DIRECTION_MOMENT_OPTS]}
+                  onChange={(v) => patch('directionMoment', v)}
+                />
+                <ChipGroup
+                  label="签名细节"
+                  value={form.directionSignature || ''}
+                  options={[...DIRECTION_SIGNATURE_OPTS]}
+                  onChange={(v) => patch('directionSignature', v)}
+                />
+              </div>
+            ) : null}
+          </section>
+
+          <section className="space-y-2">
+            <h3 className="text-xs font-black text-slate-800">版式气质</h3>
             <div className="grid sm:grid-cols-2 gap-2">
               {STYLE_OPTS.map((s) => (
                 <button
@@ -426,6 +499,36 @@ export const SiteOneClickForm: React.FC<Props> = ({
     </div>
   );
 };
+
+const ChipGroup: React.FC<{
+  label: string;
+  value: string;
+  options: string[];
+  onChange: (v: string) => void;
+}> = ({ label, value, options, onChange }) => (
+  <div className="space-y-1.5">
+    <div className="text-[10px] font-bold text-slate-500">{label}</div>
+    <div className="flex flex-wrap gap-1.5">
+      {options.map((opt) => {
+        const on = value === opt;
+        return (
+          <button
+            key={opt}
+            type="button"
+            onClick={() => onChange(opt)}
+            className={`rounded-lg px-2.5 py-1 text-[10px] font-bold border transition-colors ${
+              on
+                ? 'border-teal-500 bg-teal-50 text-teal-900'
+                : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+            }`}
+          >
+            {opt}
+          </button>
+        );
+      })}
+    </div>
+  </div>
+);
 
 const ToggleRow: React.FC<{
   icon: React.ReactNode;

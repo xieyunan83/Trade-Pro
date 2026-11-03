@@ -19,6 +19,13 @@ import {
 import { putSiteHtml } from './siteProjectVault';
 import { DEFAULT_STACK } from './siteStackCatalog';
 import { buildSectionsFromPrompt } from './siteBuilderTemplates';
+import {
+  formatDirectionForPrompt,
+  needsDirectionFields,
+  needsPolishPass,
+  polishSiteHtmlWithLlm,
+  type SiteVisualProcessMode,
+} from './siteUnslopPass';
 
 export type SiteBuildJobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 
@@ -30,6 +37,7 @@ export type SiteBuildStepId =
   | 'transition_video'
   | 'model_3d'
   | 'assemble'
+  | 'polish'
   | 'persist';
 
 export type SiteBuildStepStatus = 'pending' | 'running' | 'done' | 'skipped' | 'failed';
@@ -61,6 +69,16 @@ export type SiteBuildConfirmForm = {
   primaryColor?: string;
   contactEmail?: string;
   contactWhatsapp?: string;
+  /**
+   * 视觉处理方式（用户自选）：
+   * fast=直接出站；direction=先定风格；polish=出站后再润色；direction_polish=两者都要
+   */
+  visualProcessMode: SiteVisualProcessMode;
+  /** 路径 B：性格 / 世界 / 高潮 / 签名（仅 direction* 模式使用） */
+  directionCharacter?: string;
+  directionWorld?: string;
+  directionMoment?: string;
+  directionSignature?: string;
   /** 素材开关 */
   wantHeroImage: boolean;
   wantProductImages: boolean;
@@ -122,6 +140,11 @@ const STEP_DEFS: Array<{ id: SiteBuildStepId; label: string; gate?: (f: SiteBuil
   { id: 'transition_video', label: '生成区块过渡视频', gate: (f) => f.wantTransitionVideo },
   { id: 'model_3d', label: '生成产品 3D 模型', gate: (f) => f.wantModel3d },
   { id: 'assemble', label: '汇集成品网站代码' },
+  {
+    id: 'polish',
+    label: '专业润色（去模板感）',
+    gate: (f) => needsPolishPass(f.visualProcessMode || 'polish'),
+  },
   { id: 'persist', label: '写入本机站点库' },
 ];
 
@@ -282,6 +305,11 @@ export const defaultSiteBuildForm = (partial?: Partial<SiteBuildConfirmForm>): S
   primaryColor: '#0f766e',
   contactEmail: '',
   contactWhatsapp: '',
+  visualProcessMode: 'polish',
+  directionCharacter: '稳重务实',
+  directionWorld: '澄海注塑工厂',
+  directionMoment: '首屏真产品静物',
+  directionSignature: 'WhatsApp 联系绿点',
   wantHeroImage: true,
   wantProductImages: true,
   productImageCount: 4,
@@ -395,12 +423,22 @@ const buildAssetPromptBlock = (assets: SiteBuildAssets): string => {
 
 const composeUserPrompt = (form: SiteBuildConfirmForm, assets: SiteBuildAssets): string => {
   const products = parseProducts(form.productsText);
+  const mode = form.visualProcessMode || 'polish';
+  const directionBlock = needsDirectionFields(mode)
+    ? formatDirectionForPrompt({
+        character: form.directionCharacter,
+        world: form.directionWorld,
+        moment: form.directionMoment,
+        signature: form.directionSignature,
+      })
+    : '';
   const parts = [
     `品牌 / 公司名：${form.brandName || '未命名品牌'}`,
     form.tagline ? `定位一句话：${form.tagline}` : '',
     `行业：${form.industry}`,
     `视觉风格：${STYLE_LABEL[form.visualStyle]}`,
     form.primaryColor ? `主色倾向：${form.primaryColor}` : '',
+    directionBlock,
     form.brief ? `详细需求：\n${form.brief}` : '',
     products.length
       ? `产品清单：\n${products.map((p, i) => `${i + 1}. ${p}`).join('\n')}`
@@ -409,7 +447,7 @@ const composeUserPrompt = (form: SiteBuildConfirmForm, assets: SiteBuildAssets):
     form.contactWhatsapp ? `WhatsApp：${form.contactWhatsapp}` : '',
     form.referenceUrl ? `参考站：${form.referenceUrl}` : '',
     '请做成可演示的外贸官网单页：强首屏、产品区、信任/证书条、工厂介绍、询盘表单。',
-    '首屏要有电影感或大品牌气质；若有背景视频必须全屏铺开并配静音循环。',
+    '若有背景视频必须全屏铺开并配静音循环；首屏用真产品/场景，不要抽象光球。',
     buildAssetPromptBlock(assets),
   ];
   return parts.filter(Boolean).join('\n\n');
@@ -605,6 +643,43 @@ const runJob = async (job: SiteBuildJob) => {
       return;
     }
 
+    // —— polish（路径 A，用户自选）——
+    if (needsPolishPass(form.visualProcessMode || 'polish')) {
+      markRunning(job, 'polish', '正在专业润色（去模板感）…');
+      try {
+        const polished = await polishSiteHtmlWithLlm({
+          html,
+          brandHint: brand,
+          direction: needsDirectionFields(form.visualProcessMode || 'polish')
+            ? {
+                character: form.directionCharacter,
+                world: form.directionWorld,
+                moment: form.directionMoment,
+                signature: form.directionSignature,
+              }
+            : null,
+          onProgress: (msg) => {
+            job.statusText = msg;
+            notify();
+          },
+        });
+        html = hardenPreviewHtml(polished.html);
+        if (polished.title) title = polished.title;
+        summaryZh = `${summaryZh}；${polished.summaryZh}`;
+        markDone(job, 'polish', polished.summaryZh);
+      } catch (e: any) {
+        // 润色失败不丢整站：保留 assemble 结果并标失败明细，继续落盘
+        const step = job.steps.find((s) => s.id === 'polish');
+        if (step) {
+          step.status = 'failed';
+          step.detail = e?.message || String(e);
+          step.finishedAt = Date.now();
+        }
+        job.statusText = `专业润色未成功，已保留初版成品（${e?.message || e}）`;
+        notify();
+      }
+    }
+
     // —— persist ——
     markRunning(job, 'persist', '正在写入本机站点库…');
     try {
@@ -712,9 +787,13 @@ export const enqueueSiteBuildJob = (form: SiteBuildConfirmForm): SiteBuildJob =>
       brandName: form.brandName.trim(),
       tagline: form.tagline.trim(),
       brief: form.brief.trim(),
+      visualProcessMode: form.visualProcessMode || 'polish',
       productImageCount: Math.min(6, Math.max(1, form.productImageCount || 4)),
     },
-    steps: buildSteps(form),
+    steps: buildSteps({
+      ...form,
+      visualProcessMode: form.visualProcessMode || 'polish',
+    }),
     progressPct: 0,
     statusText: '已排队 · 后台执行中请勿关闭客户端',
     assets: { productImageUrls: [] },
