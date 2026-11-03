@@ -79,7 +79,8 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
   const [projects, setProjects] = useState<DesignProject[]>(() => loadDesignProjects());
   const [assets, setAssets] = useState<DesignAsset[]>(() => loadDesignAssets());
   const [activeId, setActiveId] = useState<string | null>(projects[0]?.id || null);
-  const [leftTab, setLeftTab] = useState<LeftTab>('skills');
+  /** 默认落在「模板」，避免新功能藏在 Skills 里找不到 */
+  const [leftTab, setLeftTab] = useState<LeftTab>('packs');
   const [prompt, setPrompt] = useState('');
   /** 负向约束：选 Skill 时预填，可自行增删；生成时还会合并全站通用拒绝项 */
   const [negativePrompt, setNegativePrompt] = useState(
@@ -617,6 +618,13 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             >
               {status.configured ? status.label : status.label}
             </span>
+            <button
+              type="button"
+              onClick={() => setLeftTab('packs')}
+              className="inline-flex items-center gap-1 rounded-full bg-amber-100 border border-amber-300 text-amber-900 text-[10px] font-black px-2.5 py-1"
+            >
+              <BookTemplate size={11} /> 企业模板在这 · 点开一键套用
+            </button>
           </div>
           <button
             type="button"
@@ -648,9 +656,9 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
           <div className="flex border-b border-slate-100">
             {(
               [
-                ['projects', '项目', FolderOpen],
-                ['skills', 'Skills', Sparkles],
                 ['packs', '模板', BookTemplate],
+                ['skills', 'Skills', Sparkles],
+                ['projects', '项目', FolderOpen],
                 ['assets', '资产', LayoutGrid],
               ] as const
             ).map(([id, label, Icon]) => (
@@ -658,18 +666,29 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                 key={id}
                 type="button"
                 onClick={() => setLeftTab(id)}
-                className={`flex-1 py-2.5 text-[10px] sm:text-[11px] font-black flex items-center justify-center gap-0.5 sm:gap-1 ${
-                  leftTab === id ? 'text-violet-700 border-b-2 border-violet-600 bg-violet-50/50' : 'text-slate-400'
+                className={`flex-1 py-2.5 text-[10px] sm:text-[11px] font-black flex items-center justify-center gap-0.5 sm:gap-1 relative ${
+                  leftTab === id
+                    ? id === 'packs'
+                      ? 'text-amber-800 border-b-2 border-amber-500 bg-amber-50/80'
+                      : 'text-violet-700 border-b-2 border-violet-600 bg-violet-50/50'
+                    : id === 'packs'
+                      ? 'text-amber-700 bg-amber-50/40'
+                      : 'text-slate-400'
                 }`}
               >
                 <Icon size={12} /> {label}
+                {id === 'packs' && (
+                  <span className="absolute -top-0.5 right-1 text-[8px] font-black text-white bg-rose-500 rounded px-1 leading-4">
+                    新
+                  </span>
+                )}
               </button>
             ))}
           </div>
           <div className="flex-1 overflow-y-auto p-2 space-y-1.5 custom-scrollbar">
             {leftTab === 'projects' &&
               (projects.length === 0 ? (
-                <p className="text-xs text-slate-400 font-bold p-4 text-center">暂无项目，点 Skills 或新建</p>
+                <p className="text-xs text-slate-400 font-bold p-4 text-center">暂无项目，点「模板」或新建</p>
               ) : (
                 projects.map((p) => (
                   <button
@@ -692,31 +711,49 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                   </button>
                 ))
               ))}
-            {leftTab === 'skills' &&
-              DESIGN_SKILLS.map((s) => (
+            {leftTab === 'skills' && (
+              <>
                 <button
-                  key={s.id}
                   type="button"
-                  onClick={() => {
-                    setSkillId(s.id);
-                    if (s.defaultPrompt) setPrompt(s.defaultPrompt);
-                    setNegativePrompt(s.negativePrompt || '');
-                    if (s.id === 'multi_product_poster') setLastRefIsLayout(true);
-                  }}
-                  onDoubleClick={() => createProject(s.id)}
-                  className={`w-full text-left rounded-xl px-3 py-2.5 border ${
-                    skillId === s.id
-                      ? 'border-violet-300 bg-violet-50'
-                      : 'border-slate-100 hover:border-violet-200'
-                  }`}
+                  onClick={() => setLeftTab('packs')}
+                  className="w-full text-left rounded-xl px-3 py-2.5 border border-amber-300 bg-amber-50 hover:bg-amber-100"
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-black text-slate-800">{s.label}</span>
-                    <span className="text-[9px] font-bold text-violet-600 uppercase">{s.category}</span>
+                    <span className="text-xs font-black text-amber-900 inline-flex items-center gap-1">
+                      <BookTemplate size={12} /> 企业模板技能库
+                    </span>
+                    <span className="text-[9px] font-bold text-rose-600">新 · 点这里</span>
                   </div>
-                  <p className="text-[10px] text-slate-500 font-medium mt-0.5 leading-snug">{s.hint}</p>
+                  <p className="text-[10px] text-amber-800/80 font-medium mt-0.5 leading-snug">
+                    目录封面 / 网格内页 / 功能卖点文案 · 一键套用
+                  </p>
                 </button>
-              ))}
+                {DESIGN_SKILLS.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => {
+                      setSkillId(s.id);
+                      if (s.defaultPrompt) setPrompt(s.defaultPrompt);
+                      setNegativePrompt(s.negativePrompt || '');
+                      if (s.id === 'multi_product_poster') setLastRefIsLayout(true);
+                    }}
+                    onDoubleClick={() => createProject(s.id)}
+                    className={`w-full text-left rounded-xl px-3 py-2.5 border ${
+                      skillId === s.id
+                        ? 'border-violet-300 bg-violet-50'
+                        : 'border-slate-100 hover:border-violet-200'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-black text-slate-800">{s.label}</span>
+                      <span className="text-[9px] font-bold text-violet-600 uppercase">{s.category}</span>
+                    </div>
+                    <p className="text-[10px] text-slate-500 font-medium mt-0.5 leading-snug">{s.hint}</p>
+                  </button>
+                ))}
+              </>
+            )}
             {leftTab === 'packs' && (
               <EnterpriseDesignPackPanel
                 skuName={
