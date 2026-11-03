@@ -87,6 +87,17 @@ import {
   stopNightSilentUpgrade,
 } from './services/nightSilentUpgrade';
 import {
+  hasAnsweredWorkerPromptThisSession,
+  isWorkerModeActive,
+  markWorkerPromptAnswered,
+  resolveWorkerParallelSlots,
+  setWorkerModeActive,
+  shouldWorkerRunHeavyAnalysisNow,
+  subscribeWorkerMode,
+} from './services/workerMode';
+import { pickStickyPoolKey } from './services/apiKeyPool';
+import { WorkerModeBadge, WorkerModePrompt } from './components/WorkerModePrompt';
+import {
   enqueueProductDig,
   enqueueProductDigBatch,
   setProductDigHistoryResolver,
@@ -318,6 +329,9 @@ const App: React.FC = () => {
   const [workspaceSyncing, setWorkspaceSyncing] = useState(false);
   /** 管理员进入与业务员相同的工作台（含今日看板） */
   const [adminInWorkspace, setAdminInWorkspace] = useState(false);
+  /** admin 进业务页：是否弹出挂机确认 */
+  const [workerPromptOpen, setWorkerPromptOpen] = useState(false);
+  const [workerModeOn, setWorkerModeOn] = useState(() => isWorkerModeActive());
   /** 指挥舱任务流 → 营销工具剧本注入 */
   const [pendingPlaybookId, setPendingPlaybookId] = useState<string | null>(null);
   useModuleHashRoute(activeModule, navigateModule);
@@ -509,9 +523,11 @@ const App: React.FC = () => {
     });
   }, []);
 
-  /** 夜间 22:00–08:00 静默补齐旧客户缺口（公司联系人 / 邮箱 / 品类 / 背调补全），无需下指令 */
+  useEffect(() => subscribeWorkerMode((s) => setWorkerModeOn(s.active)), []);
+
+  /** 挂机模式开启后：静默补齐缺口（白天轻量 / 夜间重补全） */
   useEffect(() => {
-    if (!currentUser) {
+    if (!currentUser || !workerModeOn) {
       stopNightSilentUpgrade();
       return;
     }
@@ -625,7 +641,7 @@ const App: React.FC = () => {
       },
     });
     return () => stopNightSilentUpgrade();
-  }, [currentUser?.username]);
+  }, [currentUser?.username, workerModeOn]);
 
   useEffect(() => {
     viewingHistoryIdRef.current = viewingHistoryId;
@@ -3388,9 +3404,11 @@ const App: React.FC = () => {
       };
 
       try {
-        // 夜间窗口与静默补全双轨：夜间也保持 2 路背调（补全侧已降重），避免一整晚只啃几十家
-        const BATCH_ANALYZE_CONCURRENCY = 2;
-        const runOneBatchTask = async (task: AutomationResult) => {
+        // 挂机 + 多 Key：按 Key 数并行（最多 2），每路粘滞一把 Key
+        const BATCH_ANALYZE_CONCURRENCY = isWorkerModeActive()
+          ? resolveWorkerParallelSlots()
+          : 2;
+        const runOneBatchTask = async (task: AutomationResult, slotIndex = 0) => {
           const analyzingTask: AutomationResult = { ...task, status: 'analyzing' };
           batchSeedByIdRef.current.set(task.id, analyzingTask);
           syncAutomationResults((prev) =>
@@ -3400,7 +3418,10 @@ const App: React.FC = () => {
           void saveAutomationTask(analyzingTask).catch(() => undefined);
 
           try {
-            await waitForLocalAiSlot(() => shouldStopRef.current, 2);
+            await waitForLocalAiSlot(
+              () => shouldStopRef.current,
+              BATCH_ANALYZE_CONCURRENCY
+            );
             if (shouldStopRef.current) {
               const paused: AutomationResult = { ...task, status: 'pending', error: undefined };
               batchSeedByIdRef.current.set(task.id, paused);
@@ -3411,10 +3432,12 @@ const App: React.FC = () => {
 
             const kw = (task.keyword || discoveryState.product || '').trim();
             if (kw) addCustomKeyword(kw);
+            const stickyKey = pickStickyPoolKey('qwen', slotIndex);
             const analyzeOpts = {
               searchKeyword: kw || undefined,
               searchTags: kw ? buildSearchTags(kw, task.country || '') : undefined,
               searchCountry: task.country || undefined,
+              qwenApiKey: stickyKey || undefined,
             };
             const preferredMode = task.mode || 'economy';
             const rawResult = await withHeavyJob('automation', () =>
@@ -3598,7 +3621,13 @@ const App: React.FC = () => {
         };
 
         while (!shouldStopRef.current) {
-          // 日间：夜间限定任务不跑；若本波无可跑任务则停泵，等 22:00 续跑
+          // 挂机模式：全量背调只在夜间优惠窗跑；白天把算力留给轻量补全
+          if (isWorkerModeActive() && !shouldWorkerRunHeavyAnalysisNow()) {
+            setSystemNotice(
+              '挂机模式：全量背调安排在夜间 22:00–08:00（优惠时段）；白天本机只跑轻量补全。'
+            );
+            break;
+          }
           const inNight = isQwenNightPromoWindow();
           const wave: AutomationResult[] = [];
           const concurrency = BATCH_ANALYZE_CONCURRENCY;
@@ -3624,7 +3653,7 @@ const App: React.FC = () => {
           }
           if (!wave.length) break;
 
-          await Promise.all(wave.map((t) => runOneBatchTask(t)));
+          await Promise.all(wave.map((t, i) => runOneBatchTask(t, i)));
           if (shouldStopRef.current) break;
 
           // 已离开夜间窗口：本波结束后停泵，剩余 nightWindowOnly 保持 pending
@@ -3684,9 +3713,9 @@ const App: React.FC = () => {
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [isAutomating, batchProgress.active, automationResults]);
 
-  /** 每晚 22:00 进入窗口时，自动续跑 Excel 夜间限定队列 */
+  /** 挂机端：每晚 22:00 进入窗口时自动续跑背调（含 Excel 夜间限定） */
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser || !workerModeOn) return;
     let wasInNight = isQwenNightPromoWindow();
     const wakeNightExcelBatch = () => {
       const inNight = isQwenNightPromoWindow();
@@ -3695,13 +3724,12 @@ const App: React.FC = () => {
       if (!inNight) return;
       if (batchRunnerActiveRef.current || shouldStopRef.current) return;
       if (!hasApiKeyConfigured()) return;
-      const pendingNight = (automationResultsRef.current || []).filter(
-        (t) => t.nightWindowOnly && t.status === 'pending'
+      const pendingNight = (automationResultsRef.current || []).filter((t) =>
+        isAutomationTaskRunnableNow(t, true)
       );
       if (!pendingNight.length) return;
-      // 刚进入窗口，或挂机期间定时巡检
       if (entered || pendingNight.length > 0) {
-        console.info(`[batch] night-window wake excel tasks=${pendingNight.length}`);
+        console.info(`[batch] night-window wake tasks=${pendingNight.length}`);
         void processBatchQueue(pendingNight);
       }
     };
@@ -3711,7 +3739,7 @@ const App: React.FC = () => {
       window.clearInterval(interval);
       window.clearTimeout(boot);
     };
-  }, [currentUser?.username]);
+  }, [currentUser?.username, workerModeOn]);
 
   /** 桌面工作站：登录后自动续跑本机未完成的背调队列（线上升级不刷新则本来就不会停） */
   const autoResumeBatchOnceRef = useRef(false);
@@ -5511,10 +5539,41 @@ const App: React.FC = () => {
         onEnterWorkspace={() => {
           setAdminInWorkspace(true);
           setActiveModule(ModuleType.HOME);
+          // 其它机器用 admin 进业务页：提示是否挂机执行
+          if (!hasAnsweredWorkerPromptThisSession()) {
+            setWorkerPromptOpen(true);
+          }
         }}
       />
     );
   }
+
+  const handleWorkerConfirm = () => {
+    markWorkerPromptAnswered();
+    setWorkerPromptOpen(false);
+    setWorkerModeActive(true);
+    setWorkerModeOn(true);
+    setSystemNotice(
+      '已开启挂机执行：白天轻量补全；夜间 22:00–08:00 双 Key 并行背调。请保持本页打开、电脑不休眠。'
+    );
+    // 若已在夜间窗，立刻拉起待处理背调
+    window.setTimeout(() => {
+      if (!shouldWorkerRunHeavyAnalysisNow()) return;
+      const pending = (automationResultsRef.current || []).filter((t) =>
+        isAutomationTaskRunnableNow(t, true)
+      );
+      if (pending.length) void processBatchQueue(pending);
+    }, 1500);
+  };
+
+  const handleWorkerDecline = () => {
+    markWorkerPromptAnswered();
+    setWorkerPromptOpen(false);
+    setWorkerModeActive(false);
+    setWorkerModeOn(false);
+    stopNightSilentUpgrade();
+    setSystemNotice('未开启挂机。本机仅作业务浏览；重任务请在专用挂机端确认执行。');
+  };
 
   // 管理员进业务工作台时跳过「等密钥」门禁（密钥由自己在后台配）
   if (hasKey === null && currentUser.role !== 'admin') {
@@ -6547,7 +6606,24 @@ const App: React.FC = () => {
         <ProductDigPanel />
         <EnrichmentPanel />
         <NightUpgradePanel />
+        <WorkerModeBadge
+          onStop={() => {
+            setWorkerModeActive(false);
+            setWorkerModeOn(false);
+            stopNightSilentUpgrade();
+            shouldStopRef.current = true;
+            setSystemNotice('已停止本机挂机执行。');
+          }}
+        />
       </div>
+
+      {currentUser.role === 'admin' && (
+        <WorkerModePrompt
+          open={workerPromptOpen}
+          onConfirm={handleWorkerConfirm}
+          onDecline={handleWorkerDecline}
+        />
+      )}
 
       {reportConfirm && (
         <div className="fixed inset-0 z-[90] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">

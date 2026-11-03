@@ -270,6 +270,18 @@ export const getUsablePoolKeys = (provider: ApiKeyPoolProvider): string[] => {
 export const getActivePoolKey = (provider: ApiKeyPoolProvider): string =>
   getUsablePoolKeys(provider)[0] || listPoolKeys(provider)[0] || '';
 
+/**
+ * 并行槽位粘滞取 Key：slot 0 → 第 1 把，slot 1 → 第 2 把。
+ * 与故障切换池配合：有两把可用 Key 时两路任务打不同 Key，避免都挤队首。
+ */
+export const pickStickyPoolKey = (provider: ApiKeyPoolProvider, slotIndex: number): string => {
+  const keys = getUsablePoolKeys(provider);
+  const pool = keys.length ? keys : listPoolKeys(provider);
+  if (!pool.length) return '';
+  const i = Math.abs(Math.floor(slotIndex)) % pool.length;
+  return pool[i];
+};
+
 export const getPoolKeyStatuses = (provider: ApiKeyPoolProvider): ApiKeyStatus[] => {
   const all = listPoolKeys(provider);
   const exhausted = readExhausted(provider);

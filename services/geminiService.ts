@@ -2869,7 +2869,7 @@ export const generateContentMulti = async (
   jsonMode: boolean = false,
   images: string[] = [],
   attachments: KnowledgeFile[] = [],
-  opts?: { enableSearch?: boolean }
+  opts?: { enableSearch?: boolean; qwenApiKey?: string }
 ): Promise<string[]> => {
   const needsWebSearch =
     typeof opts?.enableSearch === 'boolean'
@@ -2877,6 +2877,9 @@ export const generateContentMulti = async (
       : WEB_SEARCH_TASKS.includes(task);
   const engine = resolveEngineForTask(task);
   const systemText = systemInfo || QWEN_SYSTEM;
+  const qwenOverride = opts?.qwenApiKey?.trim()
+    ? { apiKey: opts.qwenApiKey.trim() }
+    : undefined;
 
   const runQwen = async () => {
     let userContent = buildQwenUserContent(prompt, images, attachments);
@@ -2892,6 +2895,7 @@ export const generateContentMulti = async (
       enableSearch: needsWebSearch,
       forcedSearch: false,
       task,
+      override: qwenOverride,
     });
   };
 
@@ -3248,7 +3252,14 @@ Output JSON only:
 export const analyzeCompany = async (
   domainOrName: string,
   mode: 'detailed' | 'economy' = 'detailed',
-  opts?: { searchKeyword?: string; searchTags?: string[]; searchCountry?: string; skipCache?: boolean }
+  opts?: {
+    searchKeyword?: string;
+    searchTags?: string[];
+    searchCountry?: string;
+    skipCache?: boolean;
+    /** 挂机并行：粘滞到指定千问 Key，避免多路挤同一把 */
+    qwenApiKey?: string;
+  }
 ): Promise<AnalysisResult> => {
   const searchKeyword = (opts?.searchKeyword || '').trim();
   const searchCountry = (opts?.searchCountry || '').trim();
@@ -3473,7 +3484,9 @@ ${productFocusBlock}
   `;
 
   // 1. Gemini∥千问并行取 JSON，字段级合并（单路时仅一份）
-  const texts = await generateContentMulti('analysis', prompt, SYSTEM_INSTRUCTION, true);
+  const texts = await generateContentMulti('analysis', prompt, SYSTEM_INSTRUCTION, true, [], [], {
+    qwenApiKey: opts?.qwenApiKey,
+  });
   const raws = texts
     .map((t) => extractJson(t))
     .filter((r) => r && typeof r === 'object' && !Array.isArray(r)) as Record<string, any>[];

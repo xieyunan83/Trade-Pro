@@ -13,13 +13,20 @@ export const isDesktopClient = (): boolean => {
   return false;
 };
 
-/** 桌面端默认自动续跑未完成背调队列（可设 localStorage trade_scout_auto_resume_batch=0 关闭） */
+/** 仅挂机模式（或显式 LS=1）自动续跑背调；个人本机默认不抢队列 */
 export const shouldAutoResumeBatch = (): boolean => {
   try {
     if (typeof localStorage === 'undefined') return false;
     if (localStorage.getItem('trade_scout_auto_resume_batch') === '0') return false;
     if (localStorage.getItem('trade_scout_auto_resume_batch') === '1') return true;
-    return isDesktopClient();
+    try {
+      const { isWorkerModeActive } = require('./workerMode') as typeof import('./workerMode');
+      if (isWorkerModeActive()) return true;
+    } catch {
+      /* ignore */
+    }
+    // 兼容旧桌面：无挂机开关时仍可自动续跑
+    return isDesktopClient() && localStorage.getItem('trade_scout_worker_mode') !== '0';
   } catch {
     return false;
   }

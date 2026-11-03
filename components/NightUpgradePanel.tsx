@@ -29,7 +29,7 @@ export const NightUpgradePanel: React.FC = () => {
           </div>
           <div className="text-[10px] font-semibold text-slate-400 mt-0.5 leading-snug">
             {status.inWindow
-              ? `待补 ${status.queued} · 今晚完成 ${status.completedTonight}${
+              ? `待补 ${status.queued} · 完成 ${status.completedTonight}${
                   status.failedTonight ? ` · 失败 ${status.failedTonight}` : ''
                 }`
               : `完成 ${status.completedTonight} 家旧客户补齐`}

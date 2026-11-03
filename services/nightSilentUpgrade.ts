@@ -15,6 +15,7 @@ import {
 } from '../utils/crmHistory';
 import { resolveCrmClientIntel } from '../utils/companyIntelStatus';
 import { hasRichProductCatalog } from './productCatalog';
+import { isWorkerModeActive } from './workerMode';
 
 /** 功能缺口版本：新能力上线时 +1，旧客户会重新进入夜间队列 */
 /** v6：存量 CRM 全站产品/价格带/关键词打标（仅重跑 catalog_match） */
@@ -26,6 +27,25 @@ export type NightGapKind =
   | 'product_dig'
   | 'enrichment'
   | 'catalog_match';
+
+/** 白天：几乎不烧对话 Token 的轻缺口 */
+const DAY_LIGHT_KINDS: NightGapKind[] = ['catalog_match', 'dm_email'];
+/** 夜间：重补全（吃优惠时段） */
+const NIGHT_HEAVY_KINDS: NightGapKind[] = [
+  'linkedin_locate',
+  'product_dig',
+  'enrichment',
+  'catalog_match',
+  'dm_email',
+];
+
+const kindsAllowedNow = (): Set<NightGapKind> => {
+  // 非挂机：保持原行为（夜间窗内啥都能跑；窗外泵会停）
+  if (!isWorkerModeActive()) {
+    return new Set(NIGHT_HEAVY_KINDS);
+  }
+  return new Set(isQwenNightPromoWindow() ? NIGHT_HEAVY_KINDS : DAY_LIGHT_KINDS);
+};
 
 export type NightUpgradeJob = {
   id: string;
@@ -198,7 +218,8 @@ export const getNightUpgradeStatus = (): NightUpgradeStatus => {
   ).length;
   return {
     enabled: state.enabled,
-    inWindow: isQwenNightPromoWindow(),
+    // 挂机白天也在跑轻量，角标视为「在窗」
+    inWindow: isQwenNightPromoWindow() || isWorkerModeActive(),
     schemaVersion: NIGHT_UPGRADE_SCHEMA_VERSION,
     queued: state.jobs.filter((j) => j.status === 'queued').length,
     running: state.jobs.filter((j) => j.status === 'running').length,
@@ -380,14 +401,17 @@ const scanAndEnqueue = () => {
       return score(b.gaps) - score(a.gaps);
     });
 
+  const allowed = kindsAllowedNow();
   for (const { c, gaps } of scored) {
     if (added >= MAX_PER_SCAN) break;
+    const filtered = gaps.filter((g) => allowed.has(g));
+    if (!filtered.length) continue;
     // 本地 catalog_match 几乎免费：与最高优先级重缺口一并入队，避免永远被 LinkedIn 堵死
     const kindsToAdd: NightGapKind[] = [];
-    if (gaps.includes('catalog_match')) kindsToAdd.push('catalog_match');
-    const primary = gaps.find((g) => g !== 'catalog_match');
+    if (filtered.includes('catalog_match')) kindsToAdd.push('catalog_match');
+    const primary = filtered.find((g) => g !== 'catalog_match');
     if (primary) kindsToAdd.push(primary);
-    if (!kindsToAdd.length && gaps[0]) kindsToAdd.push(gaps[0]);
+    if (!kindsToAdd.length && filtered[0]) kindsToAdd.push(filtered[0]);
 
     const domain = (c.website || '').replace(/^(?:https?:\/\/)?(?:www\.)?/i, '').split('/')[0];
     for (const kind of kindsToAdd) {
@@ -526,8 +550,10 @@ const runOneJob = async (job: NightUpgradeJob) => {
 export const pumpNightUpgrade = async () => {
   if (pumping || shouldStop) return;
   if (!state.enabled || !handlers) return;
-  if (!isQwenNightPromoWindow()) {
-    // 白天：清空 running 标记，保留 queued 等到晚上
+  // 挂机模式：白天也跑轻量；非挂机：仍仅夜间窗
+  const worker = isWorkerModeActive();
+  const inNight = isQwenNightPromoWindow();
+  if (!worker && !inNight) {
     let changed = false;
     for (const j of state.jobs) {
       if (j.status === 'running') {
@@ -542,19 +568,26 @@ export const pumpNightUpgrade = async () => {
 
   pumping = true;
   try {
+    const allowed = kindsAllowedNow();
     // 每晚窗口内定期扫缺口
     if (Date.now() - (state.lastScanAt || 0) > 8 * 60 * 1000) {
       scanAndEnqueue();
     }
 
-    // 本地品类匹配不烧 Token：优先连跑一批，与批量背调并行不抢 Key
+    // 本地品类匹配不烧 Token：优先连跑一批
     let catalogBurst = state.jobs
-      .filter((j) => j.status === 'queued' && j.kind === 'catalog_match')
+      .filter(
+        (j) =>
+          j.status === 'queued' && j.kind === 'catalog_match' && allowed.has('catalog_match')
+      )
       .slice(0, CATALOG_MATCH_BURST);
     if (!catalogBurst.length) {
       scanAndEnqueue();
       catalogBurst = state.jobs
-        .filter((j) => j.status === 'queued' && j.kind === 'catalog_match')
+        .filter(
+          (j) =>
+            j.status === 'queued' && j.kind === 'catalog_match' && allowed.has('catalog_match')
+        )
         .slice(0, CATALOG_MATCH_BURST);
     }
     if (catalogBurst.length) {
@@ -562,35 +595,49 @@ export const pumpNightUpgrade = async () => {
         if (shouldStop) break;
         await runOneJob(job);
       }
-      // 同轮继续跑轻入队 / 重补全，不再整轮只干匹配
     }
 
-    // 轻任务：只是把缺口丢进邮箱/品类/补全队列，几乎瞬时，可连跑
+    // 轻入队（白天+夜间）：邮箱等
     const lightJobs = state.jobs
-      .filter((j) => j.status === 'queued' && LIGHT_ENQUEUE_KINDS.includes(j.kind))
+      .filter(
+        (j) =>
+          j.status === 'queued' &&
+          LIGHT_ENQUEUE_KINDS.includes(j.kind) &&
+          allowed.has(j.kind)
+      )
       .slice(0, LIGHT_BURST);
     for (const job of lightJobs) {
       if (shouldStop) break;
       await runOneJob(job);
     }
 
-    // 与批量背调双轨：共享冷却 / AI 槽位，避免同一 Key 撞限流
+    // 重补全仅夜间（或非挂机的夜间窗）
+    if (!allowed.has('linkedin_locate') && !allowed.has('product_dig') && !allowed.has('enrichment')) {
+      return;
+    }
+
     const { getHeavyJobCount, getSharedCooldownUntil, waitForLocalAiSlot } = await import(
       './loadGovernor'
     );
     if (Date.now() < getSharedCooldownUntil()) {
       return;
     }
-    // 夜间软上限 2：允许与批量背调（automation）错峰并存；LinkedIn 补全仍按 HEAVY_PER_TICK 串行
     await waitForLocalAiSlot(() => shouldStop, 2);
     if (shouldStop) return;
 
-    if (!state.jobs.some((j) => j.status === 'queued')) {
+    if (!state.jobs.some((j) => j.status === 'queued' && allowed.has(j.kind))) {
       scanAndEnqueue();
     }
 
+    // 品类深挖 / 背调补全：夜间入队到各自泵
+    for (const kind of ['product_dig', 'enrichment'] as NightGapKind[]) {
+      if (!allowed.has(kind)) continue;
+      const job = state.jobs.find((j) => j.status === 'queued' && j.kind === kind);
+      if (job) await runOneJob(job);
+    }
+
     let heavyRan = 0;
-    while (heavyRan < HEAVY_PER_TICK && !shouldStop) {
+    while (heavyRan < HEAVY_PER_TICK && !shouldStop && allowed.has('linkedin_locate')) {
       const job = state.jobs.find(
         (j) => j.status === 'queued' && j.kind === 'linkedin_locate'
       );
