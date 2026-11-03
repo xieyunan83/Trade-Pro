@@ -8,10 +8,12 @@ import {
   Sparkles,
   X,
   RefreshCw,
+  Wand2,
 } from 'lucide-react';
 import {
   KIND_LABELS,
   appendPackLayoutRefs,
+  buildFoolproofPrompt,
   clearPackLayoutRefs,
   createCustomEnterprisePack,
   deleteEnterprisePack,
@@ -25,12 +27,21 @@ import {
 import { compressImageDataUrl } from '../services/catalogExcelService';
 
 type Props = {
-  /** 紧凑模式：海报工作室等窄栏 */
   compact?: boolean;
   onActiveChange?: (pack: EnterpriseDesignPack | null) => void;
+  /** 一键套用：父级填充指令 / 切换 Skill */
+  onFoolproofApply?: (pack: EnterpriseDesignPack, prompt: string) => void;
+  skuName?: string;
+  skuCode?: string;
 };
 
-export const EnterpriseDesignPackPanel: React.FC<Props> = ({ compact, onActiveChange }) => {
+export const EnterpriseDesignPackPanel: React.FC<Props> = ({
+  compact,
+  onActiveChange,
+  onFoolproofApply,
+  skuName,
+  skuCode,
+}) => {
   const [packs, setPacks] = useState<EnterpriseDesignPack[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -59,6 +70,14 @@ export const EnterpriseDesignPackPanel: React.FC<Props> = ({ compact, onActiveCh
   };
 
   const active = packs.find((p) => p.id === activeId) || null;
+
+  const applyFoolproof = (pack: EnterpriseDesignPack) => {
+    setActiveEnterprisePackId(pack.id);
+    setActiveId(pack.id);
+    onActiveChange?.(pack);
+    const prompt = buildFoolproofPrompt(pack, { skuName, skuCode });
+    onFoolproofApply?.(pack, prompt);
+  };
 
   const onUploadLayout = async (files: FileList | null) => {
     if (!files?.length || !active) return;
@@ -122,7 +141,7 @@ export const EnterpriseDesignPackPanel: React.FC<Props> = ({ compact, onActiveCh
   };
 
   const onResetSamples = () => {
-    if (!confirm('重置内置样本的风格卡？已上传的版式页会保留。')) return;
+    if (!confirm('重置为已学习的目录样本？自定义包会保留。')) return;
     setPacks(resetBuiltinEnterprisePacks());
     refresh();
   };
@@ -136,11 +155,11 @@ export const EnterpriseDesignPackPanel: React.FC<Props> = ({ compact, onActiveCh
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 text-xs font-black text-slate-800">
           <BookTemplate size={14} className="text-violet-600" />
-          企业模板技能库
+          企业模板 · 傻瓜式套用
         </div>
         <button
           type="button"
-          title="重置内置样本"
+          title="重置已学习样本"
           onClick={onResetSamples}
           className="text-slate-400 hover:text-slate-600 p-1"
         >
@@ -148,34 +167,48 @@ export const EnterpriseDesignPackPanel: React.FC<Props> = ({ compact, onActiveCh
         </button>
       </div>
       <p className={`text-slate-500 font-medium leading-snug ${compact ? 'text-[10px]' : 'text-[11px]'}`}>
-        L1 版式页 + L2 风格卡。选中后生成会自动套用；可上传企业目录/海报页初始化版式。
+        已深度学习目录版式、色板与「功能利益」文案公式。选模板 → 一键套用 → 上传产品图即可生成。
       </p>
 
-      <div className={`space-y-1.5 max-h-40 overflow-y-auto ${compact ? '' : 'max-h-52'}`}>
+      <div className={`space-y-1.5 overflow-y-auto ${compact ? 'max-h-36' : 'max-h-56'}`}>
         {packs.map((p) => {
           const selected = p.id === activeId;
           return (
-            <button
+            <div
               key={p.id}
-              type="button"
-              onClick={() => selectPack(p.id)}
-              className={`w-full text-left rounded-lg px-2.5 py-2 border transition-colors ${
+              className={`rounded-lg border transition-colors ${
                 selected
                   ? 'border-violet-300 bg-violet-50'
                   : 'border-slate-100 bg-white hover:border-violet-200'
               }`}
             >
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-[11px] font-black text-slate-800 truncate">{p.name}</span>
-                <span className="text-[9px] font-bold text-violet-600 shrink-0">
-                  {KIND_LABELS[p.kind]}
-                </span>
-              </div>
-              <div className="text-[9px] text-slate-400 font-semibold mt-0.5">
-                L1 {p.layoutRefs.length} 页 · L2 {p.styleCard?.stylePrompt ? '已就绪' : '待提炼'}
-                {p.builtin ? ' · 样本' : ''}
-              </div>
-            </button>
+              <button
+                type="button"
+                onClick={() => selectPack(p.id)}
+                className="w-full text-left px-2.5 pt-2 pb-1"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-black text-slate-800 truncate">{p.name}</span>
+                  <span className="text-[9px] font-bold text-violet-600 shrink-0">
+                    {KIND_LABELS[p.kind]}
+                  </span>
+                </div>
+                <div className="text-[9px] text-slate-400 font-semibold mt-0.5">
+                  L1 {p.layoutRefs.length} 页 · {p.builtin ? '已学习样本' : '自定义'}
+                </div>
+              </button>
+              {selected && (
+                <div className="px-2.5 pb-2">
+                  <button
+                    type="button"
+                    onClick={() => applyFoolproof(p)}
+                    className="w-full inline-flex items-center justify-center gap-1 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-[10px] font-black px-2.5 py-2"
+                  >
+                    <Wand2 size={12} /> 一键套用此模板
+                  </button>
+                </div>
+              )}
+            </div>
           );
         })}
       </div>
@@ -183,6 +216,9 @@ export const EnterpriseDesignPackPanel: React.FC<Props> = ({ compact, onActiveCh
       {active && (
         <div className="rounded-lg border border-slate-200 bg-white p-2 space-y-2">
           <div className="text-[10px] font-bold text-slate-600 leading-snug">{active.summary}</div>
+          <div className="text-[9px] font-semibold text-amber-800 bg-amber-50 border border-amber-100 rounded-md px-2 py-1">
+            {active.styleCard.foolproofHint}
+          </div>
           {active.layoutRefs.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
               {active.layoutRefs.map((src, i) => (
@@ -214,16 +250,16 @@ export const EnterpriseDesignPackPanel: React.FC<Props> = ({ compact, onActiveCh
               className="inline-flex items-center gap-1 rounded-lg bg-slate-900 text-white text-[10px] font-black px-2.5 py-1.5 disabled:opacity-50"
             >
               {busy ? <Loader2 size={11} className="animate-spin" /> : <Upload size={11} />}
-              上传版式页
+              补充版式页
             </button>
             <button
               type="button"
               disabled={extracting || !active.layoutRefs.length}
               onClick={() => void onExtract()}
-              className="inline-flex items-center gap-1 rounded-lg bg-violet-600 text-white text-[10px] font-black px-2.5 py-1.5 disabled:opacity-50"
+              className="inline-flex items-center gap-1 rounded-lg border border-violet-200 text-violet-700 text-[10px] font-black px-2.5 py-1.5 disabled:opacity-50"
             >
               {extracting ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
-              提炼风格卡
+              再提炼风格
             </button>
             {active.layoutRefs.length > 0 && (
               <button
@@ -234,7 +270,7 @@ export const EnterpriseDesignPackPanel: React.FC<Props> = ({ compact, onActiveCh
                 }}
                 className="inline-flex items-center gap-1 rounded-lg border border-slate-200 text-slate-600 text-[10px] font-bold px-2 py-1.5"
               >
-                <X size={11} /> 清空版式
+                <X size={11} /> 恢复样本版式
               </button>
             )}
             {!active.builtin && (
@@ -251,9 +287,9 @@ export const EnterpriseDesignPackPanel: React.FC<Props> = ({ compact, onActiveCh
               </button>
             )}
           </div>
-          {active.styleCard?.stylePrompt && (
-            <p className="text-[9px] text-slate-400 font-medium line-clamp-2 leading-snug">
-              L2：{active.styleCard.lightingMood || active.styleCard.stylePrompt.slice(0, 80)}
+          {active.styleCard?.copyFormula && (
+            <p className="text-[9px] text-slate-400 font-medium line-clamp-3 leading-snug">
+              文案：主题钩子 → 发展能力动词 → 配件 → 尺寸 → 货号/年龄/价
             </p>
           )}
         </div>
@@ -275,11 +311,7 @@ export const EnterpriseDesignPackPanel: React.FC<Props> = ({ compact, onActiveCh
         </button>
       </div>
 
-      {err && (
-        <div className="text-[10px] font-bold text-rose-600 flex items-start gap-1">
-          <span>{err}</span>
-        </div>
-      )}
+      {err && <div className="text-[10px] font-bold text-rose-600">{err}</div>}
     </div>
   );
 };

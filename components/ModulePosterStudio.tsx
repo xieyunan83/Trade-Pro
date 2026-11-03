@@ -286,6 +286,12 @@ export const ModulePosterStudio: React.FC = () => {
           <EnterpriseDesignPackPanel
             compact
             onActiveChange={(p) => setActivePack(p)}
+            onFoolproofApply={(p) => {
+              setActivePack(p);
+              setStep(`已套用模板「${p.name}」：上传产品图并填写资料后即可生成`);
+            }}
+            skuName={mode === 'single' ? singleFields.productName : multiFields.collectionTitle}
+            skuCode={mode === 'single' ? singleFields.modelNo : multiFields.mainModel}
           />
         </div>
 

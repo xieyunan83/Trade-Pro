@@ -384,6 +384,21 @@ export const resolveToUploadableImage = async (url: string): Promise<string> => 
     return dataUrl;
   }
 
+  // 同源静态资源（如 /enterprise-templates/*.jpg）→ 拉成 data URL 供生图
+  if (raw.startsWith('/') || raw.startsWith('./')) {
+    if (typeof window === 'undefined') {
+      throw new Error('服务端无法解析相对路径参考图');
+    }
+    const abs = new URL(raw, window.location.origin).href;
+    const res = await fetch(abs);
+    if (!res.ok) throw new Error('读取模板版式图失败');
+    const dataUrl = await blobToDataUrl(await res.blob());
+    if (!dataUrl.startsWith('data:image/')) {
+      throw new Error('参考图不是可用的图片格式');
+    }
+    return dataUrl;
+  }
+
   throw new Error('参考图须为本地上传图片或公网 HTTPS 地址');
 };
 

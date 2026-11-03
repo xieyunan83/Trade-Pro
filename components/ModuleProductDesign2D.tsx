@@ -719,17 +719,32 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
               ))}
             {leftTab === 'packs' && (
               <EnterpriseDesignPackPanel
+                skuName={
+                  skus.find((s) => s.id === skuPick || s.skuCode === skuPick)?.name ||
+                  active?.skuName
+                }
+                skuCode={
+                  skus.find((s) => s.id === skuPick || s.skuCode === skuPick)?.skuCode ||
+                  active?.skuCode
+                }
                 onActiveChange={(p) => {
                   setActivePack(p);
-                  if (p && (p.kind === 'catalog_spread' || p.kind === 'poster_hero')) {
+                  if (p && packImpliesLayoutLastRef(p)) {
                     setLastRefIsLayout(true);
                   }
-                  if (p?.skillHints?.[0] && DESIGN_SKILLS.some((s) => s.id === p.skillHints[0])) {
+                }}
+                onFoolproofApply={(p, foolPrompt) => {
+                  setActivePack(p);
+                  if (p.skillHints?.[0] && DESIGN_SKILLS.some((s) => s.id === p.skillHints[0])) {
                     const sid = p.skillHints[0];
                     setSkillId(sid);
                     const sk = DESIGN_SKILLS.find((s) => s.id === sid);
                     if (sk?.negativePrompt) setNegativePrompt(sk.negativePrompt);
                   }
+                  if (packImpliesLayoutLastRef(p)) setLastRefIsLayout(true);
+                  setPrompt(foolPrompt);
+                  setLeftTab('skills');
+                  setError(null);
                 }}
               />
             )}

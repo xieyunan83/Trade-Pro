@@ -1,7 +1,7 @@
 /**
  * 企业模板技能库 · L1 版式参考 + L2 风格卡
- * L1：上传的目录页 / 海报页（图生图版式锚点）
- * L2：可执行的风格约束（色板、排版、构图语法、光影），非 LoRA 微调
+ * 样本来源：教育玩具批发目录（封面 / 新品内页 / Toddler Play 网格）深度提炼
+ * L1：版式页图生图锚点 · L2：色板/排版/构图/功能卖点文案公式（非 LoRA）
  */
 
 import type { DesignSkillId } from './designAgentStore';
@@ -14,21 +14,23 @@ export type EnterprisePackKind =
   | 'custom';
 
 export type EnterpriseStyleCard = {
-  /** 主色 / 辅色 / 强调色（可读描述即可） */
   palette: string[];
-  /** 标题区、型号条、留白习惯 */
   typographyNotes: string;
-  /** 栅格、主次层级、产品占位 */
   layoutGrammar: string;
-  /** 光影与材质气质 */
   lightingMood: string;
-  /** 装饰线、色块、角标系统（不含供应商名） */
   decorationSystem: string;
   /** 可拼进生图的英文风格段 */
   stylePrompt: string;
-  /** 负向补充 */
   negativePrompt: string;
-  /** 提炼来源说明（中性） */
+  /**
+   * 功能卖点文案公式（中英）：主题钩子 → 发展动词 → 配件清单 → 尺寸规格
+   * 用于傻瓜式一键套用与 Brief 编排
+   */
+  copyFormula: string;
+  /** 给业务员看的一句话操作说明 */
+  foolproofHint: string;
+  /** 一键套用时预填的中文指令（用户可改） */
+  foolproofPrompt: string;
   sourceNote?: string;
   updatedAt: number;
 };
@@ -38,11 +40,8 @@ export type EnterpriseDesignPack = {
   name: string;
   kind: EnterprisePackKind;
   summary: string;
-  /** 适合挂接的 Design Skill */
   skillHints: DesignSkillId[];
-  /** L1：版式页图（data URL 或可访问 URL） */
   layoutRefs: string[];
-  /** L2：风格卡；内置样本开箱即用 */
   styleCard: EnterpriseStyleCard;
   builtin: boolean;
   createdAt: number;
@@ -52,6 +51,16 @@ export type EnterpriseDesignPack = {
 const LS_PACKS = 'trade_scout_enterprise_design_packs_v1';
 const LS_ACTIVE = 'trade_scout_enterprise_design_pack_active_v1';
 const LS_SEEDED = 'trade_scout_enterprise_design_packs_seeded_v1';
+/** 升级样本库时递增，强制刷新内置包 L1/L2 */
+const SEED_VERSION = 'edu_catalog_v2';
+
+const T = {
+  coverIntro: '/enterprise-templates/cover-new-2026.jpg',
+  coverModular: '/enterprise-templates/cover-modular-grid.jpg',
+  interiorNew: '/enterprise-templates/interior-new-products.jpg',
+  interiorDense: '/enterprise-templates/interior-toddler-dense.jpg',
+  interiorGrid: '/enterprise-templates/interior-toddler-grid.jpg',
+} as const;
 
 const now = () => Date.now();
 
@@ -62,52 +71,151 @@ const card = (
   updatedAt: partial.updatedAt || now(),
 });
 
-/** 内置样本：澄海玩具外贸常见目录 / 海报 / 主图 / 展会封面气质（L2 可执行；L1 待用户补版式页） */
+/** 从教育玩具目录样本提炼的共用文案语法 */
+const COPY_BENEFIT_LED = `功能卖点文案公式（必须遵守）：
+1) 主题钩子：用 1 句场景/角色扮演引入（如 picnic / shopping / building / doctor play）
+2) 发展动词：strengthen / boost / develop / practice / explore + 具体能力（letter recognition, fine motor, hand-eye, vocabulary, counting, color/shape…）
+3) 配件清单：Includes … 列清主要配件与数量感
+4) 规格收尾：Measures …"（或公制）
+5) 元数据区（版面上，勿堆成乱码小字）：SKU · AGES · 可选 SRP/CPQ（价与装箱用品红色强调）
+禁：空洞形容词堆砌、假认证、过密参数表、不可读微字墙。`;
+
+/**
+ * 内置样本（已挂 L1 版式页 + 深挖 L2）
+ * 覆盖：年度封面 / 模块封面 / 新品功能内页 / Toddler 多 SKU 网格 / 白底主图
+ */
 export const BUILTIN_ENTERPRISE_PACKS: EnterpriseDesignPack[] = [
   {
-    id: 'pack_catalog_grid_export',
-    name: '出口目录内页 · 网格',
-    kind: 'catalog_spread',
-    summary: '左右分栏或 2×2/3×3 产品格，型号条清晰，白/浅灰底，适合画册内页二次创作',
-    skillHints: ['multi_product_poster', 'detail_long', 'listing_set'],
-    layoutRefs: [],
+    id: 'pack_edu_year_intro_cover',
+    name: '年度新品 · 封面导语',
+    kind: 'booth_cover',
+    summary:
+      '左右色块分割 + 超大 NEW/年份标题 + 中段品牌使命短文 + 周边产品切图标注页码；适合画册开篇',
+    skillHints: ['booth_cover', 'detail_long', 'multi_product_poster'],
+    layoutRefs: [T.coverIntro],
     styleCard: card({
-      palette: ['#FFFFFF', '#F3F4F6', '#0F172A', '#DC2626', '#2563EB'],
+      palette: ['#0A2A5C', '#2F9BDB', '#FFFFFF', '#F5C518', '#E8F4FC'],
       typographyNotes:
-        '顶部窄条系列名；每格下方型号+一短卖点；中英双语标题区预留；正文不上满字墙',
+        '超大粗无衬线白字 NEW / for YEAR 层级压倒一切；中段左对齐白字使命段落（中等字重、舒适行距）；产品旁小白字「品名, pg. N」；禁止正文微字墙',
       layoutGrammar:
-        'Catalog spread: consistent product cells with equal margins, one hero SKU optional larger, clean gutters, barcode/model strip under each cell, bilingual title-safe header band, generous white space, no overlapping products',
-      lightingMood: 'Even catalog softbox, low contrast shadows, true plastic colors, print-ready sharpness',
-      decorationSystem: 'Thin slate rules, small corner brand mark area, optional red accent bars — no fake seals',
+        'Vertical split color-block cover: left ~25% deep navy with playful yellow dashed stars/swooshes, right ~75% bright sky blue; oversized white headline upper-center; short mission paragraph mid-page; 3–4 cut-out product heroes around text (top-left DIY vehicle, top-right literacy set, bottom plush row) each with tiny name+page caption; generous breathing room; catalog cover hierarchy not crowded poster',
+      lightingMood:
+        'Clean studio cut-outs on solid color fields, true toy colors, high commercial print sharpness, no muddy shadows',
+      decorationSystem:
+        'Yellow dotted star trails and launch swoosh on navy only; no carnival sticker borders; product-first cut-outs',
       stylePrompt:
-        'Chenghai toy-export catalog interior page aesthetic: clean multi-SKU grid or two-column spread, equal cell gutters, white or light-gray page ground, sharp product fidelity, bilingual header band with title-safe margins, model number strip under each product, commercial print catalog quality, locked product identity from references',
+        'Educational toy wholesale catalog year-intro cover: deep navy left panel with yellow dashed star trails, bright sky-blue main field, massive bold white sans-serif NEW for YEAR headline, short white mission paragraph left-aligned mid page, multiple sharp product cut-outs framing the text with tiny white product-name and page captions, playful but premium B2B catalog energy, locked product identity from references',
       negativePrompt:
-        'carnival sticker chaos, low-end flea market collage, watermark, fake certificates, tiny illegible paragraphs, mismatched cell sizes, dropping SKUs',
-      sourceNote: '内置样本 · 出口目录内页',
+        'dense micro-text walls, fake awards, flea-market collage, ignoring color-block split, watermark, illegible captions, cluttered icon spam',
+      copyFormula: `${COPY_BENEFIT_LED}
+封面导语变体：开篇用「From … to … we introduce nearly N new toys that inspire and empower…」；强调 innovation / creativity / engagement / bringing learning to life；不要堆 SKU 价目。`,
+      foolproofHint: '上传 1–3 张产品图 → 点「一键套用」→ 确认生成封面',
+      foolproofPrompt:
+        '按年度新品封面模板做一页：左右海军蓝/天蓝色块分割，超大白色 NEW for 2026 标题，中间写 2–3 句使命短文（启发儿童、把学习变生动），周围排布我上传的产品切图并在旁标注品名；黄点星芒装饰仅放在海军蓝侧；产品外形锁定参考图。',
+      sourceNote: '样本学习 · 年度封面导语页',
     }),
     builtin: true,
     createdAt: 0,
     updatedAt: 0,
   },
   {
-    id: 'pack_poster_scene_long',
-    name: '出口海报 · 实景长图',
-    kind: 'poster_hero',
-    summary: '竖版营销长图：大字少字、场景段、产品英雄角，适合海报工作室与详情首屏',
-    skillHints: ['detail_long', 'multi_product_poster', 'product_hero'],
-    layoutRefs: [],
+    id: 'pack_edu_modular_tile_cover',
+    name: '模块色砖 · 画册封面',
+    kind: 'booth_cover',
+    summary:
+      '2×3 圆角色砖网格：产品砖 + 年份口号砖 + Logo 砖；白缝、高饱和底色；适合系列封面',
+    skillHints: ['booth_cover', 'social_square', 'multi_product_poster'],
+    layoutRefs: [T.coverModular],
     styleCard: card({
-      palette: ['#0B1220', '#F8FAFC', '#F59E0B', '#38BDF8'],
-      typographyNotes: '顶部大标题区 + 中段场景说明短句 + 底部型号；禁止参数表与装箱量上图',
+      palette: ['#FFFFFF', '#1E5BB8', '#2BB3E0', '#7AC943', '#F5A623', '#0F172A'],
+      typographyNotes:
+        '年份超大粗白字；CATALOG 放圆角白框内；口号用高对比色（如黄字）；产品砖内小字品名+页码靠角；整体无衬线几何体',
       layoutGrammar:
-        'Vertical marketing long-poster: hero product upper-middle, lifestyle scene bands, large readable title zone, sparse copy, strong vertical rhythm, mobile-first safe margins',
-      lightingMood: 'Cinematic but clean key light, soft rim, realistic materials, export e-commerce polish',
-      decorationSystem: 'Soft gradient washes and scene props only when needed; no dense icon walls',
+        '2-column × 3-row modular tile cover on white canvas, uniform gutters, large rounded rectangles (~24–32px radius), each tile either product-on-solid-color or message/logo block; one tile is hero year+slogan; bottom-right reserved for brand mark stack; product tiles include corner caption name + pg.',
+      lightingMood: 'High-key studio products on saturated flat color tiles, crisp edges, friendly education brand feel',
+      decorationSystem:
+        'Solid primary-color tile fills only; white gutters as breathing room; no gradients or neon gels; optional soft circle callout for “nearly N new toys”',
       stylePrompt:
-        'Export-trade vertical product poster: bold sparse typography zones, lifestyle scene storytelling top-to-bottom, hero toy prominent, high commercial polish, bilingual title-safe areas, no packing-spec tables, no virtual packaging spam',
+        'Educational catalog modular cover: white background with 2x3 grid of rounded colorful tiles, saturated blue orange green cyan blocks, oversized year and CATALOG typography in a blue tile, short learning slogan, product photography inside other tiles with tiny name and page labels, brand logo stack in one tile, clean modern Lego-brick catalog aesthetic, locked product identity',
       negativePrompt:
-        'parameter tables, packing qty charts, virtual carton spam, garbled micro-text, watermark, busy icon wall',
-      sourceNote: '内置样本 · 实景营销长图',
+        'messy freeform collage, tiny illegible paragraphs, dark muddy tiles, watermark, uneven gutters, carnival stickers',
+      copyFormula: `${COPY_BENEFIT_LED}
+封面口号变体：We Bring Learning to Life! / Nearly N new toys inside! 短、有力、可大字上图。`,
+      foolproofHint: '选好产品图 → 一键套用模块封面 → 生成',
+      foolproofPrompt:
+        '按模块色砖封面做一页：白底 2×3 圆角色块网格，一块写大号年份+CATALOG+口号，其余色块放我的产品图并在角上标品名；色块用蓝/橙/绿/青高饱和纯色；缝隙留白均匀；产品外形锁定参考图。',
+      sourceNote: '样本学习 · 模块色砖封面',
+    }),
+    builtin: true,
+    createdAt: 0,
+    updatedAt: 0,
+  },
+  {
+    id: 'pack_edu_feature_interior',
+    name: '新品功能 · 专题内页',
+    kind: 'catalog_spread',
+    summary:
+      '浅天蓝底、竖向分类签、3 段产品专题：大图+卖点框+功能利益文案+尺寸；价与装箱品红色',
+    skillHints: ['multi_product_poster', 'detail_long', 'listing_set'],
+    layoutRefs: [T.interiorNew],
+    styleCard: card({
+      palette: ['#D9F0FA', '#0B3A6E', '#E91E63', '#2E7D32', '#FFFFFF', '#1565C0'],
+      typographyNotes:
+        '产品名：粗海军蓝无衬线大标题；SKU 小号粗体；AGES 全大写+绿色圆点/六边形前缀；正文常规字重可读段落；SRP|CPQ 粗品红色单独一行；功能说明可用浅蓝描边小框',
+      layoutGrammar:
+        'Light sky-blue catalog interior: vertical category tab on right edge (“New Products”); 2–3 stacked feature bands; each band = hero product photo + optional detail/lifestyle inset + left or center benefit copy + feature callout box; footer navy bar with simple legend icons (best seller / award / STEM) and large page number; keep text zones large enough to stay readable — prefer short paragraphs not micro-walls',
+      lightingMood: 'Even softbox catalog lighting, true plastic colors, white or soft cut-outs, print-ready sharpness',
+      decorationSystem:
+        'Thin light-blue feature callout boxes; green age bullets; magenta price line; navy footer icon strip; optional themed side graphic (e.g. playful label) without clutter',
+      stylePrompt:
+        'Educational toy new-products catalog interior page on soft sky-blue ground, vertical category tab, two or three horizontal product feature bands with large hero photos, navy bold product titles, short benefit-led descriptions, feature callout boxes, magenta SRP and CPQ line, green age tags, navy footer with legend icons and page number, commercial wholesale catalog clarity, locked product identity from references',
+      negativePrompt:
+        'illegible micro-text, fake certificates, flea market chaos, ignoring band hierarchy, watermark, mismatched product identity',
+      copyFormula: `${COPY_BENEFIT_LED}
+专题内页示例结构：
+- 标题：产品名（可带™）
+- 元数据：SKU · AGES N+
+- 正文：Toddlers strengthen … / Includes … / Measures …
+- 卖点框：一句视觉逻辑（如 vowels vs consonants）
+- 商业行：$XX.XX SRP | CPQ N`,
+      foolproofHint: '上传产品图 → 一键套用 → 自动按「功能利益」写说明并排版',
+      foolproofPrompt:
+        '按新品功能专题内页排版：浅天蓝底、右侧竖向分类签；每个产品一条横带——大图+粗海军蓝品名+绿色年龄标+2–3句功能利益文案（strengthen/boost/develop…）+浅蓝卖点框+品红色 SRP|CPQ；页脚海军蓝图标条；产品外形锁定参考图，文字区大而少、禁止微字墙。',
+      sourceNote: '样本学习 · 新品功能内页',
+    }),
+    builtin: true,
+    createdAt: 0,
+    updatedAt: 0,
+  },
+  {
+    id: 'pack_edu_toddler_sku_grid',
+    name: '品类网格 · 多 SKU 内页',
+    kind: 'catalog_spread',
+    summary:
+      '白底多栏 SKU 卡：品名→货号/年龄→功能利益段→尺寸→品红价；紫/粉侧栏分类名；可混入生活方式大图',
+    skillHints: ['multi_product_poster', 'listing_set', 'detail_long'],
+    layoutRefs: [T.interiorDense, T.interiorGrid],
+    styleCard: card({
+      palette: ['#FFFFFF', '#0B3A6E', '#E91E63', '#6B3FA0', '#2E7D32', '#F5F7FA'],
+      typographyNotes:
+        '每卡固定层级：①粗海军蓝品名 ②绿色货号+年龄大写标签 ③3–4 行功能利益正文 ④品红色 $SRP | CPQ；分类名竖排在紫/粉侧栏；页脚海军蓝图例',
+      layoutGrammar:
+        'White multi-SKU catalog grid (3-column or left-stack + right-hero mix). Each cell: product hero cut-out on top, then title → SKU/age → benefit paragraph → magenta commercial line. Optional bottom lifestyle+product pairing spanning 1–2 columns. Vertical purple/magenta category ribbon on side. Navy footer with icons + page number. Equal gutters, consistent card rhythm.',
+      lightingMood: 'Sterile white page, soft even product lighting, accessories knolled around hero when needed, high clarity for buyers',
+      decorationSystem:
+        'Purple vertical category ribbon; green status dots; star/trophy/STEM footer icons; thin lavender promo banner optional; no sticker chaos',
+      stylePrompt:
+        'Wholesale educational toy category catalog page on white, multi-column SKU cards with navy bold titles, green item codes and age tags, benefit-led short copy, magenta SRP CPQ lines, purple vertical category ribbon, navy footer legend, optional lifestyle inset, clean B2B buyer-scan layout, locked product identity from references',
+      negativePrompt:
+        'crowded unreadable paragraphs, fake seals, uneven card sizes, dropping SKUs, watermark, carnival borders',
+      copyFormula: `${COPY_BENEFIT_LED}
+网格卡强制四段：
+Title → SKU | TODDLERS+/AGES → Benefit paragraph (theme + skills + includes + measures) → $SRP | CPQ
+动词优先：strengthen, boost, develop, practice, explore, build。`,
+      foolproofHint: '多图上传 → 一键套用网格 → 每格自动按功能卖点结构描述',
+      foolproofPrompt:
+        '按品类多 SKU 网格内页：白底多栏产品卡，每卡品名（海军蓝粗体）→ 货号与年龄 → 3–4 句功能利益文案（场景钩子+发展能力+配件+尺寸）→ 品红色价格与装箱；侧边紫色竖排分类名；可在底部放一张生活方式大图；产品外形锁定参考图。',
+      sourceNote: '样本学习 · Toddler Play 多 SKU 网格',
     }),
     builtin: true,
     createdAt: 0,
@@ -117,12 +225,12 @@ export const BUILTIN_ENTERPRISE_PACKS: EnterpriseDesignPack[] = [
     id: 'pack_listing_pure_white',
     name: '跨境主图 · 纯白',
     kind: 'listing_white',
-    summary: '亚马逊/独立站主图规范：纯白底、主体约 85%、柔箱光、锁定 SKU',
+    summary: '纯白底主图：主体约 85%、柔箱光；卖点文案留给套图，不在主图堆字',
     skillHints: ['product_hero', 'listing_set', 'multi_angle'],
     layoutRefs: [],
     styleCard: card({
       palette: ['#FFFFFF', '#E5E7EB', '#111827'],
-      typographyNotes: '主图无字或极少字；卖点留给套图分镜',
+      typographyNotes: '主图无字或极少字；卖点按功能利益公式写在套图/详情，不进主图',
       layoutGrammar:
         'Single centered product on pure #FFFFFF cyclorama, subject fills ~85% frame, square-safe margins, slight contact shadow only',
       lightingMood: 'Dual softbox + gentle rim, true-to-life plastics, catalog sharpness',
@@ -130,32 +238,12 @@ export const BUILTIN_ENTERPRISE_PACKS: EnterpriseDesignPack[] = [
       stylePrompt:
         'Marketplace hero product photograph, pure white seamless background, soft dual softbox lighting, true material colors, subject fills about 85 percent of frame, crisp commercial catalog sharpness, locked SKU identity',
       negativePrompt:
-        'busy background, neon gels, watermark, fake certification seals, color drift, props clutter',
-      sourceNote: '内置样本 · 跨境主图',
-    }),
-    builtin: true,
-    createdAt: 0,
-    updatedAt: 0,
-  },
-  {
-    id: 'pack_booth_catalog_cover',
-    name: '展会画册 · 封面',
-    kind: 'booth_cover',
-    summary: 'B2B 展会画册封面：英雄产品、标题锁区、展厅专业灯光',
-    skillHints: ['booth_cover', 'detail_long', 'social_square'],
-    layoutRefs: [],
-    styleCard: card({
-      palette: ['#0F172A', '#F1F5F9', '#C4A35A', '#FFFFFF'],
-      typographyNotes: '封面大标题锁区居中或偏上；副标双语短句；年份可选',
-      layoutGrammar:
-        'Brochure cover hierarchy: large title-safe negative space, hero product lower-third or center-right, premium exhibition lighting, clean brand mark corner',
-      lightingMood: 'Showroom cinematic key + soft fill, professional B2B trust mood',
-      decorationSystem: 'Gold/slate accent line, minimal geometric frame — no carnival stickers',
-      stylePrompt:
-        'B2B trade-fair catalog cover composition, premium exhibition lighting on hero toy, spacious negative space for bilingual title lockup, Chenghai toy-export showroom professionalism, brochure cover hierarchy',
-      negativePrompt:
-        'carnival chaos, flea market vibe, watermark, fake awards seals, cluttered stickers',
-      sourceNote: '内置样本 · 展会封面',
+        'busy background, neon gels, watermark, fake certification seals, color drift, props clutter, text spam on hero',
+      copyFormula: COPY_BENEFIT_LED,
+      foolproofHint: '上传产品图 → 一键套用 → 生成白底主图',
+      foolproofPrompt:
+        '做一张跨境白底主图：纯白无缝背景，产品居中约占 85%，柔箱光，真实材质配色，主图不写密字；外形锁定参考图。',
+      sourceNote: '内置 · 跨境主图',
     }),
     builtin: true,
     createdAt: 0,
@@ -170,12 +258,34 @@ const stampBuiltin = (p: EnterpriseDesignPack, t: number): EnterpriseDesignPack 
   styleCard: { ...p.styleCard, updatedAt: p.styleCard.updatedAt || t },
 });
 
+const withCopyDefaults = (p: EnterpriseDesignPack): EnterpriseDesignPack => {
+  const c = p.styleCard || ({} as EnterpriseStyleCard);
+  return {
+    ...p,
+    styleCard: card({
+      palette: c.palette?.length ? c.palette : ['#FFFFFF', '#0F172A'],
+      typographyNotes: c.typographyNotes || '',
+      layoutGrammar: c.layoutGrammar || '',
+      lightingMood: c.lightingMood || '',
+      decorationSystem: c.decorationSystem || '',
+      stylePrompt: c.stylePrompt || '',
+      negativePrompt: c.negativePrompt || 'watermark, garbled text',
+      copyFormula: c.copyFormula || COPY_BENEFIT_LED,
+      foolproofHint: c.foolproofHint || '选择模板后上传产品图即可生成',
+      foolproofPrompt: c.foolproofPrompt || '按当前企业模板风格生成，产品外形锁定参考图。',
+      sourceNote: c.sourceNote,
+      updatedAt: c.updatedAt,
+    }),
+  };
+};
+
 export const loadEnterprisePacks = (): EnterpriseDesignPack[] => {
   try {
     const raw = localStorage.getItem(LS_PACKS);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as EnterpriseDesignPack[]) : [];
+    if (!Array.isArray(parsed)) return [];
+    return (parsed as EnterpriseDesignPack[]).map(withCopyDefaults);
   } catch {
     return [];
   }
@@ -185,20 +295,26 @@ export const saveEnterprisePacks = (packs: EnterpriseDesignPack[]) => {
   localStorage.setItem(LS_PACKS, JSON.stringify(packs));
 };
 
-/** 首次进入：写入内置样本；已有用户包则合并补齐缺失的 builtin id */
+/** 首次 / 版本升级：写入内置样本；保留用户自定义包 */
 export const ensureEnterprisePacksSeeded = (): EnterpriseDesignPack[] => {
   const existing = loadEnterprisePacks();
   const seededFlag = localStorage.getItem(LS_SEEDED);
   const t = now();
   const builtins = BUILTIN_ENTERPRISE_PACKS.map((p) => stampBuiltin(p, t));
+  const versionBump = seededFlag !== SEED_VERSION;
 
-  if (!existing.length) {
-    saveEnterprisePacks(builtins);
-    localStorage.setItem(LS_SEEDED, '1');
-    if (!getActiveEnterprisePackId()) {
+  if (!existing.length || versionBump) {
+    const customs = existing.filter((p) => !p.builtin);
+    // 版本升级：内置包整包替换（含公开 L1 路径与深挖 L2）；自定义保留
+    const builtinIds = new Set(builtins.map((b) => b.id));
+    const orphanCustom = customs.filter((c) => !builtinIds.has(c.id));
+    const next = [...builtins, ...orphanCustom];
+    saveEnterprisePacks(next);
+    localStorage.setItem(LS_SEEDED, SEED_VERSION);
+    if (!getActiveEnterprisePackId() || versionBump) {
       setActiveEnterprisePackId(builtins[0].id);
     }
-    return builtins;
+    return next.map(withCopyDefaults);
   }
 
   const byId = new Map(existing.map((p) => [p.id, p]));
@@ -207,38 +323,27 @@ export const ensureEnterprisePacksSeeded = (): EnterpriseDesignPack[] => {
     if (!byId.has(b.id)) {
       byId.set(b.id, b);
       dirty = true;
-    } else {
-      const cur = byId.get(b.id)!;
-      // 内置包：保留用户已上传的 L1；L2 若仍为空源注则刷新样本卡
-      if (cur.builtin) {
-        const merged: EnterpriseDesignPack = {
-          ...b,
-          layoutRefs: cur.layoutRefs?.length ? cur.layoutRefs : b.layoutRefs,
-          styleCard:
-            cur.styleCard?.stylePrompt?.trim() && cur.layoutRefs?.length
-              ? cur.styleCard
-              : b.styleCard,
-          updatedAt: Math.max(cur.updatedAt || 0, b.updatedAt),
-        };
-        if (JSON.stringify(merged) !== JSON.stringify(cur)) {
-          byId.set(b.id, merged);
-          dirty = true;
-        }
-      }
+    }
+  }
+  // 清理已废弃的旧内置 id（仍标 builtin 但不在新清单）
+  const aliveBuiltin = new Set(builtins.map((b) => b.id));
+  for (const [id, p] of Array.from(byId.entries())) {
+    if (p.builtin && !aliveBuiltin.has(id)) {
+      byId.delete(id);
+      dirty = true;
     }
   }
   const next = Array.from(byId.values()).sort((a, b) => {
     if (a.builtin !== b.builtin) return a.builtin ? -1 : 1;
     return (b.updatedAt || 0) - (a.updatedAt || 0);
   });
-  if (dirty || !seededFlag) {
+  if (dirty) {
     saveEnterprisePacks(next);
-    localStorage.setItem(LS_SEEDED, '1');
   }
   if (!getActiveEnterprisePackId() && next[0]) {
     setActiveEnterprisePackId(next[0].id);
   }
-  return next;
+  return next.map(withCopyDefaults);
 };
 
 export const getActiveEnterprisePackId = (): string | null => {
@@ -265,7 +370,7 @@ export const upsertEnterprisePack = (pack: EnterpriseDesignPack): EnterpriseDesi
   const packs = ensureEnterprisePacksSeeded();
   const i = packs.findIndex((p) => p.id === pack.id);
   const next = [...packs];
-  const stamped = { ...pack, updatedAt: now() };
+  const stamped = withCopyDefaults({ ...pack, updatedAt: now() });
   if (i >= 0) next[i] = stamped;
   else next.unshift(stamped);
   saveEnterprisePacks(next);
@@ -311,9 +416,11 @@ export const clearPackLayoutRefs = (packId: string): EnterpriseDesignPack | null
   const packs = ensureEnterprisePacksSeeded();
   const pack = packs.find((p) => p.id === packId);
   if (!pack) return null;
+  // 内置包清空后恢复公开样本 L1
+  const builtin = BUILTIN_ENTERPRISE_PACKS.find((b) => b.id === packId);
   const updated: EnterpriseDesignPack = {
     ...pack,
-    layoutRefs: [],
+    layoutRefs: pack.builtin && builtin ? [...builtin.layoutRefs] : [],
     updatedAt: now(),
   };
   upsertEnterprisePack(updated);
@@ -335,14 +442,17 @@ export const createCustomEnterprisePack = (opts: {
     skillHints: opts.skillHints || ['free', 'multi_product_poster'],
     layoutRefs: [],
     styleCard: card({
-      palette: ['#FFFFFF', '#0F172A'],
-      typographyNotes: '待从版式页提炼',
+      palette: ['#FFFFFF', '#0B3A6E', '#E91E63'],
+      typographyNotes: '待从版式页提炼；默认海军蓝标题 + 品红色商业行',
       layoutGrammar: 'Follow uploaded layout references when present',
       lightingMood: 'Match layout reference lighting',
       decorationSystem: 'Match layout reference decorations',
       stylePrompt:
-        'Match the visual system of the provided layout reference pages; keep product identity locked; commercial print quality',
+        'Match the visual system of the provided layout reference pages; keep product identity locked; commercial educational catalog quality',
       negativePrompt: 'watermark, garbled text, ignoring layout reference',
+      copyFormula: COPY_BENEFIT_LED,
+      foolproofHint: '上传版式页 → 提炼风格卡 → 一键套用',
+      foolproofPrompt: '按我上传的版式参考生成，产品外形锁定；文案按功能利益公式撰写。',
       sourceNote: '自定义包',
     }),
     builtin: false,
@@ -358,19 +468,13 @@ export const resetBuiltinEnterprisePacks = (): EnterpriseDesignPack[] => {
   const customs = loadEnterprisePacks().filter((p) => !p.builtin);
   const t = now();
   const builtins = BUILTIN_ENTERPRISE_PACKS.map((p) => stampBuiltin(p, t));
-  // 保留用户在 builtin 上上传的 L1
-  const prev = loadEnterprisePacks();
-  const withL1 = builtins.map((b) => {
-    const old = prev.find((p) => p.id === b.id);
-    return old?.layoutRefs?.length ? { ...b, layoutRefs: old.layoutRefs } : b;
-  });
-  const next = [...withL1, ...customs];
+  const next = [...builtins, ...customs];
   saveEnterprisePacks(next);
-  localStorage.setItem(LS_SEEDED, '1');
+  localStorage.setItem(LS_SEEDED, SEED_VERSION);
+  setActiveEnterprisePackId(builtins[0]?.id || null);
   return next;
 };
 
-/** 是否把末张当版式参考 */
 export const packImpliesLayoutLastRef = (pack: EnterpriseDesignPack | null | undefined): boolean => {
   if (!pack?.layoutRefs?.length) return false;
   return (
@@ -381,10 +485,6 @@ export const packImpliesLayoutLastRef = (pack: EnterpriseDesignPack | null | und
   );
 };
 
-/**
- * 合并产品参考 + 模板包 L1。
- * 版式页放在末尾（与 multi_product_poster / lastRefIsLayout 约定一致）。
- */
 export const mergeRefsWithPack = (
   productRefs: string[],
   pack: EnterpriseDesignPack | null | undefined,
@@ -395,7 +495,6 @@ export const mergeRefsWithPack = (
   }
   const layout = pack.layoutRefs.filter(Boolean);
   const products = productRefs.filter(Boolean);
-  // 留至少 1 个版式位
   const maxProducts = Math.max(0, maxTotal - Math.min(layout.length, 2));
   const head = products.slice(0, maxProducts);
   const tail = layout.slice(0, Math.max(1, maxTotal - head.length));
@@ -409,10 +508,18 @@ export const applyPackStyleToPrompt = (
 ): string => {
   if (!pack?.styleCard?.stylePrompt?.trim()) return basePrompt;
   const style = pack.styleCard.stylePrompt.trim();
+  const copy = pack.styleCard.copyFormula?.trim();
   const base = (basePrompt || '').trim();
-  if (!base) return style;
-  if (base.includes(style.slice(0, 48))) return base;
-  return `${base}\n\n[Enterprise template style · ${pack.name}]\n${style}`;
+  const extras = [
+    `[Enterprise template style · ${pack.name}]`,
+    style,
+    copy ? `[Copy craft]\n${copy}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+  if (!base) return extras;
+  if (base.includes(style.slice(0, 40))) return base;
+  return `${base}\n\n${extras}`;
 };
 
 export const applyPackNegative = (
@@ -432,15 +539,30 @@ export const packCraftNotes = (pack: EnterpriseDesignPack | null | undefined): s
     c.typographyNotes,
     c.lightingMood,
     c.decorationSystem,
+    c.copyFormula,
     pack.layoutRefs.length
       ? `已挂 ${pack.layoutRefs.length} 张版式参考（末张为版式锚点）。`
-      : '尚未上传版式页，当前仅使用风格卡约束。',
+      : '当前仅使用风格卡约束。',
   ]
     .filter(Boolean)
     .join('\n');
 };
 
-/** 从版式页提炼 / 刷新 L2 风格卡 */
+/** 傻瓜式一键指令（可带 SKU 信息） */
+export const buildFoolproofPrompt = (
+  pack: EnterpriseDesignPack | null | undefined,
+  opts?: { skuName?: string; skuCode?: string; userNote?: string }
+): string => {
+  if (!pack) return opts?.userNote?.trim() || '';
+  const bits = [
+    pack.styleCard.foolproofPrompt.trim(),
+    opts?.skuName ? `产品名：${opts.skuName}` : '',
+    opts?.skuCode ? `型号/SKU：${opts.skuCode}` : '',
+    opts?.userNote?.trim() || '',
+  ].filter(Boolean);
+  return bits.join('\n');
+};
+
 export const extractStyleCardFromLayoutRefs = async (
   pack: EnterpriseDesignPack,
   layoutImages: string[]
@@ -451,24 +573,23 @@ export const extractStyleCardFromLayoutRefs = async (
   }
 
   const { callQwen } = await import('./geminiService');
-  // 不把整图 base64 塞进纯文本；改为让模型基于用户已描述的「版式类型」+ 元数据提炼。
-  // 若运行时支持多模态，可后续扩展；此处用结构化描述任务保证稳定 JSON。
-  const prompt = `你是外贸玩具企业的平面设计规范助理。根据模板包信息与版式页数量，输出可执行的风格卡 JSON（不要 markdown）。
+  const prompt = `你是外贸/教育玩具企业的平面设计规范助理。根据模板包与版式页数量，输出可执行风格卡 JSON（不要 markdown）。
 模板包名称：${pack.name}
 类型：${pack.kind}
 摘要：${pack.summary}
 版式页数量：${imgs.length}
-已有风格草稿：${JSON.stringify({
+已有草稿：${JSON.stringify({
     palette: pack.styleCard.palette,
     typographyNotes: pack.styleCard.typographyNotes,
     layoutGrammar: pack.styleCard.layoutGrammar,
+    copyFormula: pack.styleCard.copyFormula?.slice(0, 200),
   })}
 
 要求：
-1. stylePrompt 必须是英文、可直接拼进图像生成提示，描述版式/色板/光影/装饰系统，禁止出现具体供应商或模型商品名
-2. negativePrompt 英文短句
-3. palette 3–6 个色值或色名
-4. 中文字段简洁专业
+1. stylePrompt 英文、可拼进图像生成；禁止供应商/大模型商品名
+2. copyFormula 必须包含功能利益文案公式：主题钩子→发展动词→配件→尺寸→元数据
+3. foolproofPrompt 用中文写给业务员的一键指令
+4. palette 3–6 色
 
 严格输出 JSON：
 {
@@ -479,13 +600,16 @@ export const extractStyleCardFromLayoutRefs = async (
   "decorationSystem": string,
   "stylePrompt": string,
   "negativePrompt": string,
+  "copyFormula": string,
+  "foolproofHint": string,
+  "foolproofPrompt": string,
   "sourceNote": string
 }`;
 
   const raw = await callQwen(prompt, {
     jsonMode: true,
     timeoutMs: 60_000,
-    maxTokens: 1200,
+    maxTokens: 1600,
   });
 
   let parsed: Partial<EnterpriseStyleCard> = {};
@@ -497,15 +621,19 @@ export const extractStyleCardFromLayoutRefs = async (
   }
 
   const next = card({
-    palette: Array.isArray(parsed.palette) && parsed.palette.length
-      ? parsed.palette.map(String)
-      : pack.styleCard.palette,
+    palette:
+      Array.isArray(parsed.palette) && parsed.palette.length
+        ? parsed.palette.map(String)
+        : pack.styleCard.palette,
     typographyNotes: String(parsed.typographyNotes || pack.styleCard.typographyNotes),
     layoutGrammar: String(parsed.layoutGrammar || pack.styleCard.layoutGrammar),
     lightingMood: String(parsed.lightingMood || pack.styleCard.lightingMood),
     decorationSystem: String(parsed.decorationSystem || pack.styleCard.decorationSystem),
     stylePrompt: String(parsed.stylePrompt || pack.styleCard.stylePrompt),
     negativePrompt: String(parsed.negativePrompt || pack.styleCard.negativePrompt),
+    copyFormula: String(parsed.copyFormula || pack.styleCard.copyFormula || COPY_BENEFIT_LED),
+    foolproofHint: String(parsed.foolproofHint || pack.styleCard.foolproofHint),
+    foolproofPrompt: String(parsed.foolproofPrompt || pack.styleCard.foolproofPrompt),
     sourceNote: String(parsed.sourceNote || `自 ${imgs.length} 张版式页提炼`),
   });
 
@@ -521,6 +649,6 @@ export const KIND_LABELS: Record<EnterprisePackKind, string> = {
   catalog_spread: '目录内页',
   poster_hero: '营销海报',
   listing_white: '跨境主图',
-  booth_cover: '展会封面',
+  booth_cover: '画册封面',
   custom: '自定义',
 };
