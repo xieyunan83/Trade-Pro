@@ -20,6 +20,13 @@ import {
   buildSingleProductPosterPrompt,
   REMOVE_BG_PROMPT,
 } from '../services/posterTemplates';
+import {
+  applyPackStyleToPrompt,
+  ensureEnterprisePacksSeeded,
+  getActiveEnterprisePack,
+  type EnterpriseDesignPack,
+} from '../services/enterpriseDesignPacks';
+import { EnterpriseDesignPackPanel } from './EnterpriseDesignPackPanel';
 
 const LOGO_LS = 'trade_scout_brand_logo';
 
@@ -48,6 +55,7 @@ export const ModulePosterStudio: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [resultUrl, setResultUrl] = useState<string | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
+  const [activePack, setActivePack] = useState<EnterpriseDesignPack | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -57,6 +65,8 @@ export const ModulePosterStudio: React.FC = () => {
   useEffect(() => {
     const saved = localStorage.getItem(LOGO_LS) || '';
     setBuiltinLogo(saved);
+    ensureEnterprisePacksSeeded();
+    setActivePack(getActiveEnterprisePack());
   }, []);
 
   useEffect(() => {
@@ -137,7 +147,7 @@ export const ModulePosterStudio: React.FC = () => {
     return res.images[0];
   };
 
-  /** 参考图顺序：LOGO（可选）→ 原图（外观主依据）→ 抠图（干净合成） */
+  /** 参考图顺序：LOGO（可选）→ 原图（外观主依据）→ 抠图（干净合成）→ 模板版式页（末张） */
   const buildReferenceStack = (originals: string[], cut: string[], logo?: string): string[] => {
     const refs: string[] = [];
     if (logo) refs.push(logo);
@@ -147,7 +157,10 @@ export const ModulePosterStudio: React.FC = () => {
     for (const c of cut) {
       if (c?.trim() && !refs.includes(c)) refs.push(c);
     }
-    return refs.slice(0, 8);
+    const layout = activePack?.layoutRefs?.filter(Boolean) || [];
+    const reserve = Math.min(2, layout.length);
+    const head = refs.slice(0, Math.max(1, 8 - reserve));
+    return [...head, ...layout.slice(0, 8 - head.length)].slice(0, 8);
   };
 
   const handleCutout = async () => {
@@ -220,7 +233,7 @@ export const ModulePosterStudio: React.FC = () => {
       const effectiveLogoMode =
         logoMode === 'builtin' && !logo ? 'none' : logoMode;
 
-      const prompt =
+      const basePrompt =
         mode === 'single'
           ? buildSingleProductPosterPrompt(singleFields, effectiveLogoMode)
           : buildMultiProductPosterPrompt(
@@ -228,6 +241,7 @@ export const ModulePosterStudio: React.FC = () => {
               Math.max(originals.length, workingCutouts.length || 1),
               effectiveLogoMode
             );
+      const prompt = applyPackStyleToPrompt(basePrompt, activePack);
 
       const res = await generateWanImage(
         {
@@ -265,7 +279,15 @@ export const ModulePosterStudio: React.FC = () => {
         <p className="text-sm text-slate-500 font-medium mb-4">
           {isMobile ? '手机可拍照或上传' : '电脑端请上传产品图'} → 填资料 → 选 LOGO → 生成单列实景长图。
           建议：大字少字、多段使用场景、避免虚拟包装与杂乱细节。装箱量等字段默认不上图。
+          可选用企业模板技能库套用版式与风格。
         </p>
+
+        <div className="mb-4">
+          <EnterpriseDesignPackPanel
+            compact
+            onActiveChange={(p) => setActivePack(p)}
+          />
+        </div>
 
         <div className="flex gap-2 mb-4">
           <button

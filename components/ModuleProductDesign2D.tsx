@@ -14,6 +14,7 @@ import {
   X,
   Trash2,
   Check,
+  BookTemplate,
 } from 'lucide-react';
 import type { User } from '../types';
 import { ModuleType } from '../types';
@@ -41,9 +42,20 @@ import { loadCatalogSkus } from '../services/productCatalogTypes';
 import { compressImageDataUrl } from '../services/catalogExcelService';
 import { setCreativeHandoff } from '../services/creativeAssetBridge';
 import { persistDesignAssets } from '../services/creativeAssetPersist';
+import {
+  applyPackNegative,
+  applyPackStyleToPrompt,
+  ensureEnterprisePacksSeeded,
+  getActiveEnterprisePack,
+  mergeRefsWithPack,
+  packCraftNotes,
+  packImpliesLayoutLastRef,
+  type EnterpriseDesignPack,
+} from '../services/enterpriseDesignPacks';
 import { CreativePipelineBar } from './CreativeRefPicker';
 import { DesignConstraintCardPanel } from './DesignConstraintCardPanel';
 import { CreativeStorageBadge } from './CreativeStorageBadge';
+import { EnterpriseDesignPackPanel } from './EnterpriseDesignPackPanel';
 import { VaultImg } from './VaultMedia';
 import { loadProductCatalog } from '../services/productCatalog';
 import {
@@ -57,7 +69,7 @@ type Props = {
   onNavigateModule?: (mod: ModuleType) => void;
 };
 
-type LeftTab = 'projects' | 'skills' | 'assets';
+type LeftTab = 'projects' | 'skills' | 'packs' | 'assets';
 
 /**
  * 产品设计 · 平面图：
@@ -89,9 +101,15 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
   const [refBusy, setRefBusy] = useState(false);
   /** 画布多选：用于删除 / 推送到下游模块 */
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [activePack, setActivePack] = useState<EnterpriseDesignPack | null>(null);
   const refInputRef = useRef<HTMLInputElement>(null);
   const skus = useMemo(() => loadCatalogSkus(), []);
   const status = getDesignAgentConfigStatus();
+
+  useEffect(() => {
+    ensureEnterprisePacksSeeded();
+    setActivePack(getActiveEnterprisePack());
+  }, []);
 
   const active = projects.find((p) => p.id === activeId) || null;
   const canvasAssets = useMemo(
@@ -183,24 +201,31 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     if (pendingBrief?.toolPrompt) return pendingBrief.toolPrompt;
     const skuMeta = resolveSkuMeta();
     const skuRow = skus.find((s) => s.id === skuPick || s.skuCode === skuPick);
-    const hasRefs = refUploads.length > 0 || !!(skuRow?.images?.length);
+    const hasRefs =
+      refUploads.length > 0 ||
+      !!(skuRow?.images?.length) ||
+      !!(activePack?.layoutRefs?.length);
     const refCountHint = Math.max(
-      refUploads.length,
+      refUploads.length + (activePack?.layoutRefs?.length || 0),
       hasRefs ? Math.min(skuRow?.images?.length || 0, MAX_DESIGN_REF_IMAGES) : 0
     );
-    return composeImageGenerationPrompt({
+    const composed = composeImageGenerationPrompt({
       skillDefaultPrompt:
         skill.defaultPrompt || 'Create a polished commercial product design visual',
-      craftNotes: skill.craftNotes,
+      craftNotes: [skill.craftNotes, packCraftNotes(activePack)].filter(Boolean).join('\n'),
       userBrief: prompt.trim(),
       skuName: skuMeta.name,
       skuCode: skuMeta.code,
       hasReferenceImages: hasRefs,
       referenceCount: refCountHint || (hasRefs ? 1 : 0),
       lastRefIsLayout: effectiveLastIsLayout && refCountHint >= 2,
-      skillNegative: negativePrompt.trim() || skill.negativePrompt,
+      skillNegative: applyPackNegative(
+        negativePrompt.trim() || skill.negativePrompt,
+        activePack
+      ),
       series: skillId === 'listing_set',
     }).prompt;
+    return applyPackStyleToPrompt(composed, activePack);
   };
 
   const requestGenerate = async () => {
@@ -255,10 +280,14 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
         skillId,
         skillLabel: skill.label,
         skillHint: skill.hint,
-        skillDefaultPrompt: skill.defaultPrompt,
-        skillNegativePrompt: negativePrompt.trim() || skill.negativePrompt,
+        skillDefaultPrompt: applyPackStyleToPrompt(skill.defaultPrompt, activePack),
+        skillNegativePrompt: applyPackNegative(
+          negativePrompt.trim() || skill.negativePrompt,
+          activePack
+        ),
         skillCraftNotes: [
           skill.craftNotes,
+          packCraftNotes(activePack),
           hasRefs
             ? '二次创作：以参考图为唯一外形真相；用户提示词仅为改动清单（颜色/部位/包装/功能等）；未提及处保持一致。'
             : '',
@@ -270,6 +299,9 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
           hasRefs
             ? `【参考图二次创作·改动清单】${prompt.trim()}`
             : prompt.trim(),
+          activePack
+            ? `【企业模板】${activePack.name}（L1 ${activePack.layoutRefs.length} 页）`
+            : '',
           marketNote,
         ]
           .filter(Boolean)
@@ -357,18 +389,24 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
       skus.find((s) => s.id === skuPick || s.skuCode === skuPick) ||
       skus.find((s) => s.skuCode === proj.skuCode);
     const fromSku = (boundSku?.images || []).filter(Boolean);
-    const merged: string[] = [];
-    // 上传参考优先（含版式末张）；产品库图仅在仍有空位时补入
+    const productMerged: string[] = [];
+    // 上传参考优先；产品库图仅在仍有空位时补入（版式位留给模板包 L1）
+    const reserveLayout = activePack?.layoutRefs?.length
+      ? Math.min(2, activePack.layoutRefs.length)
+      : 0;
+    const productCap = Math.max(1, MAX_DESIGN_REF_IMAGES - reserveLayout);
     for (const u of [...refUploads, ...fromSku]) {
-      if (!u || merged.includes(u)) continue;
-      merged.push(u);
-      if (merged.length >= MAX_DESIGN_REF_IMAGES) break;
+      if (!u || productMerged.includes(u)) continue;
+      productMerged.push(u);
+      if (productMerged.length >= productCap) break;
     }
-    return merged;
+    return mergeRefsWithPack(productMerged, activePack, MAX_DESIGN_REF_IMAGES).refs;
   };
 
   const effectiveLastIsLayout =
-    lastRefIsLayout || skillId === 'multi_product_poster';
+    lastRefIsLayout ||
+    skillId === 'multi_product_poster' ||
+    packImpliesLayoutLastRef(activePack);
 
   const runGenerate = async () => {
     setConfirmOpen(false);
@@ -378,15 +416,21 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
       ? `\n质检关注：${pendingBrief.qaChecklist.slice(0, 3).join('；')}`
       : '';
     const refImages = collectRefImages(proj);
+    const packHint = activePack ? ` · 模板「${activePack.name}」` : '';
     const modeHint = refImages.length
-      ? `参考图 ${refImages.length} 张 + 文字`
-      : '纯文字';
+      ? `参考图 ${refImages.length} 张 + 文字${packHint}`
+      : `纯文字${packHint}`;
     const userMsg = {
       id: newDesignId('m'),
       role: 'user' as const,
       text: prompt.trim() || `使用 Skill「${skill.label}」生成（${modeHint}）`,
       at: Date.now(),
     };
+    const mergedNeg = applyPackNegative(
+      negativePrompt.trim() || skill.negativePrompt,
+      activePack
+    );
+    const styledPrompt = applyPackStyleToPrompt(finalPrompt, activePack);
 
     setLoading(true);
     setError(null);
@@ -394,11 +438,11 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
       const isMulti = skillId === 'multi_angle' || !!pendingBrief?.multiAngle;
       const result = isMulti
         ? await generateMultiAngleDesignImages({
-            prompt: finalPrompt,
+            prompt: styledPrompt,
             size,
             thinkingMode: false,
             referenceImages: refImages.length ? refImages : undefined,
-            negativePrompt: negativePrompt.trim() || skill.negativePrompt,
+            negativePrompt: mergedNeg,
             userEditBrief: prompt.trim(),
             onProgress: (done, total, label) => {
               setError(null);
@@ -408,12 +452,12 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             },
           })
         : await generateDesignImages({
-            prompt: finalPrompt,
+            prompt: styledPrompt,
             size,
             n: count,
             thinkingMode: false,
             referenceImages: refImages.length ? refImages : undefined,
-            negativePrompt: negativePrompt.trim() || skill.negativePrompt,
+            negativePrompt: mergedNeg,
             series: skillId === 'listing_set' || count > 1,
             lastRefIsLayout: effectiveLastIsLayout && refImages.length >= 2,
             userEditBrief: prompt.trim(),
@@ -423,7 +467,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
         id: newDesignId('da'),
         projectId: proj.id,
         url,
-        prompt: finalPrompt,
+        prompt: styledPrompt,
         skillId,
         angle: result.angles?.[i],
         createdAt: now,
@@ -606,6 +650,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
               [
                 ['projects', '项目', FolderOpen],
                 ['skills', 'Skills', Sparkles],
+                ['packs', '模板', BookTemplate],
                 ['assets', '资产', LayoutGrid],
               ] as const
             ).map(([id, label, Icon]) => (
@@ -613,7 +658,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                 key={id}
                 type="button"
                 onClick={() => setLeftTab(id)}
-                className={`flex-1 py-2.5 text-[11px] font-black flex items-center justify-center gap-1 ${
+                className={`flex-1 py-2.5 text-[10px] sm:text-[11px] font-black flex items-center justify-center gap-0.5 sm:gap-1 ${
                   leftTab === id ? 'text-violet-700 border-b-2 border-violet-600 bg-violet-50/50' : 'text-slate-400'
                 }`}
               >
@@ -672,6 +717,22 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                   <p className="text-[10px] text-slate-500 font-medium mt-0.5 leading-snug">{s.hint}</p>
                 </button>
               ))}
+            {leftTab === 'packs' && (
+              <EnterpriseDesignPackPanel
+                onActiveChange={(p) => {
+                  setActivePack(p);
+                  if (p && (p.kind === 'catalog_spread' || p.kind === 'poster_hero')) {
+                    setLastRefIsLayout(true);
+                  }
+                  if (p?.skillHints?.[0] && DESIGN_SKILLS.some((s) => s.id === p.skillHints[0])) {
+                    const sid = p.skillHints[0];
+                    setSkillId(sid);
+                    const sk = DESIGN_SKILLS.find((s) => s.id === sid);
+                    if (sk?.negativePrompt) setNegativePrompt(sk.negativePrompt);
+                  }
+                }}
+              />
+            )}
             {leftTab === 'assets' &&
               (assets.length === 0 ? (
                 <p className="text-xs text-slate-400 font-bold p-4 text-center">生成后会出现在这里</p>
@@ -954,6 +1015,18 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             <label className="text-[10px] font-black text-slate-400 uppercase">当前 Skill</label>
             <div className="mt-1 text-sm font-black text-violet-800">{skill.label}</div>
             <div className="text-[10px] text-slate-500">{skill.aspectHint}</div>
+            {activePack && (
+              <button
+                type="button"
+                onClick={() => setLeftTab('packs')}
+                className="mt-1.5 text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1"
+              >
+                模板：{activePack.name}
+                {activePack.layoutRefs.length
+                  ? ` · L1 ${activePack.layoutRefs.length}`
+                  : ' · L2 风格'}
+              </button>
+            )}
           </div>
           <div>
             <label className="text-[10px] font-black text-slate-400 uppercase flex items-center gap-1">
