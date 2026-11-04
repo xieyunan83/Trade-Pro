@@ -518,10 +518,13 @@ export const applyPackStyleToPrompt = (
   const style = pack.styleCard.stylePrompt.trim();
   const copy = pack.styleCard.copyFormula?.trim();
   const base = (basePrompt || '').trim();
+  // copyFormula 只作文案结构参考，禁止诱导模型自由编造图面英文段落
   const extras = [
     `[Enterprise template style · ${pack.name}]`,
     style,
-    copy ? `[Copy craft]\n${copy}` : '',
+    copy
+      ? `[Copy craft — structure only, NOT free text to invent]\n${copy}\nIf APPROVED ON-IMAGE lines exist elsewhere in the prompt, render ONLY those exact lines. Otherwise NO TEXT on image.`
+      : '',
   ]
     .filter(Boolean)
     .join('\n');

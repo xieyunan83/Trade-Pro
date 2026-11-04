@@ -16,6 +16,7 @@ import {
   composeImageGenerationPrompt,
   identityLockBlock,
   layoutProductSwapDirectiveBlock,
+  lockedOnImageCopyBlock,
   mergeNegatives,
   multiImageRoleBlock,
   referenceEditDirectiveBlock,
@@ -35,6 +36,9 @@ export type DesignGenerateOpts = {
   lastRefIsLayout?: boolean;
   /** 多 SKU 整合：每张产品图都必须入画 */
   distinctProducts?: boolean;
+  /** 图面英文白名单（文案流水线产出） */
+  lockedOnImageCopy?: string[];
+  onImageLockBlock?: string;
   /** 用户二次创作说明：改颜色/部位/包装/功能等（有参考图时强制执行） */
   userEditBrief?: string;
 };
@@ -181,6 +185,8 @@ const hardenDesignPrompt = (
     referenceCount?: number;
     lastRefIsLayout?: boolean;
     distinctProducts?: boolean;
+    lockedOnImageCopy?: string[];
+    onImageLockBlock?: string;
     userEditBrief?: string;
   }
 ): string => {
@@ -189,11 +195,15 @@ const hardenDesignPrompt = (
     lastIsLayout: !!opts.lastRefIsLayout && refCount >= 2,
     distinctProducts: !!opts.distinctProducts && !opts.lastRefIsLayout,
   };
+  const textLock =
+    (opts.onImageLockBlock || '').trim() ||
+    lockedOnImageCopyBlock(opts.lockedOnImageCopy || []);
   const alreadyHardened =
     /NEGATIVE CONSTRAINTS/i.test(prompt) && /IDENTITY LOCK/i.test(prompt);
   if (alreadyHardened) {
     const extraNeg = mergeNegatives(
       opts.negativePrompt,
+      'garbled English, invented words, Latin gibberish, fake body paragraphs on poster',
       opts.lastRefIsLayout ? LAYOUT_SWAP_NEGATIVES : ''
     );
     let withNeg =
@@ -225,6 +235,9 @@ const hardenDesignPrompt = (
     } else if (refCount === 1 && !/REFERENCE: Image 1|MULTI-IMAGE ROLES/i.test(withNeg)) {
       withNeg = `${withNeg}\n${multiImageRoleBlock(1, roleOpts)}`;
     }
+    // 始终重钉图面文字白名单，覆盖 Brief/模板里「写大段英文」的诱导
+    withNeg = withNeg.replace(/\n?ON-IMAGE TEXT POLICY[\s\S]*?(?=\n[A-Z]{2,}|\nIDENTITY LOCK|\nNEGATIVE|$)/i, '\n');
+    withNeg = `${textLock}\n${withNeg}`;
     if (hasRefs && !/IDENTITY LOCK/i.test(withNeg)) {
       withNeg = `${withNeg}\n${identityLockBlock(true, 'image')}`;
     }
@@ -237,6 +250,8 @@ const hardenDesignPrompt = (
     referenceCount: opts.referenceCount,
     lastRefIsLayout: opts.lastRefIsLayout,
     distinctProducts: opts.distinctProducts,
+    lockedOnImageCopy: opts.lockedOnImageCopy,
+    onImageLockBlock: opts.onImageLockBlock,
     skillNegative: opts.negativePrompt,
     series: !!opts.series,
   }).prompt;
@@ -260,6 +275,8 @@ export const generateDesignImages = async (
       referenceCount: refs?.length || 0,
       lastRefIsLayout: !!opts.lastRefIsLayout && (refs?.length || 0) >= 2,
       distinctProducts: !!opts.distinctProducts,
+      lockedOnImageCopy: opts.lockedOnImageCopy,
+      onImageLockBlock: opts.onImageLockBlock,
       userEditBrief: opts.userEditBrief,
     });
     const result = await generateWanImage(

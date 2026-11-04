@@ -117,6 +117,28 @@ export const multiImageRoleBlock = (
 export const LAYOUT_SWAP_NEGATIVES =
   'copying the layout reference products, keeping template plush toys, keeping template alphabet cans, near-duplicate of layout reference image, ignoring product reference photos, reproducing sample catalog merchandise';
 
+/** 图面文字白名单：只允许印这些短句，否则禁止任何正文（防乱码） */
+export const lockedOnImageCopyBlock = (lines: string[]): string => {
+  const cleaned = (lines || [])
+    .map((l) => (l || '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .slice(0, 8);
+  if (!cleaned.length) {
+    return [
+      'ON-IMAGE TEXT POLICY (STRICT): (NO TEXT).',
+      'Leave all typography / headline / paragraph zones empty.',
+      'Do NOT invent English words, Latin-looking gibberish, product descriptions, or fake body copy.',
+    ].join(' ');
+  }
+  return [
+    'ON-IMAGE TEXT POLICY (STRICT):',
+    'Render ONLY these exact strings (character-for-character). Do not rewrite, expand, translate, or add paragraphs.',
+    ...cleaned.map((l, i) => `LINE ${i + 1}: ${l}`),
+    'FORBIDDEN: invented words, gibberish letters, long body paragraphs, tiny micro-text, fake awards.',
+    'If a line would be blurry at size, omit it — never invent filler text.',
+  ].join('\n');
+};
+
 /** 系列一致性（Listing 套图 / 多张连出） */
 export const SERIES_CONSISTENCY_BLOCK =
   'SERIES CONSISTENCY: If producing a set, keep identical product identity, color temperature, softbox look and crop margins across frames; vary only the selling-point focus.';
@@ -163,6 +185,10 @@ export const composeImageGenerationPrompt = (opts: {
   lastRefIsLayout?: boolean;
   /** 多 SKU 整合：每张产品图都必须入画 */
   distinctProducts?: boolean;
+  /** 图面英文白名单（经文案流水线校验）；空数组=禁止上图文字 */
+  lockedOnImageCopy?: string[];
+  /** 已拼好的 ON-IMAGE TEXT POLICY 块（优先于 lockedOnImageCopy） */
+  onImageLockBlock?: string;
   skillNegative?: string;
   series?: boolean;
   /** 已由 Brief 拼好的主提示；传入则不再重复 Skill 底稿 */
@@ -177,6 +203,11 @@ export const composeImageGenerationPrompt = (opts: {
     lastIsLayout: opts.lastRefIsLayout,
     distinctProducts: opts.distinctProducts,
   });
+  const textLock =
+    (opts.onImageLockBlock || '').trim() ||
+    (opts.lockedOnImageCopy
+      ? lockedOnImageCopyBlock(opts.lockedOnImageCopy)
+      : lockedOnImageCopyBlock([]));
   const skuLine =
     opts.skuName || opts.skuCode
       ? `Product identity: ${[opts.skuName, opts.skuCode].filter(Boolean).join(' / ')}. Keep SKU appearance consistent.`
@@ -193,6 +224,7 @@ export const composeImageGenerationPrompt = (opts: {
         // 有参考时：先钉死「只改用户要求」，再叠 Brief，避免编排结果冲掉编辑范围
         hasRefs ? editDirective : '',
         layoutSwap,
+        textLock,
         opts.baseToolPrompt,
         roles,
         identity,
@@ -202,6 +234,7 @@ export const composeImageGenerationPrompt = (opts: {
     : joinBlocks([
         hasRefs ? editDirective : '',
         layoutSwap,
+        textLock,
         hasRefs
           ? opts.skillDefaultPrompt
             ? `Skill framing (secondary to edit request + identity lock): ${opts.skillDefaultPrompt}`
@@ -222,6 +255,7 @@ export const composeImageGenerationPrompt = (opts: {
 
   const negative = mergeNegatives(
     UNIVERSAL_IMAGE_NEGATIVES,
+    'garbled English, invented words, Latin gibberish, fake body paragraphs on poster',
     opts.lastRefIsLayout ? LAYOUT_SWAP_NEGATIVES : '',
     opts.skillNegative
   );
@@ -265,6 +299,6 @@ export const CREATIVE_LLM_SYSTEM_PLAN = `你是澄海玩具出口场景的「设
 1b) 若末张为版式模板：toolPrompt 必须写明 LAYOUT SWAP——只借末张构图/色块/标题区，前面产品图换入成图；禁止复刻模板内原商品。
 2) 无参考图时：按文字描述创作，仍保持商业玩具出口画质。
 3) 保留 SKU 身份；贴合 Skill；适合跨境电商/展会。
-4) 不要编造认证文字、平台徽章、水印或乱码字。
+4) 图面文字：禁止让模型自由发挥英文段落；若输入已给 ON-IMAGE TEXT POLICY / 白名单短句，toolPrompt 只引用这些短句；否则明确 NO TEXT。禁止乱码假词。
 5) 光影默认电商柔箱 + 轻轮廓光；避免霓虹凝胶与廉价贴纸风。
 6) summaryZh / titleZh 禁止出现任何大模型或供应商商品名。`;

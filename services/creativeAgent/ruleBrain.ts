@@ -62,6 +62,8 @@ export const ruleCreativeBrain: CreativeBrainPort = {
       referenceCount: input.referenceCount,
       lastRefIsLayout: input.lastRefIsLayout,
       distinctProducts: input.distinctProducts,
+      lockedOnImageCopy: input.lockedOnImageCopy,
+      onImageLockBlock: input.onImageLockBlock,
       skillNegative: input.skillNegativePrompt,
       series,
       negativeAsFieldOnly: false,
@@ -78,6 +80,8 @@ export const ruleCreativeBrain: CreativeBrainPort = {
           : QA_BY_DOMAIN[input.domain] || QA_BY_DOMAIN.design_2d,
       multiAngle,
       brainId: 'rule',
+      lockedOnImageCopy: input.lockedOnImageCopy,
+      onImageLockBlock: input.onImageLockBlock,
     };
     return brief;
   },

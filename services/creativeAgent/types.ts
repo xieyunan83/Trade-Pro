@@ -31,6 +31,9 @@ export type CreativePlanInput = {
   lastRefIsLayout?: boolean;
   /** 多 SKU 整合：每张产品都必须出现 */
   distinctProducts?: boolean;
+  /** 图面英文白名单（文案流水线） */
+  lockedOnImageCopy?: string[];
+  onImageLockBlock?: string;
   /** 渠道 / 卖场等扩展字段（包装等） */
   channel?: string;
   palette?: string;
@@ -54,6 +57,11 @@ export type CreativeBrief = {
   multiAngle?: boolean;
   /** 大脑来源标记（仅内部/管理，前台可忽略） */
   brainId: string;
+  /** 经校验的图面英文短句 */
+  lockedOnImageCopy?: string[];
+  onImageLockBlock?: string;
+  /** 业务员可读的文案方案摘要（不上图） */
+  copyPlanSummaryZh?: string;
 };
 
 export type CreativeBrainPort = {

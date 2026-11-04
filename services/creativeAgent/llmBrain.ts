@@ -59,6 +59,8 @@ export const llmCreativeBrain: CreativeBrainPort = {
         referenceCount: input.referenceCount,
         lastRefIsLayout: input.lastRefIsLayout,
         distinctProducts: input.distinctProducts,
+        lockedOnImageCopy: input.lockedOnImageCopy,
+        onImageLockBlock: input.onImageLockBlock,
         skillNegative: input.skillNegativePrompt,
         series: input.skillId === 'listing_set' || input.skillId === 'multi_angle',
       });
@@ -74,6 +76,8 @@ export const llmCreativeBrain: CreativeBrainPort = {
         toolPrompt,
         qaChecklist: qa,
         brainId: 'llm',
+        lockedOnImageCopy: input.lockedOnImageCopy,
+        onImageLockBlock: input.onImageLockBlock,
       };
     } catch {
       return fallback;

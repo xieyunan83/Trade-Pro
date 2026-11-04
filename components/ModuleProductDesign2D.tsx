@@ -38,6 +38,7 @@ import {
 import { planCreativeBrief } from '../services/creativeAgent/runtime';
 import type { CreativeBrief } from '../services/creativeAgent/types';
 import { composeImageGenerationPrompt } from '../services/creativeQualityKit';
+import { runMarketingCopyPipeline } from '../services/creativeMarketingCopyPipeline';
 import { loadCatalogSkus } from '../services/productCatalogTypes';
 import { compressImageDataUrl } from '../services/catalogExcelService';
 import { setCreativeHandoff } from '../services/creativeAssetBridge';
@@ -380,6 +381,18 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
       const layoutLast =
         previewRefs.lastRefIsLayout ||
         (lastRefIsLayout && previewRefs.refs.length >= 2);
+      const copyPlan = await runMarketingCopyPipeline({
+        productName: skuMeta.name || skuRow?.name,
+        skuCode: skuMeta.code || skuRow?.skuCode,
+        category: skuRow?.category,
+        specs: skuRow?.specs,
+        userHighlight: resolveEditBrief(),
+        locale: 'en',
+        seedLines: [skuMeta.name || '', skuMeta.code ? `Model ${skuMeta.code}` : ''].filter(
+          Boolean
+        ),
+        onProgress: (msg) => setError(msg),
+      });
       const brief = await planCreativeBrief({
         domain: 'design_2d',
         skillId,
@@ -407,10 +420,14 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
           agentMode === 'secondary'
             ? buildSecondaryCreationEditEnglish(secondaryFields)
             : '',
+          '图面文字只能使用已校验白名单短句；禁止自由编造英文段落。',
         ]
           .filter(Boolean)
           .join('\n'),
-        skillQaChecklist: skill.qaChecklist,
+        skillQaChecklist: [
+          ...(skill.qaChecklist || []),
+          '图面英文无乱码、无假词、仅白名单短句',
+        ].slice(0, 8),
         userBrief: [
           hasRefs
             ? `【参考图二次创作·改动清单】\n${resolveEditBrief()}`
@@ -419,6 +436,14 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             ? `【企业模板】${activePack.name}（L1 ${activePack.layoutRefs.length} 页）`
             : '',
           marketNote,
+          copyPlan.productSummaryZh
+            ? `【文案方案】${copyPlan.productSummaryZh}${
+                copyPlan.functions.length ? `；功能：${copyPlan.functions.join('、')}` : ''
+              }`
+            : '',
+          copyPlan.approvedOnImageEn.length
+            ? `【可上图英文】\n${copyPlan.approvedOnImageEn.join('\n')}`
+            : '【可上图英文】无 — 图面禁止文字',
         ]
           .filter(Boolean)
           .join('\n'),
@@ -428,8 +453,23 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
         referenceCount: previewRefs.refs.length || (hasRefs ? 1 : 0),
         lastRefIsLayout: layoutLast,
         distinctProducts: skillId === 'multi_product_poster' && !layoutLast,
+        lockedOnImageCopy: copyPlan.approvedOnImageEn,
+        onImageLockBlock: copyPlan.onImageLockBlock,
       });
-      setPendingBrief(brief);
+      setPendingBrief({
+        ...brief,
+        lockedOnImageCopy: copyPlan.approvedOnImageEn,
+        onImageLockBlock: copyPlan.onImageLockBlock,
+        copyPlanSummaryZh: [
+          copyPlan.productSummaryZh,
+          copyPlan.approvedOnImageEn.length
+            ? `上图：${copyPlan.approvedOnImageEn.join(' · ')}`
+            : '上图：无文字',
+        ]
+          .filter(Boolean)
+          .join('；'),
+      });
+      setError(null);
       setConfirmOpen(true);
     } catch (e: any) {
       setError(e?.message || '方案编排失败，请重试');
@@ -622,6 +662,8 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             series: skillId === 'listing_set' || count > 1,
             lastRefIsLayout: layoutLast,
             distinctProducts: skillId === 'multi_product_poster' && !layoutLast,
+            lockedOnImageCopy: pendingBrief?.lockedOnImageCopy,
+            onImageLockBlock: pendingBrief?.onImageLockBlock,
             userEditBrief: editBrief,
           });
       const now = Date.now();
@@ -1500,6 +1542,22 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                 · {size}
               </span>
             </p>
+            {pendingBrief.copyPlanSummaryZh && (
+              <div className="text-[11px] text-emerald-800 bg-emerald-50/90 rounded-xl px-3 py-2 font-medium leading-relaxed">
+                <span className="font-black">文案方案（已校验）</span>
+                <br />
+                {pendingBrief.copyPlanSummaryZh}
+                {pendingBrief.lockedOnImageCopy?.length ? (
+                  <ul className="mt-1.5 space-y-0.5 text-emerald-900">
+                    {pendingBrief.lockedOnImageCopy.map((line) => (
+                      <li key={line}>· {line}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-1 text-emerald-700">图面将不印文字，避免乱码。</p>
+                )}
+              </div>
+            )}
             {refUploads.length > 0 && (
               <div className="flex gap-2 flex-wrap">
                 {refUploads.map((src, i) => (

@@ -16,6 +16,7 @@ import {
   DEFAULT_SINGLE_FIELDS,
   MultiPosterFields,
   SinglePosterFields,
+  buildApprovedEnglishCopy,
   buildMultiProductPosterPrompt,
   buildSingleProductPosterPrompt,
   REMOVE_BG_PROMPT,
@@ -26,7 +27,8 @@ import {
   getActiveEnterprisePack,
   type EnterpriseDesignPack,
 } from '../services/enterpriseDesignPacks';
-import { multiImageRoleBlock } from '../services/creativeQualityKit';
+import { lockedOnImageCopyBlock, multiImageRoleBlock } from '../services/creativeQualityKit';
+import { runMarketingCopyPipeline } from '../services/creativeMarketingCopyPipeline';
 import { downloadMediaFile } from '../services/creativeAssetVault';
 import { EnterpriseDesignPackPanel } from './EnterpriseDesignPackPanel';
 
@@ -229,7 +231,7 @@ export const ModulePosterStudio: React.FC = () => {
     try {
       // 长图以原图为外观主参考；抠图仅作轮廓辅助，避免「抠图贴灰底」的目录页观感
       const workingCutouts = cutouts;
-      setStep('按你填写的资料生成实景电商长图（Wan2.7 Pro，约 1–2 分钟）…');
+      setStep('正在分析产品并生成文案方案…');
       const logo = logoForGen();
       const refs = buildReferenceStack(originals, workingCutouts, logo);
       const effectiveLogoMode =
@@ -237,9 +239,67 @@ export const ModulePosterStudio: React.FC = () => {
 
       const productCount = Math.max(originals.length, workingCutouts.length || 1);
       const layoutTail = !!(activePack?.layoutRefs?.length);
+      const seedFromForm =
+        mode === 'single'
+          ? buildApprovedEnglishCopy(singleFields)
+              .split('\n')
+              .map((s) => s.trim())
+              .filter((s) => s && !s.startsWith('(NO TEXT'))
+          : [
+              multiFields.collectionTitle,
+              multiFields.brandName,
+              multiFields.mainModel ? `Model ${multiFields.mainModel}` : '',
+              multiFields.mainFeatures,
+            ]
+              .map((s) => (s || '').trim())
+              .filter(Boolean);
+
+      const copyPlan = await runMarketingCopyPipeline({
+        productName:
+          mode === 'single'
+            ? singleFields.productName || singleFields.seriesName
+            : multiFields.collectionTitle || multiFields.brandName,
+        skuCode: mode === 'single' ? singleFields.modelNo : multiFields.mainModel,
+        userHighlight:
+          mode === 'single'
+            ? [singleFields.benefit1, singleFields.benefit2, singleFields.benefit3]
+                .filter(Boolean)
+                .join('; ')
+            : multiFields.mainFeatures,
+        seedLines: seedFromForm,
+        locale: 'en',
+        onProgress: (msg) => setStep(msg),
+      });
+
+      // 若表单卖点为空，用流水线结果回填，避免图面空白时模型乱编
+      if (mode === 'single' && !singleFields.benefit1 && copyPlan.approvedOnImageEn[1]) {
+        setSingleFields((p) => ({
+          ...p,
+          benefit1: p.benefit1 || copyPlan.approvedOnImageEn[1] || '',
+          benefit2: p.benefit2 || copyPlan.approvedOnImageEn[2] || '',
+          benefit3: p.benefit3 || copyPlan.approvedOnImageEn[3] || '',
+          productName: p.productName || copyPlan.approvedOnImageEn[0] || p.productName,
+        }));
+      }
+
+      const fieldsForPrompt =
+        mode === 'single'
+          ? {
+              ...singleFields,
+              productName:
+                singleFields.productName || copyPlan.approvedOnImageEn[0] || '',
+              benefit1:
+                singleFields.benefit1 || copyPlan.approvedOnImageEn[1] || '',
+              benefit2:
+                singleFields.benefit2 || copyPlan.approvedOnImageEn[2] || '',
+              benefit3:
+                singleFields.benefit3 || copyPlan.approvedOnImageEn[3] || '',
+            }
+          : multiFields;
+
       const basePrompt =
         mode === 'single'
-          ? buildSingleProductPosterPrompt(singleFields, effectiveLogoMode)
+          ? buildSingleProductPosterPrompt(fieldsForPrompt as typeof singleFields, effectiveLogoMode)
           : buildMultiProductPosterPrompt(
               multiFields,
               productCount,
@@ -249,11 +309,15 @@ export const ModulePosterStudio: React.FC = () => {
         lastIsLayout: layoutTail && refs.length >= 2,
         distinctProducts: mode === 'multi' && !layoutTail && productCount > 1,
       });
+      const textLock =
+        copyPlan.onImageLockBlock ||
+        lockedOnImageCopyBlock(copyPlan.approvedOnImageEn);
       const prompt = applyPackStyleToPrompt(
-        [roleBlock, basePrompt].filter(Boolean).join('\n'),
+        [textLock, roleBlock, basePrompt].filter(Boolean).join('\n'),
         activePack
       );
 
+      setStep('文案已校验，正在生成海报…');
       const res = await generateWanImage(
         {
           prompt,

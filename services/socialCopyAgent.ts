@@ -105,14 +105,40 @@ export const generateSocialCopyWithLlm = async (
     .filter(Boolean)
     .join('\n');
 
-  const raw = await callQwen(`${SYSTEM}\n\n---\n${user}`, {
-    jsonMode: true,
-    task: 'analysis',
-    timeoutMs: 90_000,
-    maxTokens: 2048,
-    enableSearch: false,
-    forcedSearch: false,
-  });
+  // 先查同类介绍再写帖，减少胡编卖点
+  let evidence = '';
+  try {
+    const { hasTavilyKey, tavilySearch } = await import('./tavilyService');
+    if (hasTavilyKey()) {
+      input.onProgress?.('正在查阅同类产品介绍…');
+      const data = await tavilySearch(
+        `${input.productName} toy features benefits marketing`,
+        { maxResults: 4, searchDepth: 'basic', includeAnswer: true }
+      );
+      evidence = [
+        data.answer || '',
+        ...(data.results || []).slice(0, 4).map((r) => `${r.title}: ${(r.content || '').slice(0, 200)}`),
+      ]
+        .filter(Boolean)
+        .join('\n')
+        .slice(0, 2800);
+    }
+  } catch {
+    /* ignore */
+  }
+
+  input.onProgress?.('正在生成并校验文案…');
+  const raw = await callQwen(
+    `${SYSTEM}\n\n---\n${user}${evidence ? `\n同类介绍参考：\n${evidence}` : ''}`,
+    {
+      jsonMode: true,
+      task: 'analysis',
+      timeoutMs: 90_000,
+      maxTokens: 2048,
+      enableSearch: !evidence,
+      forcedSearch: !evidence,
+    }
+  );
 
   let parsed: {
     titleLine?: string;
@@ -167,9 +193,18 @@ export const generateSocialCoverImage = async (opts: {
   const vertical = opts.platform === 'tiktok';
   const square = opts.platform === 'instagram' || opts.platform === 'whatsapp';
 
-  opts.onProgress?.('正在生成渠道配图…');
+  opts.onProgress?.('正在准备渠道配图文案…');
   const { composeImageGenerationPrompt } = await import('./creativeQualityKit');
+  const { runMarketingCopyPipeline } = await import('./creativeMarketingCopyPipeline');
   const socialRefs = (opts.referenceImages || []).filter(Boolean).slice(0, 4);
+  const copyPlan = await runMarketingCopyPipeline({
+    productName: opts.productName,
+    userHighlight: opts.highlight,
+    locale: opts.locale,
+    seedLines: [opts.productName, opts.highlight || ''].filter(Boolean),
+    onProgress: opts.onProgress,
+  });
+  opts.onProgress?.('正在生成渠道配图…');
   const composed = composeImageGenerationPrompt({
     skillDefaultPrompt: [
       vertical
@@ -177,7 +212,7 @@ export const generateSocialCoverImage = async (opts: {
         : square
           ? 'Square 1:1 social product post visual'
           : 'Landscape social share image for B2B toy wholesale',
-      'Commercial toy product photography, clean background, bold but sparse cover typography area left empty',
+      'Commercial toy product photography, clean background',
       opts.locale === 'zh' ? '适合中国玩具外贸社媒' : 'for global toy importers feed',
       meta ? `Target canvas ${meta.size}` : '',
       socialRefs.length > 1
@@ -191,6 +226,8 @@ export const generateSocialCoverImage = async (opts: {
     hasReferenceImages: socialRefs.length > 0,
     referenceCount: socialRefs.length,
     distinctProducts: socialRefs.length > 1,
+    lockedOnImageCopy: copyPlan.approvedOnImageEn.slice(0, 3),
+    onImageLockBlock: copyPlan.onImageLockBlock,
     skillNegative: 'platform UI chrome, garbled cover text, watermark, fake badges, dropping product refs',
   });
 
@@ -203,6 +240,8 @@ export const generateSocialCoverImage = async (opts: {
       referenceImages: socialRefs,
       negativePrompt: composed.negative,
       distinctProducts: socialRefs.length > 1,
+      lockedOnImageCopy: copyPlan.approvedOnImageEn.slice(0, 3),
+      onImageLockBlock: copyPlan.onImageLockBlock,
     });
     const url = result.images[0];
     if (!url) return undefined;

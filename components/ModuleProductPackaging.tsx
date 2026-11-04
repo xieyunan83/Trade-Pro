@@ -335,6 +335,24 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
     setLoading(true);
     setError(null);
     try {
+      const { runMarketingCopyPipeline } = await import(
+        '../services/creativeMarketingCopyPipeline'
+      );
+      const copyPlan = await runMarketingCopyPipeline({
+        productName:
+          active?.skuName ||
+          (skuPick ? skus.find((x) => x.id === skuPick)?.name : undefined),
+        skuCode:
+          active?.skuCode ||
+          (skuPick ? skus.find((x) => x.id === skuPick)?.skuCode : undefined),
+        userHighlight: prompt.trim(),
+        locale: 'en',
+        seedLines: [
+          active?.skuName || '',
+          active?.skuCode ? `Model ${active.skuCode}` : '',
+        ].filter(Boolean),
+        onProgress: (msg) => setError(msg),
+      });
       const result = await generateDesignImages({
         prompt: finalPrompt,
         size,
@@ -343,7 +361,10 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
         referenceImages: refImages.length ? refImages : undefined,
         negativePrompt: negativePrompt.trim() || skill.negativePrompt,
         series: count > 1,
+        lockedOnImageCopy: copyPlan.approvedOnImageEn,
+        onImageLockBlock: copyPlan.onImageLockBlock,
       });
+      setError(null);
       const now = Date.now();
       const newAssetsRaw: PackagingAsset[] = result.images.map((url) => ({
         id: newPackagingId('pa'),
