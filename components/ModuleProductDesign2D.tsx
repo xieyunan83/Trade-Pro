@@ -381,6 +381,27 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
       const layoutLast =
         previewRefs.lastRefIsLayout ||
         (lastRefIsLayout && previewRefs.refs.length >= 2);
+      const generationPromptHints = [
+        prompt.trim(),
+        agentMode === 'secondary' && secondaryFieldsHaveEdits(secondaryFields)
+          ? [
+              secondaryFields.addFeatures,
+              secondaryFields.appearanceEdit,
+              secondaryFields.materialFinish,
+              secondaryFields.productColor,
+              secondaryFields.freeNote,
+              buildSecondaryCreationEditEnglish(secondaryFields),
+            ]
+              .filter(Boolean)
+              .join('\n')
+          : '',
+        ...canvasAssets
+          .slice()
+          .sort((a, b) => b.createdAt - a.createdAt)
+          .slice(0, 4)
+          .map((a) => a.prompt || ''),
+        skill.defaultPrompt || '',
+      ].filter((h) => (h || '').trim().length >= 8);
       const copyPlan = await runMarketingCopyPipeline({
         productName: skuMeta.name || skuRow?.name,
         skuCode: skuMeta.code || skuRow?.skuCode,
@@ -391,6 +412,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
         seedLines: [skuMeta.name || '', skuMeta.code ? `Model ${skuMeta.code}` : ''].filter(
           Boolean
         ),
+        generationPromptHints,
         onProgress: (msg) => setError(msg),
       });
       const brief = await planCreativeBrief({
@@ -421,12 +443,14 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             ? buildSecondaryCreationEditEnglish(secondaryFields)
             : '',
           '图面文字只能使用已校验白名单短句；禁止自由编造英文段落。',
+          '产品与文字分区：产品不得挡住任何标题/卖点文字；文字放在右侧或左侧安全区。',
         ]
           .filter(Boolean)
           .join('\n'),
         skillQaChecklist: [
           ...(skill.qaChecklist || []),
           '图面英文无乱码、无假词、仅白名单短句',
+          '产品未遮挡文字，卖点短句完整可读',
         ].slice(0, 8),
         userBrief: [
           hasRefs

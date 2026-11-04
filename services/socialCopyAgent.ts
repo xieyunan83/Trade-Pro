@@ -202,6 +202,9 @@ export const generateSocialCoverImage = async (opts: {
     userHighlight: opts.highlight,
     locale: opts.locale,
     seedLines: [opts.productName, opts.highlight || ''].filter(Boolean),
+    generationPromptHints: [opts.highlight || '', opts.productName || ''].filter(
+      (h) => (h || '').trim().length >= 4
+    ),
     onProgress: opts.onProgress,
   });
   opts.onProgress?.('正在生成渠道配图…');

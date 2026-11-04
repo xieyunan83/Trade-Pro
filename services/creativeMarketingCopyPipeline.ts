@@ -1,6 +1,8 @@
 /**
  * 营销文案流水线：分析功能 → 查阅同类介绍 → 生成方案 → 校验 → 白名单写入海报/图面。
  * 避免生图模型自行「编造英文乱码」。前台进度文案保持中性，不暴露供应商名。
+ *
+ * 重点来源：① 生成该产品时的提示词/二次创作改点 ② 同类产品公开介绍 ③ 去 AI 腔的人感短句。
  */
 import { callQwen } from './geminiService';
 import { listPoolKeys } from './apiKeyPool';
@@ -17,6 +19,11 @@ export type MarketingCopyPipelineInput = {
   locale?: 'zh' | 'en';
   /** 已有用户填好的短句（海报表单等），优先纳入白名单 */
   seedLines?: string[];
+  /**
+   * 生成该产品时的提示词 / 二次创作改点 / 画布资产 prompt。
+   * 含功能、外观、互动重点，比纯网搜更贴近本款。
+   */
+  generationPromptHints?: string[];
   skipSearch?: boolean;
   onProgress?: (msg: string) => void;
 };
@@ -43,9 +50,7 @@ const looksLikeGibberishWord = (bare: string): boolean => {
   if (!/[aeiouyAEIOUY]/.test(bare) && bare.length >= 4) return true;
   if (/[bcdfghjklmnpqrstvwxz]{4,}/i.test(bare)) return true;
   if (/^[A-Za-z]{11,}$/.test(bare) && !/ing$|tion$|ment$|ness$|able$/i.test(bare)) return true;
-  // 胡拼长词且不含常见词根（如 Commectipees / Paglish）
   if (bare.length >= 7 && !COMMON_STEM.test(bare) && /[aeiou].*[aeiou].*[aeiou]/i.test(bare)) {
-    // 三元音但词形怪异：连续双写 + 罕见尾缀
     if (/([a-z])\1/i.test(bare) && /(ipees|tipees|lish|ectipe|ommect)/i.test(bare)) return true;
     if (/(ipees|tipees|ommect|paglish|sofs|soice)/i.test(bare)) return true;
   }
@@ -65,7 +70,7 @@ const looksLikeGibberish = (line: string): boolean => {
     if (bare.length < 2) continue;
     if (looksLikeGibberishWord(bare)) bad += 1;
   }
-  return bad >= 1; // 任一假词整行作废
+  return bad >= 1;
 };
 
 const normalizeLine = (raw: string): string =>
@@ -100,6 +105,30 @@ const SAFE_FEATURE_BANK = [
   'Catalog Ready Quality',
 ];
 
+/** 从生图/二次创作提示词里抽出可读卖点线索（去掉工程约束块） */
+export const distillGenerationPromptHints = (rawHints: string[]): string => {
+  const scrub = (s: string) =>
+    s
+      .replace(/NEGATIVE CONSTRAINTS[\s\S]*$/gi, '')
+      .replace(/IDENTITY LOCK[\s\S]*?(?=\n[A-Z]{3,}|\n$)/gi, '')
+      .replace(/ON-IMAGE TEXT POLICY[\s\S]*?(?=\n[A-Z]{3,}|\n$)/gi, '')
+      .replace(/TYPOGRAPHY SAFE LAYOUT[\s\S]*?(?=\n[A-Z]{3,}|\n$)/gi, '')
+      .replace(/PRODUCT COMPOSITE[\s\S]*?(?=\n[A-Z]{3,}|\n$)/gi, '')
+      .replace(/MULTI-IMAGE ROLES[\s\S]*?(?=\n[A-Z]{3,}|\n$)/gi, '')
+      .replace(/REFERENCE: Image[^\n]*/gi, '')
+      .replace(/Also avoid:[^\n]*/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const chunks = (rawHints || [])
+    .map((h) => scrub(String(h || '')))
+    .filter((h) => h.length >= 12)
+    .slice(0, 6)
+    .map((h) => h.slice(0, 900));
+  if (!chunks.length) return '';
+  return chunks.join('\n---\n').slice(0, 2800);
+};
+
 const filterApprovedLines = (lines: string[], seeds: string[]): string[] => {
   const out: string[] = [];
   for (const raw of [...seeds, ...lines]) {
@@ -121,10 +150,7 @@ const ensureMinCopyLines = (
 ): string[] => {
   const min = opts.min ?? 4;
   let out = [...lines];
-  const fillers = [
-    opts.productName || '',
-    ...SAFE_FEATURE_BANK,
-  ];
+  const fillers = [opts.productName || '', ...SAFE_FEATURE_BANK];
   for (const f of fillers) {
     if (out.length >= min) break;
     const line = normalizeLine(f);
@@ -166,22 +192,35 @@ const gatherSimilarIntroEvidence = async (
   }
 };
 
-const SYSTEM = `你是澄海玩具出口目录文案专家。必须严格按流水线工作：
-1) 分析产品功能与卖点；2) 参考同类产品如何介绍；3) 生成可印在海报上的短英文；4) 自检拼写与语义。
+const SYSTEM = `你是澄海玩具厂的资深业务文案，给展会目录和海报写短句。口吻要像真人同事写的：具体、好记、有一点温度，不要公关腔或 AI 腔。
+
+必须严格按流水线工作：
+1) 先读「本品生成提示词」——这是本款外形、功能、互动的第一真相；
+2) 再参考同类产品介绍的常见卖点说法（勿照抄品牌名）；
+3) 抽出 4～6 条可印在海报上的英文短句；
+4) 自检拼写与语义，并写一句给业务员看的中文说明。
+
 只输出 JSON（不要 markdown）：
 {
-  "productSummaryZh": "一句话中文产品理解",
+  "productSummaryZh": "一句话中文产品理解（口语、有温度）",
   "functions": ["功能1", "功能2"],
-  "approvedOnImageEn": ["NEW for 2026", "Interactive Robot Dog", "Walk Talk Light"],
-  "panelCaptionZh": "给业务员看的中文说明（不上图）",
-  "panelCaptionEn": "optional longer English for UI panels only",
-  "qaNotes": ["spelling ok", "no gibberish"]
+  "approvedOnImageEn": ["NEW for 2026", "Walks And Talks", "Early Learning Fun"],
+  "panelCaptionZh": "给业务员看的中文说明（不上图，像人说话）",
+  "panelCaptionEn": "optional longer English for UI panels only — warm, concrete",
+  "qaNotes": ["spelling ok", "grounded in generation prompts"]
 }
+
 approvedOnImageEn 硬性规则：
-- 每条 2～6 个英文单词，真实词典词，禁止乱码/假词/拉丁胡拼（如 Sofs Commectipees）
-- 必须 4～6 条且禁止重复或近义重复；优先：年份钩子 / 品名 / 3～4 个功能卖点
-- 禁止假认证、假奖项、长段落、参数表、同一句出现两次
-- 若不确定某句拼写，换一句真实卖点，不要整份留空`;
+- 每条 2～6 个英文单词，真实词典词，禁止乱码/假词/拉丁胡拼
+- 必须 4～6 条且禁止重复或近义重复
+- 优先顺序：年份钩子 → 品名/品类 → 来自生成提示词的核心功能（走路/对话/灯光/遥控/编程等）→ 学习/陪伴价值
+- 禁止假认证、假奖项、长段落、参数表
+- 禁止 AI 套话：revolutionize / unleash / elevate / seamless / dive into / next-level / game-changer / empower / unlock potential
+- 用孩子能玩到的具体动作或家长听得懂的好处（Walks And Talks、Voice Interactive Learning）
+- 若提示词与网搜冲突，以本品生成提示词为准
+- 若不确定某句拼写，换一句真实卖点，不要整份留空
+
+panelCaptionZh / productSummaryZh：像业务员微信里跟客户介绍，短、暖、不堆形容词。`;
 
 /**
  * 分析 → 搜索 → 方案 → 校验 → 返回图面白名单文案。
@@ -194,6 +233,8 @@ export const runMarketingCopyPipeline = async (
     [input.productName, input.category, input.skuCode].filter(Boolean).join(' ') ||
     input.userHighlight ||
     'toy product';
+
+  const distilledHints = distillGenerationPromptHints(input.generationPromptHints || []);
 
   const fallbackLines = filterApprovedLines(
     [
@@ -229,7 +270,7 @@ export const runMarketingCopyPipeline = async (
     evidence = await gatherSimilarIntroEvidence(productHint, input.onProgress);
   }
 
-  input.onProgress?.('正在生成并校验文案方案…');
+  input.onProgress?.('正在结合本品提示词生成文案…');
   const user = [
     `品名：${input.productName || '（未填）'}`,
     input.skuCode ? `型号：${input.skuCode}` : '',
@@ -237,10 +278,14 @@ export const runMarketingCopyPipeline = async (
     input.specs ? `规格/备注：${input.specs.slice(0, 400)}` : '',
     input.userHighlight ? `用户强调：${input.userHighlight.slice(0, 500)}` : '',
     seeds.length ? `用户已填可上图短句：\n${seeds.join('\n')}` : '',
+    distilledHints
+      ? `【本品生成提示词 / 二次创作重点 — 优先采信】\n${distilledHints}`
+      : '（无生成提示词摘录；请结合用户强调与玩具常识）',
     evidence
-      ? `同类介绍摘录（仅参考措辞，勿照抄品牌名）：\n${evidence}`
-      : '（无外部摘录，请结合玩具外贸常识；必要时用联网能力核实功能表述）',
+      ? `同类介绍摘录（仅参考措辞与常见卖点结构，勿照抄品牌名；与本品提示词冲突时以本品为准）：\n${evidence}`
+      : '（无外部摘录；以本品提示词 + 外贸常识为主）',
     `语种偏好：${input.locale === 'en' ? 'English on-image' : '中文说明 + 英文上图短句'}`,
+    '文风：去 AI 化，像真人写的目录短句；上图只短句，不要段落。',
   ]
     .filter(Boolean)
     .join('\n');
@@ -278,10 +323,10 @@ export const runMarketingCopyPipeline = async (
       { productName: input.productName, min: 4 }
     );
 
-    // 二次校验：再让模型挑出错词；失败则本地规则已滤
     let qaPassed = approved.length >= 4 && !approved.some(looksLikeGibberish);
     const qaNotes = [
       ...(Array.isArray(parsed.qaNotes) ? parsed.qaNotes.map(String) : []),
+      distilledHints ? 'used-generation-prompts' : 'no-generation-prompts',
       qaPassed ? 'local-spell-gate:pass' : 'local-spell-gate:fail→topped-up',
     ];
 
@@ -289,8 +334,11 @@ export const runMarketingCopyPipeline = async (
       try {
         input.onProgress?.('正在复核海报短句…');
         const checkRaw = await callQwen(
-          `Check these English poster lines. Reply JSON {"ok":true|false,"fixed":["..."],"bad":["..."]}.
-Reject gibberish / non-words / duplicates. Keep 4-6 UNIQUE real marketing lines, 2-6 words each. Do NOT return empty.
+          `Check these English poster lines for a toy catalog.
+Reply JSON {"ok":true|false,"fixed":["..."],"bad":["..."]}.
+Reject gibberish / non-words / duplicates / AI buzzwords (revolutionize, unleash, elevate, seamless, game-changer).
+Keep 4-6 UNIQUE warm concrete marketing lines, 2-6 real dictionary words each. Do NOT return empty.
+Prefer features grounded in: ${(input.productName || productHint).slice(0, 80)}
 Lines:\n${approved.map((l, i) => `${i + 1}. ${l}`).join('\n')}`,
           {
             jsonMode: true,

@@ -131,6 +131,19 @@ export const productCutoutCompositeBlock = (): string =>
     'REQUIRED: products appear as real objects in the design, not photos pasted inside boxes.',
   ].join(' ');
 
+/**
+ * 文字与产品分区：产品不得挡住介绍文字（用户常见投诉）。
+ */
+export const typographySafeLayoutBlock = (): string =>
+  [
+    'TYPOGRAPHY SAFE LAYOUT (STRICT):',
+    'Reserve a clear copy column / band (e.g. top-right or left strip) with NO product silhouette overlapping any letter.',
+    'Products and text must not collide: no toy covering headlines, bullets, captions, or body areas.',
+    'Keep ≥8% margin between product edges and any text; if space is tight, shrink or move the product — never cover copy.',
+    'FORBIDDEN: product standing on top of paragraphs; text running through the toy; stacking a product over the description block.',
+    'FORBIDDEN: inventing long body paragraphs — only the approved short lines may appear, fully legible.',
+  ].join(' ');
+
 /** 图面文字白名单：只允许印这些短句，否则禁止任何正文（防乱码/重复） */
 export const lockedOnImageCopyBlock = (lines: string[]): string => {
   const cleaned = (lines || [])
@@ -146,11 +159,12 @@ export const lockedOnImageCopyBlock = (lines: string[]): string => {
   }
   return [
     'ON-IMAGE TEXT POLICY (STRICT):',
-    `Render AT MOST these ${cleaned.length} lines — each line AT MOST ONCE. Do not add extra bullets.`,
-    'Copy-paste character-for-character. Do not rewrite, expand, translate, or invent synonyms.',
+    `Render AT MOST these ${cleaned.length} short lines — each ONCE, fully visible, never behind a product.`,
+    'Place them only inside the reserved copy zone (top-right or left band). Huge sharp letters.',
+    'Copy-paste character-for-character. Do not rewrite, expand into paragraphs, or invent synonyms.',
     ...cleaned.map((l, i) => `LINE ${i + 1}: ${l}`),
-    'FORBIDDEN: any English word not in the lines above; duplicate lines; gibberish (e.g. fake words like "Sofs Commectipees"); long paragraphs; tiny micro-text; fake awards.',
-    'If a line cannot be rendered sharply, OMIT it — never invent filler or repeat another line.',
+    'FORBIDDEN: any word not in the lines above; duplicate lines; body paragraphs; multi-sentence blocks; gibberish; tiny micro-text; fake awards; text occluded by products.',
+    'If a line cannot sit fully in the safe zone without touching a product, OMIT that line — never invent filler.',
   ].join('\n');
 };
 
@@ -224,6 +238,7 @@ export const composeImageGenerationPrompt = (opts: {
       ? lockedOnImageCopyBlock(opts.lockedOnImageCopy)
       : lockedOnImageCopyBlock([]));
   const cutoutComposite = hasRefs ? productCutoutCompositeBlock() : '';
+  const typeSafe = typographySafeLayoutBlock();
   const skuLine =
     opts.skuName || opts.skuCode
       ? `Product identity: ${[opts.skuName, opts.skuCode].filter(Boolean).join(' / ')}. Keep SKU appearance consistent.`
@@ -240,6 +255,7 @@ export const composeImageGenerationPrompt = (opts: {
         // 多参考优先钉死「每张都要用」，避免 Brief/二次创作把后几张角度吃掉
         roles,
         cutoutComposite,
+        typeSafe,
         hasRefs ? editDirective : '',
         layoutSwap,
         textLock,
@@ -251,6 +267,7 @@ export const composeImageGenerationPrompt = (opts: {
     : joinBlocks([
         roles,
         cutoutComposite,
+        typeSafe,
         hasRefs ? editDirective : '',
         layoutSwap,
         textLock,
@@ -275,6 +292,7 @@ export const composeImageGenerationPrompt = (opts: {
     UNIVERSAL_IMAGE_NEGATIVES,
     'garbled English, invented words, Latin gibberish, fake body paragraphs on poster',
     'white product cards, rounded photo frames, boxed thumbnails, studio white backdrop behind product, polaroid frames, contact-sheet cells',
+    'product covering text, toy overlapping headlines, text behind product, illegible occluded copy, long prose paragraph on poster',
     opts.lastRefIsLayout ? LAYOUT_SWAP_NEGATIVES : '',
     opts.skillNegative
   );

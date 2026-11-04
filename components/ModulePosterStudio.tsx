@@ -31,6 +31,7 @@ import {
   lockedOnImageCopyBlock,
   multiImageRoleBlock,
   productCutoutCompositeBlock,
+  typographySafeLayoutBlock,
 } from '../services/creativeQualityKit';
 import { runMarketingCopyPipeline } from '../services/creativeMarketingCopyPipeline';
 import { downloadMediaFile } from '../services/creativeAssetVault';
@@ -284,6 +285,29 @@ export const ModulePosterStudio: React.FC = () => {
                 .join('; ')
             : multiFields.mainFeatures,
         seedLines: seedFromForm,
+        generationPromptHints: [
+          mode === 'single'
+            ? [
+                singleFields.productName,
+                singleFields.seriesName,
+                singleFields.benefit1,
+                singleFields.benefit2,
+                singleFields.benefit3,
+                singleFields.hasLight ? 'LED light effects' : '',
+                singleFields.hasSound ? 'sound music voice' : '',
+                singleFields.age ? `age ${singleFields.age}` : '',
+              ]
+                .filter(Boolean)
+                .join('\n')
+            : [
+                multiFields.collectionTitle,
+                multiFields.brandName,
+                multiFields.mainFeatures,
+                multiFields.year ? `NEW for ${multiFields.year}` : '',
+              ]
+                .filter(Boolean)
+                .join('\n'),
+        ].filter((h) => (h || '').trim().length >= 4),
         locale: 'en',
         onProgress: (msg) => setStep(msg),
       });
@@ -330,7 +354,14 @@ export const ModulePosterStudio: React.FC = () => {
         copyPlan.onImageLockBlock ||
         lockedOnImageCopyBlock(copyPlan.approvedOnImageEn);
       const prompt = applyPackStyleToPrompt(
-        [productCutoutCompositeBlock(), textLock, roleBlock, basePrompt]
+        [
+          productCutoutCompositeBlock(),
+          typographySafeLayoutBlock(),
+          textLock,
+          roleBlock,
+          basePrompt,
+          'NEGATIVE also avoid: product covering text, toy overlapping headlines, body paragraphs, gibberish English.',
+        ]
           .filter(Boolean)
           .join('\n'),
         activePack

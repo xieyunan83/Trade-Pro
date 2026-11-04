@@ -351,6 +351,11 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
           active?.skuName || '',
           active?.skuCode ? `Model ${active.skuCode}` : '',
         ].filter(Boolean),
+        generationPromptHints: [
+          prompt.trim(),
+          finalPrompt,
+          skill.defaultPrompt || '',
+        ].filter((h) => (h || '').trim().length >= 8),
         onProgress: (msg) => setError(msg),
       });
       let genRefs = refImages;

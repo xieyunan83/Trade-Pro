@@ -106,6 +106,7 @@ HARD RULES (must obey)
 ${copy}
 - Max 1 short headline per scene (3–8 words). Prefer fewer words.
 - HUGE sharp letters only. No tiny text. No paragraphs. No icon grids with micro captions.
+- Keep text in clear bands that products NEVER cover — if a product would overlap letters, move the product or omit that line.
 - NO specification table. NO parameter grid. NO blurry or unreadable text. If text would be small, use NO text.
 5) DETAILS: do NOT invent close-up callouts, magnifying circles, fake macros, or wrong parts. Prefer whole-product lifestyle shots. If one detail crop is needed, it must match the uploaded photo exactly — otherwise skip detail section.
 6) PACKAGING: packaging photo was NOT uploaded. NEVER draw retail box, color box, carton, shipping box, package flat-lay, or “what’s in the box”. Replace any packaging idea with another lifestyle scene.
@@ -125,7 +126,7 @@ SECTION ORDER (all full-width)
 
 Art: premium photography, sharp focus on product, elegant large typography, cohesive colors, realistic lighting and shadows.
 
-NEGATIVE: studio backdrop, white void, blue seamless, two-column layout, catalog sheet, spec table, tiny blurry text, gibberish, Chinese/Japanese/Korean, invented packaging, carton, retail box, fake close-up circles, wrong product parts, Buy Now, QR, watermark.
+NEGATIVE: studio backdrop, white void, blue seamless, two-column layout, catalog sheet, spec table, tiny blurry text, gibberish, Chinese/Japanese/Korean, invented packaging, carton, retail box, fake close-up circles, wrong product parts, Buy Now, QR, watermark, product covering text, text behind product, long prose paragraphs.
 `.trim();
 };
 
@@ -156,13 +157,13 @@ HARD RULES:
 - ≥5 different full-width real-world usage scenes. No plain studio backgrounds. Distribute all ${productCount} products across scenes so none is missing.
 - Text ONLY from:
 ${copy}
-- Huge sharp English only. No tables. No tiny blurry text.
+- Huge sharp English only. No tables. No tiny blurry text. Products must not cover any letters.
 - NEVER invent packaging/boxes/cartons (no packaging photo uploaded). Use extra lifestyle scenes instead.
 - No two-column layout. No fake detail magnifiers. No Buy Now / QR.
 ${logoLine(logoMode)}
 
 Stack full-width: hero lifestyle → scene2 → scene3 → scene4 → in-environment beauty → scene5 (no packaging) → closing.
-NEGATIVE: studio void, two-column, spec table, blurry micro text, virtual packaging, wrong product, gibberish, dropping later product SKUs, single-product-only when ${productCount} products provided.
+NEGATIVE: studio void, two-column, spec table, blurry micro text, virtual packaging, wrong product, gibberish, dropping later product SKUs, single-product-only when ${productCount} products provided, product covering text, long prose paragraphs.
 `.trim();
 };
 
