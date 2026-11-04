@@ -11,6 +11,13 @@ import {
   Sparkles,
   KeyRound,
   Save,
+  Scissors,
+  Puzzle,
+  Grid3X3,
+  Paintbrush,
+  Bone,
+  Printer,
+  Wrench,
 } from 'lucide-react';
 import type { User } from '../types';
 import { ModuleType } from '../types';
@@ -19,11 +26,14 @@ import {
   type Model3dJob,
   type Model3dMode,
   type Model3dQuality,
+  type Model3dWorkbenchTool,
+  type Model3dMeshOp,
   loadModel3dJobs,
   saveModel3dJobs,
   newCreativeId,
 } from '../services/creativeStudioStore';
 import {
+  ensureOfficialModelTaskId,
   generateModel3d,
   getModel3dProviderStatus,
   hydrateModel3dProvider,
@@ -33,6 +43,9 @@ import {
   sanitizeModel3dJobs,
   type Model3dTextureQuality,
   type TripoConvertFormat,
+  type TripoPostProcessKind,
+  type TripoSegmentGranularity,
+  type TripoRigType,
 } from '../services/model3dService';
 import { loadDataProviderLocal, saveDataProvider } from '../services/dataProviders';
 import { consumeCreativeHandoff } from '../services/creativeAssetBridge';
@@ -86,11 +99,19 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
   const [hydrating, setHydrating] = useState(true);
   const [quickKey, setQuickKey] = useState('');
   const [savingKey, setSavingKey] = useState(false);
+  /** 制造工作台当前工具 */
+  const [workbenchTool, setWorkbenchTool] = useState<Model3dWorkbenchTool>('generate');
+  const [segmentGranularity, setSegmentGranularity] =
+    useState<TripoSegmentGranularity>('balanced');
+  const [retopoFaceLimit, setRetopoFaceLimit] = useState(8000);
+  const [retopoQuad, setRetopoQuad] = useState(true);
+  const [rigType, setRigType] = useState<TripoRigType>('biped');
   const fileRef = useRef<HTMLInputElement>(null);
   const glbFileRef = useRef<HTMLInputElement>(null);
   const skus = useMemo(() => loadCatalogSkus(), []);
   const active = jobs.find((j) => j.id === activeId) || null;
   const isAdmin = currentUser.role === 'admin' || currentUser.role === 'director';
+  const editChannelReady = isTripoOfficialReady();
 
   useEffect(() => {
     let cancelled = false;
@@ -206,15 +227,20 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     setProvider(st);
     setSavingKey(false);
     setQuickKey('');
-    setMsgTone(st.ready ? 'ok' : 'error');
+    const editOk = target === 'tripo' && isTripoOfficialReady();
+    setMsgTone(st.ready || editOk ? 'ok' : 'error');
     setMsg(
-      st.ready
-        ? target === 'qwen_tripo'
-          ? '3D 主通道 Key 已保存并启用，可以开始生成'
-          : target === 'hunyuan3d'
-            ? '3D 备选 Key 已保存并启用，可以开始生成'
-            : '3D API 已保存并启用，可以开始生成'
-        : st.detail
+      target === 'tripo'
+        ? editOk
+          ? '3D 编辑通道 Key 已保存：可进行部件拆分 / 重拓扑 / STL 制造导出'
+          : '编辑通道 Key 已写入，请确认已启用'
+        : st.ready
+          ? target === 'qwen_tripo'
+            ? '3D 主通道 Key 已保存并启用，可以开始生成'
+            : target === 'hunyuan3d'
+              ? '3D 备选 Key 已保存并启用，可以开始生成'
+              : '3D API 已保存并启用，可以开始生成'
+          : st.detail
     );
   };
 
@@ -534,52 +560,95 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     }
   };
 
-  /** Tripo 后处理：贴图 / 减面 / 格式转换 */
-  const runPostProcess = async (
-    kind: 'texture_hd' | 'lowpoly' | 'convert',
-    format?: TripoConvertFormat
-  ) => {
+  /** 制造工作台后处理：拆分 / 补全 / 重拓扑 / 贴图 / 绑定 / 导出 */
+  const runPostProcess = async (kind: TripoPostProcessKind, format?: TripoConvertFormat) => {
     if (!active || active.status !== 'ready') return;
-    const taskId = (active.providerTaskId || active.sourceTaskId || '').trim();
-    if (!taskId || active.provider === 'local') {
+    if (!editChannelReady) {
       setMsgTone('error');
-      setMsg('本地导入的模型无法云端后处理；请直接下载生成结果。');
+      setMsg(
+        '制造级后处理需配置官方 3D 编辑通道 Key（tsk_ 开头）。图/文生可用主通道；拆分部件、重拓扑、导出 STL 请另配编辑 Key。'
+      );
       return;
     }
-    if (!isTripoOfficialReady()) {
+    const modelUrl = pickLocalOrRemoteModelUrl(active);
+    if (!modelUrl && !(active.providerTaskId || active.officialTaskId)) {
       setMsgTone('error');
-      setMsg('当前通道不支持云端后处理，请直接下载生成结果。');
+      setMsg('当前任务没有可用模型，请先生成或导入 GLB。');
       return;
     }
-    if (active.provider && active.provider !== 'tripo') {
+    if (kind === 'complete' && !active.segmentTaskId) {
       setMsgTone('error');
-      setMsg('当前模型不支持云端贴图/减面/转换，请直接下载生成结果。');
+      setMsg('请先完成「部件拆分」，再执行部件补全（手板/模具分水口前需拆分）。');
+      setWorkbenchTool('segment');
       return;
     }
+
     setBusy(true);
     setMsgTone('info');
-    setMsg(
-      kind === 'texture_hd'
-        ? '正在高清贴图重做…'
-        : kind === 'lowpoly'
-          ? '正在智能减面…'
-          : `正在转换为 ${format || 'OBJ'}…`
-    );
+    const kindHint =
+      kind === 'segment'
+        ? '正在部件拆分…'
+        : kind === 'complete'
+          ? '正在部件补全…'
+          : kind === 'retopo' || kind === 'lowpoly'
+            ? '正在重拓扑（制造减面）…'
+            : kind === 'texture_hd'
+              ? '正在高清贴图…'
+              : kind === 'rig'
+                ? '正在自动绑定…'
+                : `正在导出 ${format || 'STL'}…`;
+    setMsg(kindHint);
+
     try {
-      const result = await runTripoPostProcess({
-        kind,
-        originalTaskId: taskId,
-        format,
-        texturePrompt: prompt.trim() || undefined,
-        onTaskCreated: (tid) => patchJob(active.id, { providerTaskId: tid }),
+      // 千问/混元/本地 → 先导入官方编辑通道
+      const officialId = await ensureOfficialModelTaskId({
+        provider: active.provider,
+        providerTaskId: active.providerTaskId,
+        officialTaskId: active.officialTaskId,
+        modelUrl,
         onProgress: (pct, status) => {
           patchJob(active.id, {
             status: 'running',
-            progress: Math.round(pct),
-            previewHint: `后处理 ${status} ${Math.round(pct)}%`,
+            progress: Math.min(35, Math.round(pct * 0.35)),
+            previewHint: `导入编辑通道 ${status} ${Math.round(pct)}%`,
           });
         },
       });
+      if (officialId !== active.officialTaskId) {
+        patchJob(active.id, { officialTaskId: officialId });
+      }
+
+      const upstreamId =
+        kind === 'complete'
+          ? (active.segmentTaskId || officialId).trim()
+          : (active.provider === 'tripo'
+              ? (active.providerTaskId || officialId)
+              : officialId
+            ).trim();
+
+      const result = await runTripoPostProcess({
+        kind,
+        originalTaskId: upstreamId,
+        format,
+        texturePrompt: prompt.trim() || undefined,
+        faceLimit: retopoFaceLimit,
+        quad: retopoQuad,
+        segmentGranularity,
+        rigType,
+        onTaskCreated: (tid) =>
+          patchJob(active.id, {
+            providerTaskId: tid,
+            officialTaskId: tid,
+          }),
+        onProgress: (pct, status) => {
+          patchJob(active.id, {
+            status: 'running',
+            progress: Math.round(35 + pct * 0.65),
+            previewHint: `${kindHint.replace('…', '')} · ${status} ${Math.round(pct)}%`,
+          });
+        },
+      });
+
       const converted =
         kind === 'convert' && format
           ? { ...(active.convertedUrls || {}), [format]: result.modelUrl }
@@ -587,24 +656,41 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
       const formats = Array.from(
         new Set([...(active.exportFormats || ['GLB']), ...(format ? [format] : ['GLB'])])
       );
+      const opKind =
+        kind === 'lowpoly'
+          ? 'retopo'
+          : kind === 'texture_hd'
+            ? 'texture_hd'
+            : kind === 'convert'
+              ? 'convert'
+              : kind === 'segment'
+                ? 'segment'
+                : kind === 'complete'
+                  ? 'complete'
+                  : kind === 'rig'
+                    ? 'rig'
+                    : 'retopo';
+      const op: Model3dMeshOp = {
+        kind: opKind,
+        taskId: result.taskId,
+        label: result.label,
+        at: Date.now(),
+      };
       const next: Partial<Model3dJob> = {
         status: 'ready',
         progress: 100,
-        provider: 'tripo',
         providerTaskId: result.taskId,
-        sourceTaskId: active.sourceTaskId || taskId,
+        officialTaskId: result.taskId,
+        sourceTaskId: active.sourceTaskId || active.providerTaskId || officialId,
+        segmentTaskId: kind === 'segment' ? result.taskId : active.segmentTaskId,
         modelUrl: kind === 'convert' ? active.modelUrl || result.modelUrl : result.modelUrl,
         pbrModelUrl: kind === 'convert' ? active.pbrModelUrl : result.pbrModelUrl || result.modelUrl,
         baseModelUrl: kind === 'convert' ? active.baseModelUrl : result.baseModelUrl,
         previewImageUrl: result.previewImageUrl || active.previewImageUrl,
         convertedUrls: converted,
         exportFormats: formats,
-        previewHint:
-          kind === 'texture_hd'
-            ? '高清贴图完成 · 可环视'
-            : kind === 'lowpoly'
-              ? '智能减面完成 · 可环视'
-              : `${format} 已就绪 · 见下方导出`,
+        meshOps: [...(active.meshOps || []), op].slice(-20),
+        previewHint: `${result.label}完成 · 可环视 / 导出制造格式`,
         error: undefined,
         updatedAt: Date.now(),
       };
@@ -613,10 +699,8 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
       setMsgTone('ok');
       setMsg(
         kind === 'convert'
-          ? `${format} 转换完成，可下载`
-          : kind === 'texture_hd'
-            ? '高清贴图完成'
-            : '智能减面完成'
+          ? `${format} 已就绪，可用于 3D 打印 / 手板 / 模具`
+          : `${result.label}完成`
       );
       if (kind !== 'convert') {
         const merged = { ...active, ...next } as Model3dJob;
@@ -695,7 +779,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
             <span className="inline-flex items-center gap-1 text-indigo-700 font-black text-[10px] uppercase tracking-widest">
               <Box size={12} /> 3D Studio
             </span>
-            <h2 className="text-base font-extrabold text-slate-900">产品设计 · 3D 图</h2>
+            <h2 className="text-base font-extrabold text-slate-900">产品设计 · 3D 工作台</h2>
             <div
               className={`text-[10px] font-bold rounded-lg px-2 py-1 border ${
                 hydrating
@@ -705,19 +789,307 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                     : 'text-rose-800 bg-rose-50 border-rose-200'
               }`}
             >
-              {hydrating ? '同步中…' : provider.ready ? '服务已就绪' : '需配置 API Key'}
+              {hydrating ? '同步中…' : provider.ready ? '生成已就绪' : '需配置 API Key'}
+            </div>
+            <div
+              className={`text-[10px] font-bold rounded-lg px-2 py-1 border ${
+                editChannelReady
+                  ? 'text-teal-800 bg-teal-50 border-teal-200'
+                  : 'text-amber-800 bg-amber-50 border-amber-200'
+              }`}
+              title="部件拆分 / 重拓扑 / STL 导出依赖编辑通道"
+            >
+              {editChannelReady ? '制造编辑已就绪' : '制造编辑待配置'}
             </div>
           </div>
+          <p className="text-[10px] text-slate-500 font-medium max-w-md text-right leading-snug">
+            生成 → 拆分部件 → 补全 → 重拓扑 → 导出 STL/OBJ，对接 3D 打印、手板与开模
+          </p>
         </div>
         <div className="mt-1.5">
           <CreativePipelineBar current="3d" onNavigate={onNavigateModule} />
         </div>
       </div>
 
-      {/* 预览区加宽，接近正方形视口 */}
+      {/* 工作台：左侧工具轨 + 参数 | 中预览 | 右项目库 */}
       <div className="grid lg:grid-cols-12 gap-3">
         <div className="lg:col-span-3 space-y-3 max-h-[min(78vh,52rem)] overflow-y-auto custom-scrollbar pr-0.5">
-          {!provider.ready && (
+          {/* 制造流水线工具轨 */}
+          <div className="rounded-2xl border border-slate-200 bg-slate-950 text-white p-2">
+            <div className="text-[9px] font-black uppercase tracking-widest text-slate-400 px-1.5 mb-1.5 flex items-center gap-1">
+              <Wrench size={10} /> 制造工作台
+            </div>
+            <div className="grid grid-cols-4 gap-1">
+              {(
+                [
+                  { id: 'generate' as const, label: '生成', icon: Sparkles },
+                  { id: 'segment' as const, label: '拆分', icon: Scissors },
+                  { id: 'complete' as const, label: '补全', icon: Puzzle },
+                  { id: 'retopo' as const, label: '重拓扑', icon: Grid3X3 },
+                  { id: 'texture' as const, label: '贴图', icon: Paintbrush },
+                  { id: 'rig' as const, label: '绑定', icon: Bone },
+                  { id: 'export' as const, label: '导出', icon: Printer },
+                ] as const
+              ).map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setWorkbenchTool(t.id)}
+                  className={`flex flex-col items-center gap-0.5 rounded-xl px-1 py-2 text-[9px] font-black transition ${
+                    workbenchTool === t.id
+                      ? 'bg-amber-400 text-slate-950 shadow'
+                      : 'bg-white/5 text-slate-300 hover:bg-white/10'
+                  }`}
+                >
+                  <t.icon size={14} />
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            {!editChannelReady && workbenchTool !== 'generate' && (
+              <div className="mt-2 space-y-1.5 px-1">
+                <p className="text-[9px] text-amber-200/90 font-medium leading-relaxed">
+                  拆分 / 补全 / 重拓扑 / 绑定 / 制造导出需编辑通道 Key（tsk_ 开头）。
+                </p>
+                {isAdmin && (
+                  <div className="flex gap-1">
+                    <input
+                      type="password"
+                      value={quickKey}
+                      onChange={(e) => setQuickKey(e.target.value)}
+                      placeholder="粘贴 tsk_ 编辑 Key"
+                      className="flex-1 rounded-lg border border-white/20 bg-white/10 px-2 py-1.5 text-[10px] text-white placeholder:text-slate-500"
+                      autoComplete="off"
+                    />
+                    <button
+                      type="button"
+                      disabled={savingKey}
+                      onClick={() => void saveQuickKey()}
+                      className="rounded-lg bg-amber-400 text-slate-950 text-[9px] font-black px-2 disabled:opacity-50"
+                    >
+                      保存
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {workbenchTool !== 'generate' && active?.status === 'ready' && (
+            <div className="rounded-2xl border border-teal-200 bg-teal-50/60 p-3 space-y-2.5">
+              {workbenchTool === 'segment' && (
+                <>
+                  <div className="text-xs font-black text-teal-900 flex items-center gap-1">
+                    <Scissors size={13} /> 部件拆分
+                  </div>
+                  <p className="text-[10px] text-teal-800/80 font-medium leading-relaxed">
+                    按几何自动拆成可打印 / 开模部件。建议粗略 3–6、标准 8–15、精细 15+ 件。
+                  </p>
+                  <div className="grid grid-cols-3 gap-1">
+                    {(
+                      [
+                        { id: 'simple' as const, label: '粗略', tip: '3–6' },
+                        { id: 'balanced' as const, label: '标准', tip: '8–15' },
+                        { id: 'detailed' as const, label: '精细', tip: '15+' },
+                      ] as const
+                    ).map((g) => (
+                      <button
+                        key={g.id}
+                        type="button"
+                        onClick={() => setSegmentGranularity(g.id)}
+                        className={`rounded-lg border px-1.5 py-1.5 text-center ${
+                          segmentGranularity === g.id
+                            ? 'border-teal-500 bg-white text-teal-900'
+                            : 'border-teal-100 bg-white/50 text-teal-700'
+                        }`}
+                      >
+                        <div className="text-[10px] font-black">{g.label}</div>
+                        <div className="text-[8px] font-bold opacity-70">{g.tip}</div>
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    disabled={busy || !editChannelReady}
+                    onClick={() => void runPostProcess('segment')}
+                    className="w-full rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-black py-2.5 disabled:opacity-50"
+                  >
+                    {busy ? '拆分中…' : '开始拆分'}
+                  </button>
+                </>
+              )}
+              {workbenchTool === 'complete' && (
+                <>
+                  <div className="text-xs font-black text-teal-900 flex items-center gap-1">
+                    <Puzzle size={13} /> 部件补全
+                  </div>
+                  <p className="text-[10px] text-teal-800/80 font-medium leading-relaxed">
+                    对已拆分部件补封闭面，便于单独 3D 打印与模具分件。须先完成拆分。
+                  </p>
+                  <button
+                    type="button"
+                    disabled={busy || !editChannelReady || !active.segmentTaskId}
+                    onClick={() => void runPostProcess('complete')}
+                    className="w-full rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-black py-2.5 disabled:opacity-50"
+                  >
+                    {busy ? '补全中…' : '开始补全'}
+                  </button>
+                </>
+              )}
+              {workbenchTool === 'retopo' && (
+                <>
+                  <div className="text-xs font-black text-teal-900 flex items-center gap-1">
+                    <Grid3X3 size={13} /> 重拓扑
+                  </div>
+                  <p className="text-[10px] text-teal-800/80 font-medium leading-relaxed">
+                    降面并整理拓扑。四边面利于模具/细分；三角面利于打印与引擎。打印建议 5k–20k 面。
+                  </p>
+                  <div className="grid grid-cols-2 gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setRetopoQuad(true)}
+                      className={`rounded-lg border px-2 py-1.5 text-[10px] font-black ${
+                        retopoQuad ? 'border-teal-500 bg-white' : 'border-teal-100 bg-white/40'
+                      }`}
+                    >
+                      四边面
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRetopoQuad(false)}
+                      className={`rounded-lg border px-2 py-1.5 text-[10px] font-black ${
+                        !retopoQuad ? 'border-teal-500 bg-white' : 'border-teal-100 bg-white/40'
+                      }`}
+                    >
+                      三角面
+                    </button>
+                  </div>
+                  <label className="block text-[9px] font-black text-teal-700 uppercase tracking-wider">
+                    目标面数 {retopoFaceLimit.toLocaleString()}
+                  </label>
+                  <input
+                    type="range"
+                    min={500}
+                    max={50000}
+                    step={500}
+                    value={retopoFaceLimit}
+                    onChange={(e) => setRetopoFaceLimit(Number(e.target.value))}
+                    className="w-full accent-teal-600"
+                  />
+                  <button
+                    type="button"
+                    disabled={busy || !editChannelReady}
+                    onClick={() => void runPostProcess('retopo')}
+                    className="w-full rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-black py-2.5 disabled:opacity-50"
+                  >
+                    {busy ? '重拓扑中…' : '开始重拓扑'}
+                  </button>
+                </>
+              )}
+              {workbenchTool === 'texture' && (
+                <>
+                  <div className="text-xs font-black text-teal-900 flex items-center gap-1">
+                    <Paintbrush size={13} /> 高清贴图
+                  </div>
+                  <p className="text-[10px] text-teal-800/80 font-medium leading-relaxed">
+                    对当前网格重做 PBR 贴图。可用上方「描述」作贴图提示。高模请先重拓扑再贴图更稳。
+                  </p>
+                  <button
+                    type="button"
+                    disabled={busy || !editChannelReady}
+                    onClick={() => void runPostProcess('texture_hd')}
+                    className="w-full rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-black py-2.5 disabled:opacity-50"
+                  >
+                    {busy ? '贴图中…' : '生成贴图'}
+                  </button>
+                </>
+              )}
+              {workbenchTool === 'rig' && (
+                <>
+                  <div className="text-xs font-black text-teal-900 flex items-center gap-1">
+                    <Bone size={13} /> 自动绑定
+                  </div>
+                  <p className="text-[10px] text-teal-800/80 font-medium leading-relaxed">
+                    为人形/生物模型加骨骼，便于演示动画。开模打印请优先拆分与导出，不必绑定。
+                  </p>
+                  <div className="grid grid-cols-2 gap-1">
+                    {(
+                      [
+                        { id: 'biped' as const, label: '人形' },
+                        { id: 'quadruped' as const, label: '四足' },
+                      ] as const
+                    ).map((r) => (
+                      <button
+                        key={r.id}
+                        type="button"
+                        onClick={() => setRigType(r.id)}
+                        className={`rounded-lg border px-2 py-1.5 text-[10px] font-black ${
+                          rigType === r.id ? 'border-teal-500 bg-white' : 'border-teal-100 bg-white/40'
+                        }`}
+                      >
+                        {r.label}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    disabled={busy || !editChannelReady}
+                    onClick={() => void runPostProcess('rig')}
+                    className="w-full rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-black py-2.5 disabled:opacity-50"
+                  >
+                    {busy ? '绑定中…' : '自动绑定'}
+                  </button>
+                </>
+              )}
+              {workbenchTool === 'export' && (
+                <>
+                  <div className="text-xs font-black text-teal-900 flex items-center gap-1">
+                    <Printer size={13} /> 制造导出
+                  </div>
+                  <p className="text-[10px] text-teal-800/80 font-medium leading-relaxed">
+                    STL / 3MF 适合 3D 打印与手板；OBJ / FBX 适合模具 CAD。建议拆分+重拓扑后再导出。
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(['STL', '3MF', 'OBJ', 'FBX', 'GLTF', 'USDZ'] as TripoConvertFormat[]).map(
+                      (fmt) => (
+                        <button
+                          key={fmt}
+                          type="button"
+                          disabled={busy || !editChannelReady}
+                          onClick={() => void runPostProcess('convert', fmt)}
+                          className="rounded-lg bg-teal-700/90 hover:bg-teal-600 text-white text-[10px] font-black px-2.5 py-1.5 disabled:opacity-50"
+                        >
+                          转 {fmt}
+                        </button>
+                      )
+                    )}
+                  </div>
+                </>
+              )}
+              {!!active.meshOps?.length && (
+                <div className="pt-1 border-t border-teal-100">
+                  <div className="text-[9px] font-black text-teal-700 uppercase tracking-wider mb-1">
+                    已完成步骤
+                  </div>
+                  <ul className="space-y-0.5 max-h-20 overflow-y-auto">
+                    {[...active.meshOps].reverse().slice(0, 6).map((op, i) => (
+                      <li key={`${op.at}-${i}`} className="text-[9px] font-bold text-teal-800/80">
+                        {op.label}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+
+          {workbenchTool !== 'generate' && (!active || active.status !== 'ready') && (
+            <div className="rounded-2xl border border-slate-200 bg-white p-3 text-[11px] text-slate-500 font-medium">
+              请先在「生成」完成模型，再使用拆分 / 重拓扑 / 制造导出。
+            </div>
+          )}
+
+          {workbenchTool === 'generate' && !provider.ready && (
             <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 space-y-2">
               <div className="text-xs font-black text-rose-900 flex items-center gap-1.5">
                 <KeyRound size={14} /> 尚未配置图生 3D API
@@ -751,6 +1123,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
               )}
             </div>
           )}
+          {workbenchTool === 'generate' && (
           <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
             <div className="flex gap-2">
               {(
@@ -1068,6 +1441,21 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
               </p>
             )}
           </div>
+          )}
+
+          {msg && workbenchTool !== 'generate' && (
+            <p
+              className={`text-xs font-bold rounded-xl px-3 py-2 border ${
+                msgTone === 'error'
+                  ? 'text-rose-900 bg-rose-50 border-rose-200'
+                  : msgTone === 'ok'
+                    ? 'text-emerald-900 bg-emerald-50 border-emerald-200'
+                    : 'text-indigo-900 bg-indigo-50 border-indigo-100'
+              }`}
+            >
+              {msg}
+            </p>
+          )}
         </div>
 
         <div className="lg:col-span-6 rounded-2xl border border-slate-200 bg-slate-950 text-white overflow-hidden flex flex-col">
@@ -1246,64 +1634,90 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                   </span>
                 )}
               </div>
-              {isTripoOfficialReady() &&
-                active.provider === 'tripo' &&
-                (active.providerTaskId || active.sourceTaskId) && (
-                  <div className="rounded-xl border border-white/10 bg-white/5 p-2.5 space-y-2">
-                    <div className="text-[10px] font-black text-teal-200/90 uppercase tracking-wider">
-                      云端后处理
-                    </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void runPostProcess('texture_hd')}
-                        className="rounded-lg bg-teal-500/90 hover:bg-teal-400 text-[10px] font-black px-2.5 py-1.5 text-slate-950 disabled:opacity-50"
-                      >
-                        高清贴图
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void runPostProcess('lowpoly')}
-                        className="rounded-lg bg-white/10 hover:bg-white/15 text-[10px] font-black px-2.5 py-1.5 disabled:opacity-50"
-                      >
-                        智能减面
-                      </button>
-                      {(['OBJ', 'STL', 'FBX', 'USDZ', 'GLTF'] as TripoConvertFormat[]).map((fmt) => (
-                        <button
-                          key={fmt}
-                          type="button"
-                          disabled={busy}
-                          onClick={() => void runPostProcess('convert', fmt)}
-                          className="rounded-lg bg-white/10 hover:bg-white/15 text-[10px] font-black px-2 py-1.5 disabled:opacity-50"
-                        >
-                          转 {fmt}
-                        </button>
-                      ))}
-                    </div>
-                    {active.convertedUrls &&
-                      Object.keys(active.convertedUrls).length > 0 && (
-                        <div className="flex flex-wrap gap-1.5 pt-1">
-                          {(Object.entries(active.convertedUrls) as [TripoConvertFormat, string][]).map(
-                            ([fmt, url]) =>
-                              url ? (
-                                <a
-                                  key={fmt}
-                                  href={url}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  download
-                                  className="inline-flex items-center gap-1 rounded-lg bg-emerald-500/20 text-emerald-200 text-[10px] font-black px-2 py-1"
-                                >
-                                  <Download size={10} /> {fmt}
-                                </a>
-                              ) : null
-                          )}
-                        </div>
-                      )}
+              <div className="rounded-xl border border-white/10 bg-white/5 p-2.5 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-[10px] font-black text-teal-200/90 uppercase tracking-wider">
+                    制造快捷
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setWorkbenchTool('segment')}
+                    className="text-[9px] font-black text-amber-300 hover:text-amber-200"
+                  >
+                    打开拆分工作台 →
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    disabled={busy || !editChannelReady}
+                    onClick={() => {
+                      setWorkbenchTool('segment');
+                      void runPostProcess('segment');
+                    }}
+                    className="rounded-lg bg-amber-400/90 hover:bg-amber-300 text-[10px] font-black px-2.5 py-1.5 text-slate-950 disabled:opacity-50"
+                  >
+                    部件拆分
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy || !editChannelReady}
+                    onClick={() => {
+                      setWorkbenchTool('retopo');
+                      void runPostProcess('retopo');
+                    }}
+                    className="rounded-lg bg-white/10 hover:bg-white/15 text-[10px] font-black px-2.5 py-1.5 disabled:opacity-50"
+                  >
+                    重拓扑
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy || !editChannelReady}
+                    onClick={() => {
+                      setWorkbenchTool('export');
+                      void runPostProcess('convert', 'STL');
+                    }}
+                    className="rounded-lg bg-emerald-500/80 hover:bg-emerald-400 text-[10px] font-black px-2.5 py-1.5 text-slate-950 disabled:opacity-50"
+                  >
+                    导出 STL（打印）
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy || !editChannelReady}
+                    onClick={() => {
+                      setWorkbenchTool('export');
+                      void runPostProcess('convert', 'OBJ');
+                    }}
+                    className="rounded-lg bg-white/10 hover:bg-white/15 text-[10px] font-black px-2.5 py-1.5 disabled:opacity-50"
+                  >
+                    导出 OBJ（模具）
+                  </button>
+                </div>
+                {active.convertedUrls && Object.keys(active.convertedUrls).length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {(Object.entries(active.convertedUrls) as [TripoConvertFormat, string][]).map(
+                      ([fmt, url]) =>
+                        url ? (
+                          <a
+                            key={fmt}
+                            href={url}
+                            target="_blank"
+                            rel="noreferrer"
+                            download
+                            className="inline-flex items-center gap-1 rounded-lg bg-emerald-500/20 text-emerald-200 text-[10px] font-black px-2 py-1"
+                          >
+                            <Download size={10} /> {fmt}
+                          </a>
+                        ) : null
+                    )}
                   </div>
                 )}
+                {!editChannelReady && (
+                  <p className="text-[9px] text-amber-200/80 font-medium leading-relaxed">
+                    需配置官方编辑通道 Key（tsk_）后，才可拆分部件并导出打印/开模格式。
+                  </p>
+                )}
+              </div>
             </div>
           )}
         </div>

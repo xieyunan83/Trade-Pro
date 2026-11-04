@@ -8,6 +8,32 @@ export type Model3dJobStatus = 'queued' | 'running' | 'ready' | 'failed';
 export type Model3dProvider = 'tripo' | 'qwen_tripo' | 'hunyuan' | 'local';
 export type Model3dConvertFormat = 'GLTF' | 'USDZ' | 'FBX' | 'OBJ' | 'STL' | '3MF';
 
+/** 制造工作台步骤（对标编辑台：拆分 → 补全 → 重拓扑 → 贴图 → 绑定 → 导出） */
+export type Model3dWorkbenchTool =
+  | 'generate'
+  | 'segment'
+  | 'complete'
+  | 'retopo'
+  | 'texture'
+  | 'rig'
+  | 'export';
+
+export type Model3dMeshOpKind =
+  | 'segment'
+  | 'complete'
+  | 'retopo'
+  | 'texture_hd'
+  | 'rig'
+  | 'convert'
+  | 'import';
+
+export type Model3dMeshOp = {
+  kind: Model3dMeshOpKind;
+  taskId?: string;
+  label: string;
+  at: number;
+};
+
 export type Model3dJob = {
   id: string;
   title: string;
@@ -27,6 +53,12 @@ export type Model3dJob = {
   providerTaskId?: string;
   /** 首次生成任务 ID（后处理链的根） */
   sourceTaskId?: string;
+  /**
+   * 官方编辑通道任务 ID（千问/混元/本地导入后，经 import_model 得到，供拆分/重拓扑等）
+   */
+  officialTaskId?: string;
+  /** 最近一次部件拆分任务（部件补全依赖） */
+  segmentTaskId?: string;
   provider?: Model3dProvider;
   modelVersion?: string;
   /** GLB / 网格下载地址 */
@@ -35,9 +67,13 @@ export type Model3dJob = {
   baseModelUrl?: string;
   /** 渲染预览图 */
   previewImageUrl?: string;
+  /** UV 预览图（若后处理返回） */
+  uvAtlasUrl?: string;
   /** 转换格式下载（OBJ/STL/FBX 等） */
   convertedUrls?: Partial<Record<Model3dConvertFormat, string>>;
   exportFormats: string[];
+  /** 制造流水线操作记录 */
+  meshOps?: Model3dMeshOp[];
   error?: string;
   ownerUsername?: string;
   createdAt: number;

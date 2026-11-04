@@ -70,8 +70,17 @@ export const TRIPO_MODEL_H_STABLE = 'v3.0-20250812';
 export const TRIPO_MODEL_P = 'P1-20260311';
 export const TRIPO_TEXTURE_MODEL = 'v3.0-20250812';
 
-export type TripoPostProcessKind = 'texture_hd' | 'lowpoly' | 'convert';
+export type TripoPostProcessKind =
+  | 'texture_hd'
+  | 'lowpoly'
+  | 'retopo'
+  | 'segment'
+  | 'complete'
+  | 'rig'
+  | 'convert';
 export type TripoConvertFormat = 'GLTF' | 'USDZ' | 'FBX' | 'OBJ' | 'STL' | '3MF';
+export type TripoSegmentGranularity = 'simple' | 'balanced' | 'detailed';
+export type TripoRigType = 'biped' | 'quadruped' | 'hexapod' | 'octopod' | 'serpentine' | 'aquatic';
 
 const sanitizeKey = (k: string) =>
   (k || '')
@@ -583,8 +592,170 @@ const generateModel3dInner = async (input: Model3dGenerateInput): Promise<Model3
   };
 };
 
+/** 从本机 vault / blob / https 拉成 Blob，供上传到官方编辑通道 */
+const resolveModelBlob = async (
+  modelUrl: string
+): Promise<{ blob: Blob; filename: string; ext: string }> => {
+  const raw = (modelUrl || '').trim();
+  if (!raw) throw new Error('缺少模型文件地址');
+
+  let blob: Blob;
+  if (/^https?:\/\//i.test(raw) || raw.startsWith('blob:')) {
+    const res = await fetch(raw);
+    if (!res.ok) throw new Error(`读取模型失败 HTTP ${res.status}`);
+    blob = await res.blob();
+  } else if (raw.startsWith('vault:')) {
+    const { resolveMediaUrl } = await import('./creativeAssetVault');
+    const resolved = await resolveMediaUrl(raw);
+    if (!resolved) throw new Error('本机素材库中找不到该模型，请重新生成或导入');
+    const res = await fetch(resolved);
+    if (!res.ok) throw new Error('读取本机模型失败');
+    blob = await res.blob();
+  } else if (raw.startsWith('data:')) {
+    const m = /^data:([^;]+);base64,(.+)$/i.exec(raw);
+    if (!m) throw new Error('模型 data URL 无效');
+    const bin = atob(m[2]);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    blob = new Blob([arr], { type: m[1] || 'model/gltf-binary' });
+  } else {
+    throw new Error('不支持的模型地址格式，请使用 GLB 下载链或本机导入');
+  }
+
+  if (blob.size > 148 * 1024 * 1024) {
+    throw new Error('模型超过 150MB，无法上传做后处理，请先减面');
+  }
+  const lower = raw.toLowerCase();
+  const ext = lower.includes('.stl')
+    ? 'stl'
+    : lower.includes('.obj')
+      ? 'obj'
+      : lower.includes('.fbx')
+        ? 'fbx'
+        : lower.includes('.gltf')
+          ? 'gltf'
+          : 'glb';
+  return { blob, filename: `model.${ext}`, ext };
+};
+
+/** 上传 3D 文件到官方通道，返回 file_token */
+const uploadModelFile = async (
+  apiKey: string,
+  modelUrl: string
+): Promise<{ fileToken: string; fileType: string }> => {
+  const { blob, filename, ext } = await resolveModelBlob(modelUrl);
+  const tryUpload = async (path: string) => {
+    const form = new FormData();
+    form.append('file', blob, filename);
+    const res = await fetch(tripoUrl(path), {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: form,
+    });
+    const json = await parseJson(res);
+    throwIfApiError(res, json, `模型上传失败 HTTP ${res.status}`);
+    const token =
+      json.data?.file_token ||
+      json.data?.image_token ||
+      json.file_token ||
+      json.image_token ||
+      json.data?.resource_uri ||
+      '';
+    if (!token) throw new Error('模型上传成功但未返回 file_token');
+    return String(token);
+  };
+
+  let fileToken: string;
+  try {
+    fileToken = await tryUpload('/v2/openapi/upload/sts');
+  } catch (e1: any) {
+    try {
+      fileToken = await tryUpload('/v2/openapi/upload');
+    } catch {
+      throw new Error(e1?.message || '模型上传失败');
+    }
+  }
+  return { fileToken, fileType: ext };
+};
+
 /**
- * Tripo 后处理：高清贴图 / 智能减面 / 格式转换（对齐官网工作流）
+ * 将千问/混元/本地 GLB 导入官方编辑通道，得到可用于拆分/重拓扑等的 task_id。
+ * 已有官方任务则直接返回。
+ */
+export const ensureOfficialModelTaskId = async (opts: {
+  provider?: string;
+  providerTaskId?: string;
+  officialTaskId?: string;
+  modelUrl?: string;
+  onProgress?: (pct: number, status: string) => void;
+}): Promise<string> => {
+  if (!isTripoReady()) {
+    throw new Error(
+      '制造级后处理（部件拆分 / 重拓扑 / 导出 STL 等）需配置官方 3D 编辑通道 Key（tsk_ 开头）。生成可用主通道，编辑请另配编辑 Key。'
+    );
+  }
+  const existing = (opts.officialTaskId || '').trim();
+  if (existing) return existing;
+
+  const provider = (opts.provider || '').trim();
+  const tid = (opts.providerTaskId || '').trim();
+  // 官方通道生成的任务可直接串联
+  if (provider === 'tripo' && tid) return tid;
+
+  const modelUrl = (opts.modelUrl || '').trim();
+  if (!modelUrl) {
+    throw new Error('缺少模型文件，无法导入编辑通道。请先生成或导入 GLB。');
+  }
+
+  const { apiKey } = resolveMeta();
+  opts.onProgress?.(5, 'importing');
+
+  let file: Record<string, unknown>;
+  if (/^https?:\/\//i.test(modelUrl) && !/localhost|127\.0\.0\.1/i.test(modelUrl)) {
+    const lower = modelUrl.toLowerCase();
+    const type = lower.includes('.stl')
+      ? 'stl'
+      : lower.includes('.obj')
+        ? 'obj'
+        : lower.includes('.fbx')
+          ? 'fbx'
+          : 'glb';
+    file = { type, url: modelUrl };
+  } else {
+    const up = await uploadModelFile(apiKey, modelUrl);
+    file = { type: up.fileType, file_token: up.fileToken };
+  }
+
+  opts.onProgress?.(12, 'import_queued');
+  const importId = await createTask(apiKey, { type: 'import_model', file });
+  opts.onProgress?.(20, 'import_running');
+  await pollTask(apiKey, importId, opts.onProgress);
+  return importId;
+};
+
+const postProcessLabel = (kind: TripoPostProcessKind, format?: TripoConvertFormat): string => {
+  switch (kind) {
+    case 'segment':
+      return '部件拆分';
+    case 'complete':
+      return '部件补全';
+    case 'lowpoly':
+    case 'retopo':
+      return '重拓扑';
+    case 'texture_hd':
+      return '高清贴图';
+    case 'rig':
+      return '自动绑定';
+    case 'convert':
+      return `导出 ${format || 'OBJ'}`;
+    default:
+      return '后处理';
+  }
+};
+
+/**
+ * 官方编辑通道后处理：部件拆分 / 补全 / 重拓扑 / 贴图 / 绑定 / 格式转换
+ *（对齐编辑台工作流，便于 3D 打印、手板、模具）
  */
 export const runTripoPostProcess = async (opts: {
   kind: TripoPostProcessKind;
@@ -593,18 +764,28 @@ export const runTripoPostProcess = async (opts: {
   format?: TripoConvertFormat;
   texturePrompt?: string;
   faceLimit?: number;
+  /** 重拓扑：四边面（模具/细分友好）或三角面 */
+  quad?: boolean;
+  /** 部件拆分粒度（写入 model_version 旁注；v2 主路径仍用 geometry 拆分） */
+  segmentGranularity?: TripoSegmentGranularity;
+  rigType?: TripoRigType;
+  rigSpec?: 'tripo' | 'mixamo';
   onProgress?: (pct: number, status: string) => void;
   onTaskCreated?: (taskId: string) => void;
-}): Promise<Model3dGenerateResult> => {
+}): Promise<Model3dGenerateResult & { label: string }> => {
   if (!isTripoReady()) {
-    throw new Error('当前 3D 通道不支持云端后处理（贴图重做 / 减面 / 格式转换）。');
+    throw new Error(
+      '当前未配置官方 3D 编辑通道，无法执行部件拆分 / 重拓扑 / 制造导出。请在数据接入填写编辑通道 Key。'
+    );
   }
   const { apiKey } = resolveMeta();
   const original = (opts.originalTaskId || '').trim();
   if (!original) throw new Error('缺少上游任务 ID，无法后处理');
 
+  const kind = opts.kind === 'lowpoly' ? 'retopo' : opts.kind;
   let body: Record<string, unknown>;
-  if (opts.kind === 'texture_hd') {
+
+  if (kind === 'texture_hd') {
     body = {
       type: 'texture_model',
       original_model_task_id: original,
@@ -618,17 +799,42 @@ export const runTripoPostProcess = async (opts: {
     if (opts.texturePrompt?.trim()) {
       body.texture_prompt = { text: opts.texturePrompt.trim().slice(0, 1024) };
     }
-  } else if (opts.kind === 'lowpoly') {
+  } else if (kind === 'retopo') {
+    const faceLimit =
+      opts.faceLimit && opts.faceLimit > 0
+        ? Math.min(100_000, Math.max(500, Math.round(opts.faceLimit)))
+        : 8000;
     body = {
       type: 'highpoly_to_lowpoly',
       original_model_task_id: original,
       model_version: 'P-v2.0-20251225',
-      quad: true,
-      face_limit: opts.faceLimit && opts.faceLimit > 0 ? Math.min(10000, Math.max(500, opts.faceLimit)) : 8000,
+      quad: opts.quad !== false,
+      face_limit: faceLimit,
       bake: true,
     };
+  } else if (kind === 'segment') {
+    body = {
+      type: 'mesh_segmentation',
+      original_model_task_id: original,
+      model_version: 'v1.0-20250506',
+    };
+  } else if (kind === 'complete') {
+    body = {
+      type: 'mesh_completion',
+      original_model_task_id: original,
+      model_version: 'v1.0-20250506',
+    };
+  } else if (kind === 'rig') {
+    body = {
+      type: 'animate_rig',
+      original_model_task_id: original,
+      model_version: 'v2.5-20260210',
+      out_format: 'glb',
+      rig_type: opts.rigType || 'biped',
+      spec: opts.rigSpec || 'tripo',
+    };
   } else {
-    const format = opts.format || 'OBJ';
+    const format = opts.format || 'STL';
     body = {
       type: 'convert_model',
       original_model_task_id: original,
@@ -636,6 +842,8 @@ export const runTripoPostProcess = async (opts: {
       face_limit: opts.faceLimit && opts.faceLimit > 0 ? opts.faceLimit : 10000,
       bake: true,
       pivot_to_center_bottom: true,
+      // 打印友好：尽量贴平底面
+      flatten_bottom: format === 'STL' || format === 'OBJ' || format === '3MF',
     };
   }
 
@@ -650,6 +858,7 @@ export const runTripoPostProcess = async (opts: {
     taskId,
     sourceTaskId: original,
     provider: 'tripo',
+    label: postProcessLabel(opts.kind, opts.format),
   };
 };
 
