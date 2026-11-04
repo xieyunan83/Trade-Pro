@@ -63,6 +63,7 @@ import { CreativePipelineBar, CreativeRefPicker } from './CreativeRefPicker';
 import { MODEL3D_SKILLS, type Model3dSkillId } from '../services/creativeSkills/model3dSkills';
 import { UNIVERSAL_3D_NEGATIVES, mergeNegatives } from '../services/creativeQualityKit';
 import { Model3dOrbitViewer } from './Model3dOrbitViewer';
+import { Model3dPartsViewer } from './Model3dPartsViewer';
 import { CreativeStorageBadge } from './CreativeStorageBadge';
 import { VaultImg, useVaultUrl } from './VaultMedia';
 
@@ -108,14 +109,47 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
   const [retopoFaceLimit, setRetopoFaceLimit] = useState(8000);
   const [retopoQuad, setRetopoQuad] = useState(true);
   const [rigType, setRigType] = useState<TripoRigType>('biped');
+  /** 拆分后：部件着色 + 炸开预览 */
+  const [partsPreview, setPartsPreview] = useState(false);
+  const [partNames, setPartNames] = useState<string[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
   const glbFileRef = useRef<HTMLInputElement>(null);
+  const workbenchPanelRef = useRef<HTMLDivElement>(null);
   const skus = useMemo(() => loadCatalogSkus(), []);
   const active = jobs.find((j) => j.id === activeId) || null;
   const isAdmin = currentUser.role === 'admin' || currentUser.role === 'director';
   /** 千问主通道或官方编辑通道任一即可做拆分/重拓扑等 */
   const editChannelReady = isModel3dEditReady();
   const qwenEditReady = getQwenTripo3dProviderStatus().ready;
+  const hasSegmentResult = !!(active?.segmentTaskId || active?.meshOps?.some((o) => o.kind === 'segment'));
+
+  const openSegmentWorkbench = (opts?: { viewParts?: boolean }) => {
+    setWorkbenchTool('segment');
+    if (opts?.viewParts !== false && hasSegmentResult) {
+      setPartsPreview(true);
+      setMsgTone('ok');
+      setMsg(
+        partNames.length
+          ? `部件预览已打开：共 ${partNames.length} 件，不同颜色区分；可拖动下方「炸开」查看分件`
+          : '部件预览已打开：不同颜色区分各部件，可拖动下方「炸开」查看分件'
+      );
+    }
+    requestAnimationFrame(() => {
+      workbenchPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+  };
+
+  // 切换任务时：有拆分记录则默认看部件预览
+  useEffect(() => {
+    if (!active) {
+      setPartsPreview(false);
+      setPartNames([]);
+      return;
+    }
+    if (active.segmentTaskId) setPartsPreview(true);
+    else setPartsPreview(false);
+    setPartNames([]);
+  }, [active?.id, active?.segmentTaskId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -738,11 +772,17 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
       patchJob(active.id, next);
       setBusy(false);
       setMsgTone('ok');
-      setMsg(
-        kind === 'convert'
-          ? `${format} 已就绪，可用于 3D 打印 / 手板 / 模具`
-          : `${result.label}完成`
-      );
+      if (kind === 'segment') {
+        setPartsPreview(true);
+        setWorkbenchTool('segment');
+        setMsg('部件拆分完成：右侧已切换为「分件着色」预览，拖动「炸开」可看各部件');
+      } else {
+        setMsg(
+          kind === 'convert'
+            ? `${format} 已就绪，可用于 3D 打印 / 手板 / 模具`
+            : `${result.label}完成`
+        );
+      }
       if (kind !== 'convert') {
         const merged = { ...active, ...next } as Model3dJob;
         void persistModel3dJob(merged).then((vaulted) => {
@@ -860,7 +900,10 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
       <div className="grid lg:grid-cols-12 gap-3">
         <div className="lg:col-span-3 space-y-3 max-h-[min(78vh,52rem)] overflow-y-auto custom-scrollbar pr-0.5">
           {/* 制造流水线工具轨 */}
-          <div className="rounded-2xl border border-slate-200 bg-slate-950 text-white p-2">
+          <div
+            ref={workbenchPanelRef}
+            className="rounded-2xl border border-slate-200 bg-slate-950 text-white p-2"
+          >
             <div className="text-[9px] font-black uppercase tracking-widest text-slate-400 px-1.5 mb-1.5 flex items-center gap-1">
               <Wrench size={10} /> 制造工作台
             </div>
@@ -959,8 +1002,21 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                     onClick={() => void runPostProcess('segment')}
                     className="w-full rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-black py-2.5 disabled:opacity-50"
                   >
-                    {busy ? '拆分中…' : '开始拆分'}
+                    {busy ? '拆分中…' : hasSegmentResult ? '重新拆分' : '开始拆分'}
                   </button>
+                  {hasSegmentResult && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPartsPreview(true);
+                        setMsgTone('ok');
+                        setMsg('已切换到分件着色预览：颜色=部件，可调节「炸开」看间隙');
+                      }}
+                      className="w-full rounded-xl border border-teal-300 bg-white text-teal-900 text-[11px] font-black py-2"
+                    >
+                      查看拆分效果（着色 / 炸开）
+                    </button>
+                  )}
                 </>
               )}
               {workbenchTool === 'complete' && (
@@ -1506,7 +1562,11 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         <div className="lg:col-span-6 rounded-2xl border border-slate-200 bg-slate-950 text-white overflow-hidden flex flex-col">
           <div className="px-3 py-2 border-b border-white/10 flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-slate-300">
             <span>
-              {active?.status === 'ready' && downloadUrl ? '3D 环视预览' : '视口预览'}
+              {active?.status === 'ready' && downloadUrl
+                ? partsPreview && hasSegmentResult
+                  ? '拆分效果 · 分件着色'
+                  : '3D 环视预览'
+                : '视口预览'}
             </span>
             <CreativeStorageBadge compact className="!bg-white/10 !border-white/20 !text-slate-200" />
             {active && (
@@ -1538,10 +1598,18 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                 </div>
               </div>
             ) : active?.status === 'ready' && (rawPreviewUrl || rawDownloadUrl) ? (
+              partsPreview && hasSegmentResult ? (
+                <Model3dPartsViewer
+                  src={(rawPreviewUrl || rawDownloadUrl || '').trim()}
+                  className="w-full h-full min-h-0"
+                  explode={0.4}
+                  onPartsFound={(names) => setPartNames(names)}
+                />
+              ) : (
               <Model3dOrbitViewer
                 // 直接传 vault:/https，由预览组件本机秒开；勿等 useVaultUrl 异步，否则会空转半小时
                 src={(rawPreviewUrl || rawDownloadUrl || '').trim()}
-                stableKey={active.id}
+                stableKey={`${active.id}|${active.segmentTaskId || ''}|${active.providerTaskId || ''}|${active.updatedAt || 0}`}
                 poster={previewPoster || undefined}
                 className="w-full h-full min-h-0"
                 downloadHref={downloadUrl || previewUrl || undefined}
@@ -1598,6 +1666,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                   })();
                 }}
               />
+              )
             ) : active?.previewImageUrl ? (
               <div className="flex-1 flex items-center justify-center p-6">
                 <VaultImg
@@ -1686,12 +1755,51 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                   </div>
                   <button
                     type="button"
-                    onClick={() => setWorkbenchTool('segment')}
+                    onClick={() => openSegmentWorkbench({ viewParts: true })}
                     className="text-[9px] font-black text-amber-300 hover:text-amber-200"
                   >
-                    打开拆分工作台 →
+                    {hasSegmentResult ? '查看拆分效果 →' : '打开拆分工作台 →'}
                   </button>
                 </div>
+                {hasSegmentResult && (
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPartsPreview(true);
+                        setMsgTone('ok');
+                        setMsg('分件着色预览：颜色区分部件，底部可调节炸开距离');
+                      }}
+                      className={`rounded-lg text-[10px] font-black px-2.5 py-1.5 ${
+                        partsPreview
+                          ? 'bg-amber-400 text-slate-950'
+                          : 'bg-white/10 hover:bg-white/15'
+                      }`}
+                    >
+                      分件着色
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPartsPreview(false);
+                        setMsgTone('info');
+                        setMsg('已切回整体环视预览');
+                      }}
+                      className={`rounded-lg text-[10px] font-black px-2.5 py-1.5 ${
+                        !partsPreview
+                          ? 'bg-amber-400 text-slate-950'
+                          : 'bg-white/10 hover:bg-white/15'
+                      }`}
+                    >
+                      整体环视
+                    </button>
+                    {partNames.length > 0 && (
+                      <span className="text-[9px] font-bold text-teal-200/80 self-center">
+                        {partNames.length} 个部件
+                      </span>
+                    )}
+                  </div>
+                )}
                 <div className="flex flex-wrap gap-1.5">
                   <button
                     type="button"
