@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import type { AnalysisResult, Client, HistoryItem, MailGroup, User } from '../types';
 import { ModuleType } from '../types';
+import { runGtmLaunchPack } from '../services/gtmExpertService';
 import {
-  runGtmLaunchPack,
-  suggestGtmInputFromCreative,
-} from '../services/gtmExpertService';
+  consumeCreativeHandoff,
+  findSkuByIdOrCode,
+} from '../services/creativeAssetBridge';
 import {
   loadGtmLaunchPacks,
   type GtmClientMatch,
@@ -134,17 +135,16 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
   const focusWebsite = (focusAnalysis?.companyInfo?.website || '').trim();
   const clientMode = !!(focusCompany || focusWebsite);
 
-  const suggested = useMemo(() => suggestGtmInputFromCreative(), []);
-  const formInitial = useMemo<MatchFormValues>(
-    () => ({
-      productName: suggested.productName || '',
-      category: suggested.category || '',
-      priceBand: suggested.priceBand || '',
-      skuCode: suggested.skuCode || '',
-      notes: suggested.notes || suggested.designNotes || '',
-    }),
-    [suggested]
-  );
+  const [formSeed, setFormSeed] = useState(0);
+  const [formInitial, setFormInitial] = useState<MatchFormValues>(() => ({
+    productName: '',
+    category: '',
+    priceBand: '',
+    skuCode: '',
+    notes: '',
+    imageUrls: [],
+    source: 'catalog',
+  }));
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -159,6 +159,30 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
   /** 背调上下文中也可切到「新品找客户」全库模式 */
   const [forceLaunchMode, setForceLaunchMode] = useState(false);
   const showClientMatch = clientMode && !forceLaunchMode;
+
+  /** 消费平面/包装等模块推送的交接包，自动填入选品 */
+  useEffect(() => {
+    const handoff = consumeCreativeHandoff('product_match');
+    if (!handoff) return;
+    const sku = handoff.skuCode ? findSkuByIdOrCode(handoff.skuCode) : undefined;
+    const pack = (sku?.packing || '').trim();
+    const colors = (sku?.colors || '').trim();
+    const priceBand =
+      sku?.factoryPrice != null ? `${sku.currency || 'USD'} ${sku.factoryPrice}` : '';
+    setFormInitial({
+      productName: handoff.skuName || sku?.name || handoff.note || handoff.skuCode || '设计新品',
+      category: sku?.category || '',
+      priceBand,
+      skuCode: handoff.skuCode || sku?.skuCode || '',
+      notes: [handoff.note, pack && `包装:${pack}`, colors && `配色:${colors}`]
+        .filter(Boolean)
+        .join('；'),
+      imageUrls: (handoff.images || []).filter(Boolean).slice(0, 4),
+      source: handoff.images?.length ? 'design' : 'catalog',
+    });
+    setFormSeed((n) => n + 1);
+    setForceLaunchMode(true);
+  }, []);
 
   const openHistoryFor = (m: GtmClientMatch) => {
     if (!m.historyId || !onOpenHistory) return;
@@ -230,13 +254,22 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
       setError(null);
       setProgress('启动双专家…');
       try {
+        const imageNote = values.imageUrls?.length
+          ? `已附 ${values.imageUrls.length} 张产品图（来源:${
+              values.source === 'catalog'
+                ? '产品库'
+                : values.source === 'upload'
+                  ? '本地上传'
+                  : '设计模块'
+            }）`
+          : '';
         const next = await runGtmLaunchPack({
           input: {
             productName: values.productName,
             category: values.category || undefined,
             priceBand: values.priceBand || undefined,
             skuCode: values.skuCode || undefined,
-            notes: values.notes || undefined,
+            notes: [values.notes, imageNote].filter(Boolean).join('；') || undefined,
             designNotes: values.notes || undefined,
           },
           crmClients,
@@ -459,6 +492,8 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
       </div>
 
       <MatchInputForm
+        key={formSeed}
+        seedKey={formSeed}
         initial={formInitial}
         busy={busy}
         progress={progress}
