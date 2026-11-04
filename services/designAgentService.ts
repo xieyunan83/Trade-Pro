@@ -30,6 +30,8 @@ export type DesignGenerateOpts = {
   size?: '1K' | '2K' | '4K';
   thinkingMode?: boolean;
   referenceImages?: string[];
+  /** 与 referenceImages 对齐的短标签（如 正面 / 45° / 侧面 / 版式） */
+  referenceLabels?: string[];
   /** 额外负向（Skill / Brief） */
   negativePrompt?: string;
   /** Listing 等系列一致性 */
@@ -124,16 +126,37 @@ export const MAX_DESIGN_REF_IMAGES = 9;
 const MAX_REF_TOTAL_DATA_CHARS = 3_200_000;
 const MAX_REF_SINGLE_CHARS = 480_000;
 
-const shrinkRefForUpload = async (url: string, many: boolean): Promise<string> => {
-  if (/^https?:\/\//i.test(url)) return url;
+/**
+ * 万相不支持 PNG 透明通道：凡 dataURL 一律压成白底 JPEG，避免后几张参考被接口忽略。
+ */
+const flattenRefToWanJpeg = async (url: string, maxEdge: number, quality: number): Promise<string> => {
+  if (/^https?:\/\//i.test(url)) {
+    try {
+      const resolved = await resolveToDataUrlOrHttps(url);
+      if (resolved?.startsWith('data:image/')) {
+        return compressImageDataUrl(resolved, maxEdge, quality);
+      }
+    } catch {
+      /* keep https if resolve fails */
+    }
+    return url;
+  }
   if (!url.startsWith('data:image/')) return url;
-  let out = url;
+  // 即使体积很小也要转 JPEG（透明 PNG 在多图时会被模型/接口 silently 丢掉）
+  return compressImageDataUrl(url, maxEdge, quality);
+};
+
+const shrinkRefForUpload = async (url: string, many: boolean): Promise<string> => {
   const edge1 = many ? 768 : 1024;
   const edge2 = many ? 560 : 768;
   const edge3 = many ? 448 : 640;
-  if (out.length > 220_000) out = await compressImageDataUrl(out, edge1, many ? 0.62 : 0.72);
-  if (out.length > 360_000) out = await compressImageDataUrl(out, edge2, many ? 0.55 : 0.65);
-  if (out.length > MAX_REF_SINGLE_CHARS) out = await compressImageDataUrl(out, edge3, 0.5);
+  let out = await flattenRefToWanJpeg(url, edge1, many ? 0.62 : 0.78);
+  if (out.startsWith('data:image/') && out.length > 360_000) {
+    out = await compressImageDataUrl(out, edge2, many ? 0.55 : 0.65);
+  }
+  if (out.startsWith('data:image/') && out.length > MAX_REF_SINGLE_CHARS) {
+    out = await compressImageDataUrl(out, edge3, 0.5);
+  }
   return out;
 };
 
@@ -163,7 +186,6 @@ const prepareReferenceImages = async (urls?: string[]): Promise<string[] | undef
         if (shrunk.length > dataBudget) {
           shrunk = await compressImageDataUrl(shrunk, 240, 0.4);
         }
-        // 仍超总预算：宁可再压也不跳过，保证用户选中的每张都尽量进请求
         if (shrunk.length > dataBudget) {
           console.warn(
             `[design] ref #${out.length + 1}/${n} still large (${shrunk.length}), forcing include`
@@ -180,6 +202,31 @@ const prepareReferenceImages = async (urls?: string[]): Promise<string[] | undef
     console.warn(`[design] prepared ${out.length}/${n} refs — some failed resolve/compress`);
   }
   return out.length ? out : undefined;
+};
+
+/** 钉在提示词最前：逐张点名，防止模型只吃 Image 1 */
+export const buildReferenceManifestBlock = (
+  count: number,
+  opts?: { labels?: string[]; lastIsLayout?: boolean }
+): string => {
+  if (count <= 0) return '';
+  const labels = opts?.labels || [];
+  const lastIsLayout = !!opts?.lastIsLayout && count >= 2;
+  const lines = Array.from({ length: count }, (_, i) => {
+    const n = i + 1;
+    const custom = (labels[i] || '').trim();
+    if (lastIsLayout && i === count - 1) {
+      return `Image ${n} = LAYOUT TEMPLATE ONLY (${custom || 'composition / color blocks / type zones'}) — do not keep its merchandise.`;
+    }
+    return `Image ${n} = PRODUCT CUTOUT #${n}${custom ? ` (${custom})` : ''} — MUST appear as its own hero with THIS photo's exact angle/pose.`;
+  });
+  return [
+    `INPUT IMAGE MANIFEST (${count} images — USE EVERY ONE):`,
+    ...lines,
+    lastIsLayout
+      ? `Place all ${count - 1} product cutouts into the layout slots. Never invent angles from Image 1 alone.`
+      : `The output must visibly include all ${count} product cutouts. Never invent angles from Image 1 alone.`,
+  ].join('\n');
 };
 
 /** 去掉易触发「一张图拼多角」的措辞，保留产品描述 */
@@ -303,20 +350,36 @@ export const generateDesignImages = async (
     const hasRefs = !!(refs && refs.length);
     const refCount = refs?.length || 0;
     if (requestedRefCount >= 2 && refCount < requestedRefCount) {
-      console.warn(
-        `[design] only ${refCount}/${requestedRefCount} refs survived prepare — multi-view may degrade`
+      throw new Error(
+        `参考图只成功载入 ${refCount}/${requestedRefCount} 张，无法保证多角度都入画。请重新勾选全部产品图后再试。`
       );
     }
-    const prompt = hardenDesignPrompt(opts.prompt, hasRefs, {
+    const layoutLast = !!opts.lastRefIsLayout && refCount >= 2;
+    const labels = (opts.referenceLabels || []).slice(0, refCount);
+    const manifest = buildReferenceManifestBlock(refCount, {
+      labels,
+      lastIsLayout: layoutLast,
+    });
+    let prompt = hardenDesignPrompt(opts.prompt, hasRefs, {
       negativePrompt: opts.negativePrompt,
       series: opts.series || n > 1,
       referenceCount: refCount,
-      lastRefIsLayout: !!opts.lastRefIsLayout && refCount >= 2,
+      lastRefIsLayout: layoutLast,
       distinctProducts: !!opts.distinctProducts,
       lockedOnImageCopy: opts.lockedOnImageCopy,
       onImageLockBlock: opts.onImageLockBlock,
       userEditBrief: opts.userEditBrief,
     });
+    if (manifest && !/INPUT IMAGE MANIFEST/i.test(prompt)) {
+      prompt = `${manifest}\n${prompt}`;
+    }
+    // 万相提示词约 5000 字截断：清单必须留在最前
+    if (prompt.length > 4800) {
+      const head = manifest || '';
+      const body = head && prompt.startsWith(head) ? prompt.slice(head.length) : prompt;
+      const budget = Math.max(400, 4800 - head.length - 1);
+      prompt = head ? `${head}\n${body.slice(0, budget)}` : prompt.slice(0, 4800);
+    }
     const result = await generateWanImage(
       {
         prompt,

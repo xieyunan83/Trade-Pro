@@ -590,19 +590,25 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
 
   const collectRefImagesDetailed = (
     proj: DesignProject
-  ): { refs: string[]; lastRefIsLayout: boolean } => {
+  ): { refs: string[]; labels: string[]; lastRefIsLayout: boolean } => {
     const boundSku =
       skus.find((s) => s.id === skuPick || s.skuCode === skuPick) ||
       skus.find((s) => s.skuCode === proj.skuCode);
     const fromSku = (boundSku?.images || []).filter(Boolean);
     const layoutSet = new Set((activePack?.layoutRefs || []).filter(Boolean));
+    const angleByUrl = new Map<string, string>();
+    for (const a of canvasAssets) {
+      if (a.url && a.angle) angleByUrl.set(a.url, a.angle);
+    }
     const productMerged: string[] = [];
+    const productLabels: string[] = [];
     // 上传 → 画布选中/生成图 → 产品库；排除版式样本 URL；末位留给 1 张 L1 版式
     const reserveLayout = activePack?.layoutRefs?.length ? 1 : 0;
     const productCap = Math.max(1, MAX_DESIGN_REF_IMAGES - reserveLayout);
     for (const u of [...refUploads, ...canvasProductRefUrls, ...fromSku]) {
       if (!u || productMerged.includes(u) || layoutSet.has(u)) continue;
       productMerged.push(u);
+      productLabels.push(angleByUrl.get(u) || `product ${productMerged.length}`);
       if (productMerged.length >= productCap) break;
     }
     const merged = mergeRefsWithPack(
@@ -614,7 +620,12 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     const layoutLast =
       merged.lastRefIsLayout ||
       (lastRefIsLayout && merged.refs.length >= 2);
-    return { refs: merged.refs, lastRefIsLayout: layoutLast };
+    const labels = merged.refs.map((u, i) => {
+      if (layoutLast && i === merged.refs.length - 1) return 'layout template';
+      const idx = productMerged.indexOf(u);
+      return (idx >= 0 ? productLabels[idx] : '') || `product ${i + 1}`;
+    });
+    return { refs: merged.refs, labels, lastRefIsLayout: layoutLast };
   };
 
   const collectRefImages = (proj: DesignProject): string[] =>
@@ -647,6 +658,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     const proj = ensureProject();
     const collected = collectRefImagesDetailed(proj);
     const refImages = collected.refs;
+    const refLabels = collected.labels;
     const layoutLast = collected.lastRefIsLayout;
     const finalPrompt =
       pendingBrief?.toolPrompt || buildFinalPrompt(refImages.length, layoutLast);
@@ -655,8 +667,11 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
       : '';
     const packHint = activePack ? ` · 模板「${activePack.name}」` : '';
     const modeHint = refImages.length
-      ? `参考图 ${refImages.length} 张 + 文字${packHint}`
+      ? `参考图 ${refImages.length} 张（${refLabels.filter(Boolean).join(' / ') || '产品'}）+ 文字${packHint}`
       : `纯文字${packHint}`;
+    if (refImages.length >= 2) {
+      setError(`将使用全部 ${refImages.length} 张参考图：${refLabels.join('、')}`);
+    }
     const editBrief = resolveEditBrief();
     const userMsg = {
       id: newDesignId('m'),
@@ -688,9 +703,11 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
       if (refImages.length) {
         setError('正在抠出产品主体（去背景）…');
         const { ensureProductCutouts } = await import('../services/productCutoutService');
+        const productSlots = layoutLast ? Math.max(1, refImages.length - 1) : refImages.length;
+        // 多张角度参考时禁止走「生图抠图」，否则会重绘成近似正面、丢掉真实 45°/侧面
         genRefs = await ensureProductCutouts(refImages, {
           lastIsLayout: layoutLast,
-          allowApi: true,
+          allowApi: productSlots <= 1,
           onProgress: (msg) => setError(msg),
         });
         setError(null);
@@ -717,6 +734,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             n: count,
             thinkingMode: false,
             referenceImages: genRefs.length ? genRefs : undefined,
+            referenceLabels: genRefs.length ? refLabels.slice(0, genRefs.length) : undefined,
             negativePrompt: [
               mergedNeg,
               'white product cards, rounded photo frames, boxed thumbnails, studio white backdrop behind product',

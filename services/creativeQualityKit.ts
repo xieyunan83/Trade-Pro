@@ -128,9 +128,10 @@ export const LAYOUT_SWAP_NEGATIVES =
 export const productCutoutCompositeBlock = (): string =>
   [
     'PRODUCT COMPOSITE (STRICT):',
-    'Reference images are PRODUCT SUBJECT cutouts (transparent / no studio backdrop).',
-    'Place each product seamlessly into the poster scene or color field — soft contact shadow OK.',
-    'FORBIDDEN: white/rounded product cards, polaroid frames, boxed thumbnails, UI tiles, keeping the original studio white/gray background behind the toy, floating cutout rectangles, catalog contact-sheet cells.',
+    'Reference images are PRODUCT SUBJECT cutouts on clean white (use the toy silhouette only — ignore any leftover white plate).',
+    'Place EACH provided cutout seamlessly into the poster scene or color field — soft contact shadow OK.',
+    'FORBIDDEN: white/rounded product cards, polaroid frames, boxed thumbnails, UI tiles, floating cutout rectangles, catalog contact-sheet cells.',
+    'FORBIDDEN: using only the first cutout and inventing other angles; every product reference Image must become its own hero placement.',
     'REQUIRED: products appear as real objects in the design, not photos pasted inside boxes.',
   ].join(' ');
 

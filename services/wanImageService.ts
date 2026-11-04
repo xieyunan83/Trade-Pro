@@ -183,6 +183,32 @@ const sanitizeRefImages = (imgs?: string[]): string[] =>
     .filter((s) => /^https?:\/\//i.test(s) || s.startsWith('data:image/'))
     .slice(0, 9);
 
+/**
+ * 万相不支持 PNG 透明通道：入口处把 dataURL 统一成白底 JPEG，
+ * 避免多图时后几张透明 PNG 被忽略、只剩第一张生效。
+ */
+const ensureWanCompatibleRefs = async (imgs: string[]): Promise<string[]> => {
+  if (!imgs.length) return imgs;
+  const { compressImageDataUrl } = await import('./catalogExcelService');
+  const many = imgs.length >= 3;
+  const out: string[] = [];
+  for (const raw of imgs) {
+    if (!raw.startsWith('data:image/')) {
+      out.push(raw);
+      continue;
+    }
+    // 已是较小 JPEG 仍再走一遍白底，保证无 alpha
+    const edge = many ? 640 : 1024;
+    const q = many ? 0.68 : 0.82;
+    try {
+      out.push(await compressImageDataUrl(raw, edge, q));
+    } catch {
+      out.push(raw);
+    }
+  }
+  return out;
+};
+
 const extractImageUrls = (data: any): string[] => {
   const urls: string[] = [];
   const push = (v: unknown) => {
@@ -362,13 +388,21 @@ export const generateWanImage = async (
   configOverride?: Partial<WanImageConfig>
 ): Promise<WanImageResult> => {
   const config = await resolveWanImageConfig(configOverride);
-  const refs = sanitizeRefImages(options.referenceImages);
+  const rawRefs = sanitizeRefImages(options.referenceImages);
+  const refs = await ensureWanCompatibleRefs(rawRefs);
   const thinkingMode = refs.length > 0 ? false : options.thinkingMode === true;
   const timeoutMs = options.timeoutMs ?? 180_000;
 
+  // 多图时在正文最前再次点名张数（接口侧按 content 顺序认 Image 1…N）
+  let promptText = options.prompt.trim();
+  if (refs.length >= 2 && !/INPUT IMAGE MANIFEST|USE EVERY|全部参考图/i.test(promptText)) {
+    promptText = `There are ${refs.length} input images in order (Image 1…Image ${refs.length}). USE EVERY IMAGE. Do not invent missing angles from Image 1 alone.\n${promptText}`;
+  }
+  if (promptText.length > 5000) promptText = promptText.slice(0, 5000);
+
   const content: Array<Record<string, string>> = [];
   for (const img of refs) content.push({ image: img });
-  content.push({ text: options.prompt.trim() });
+  content.push({ text: promptText });
 
   const body = {
     model: config.modelId,
