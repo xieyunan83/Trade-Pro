@@ -164,6 +164,23 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     [canvasAssets, selectedIds]
   );
 
+  /** 画布产品图可直接作二次创作参考：优先已选中，否则用当前画布图（正面角优先） */
+  const canvasProductRefUrls = useMemo(() => {
+    const pool = selectedAssets.length ? selectedAssets : canvasAssets;
+    const rank = (ang?: string) => {
+      if (!ang) return 9;
+      if (/正面|front/i.test(ang)) return 0;
+      if (/45|四分/i.test(ang)) return 1;
+      if (/侧面|side/i.test(ang)) return 2;
+      if (/背面|back/i.test(ang)) return 3;
+      return 5;
+    };
+    return [...pool]
+      .sort((a, b) => rank(a.angle) - rank(b.angle))
+      .map((a) => a.url)
+      .filter(Boolean);
+  }, [selectedAssets, canvasAssets]);
+
   React.useEffect(() => {
     setSelectedIds([]);
   }, [activeId]);
@@ -246,10 +263,13 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     const skuRow = skus.find((s) => s.id === skuPick || s.skuCode === skuPick);
     const hasRefs =
       refUploads.length > 0 ||
+      canvasProductRefUrls.length > 0 ||
       !!(skuRow?.images?.length) ||
       !!(activePack?.layoutRefs?.length);
     const refCountHint = Math.max(
-      refUploads.length + (activePack?.layoutRefs?.length || 0),
+      refUploads.length +
+        canvasProductRefUrls.length +
+        (activePack?.layoutRefs?.length || 0),
       hasRefs ? Math.min(skuRow?.images?.length || 0, MAX_DESIGN_REF_IMAGES) : 0
     );
     const composed = composeImageGenerationPrompt({
@@ -282,9 +302,13 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     setError(null);
     const skuRowEarly = skus.find((s) => s.id === skuPick || s.skuCode === skuPick);
     const hasRefsEarly =
-      refUploads.length > 0 || !!(skuRowEarly?.images?.length);
+      refUploads.length > 0 ||
+      canvasProductRefUrls.length > 0 ||
+      !!(skuRowEarly?.images?.length);
     if (!hasRefsEarly) {
-      setError('请先上传产品参考图，或从产品库选择带图 SKU，再填写要改的包装/颜色/外观。');
+      setError(
+        '请先：上传参考图、从产品库选带图 SKU，或在画布勾选已生成的产品图，再填写包装/颜色/外观改动。'
+      );
       return;
     }
     const editBriefCheck = resolveEditBrief();
@@ -310,7 +334,9 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
       const skuMeta = resolveSkuMeta();
       const skuRow = skus.find((s) => s.id === skuPick || s.skuCode === skuPick);
       const hasRefs =
-        refUploads.length > 0 || !!(skuRow?.images?.length);
+        refUploads.length > 0 ||
+        canvasProductRefUrls.length > 0 ||
+        !!(skuRow?.images?.length);
       let marketNote = '';
       try {
         const profiles = await loadProductCatalog();
@@ -455,17 +481,36 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
       skus.find((s) => s.skuCode === proj.skuCode);
     const fromSku = (boundSku?.images || []).filter(Boolean);
     const productMerged: string[] = [];
-    // 上传参考优先；产品库图仅在仍有空位时补入（版式位留给模板包 L1）
+    // 上传 → 画布选中/生成图 → 产品库；版式位留给模板包 L1
     const reserveLayout = activePack?.layoutRefs?.length
       ? Math.min(2, activePack.layoutRefs.length)
       : 0;
     const productCap = Math.max(1, MAX_DESIGN_REF_IMAGES - reserveLayout);
-    for (const u of [...refUploads, ...fromSku]) {
+    for (const u of [...refUploads, ...canvasProductRefUrls, ...fromSku]) {
       if (!u || productMerged.includes(u)) continue;
       productMerged.push(u);
       if (productMerged.length >= productCap) break;
     }
     return mergeRefsWithPack(productMerged, activePack, MAX_DESIGN_REF_IMAGES).refs;
+  };
+
+  /** 把画布选中图写入右侧参考槽（可见、可删） */
+  const useSelectedAsRefs = () => {
+    const urls = selectedAssets.map((a) => a.url).filter(Boolean);
+    if (!urls.length) {
+      setError('请先在画布勾选要用作参考的产品图');
+      return;
+    }
+    setRefUploads((prev) => {
+      const next = [...prev];
+      for (const u of urls) {
+        if (next.includes(u)) continue;
+        next.push(u);
+        if (next.length >= MAX_DESIGN_REF_IMAGES) break;
+      }
+      return next.slice(0, MAX_DESIGN_REF_IMAGES);
+    });
+    setError(null);
   };
 
   const effectiveLastIsLayout =
@@ -941,6 +986,15 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                   >
                     <Trash2 size={11} /> 删除选中
                   </button>
+                  <button
+                    type="button"
+                    onClick={useSelectedAsRefs}
+                    disabled={!selectedIds.length}
+                    className="text-[10px] font-black rounded-lg bg-emerald-600 text-white px-2.5 py-1.5 inline-flex items-center gap-1 disabled:opacity-40"
+                    title="将勾选的生成图写入右侧参考槽，供二次创作"
+                  >
+                    <ImagePlus size={11} /> 选中 → 作参考
+                  </button>
                   {onNavigateModule ? (
                     <>
                       <span className="text-[10px] text-slate-300 px-0.5">|</span>
@@ -979,7 +1033,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                   ) : null}
                 </div>
                 <p className="text-[10px] text-slate-400 font-medium">
-                  点击图片勾选；可多选后推送。3D 最多 4 张（多视图），视频最多 6 张，包装最多 3 张。
+                  勾选后可「选中 → 作参考」做二次创作，或直接确认生成（会自动用选中/画布图作身份锁）。也可推送 3D / 视频 / 包装。
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {canvasAssets.map((a, i) => {
@@ -1177,6 +1231,22 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             <label className="text-[10px] font-black text-slate-400 uppercase flex items-center gap-1">
               <ImagePlus size={10} /> ② 参考图（最多 {MAX_DESIGN_REF_IMAGES} 张）
             </label>
+            {canvasProductRefUrls.length > 0 && (
+              <div className="mt-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-[10px] font-bold text-emerald-800">
+                {selectedIds.length
+                  ? `将使用画布选中 ${Math.min(selectedIds.length, MAX_DESIGN_REF_IMAGES)} 张作产品参考`
+                  : `将使用画布已有 ${Math.min(canvasProductRefUrls.length, MAX_DESIGN_REF_IMAGES)} 张作产品参考`}
+                {selectedIds.length ? (
+                  <button
+                    type="button"
+                    onClick={useSelectedAsRefs}
+                    className="ml-2 underline text-emerald-700"
+                  >
+                    写入参考槽
+                  </button>
+                ) : null}
+              </div>
+            )}
             <input
               ref={refInputRef}
               type="file"
