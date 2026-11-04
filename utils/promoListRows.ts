@@ -1,5 +1,6 @@
 import { AutomationResult, Client, DecisionMaker, HistoryItem } from '../types';
 import {
+  buildCrmLookupIndex,
   buildHistoryLookupIndex,
   normalizeCrmHost,
 } from './crmHistory';
@@ -42,12 +43,18 @@ export const buildPromoListRows = (
   history: HistoryItem[]
 ): PromoListRow[] => {
   const historyIndex = buildHistoryLookupIndex(history);
+  const crmIndex = buildCrmLookupIndex(crmClients);
   const coveredHosts = new Set<string>();
   const coveredNames = new Set<string>();
   const rows: PromoListRow[] = [];
 
   for (const task of automationResults) {
-    const intel = resolveAutomationTaskIntel(task, crmClients, historyIndex);
+    const intel = resolveAutomationTaskIntel(
+      task,
+      crmClients,
+      historyIndex,
+      crmIndex
+    );
     const website = task.website || task.analysis?.companyInfo?.website || intel.crmClient?.website || '';
     const name = task.analysis?.companyInfo?.name || task.clientName || intel.crmClient?.name || '';
     const host = normalizeCrmHost(website);

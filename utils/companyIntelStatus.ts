@@ -1,13 +1,16 @@
 import { AnalysisResult, AutomationResult, Client, DecisionMaker, HistoryItem } from '../types';
 import { hasRichProductCatalog } from '../services/productCatalog';
 import {
+  buildCrmLookupIndex,
   buildHistoryLookupIndex,
   clientHasBackgroundCheckIndexed,
   countAnalysisDecisionMakers,
   findCrmClientIndex,
+  findCrmClientIndexFast,
   historyHasDmSearch,
   lookupHistoryForClient,
   resolveDmDigStatus,
+  type CrmLookupIndex,
   type DmDigStatus,
   type HistoryLookupIndex,
 } from './crmHistory';
@@ -30,10 +33,14 @@ export type CompanyIntelStatus = {
 export const findCrmClientMatch = (
   clients: Client[],
   website?: string | null,
-  name?: string | null
+  name?: string | null,
+  crmIndex?: CrmLookupIndex
 ): Client | undefined => {
-  const idx = findCrmClientIndex(clients, website, name);
-  return idx >= 0 ? clients[idx] : undefined;
+  const idx = crmIndex
+    ? findCrmClientIndexFast(crmIndex, website, name)
+    : findCrmClientIndex(clients, website, name);
+  const list = crmIndex?.clients || clients;
+  return idx >= 0 ? list[idx] : undefined;
 };
 
 const pickPrimaryContact = (
@@ -71,6 +78,7 @@ export const resolveCompanyIntelStatus = (opts: {
   taskAnalysis?: AnalysisResult | null;
   taskCompleted?: boolean;
   crmClients?: Client[];
+  crmIndex?: CrmLookupIndex;
   historyIndex?: HistoryLookupIndex;
   history?: HistoryItem[];
 }): CompanyIntelStatus => {
@@ -79,7 +87,12 @@ export const resolveCompanyIntelStatus = (opts: {
     opts.historyIndex ||
     (opts.history?.length ? buildHistoryLookupIndex(opts.history) : undefined);
 
-  const crmClient = findCrmClientMatch(clients, opts.website, opts.name);
+  const crmClient = findCrmClientMatch(
+    clients,
+    opts.website,
+    opts.name,
+    opts.crmIndex
+  );
   const historyItem = index
     ? lookupHistoryForClient(
         {
@@ -152,7 +165,8 @@ export const resolveCompanyIntelStatus = (opts: {
 export const resolveAutomationTaskIntel = (
   task: AutomationResult,
   crmClients: Client[],
-  historyIndex: HistoryLookupIndex
+  historyIndex: HistoryLookupIndex,
+  crmIndex?: CrmLookupIndex
 ): CompanyIntelStatus =>
   resolveCompanyIntelStatus({
     website: task.website || task.analysis?.companyInfo?.website,
@@ -160,6 +174,7 @@ export const resolveAutomationTaskIntel = (
     taskAnalysis: task.analysis,
     taskCompleted: task.status === 'completed' && !!task.analysis,
     crmClients,
+    crmIndex,
     historyIndex,
   });
 

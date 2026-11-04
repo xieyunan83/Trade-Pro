@@ -13,7 +13,11 @@ export const isDesktopClient = (): boolean => {
   return false;
 };
 
-/** 仅挂机模式（或显式 LS=1）自动续跑背调；个人本机默认不抢队列 */
+/**
+ * 是否自动续跑背调队列。
+ * 仅：显式 LS=1，或已确认开启的挂机模式。
+ * 个人账号 / 未开挂机默认 false，避免进营销工具就抢跑卡死。
+ */
 export const shouldAutoResumeBatch = (): boolean => {
   try {
     if (typeof localStorage === 'undefined') return false;
@@ -21,12 +25,10 @@ export const shouldAutoResumeBatch = (): boolean => {
     if (localStorage.getItem('trade_scout_auto_resume_batch') === '1') return true;
     try {
       const { isWorkerModeActive } = require('./workerMode') as typeof import('./workerMode');
-      if (isWorkerModeActive()) return true;
+      return isWorkerModeActive();
     } catch {
-      /* ignore */
+      return false;
     }
-    // 兼容旧桌面：无挂机开关时仍可自动续跑
-    return isDesktopClient() && localStorage.getItem('trade_scout_worker_mode') !== '0';
   } catch {
     return false;
   }

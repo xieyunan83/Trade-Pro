@@ -52,10 +52,19 @@ import {
   packImpliesLayoutLastRef,
   type EnterpriseDesignPack,
 } from '../services/enterpriseDesignPacks';
+import {
+  DEFAULT_SECONDARY_FIELDS,
+  SECONDARY_CREATION_NEGATIVE,
+  buildSecondaryCreationEditEnglish,
+  buildSecondaryCreationUserBrief,
+  secondaryFieldsHaveEdits,
+  type SecondaryCreationFields,
+} from '../services/secondaryCreationBrief';
 import { CreativePipelineBar } from './CreativeRefPicker';
 import { DesignConstraintCardPanel } from './DesignConstraintCardPanel';
 import { CreativeStorageBadge } from './CreativeStorageBadge';
 import { EnterpriseDesignPackPanel } from './EnterpriseDesignPackPanel';
+import { SecondaryCreationPanel } from './SecondaryCreationPanel';
 import { VaultImg } from './VaultMedia';
 import { loadProductCatalog } from '../services/productCatalog';
 import {
@@ -103,6 +112,11 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
   /** 画布多选：用于删除 / 推送到下游模块 */
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [activePack, setActivePack] = useState<EnterpriseDesignPack | null>(null);
+  /** 核心：结构化二次创作（默认） / 自由提示词 */
+  const [agentMode, setAgentMode] = useState<'secondary' | 'free'>('secondary');
+  const [secondaryFields, setSecondaryFields] = useState<SecondaryCreationFields>(
+    () => ({ ...DEFAULT_SECONDARY_FIELDS })
+  );
   const refInputRef = useRef<HTMLInputElement>(null);
   const skus = useMemo(() => loadCatalogSkus(), []);
   const status = getDesignAgentConfigStatus();
@@ -111,6 +125,34 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     ensureEnterprisePacksSeeded();
     setActivePack(getActiveEnterprisePack());
   }, []);
+
+  const resolveSkuForSecondary = () => {
+    const s = skus.find((x) => x.id === skuPick || x.skuCode === skuPick);
+    return {
+      name: s?.name || active?.skuName,
+      code: s?.skuCode || active?.skuCode,
+    };
+  };
+
+  /** 二次创作最终用户改动清单（结构化优先，否则用自由提示词） */
+  const resolveEditBrief = (): string => {
+    if (agentMode === 'secondary' && secondaryFieldsHaveEdits(secondaryFields)) {
+      const meta = resolveSkuForSecondary();
+      return [
+        buildSecondaryCreationUserBrief(secondaryFields, {
+          skuName: meta.name,
+          skuCode: meta.code,
+        }),
+        buildSecondaryCreationEditEnglish(secondaryFields),
+        prompt.trim() && !prompt.includes('【产品二次创作')
+          ? `补充：${prompt.trim()}`
+          : '',
+      ]
+        .filter(Boolean)
+        .join('\n\n');
+    }
+    return prompt.trim();
+  };
 
   const active = projects.find((p) => p.id === activeId) || null;
   const canvasAssets = useMemo(
@@ -242,12 +284,26 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     const hasRefsEarly =
       refUploads.length > 0 || !!(skuRowEarly?.images?.length);
     if (!hasRefsEarly) {
-      setError('请先上传产品参考图，或从产品库选择带图 SKU，再写明要改的部位/颜色/包装/功能。');
+      setError('请先上传产品参考图，或从产品库选择带图 SKU，再填写要改的包装/颜色/外观。');
       return;
     }
-    if (!prompt.trim()) {
-      setError('请写明二次创作要求，例如：包装改红色、去掉某配件、增加灯光功能等。未写明的部分将保持与参考图一致。');
+    const editBriefCheck = resolveEditBrief();
+    if (!editBriefCheck.trim()) {
+      setError(
+        agentMode === 'secondary'
+          ? '请在「产品二次创作」中至少填写一项改动（包装、颜色、外观等），或切换到自由指令。'
+          : '请写明二次创作要求，例如：包装改红色、去掉某配件、增加灯光功能等。'
+      );
       return;
+    }
+    if (agentMode === 'secondary' && secondaryFieldsHaveEdits(secondaryFields)) {
+      const meta = resolveSkuForSecondary();
+      setPrompt(
+        buildSecondaryCreationUserBrief(secondaryFields, {
+          skuName: meta.name,
+          skuCode: meta.code,
+        })
+      );
     }
     setPlanning(true);
     try {
@@ -283,14 +339,22 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
         skillHint: skill.hint,
         skillDefaultPrompt: applyPackStyleToPrompt(skill.defaultPrompt, activePack),
         skillNegativePrompt: applyPackNegative(
-          negativePrompt.trim() || skill.negativePrompt,
+          [
+            negativePrompt.trim() || skill.negativePrompt,
+            agentMode === 'secondary' ? SECONDARY_CREATION_NEGATIVE : '',
+          ]
+            .filter(Boolean)
+            .join(', '),
           activePack
         ),
         skillCraftNotes: [
           skill.craftNotes,
           packCraftNotes(activePack),
           hasRefs
-            ? '二次创作：以参考图为唯一外形真相；用户提示词仅为改动清单（颜色/部位/包装/功能等）；未提及处保持一致。'
+            ? '二次创作：以参考图为唯一外形真相；用户提示词仅为改动清单（颜色/部位/包装/功能等）；未提及处保持一致。禁止整体换模。'
+            : '',
+          agentMode === 'secondary'
+            ? buildSecondaryCreationEditEnglish(secondaryFields)
             : '',
         ]
           .filter(Boolean)
@@ -298,8 +362,8 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
         skillQaChecklist: skill.qaChecklist,
         userBrief: [
           hasRefs
-            ? `【参考图二次创作·改动清单】${prompt.trim()}`
-            : prompt.trim(),
+            ? `【参考图二次创作·改动清单】\n${resolveEditBrief()}`
+            : resolveEditBrief(),
           activePack
             ? `【企业模板】${activePack.name}（L1 ${activePack.layoutRefs.length} 页）`
             : '',
@@ -421,14 +485,20 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     const modeHint = refImages.length
       ? `参考图 ${refImages.length} 张 + 文字${packHint}`
       : `纯文字${packHint}`;
+    const editBrief = resolveEditBrief();
     const userMsg = {
       id: newDesignId('m'),
       role: 'user' as const,
-      text: prompt.trim() || `使用 Skill「${skill.label}」生成（${modeHint}）`,
+      text: editBrief || prompt.trim() || `使用 Skill「${skill.label}」生成（${modeHint}）`,
       at: Date.now(),
     };
     const mergedNeg = applyPackNegative(
-      negativePrompt.trim() || skill.negativePrompt,
+      [
+        negativePrompt.trim() || skill.negativePrompt,
+        agentMode === 'secondary' ? SECONDARY_CREATION_NEGATIVE : '',
+      ]
+        .filter(Boolean)
+        .join(', '),
       activePack
     );
     const styledPrompt = applyPackStyleToPrompt(finalPrompt, activePack);
@@ -444,7 +514,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             thinkingMode: false,
             referenceImages: refImages.length ? refImages : undefined,
             negativePrompt: mergedNeg,
-            userEditBrief: prompt.trim(),
+            userEditBrief: editBrief,
             onProgress: (done, total, label) => {
               setError(null);
               void done;
@@ -461,7 +531,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             negativePrompt: mergedNeg,
             series: skillId === 'listing_set' || count > 1,
             lastRefIsLayout: effectiveLastIsLayout && refImages.length >= 2,
-            userEditBrief: prompt.trim(),
+            userEditBrief: editBrief,
           });
       const now = Date.now();
       const newAssetsRaw: DesignAsset[] = result.images.map((url, i) => ({
@@ -1022,19 +1092,42 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
           )}
         </section>
 
-        {/* 右：Agent 输入 */}
-        <aside className="xl:col-span-3 rounded-2xl border border-slate-200 bg-white p-3 sm:p-4 flex flex-col gap-3">
-          <div className="text-xs font-black text-slate-800">向 Agent 下指令</div>
+        {/* 右：二次创作 / Agent */}
+        <aside className="xl:col-span-3 rounded-2xl border border-slate-200 bg-white p-3 sm:p-4 flex flex-col gap-3 max-h-[min(90vh,56rem)] overflow-y-auto custom-scrollbar">
+          <div className="flex rounded-xl border border-slate-200 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setAgentMode('secondary')}
+              className={`flex-1 py-2 text-[11px] font-black ${
+                agentMode === 'secondary'
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-slate-50 text-slate-500'
+              }`}
+            >
+              二次创作
+            </button>
+            <button
+              type="button"
+              onClick={() => setAgentMode('free')}
+              className={`flex-1 py-2 text-[11px] font-black ${
+                agentMode === 'free'
+                  ? 'bg-violet-600 text-white'
+                  : 'bg-slate-50 text-slate-500'
+              }`}
+            >
+              自由指令
+            </button>
+          </div>
           <div>
             <label className="text-[10px] font-black text-slate-400 uppercase flex items-center gap-1">
-              <Package size={10} /> 产品库 SKU（可选）
+              <Package size={10} /> ① 产品库挑图（或下方上传）
             </label>
             <select
               className="w-full mt-1 rounded-xl border border-slate-200 px-2.5 py-2 text-xs"
               value={skuPick}
               onChange={(e) => setSkuPick(e.target.value)}
             >
-              <option value="">不绑定</option>
+              <option value="">不绑定 · 请上传参考图</option>
               {skus.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.skuCode} · {s.name}
@@ -1051,13 +1144,13 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                   <img
                     src={img0}
                     alt=""
-                    className="w-12 h-12 rounded-lg object-cover border border-violet-100"
+                    className="w-12 h-12 rounded-lg object-cover border border-emerald-200"
                     onError={(e) => {
                       (e.currentTarget as HTMLImageElement).style.display = 'none';
                     }}
                   />
-                  <span className="text-[10px] font-bold text-violet-700">
-                    生成时将用此产品图作参考二次创作
+                  <span className="text-[10px] font-bold text-emerald-800">
+                    将以此产品图为身份锁，做局部再设计
                   </span>
                 </div>
               );
@@ -1082,7 +1175,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
           </div>
           <div>
             <label className="text-[10px] font-black text-slate-400 uppercase flex items-center gap-1">
-              <ImagePlus size={10} /> 参考图（最多 {MAX_DESIGN_REF_IMAGES} 张，每张都会参与）
+              <ImagePlus size={10} /> ② 参考图（最多 {MAX_DESIGN_REF_IMAGES} 张）
             </label>
             <input
               ref={refInputRef}
@@ -1146,19 +1239,45 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
               </span>
             </label>
             <p className="text-[9px] text-slate-400 font-medium mt-1 leading-relaxed">
-              例：8 张独立产品图 + 1 张宣传海报参考。系统会强制每张参考图生效并锁产品外形。上传自动压缩。
+              产品图优先；末张可勾选为版式参考。系统强制身份锁。
             </p>
           </div>
-          <textarea
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            rows={4}
-            placeholder="基于参考图二次创作，只写要改的：如「机身改哑光黑、包装盒改红金配色、增加声光按钮、去掉肩带」——未写的部位/颜色/包装将严格保持与参考图一致"
-            className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-medium resize-y min-h-[5rem]"
-          />
-          <p className="text-[9px] text-violet-700/90 font-medium -mt-1 leading-relaxed">
-            二次创作规则：必须有产品参考图；提示词只描述改动点，系统会强制锁外形，禁止整体换模。
-          </p>
+
+          {agentMode === 'secondary' ? (
+            <SecondaryCreationPanel
+              value={secondaryFields}
+              onChange={setSecondaryFields}
+              skuName={resolveSkuForSecondary().name}
+              skuCode={resolveSkuForSecondary().code}
+              onApplyToPrompt={(brief) => {
+                setPrompt(brief);
+                setError(null);
+              }}
+            />
+          ) : (
+            <>
+              <textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                rows={4}
+                placeholder="只写要改的：如「机身改哑光黑、包装盒改红金、加声光、去掉肩带」——未写的部位保持与参考图一致"
+                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-medium resize-y min-h-[5rem]"
+              />
+              <p className="text-[9px] text-violet-700/90 font-medium -mt-1 leading-relaxed">
+                自由指令仍走二次创作引擎：必须有参考图；只改点名项，禁止整体换模。
+              </p>
+            </>
+          )}
+          {agentMode === 'secondary' && prompt.trim() && (
+            <details className="rounded-lg border border-slate-100 bg-slate-50 px-2 py-1.5">
+              <summary className="text-[10px] font-bold text-slate-500 cursor-pointer">
+                已写入的改动清单（可展开）
+              </summary>
+              <pre className="mt-1 text-[10px] text-slate-600 whitespace-pre-wrap font-medium">
+                {prompt}
+              </pre>
+            </details>
+          )}
           <div>
             <div className="flex items-center justify-between gap-2 mb-1">
               <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">

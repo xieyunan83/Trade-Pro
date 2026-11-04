@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useDeferredValue, useEffect, useMemo, useState } from 'react';
 import {
   AutomationPipelineConfig,
   AutomationResult,
@@ -211,9 +211,12 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   const [pageSize, setPageSize] = useState<10 | 20 | 50>(20);
   const [page, setPage] = useState(1);
 
+  const deferredAutomation = useDeferredValue(automationResults);
+  const deferredCrm = useDeferredValue(crmClients);
+  const deferredHistory = useDeferredValue(history);
   const allRows = useMemo(
-    () => buildPromoListRows(automationResults, crmClients, history),
-    [automationResults, crmClients, history]
+    () => buildPromoListRows(deferredAutomation, deferredCrm, deferredHistory),
+    [deferredAutomation, deferredCrm, deferredHistory]
   );
 
   const alignStats = useMemo(

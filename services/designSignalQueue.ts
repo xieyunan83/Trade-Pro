@@ -132,20 +132,14 @@ const failStaleRunningJobs = () => {
   if (changed) notify();
 };
 
-/** 启动时恢复未完成任务 */
+/** 启动时仅恢复队列状态，不自动泵（需挂机或用户点「继续」） */
 export const hydrateDesignSignalQueue = () => {
   if (jobs.length) return;
   jobs = loadJobs();
   for (const j of jobs) {
     if (j.status === 'running') j.status = 'queued';
   }
-  if (jobs.some((j) => j.status === 'queued')) {
-    shouldStop = false;
-    notify();
-    void pump();
-  } else if (jobs.length) {
-    notify();
-  }
+  if (jobs.length) notify();
 };
 
 export const subscribeDesignSignalJobs = (listener: Listener): (() => void) => {

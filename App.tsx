@@ -525,9 +525,9 @@ const App: React.FC = () => {
 
   useEffect(() => subscribeWorkerMode((s) => setWorkerModeOn(s.active)), []);
 
-  /** 挂机模式开启后：静默补齐缺口（白天轻量 / 夜间重补全） */
+  /** 仅 admin 挂机端：静默补齐缺口（白天轻量 / 夜间重补全）；业务员本机绝不自动开跑 */
   useEffect(() => {
-    if (!currentUser || !workerModeOn) {
+    if (!currentUser || currentUser.role !== 'admin' || !workerModeOn) {
       stopNightSilentUpgrade();
       return;
     }
@@ -898,6 +898,12 @@ const App: React.FC = () => {
       crmPersistReadyRef.current = false;
       lastWorkspaceUserRef.current = null;
       return;
+    }
+
+    // 非 admin 登录：强制关闭挂机，避免继承本机 admin 挂机 LS 后自动背调卡死
+    if (currentUser.role !== 'admin' && isWorkerModeActive()) {
+      setWorkerModeActive(false);
+      stopNightSilentUpgrade();
     }
 
     // 切换账号时清空工作区；同账号 StrictMode 二次挂载仍会重新拉取
@@ -3506,41 +3512,43 @@ const App: React.FC = () => {
               console.error('批量结果写入历史失败，但任务队列已保存', histErr);
             }
 
-            // 背调后静默四通道补全（联系人 + 社媒），用户无感知
-            try {
-              const domain = result.companyInfo?.website || task.website || '';
-              const companyName = result.companyInfo?.name || task.clientName || domain;
-              if (domain || companyName) {
-                const intel = await gatherSilentCompanyChannelIntel({
-                  domain,
-                  companyName,
-                  productKeyword: kw || task.keyword || result.searchKeyword,
-                  country: task.country || result.searchCountry,
-                  existingDecisionMakers: result.decisionMakers || [],
-                });
-                const mergedAnalysis = mergeSilentIntelIntoAnalysis(result, intel);
-                if (
-                  intel.decisionMakers.length ||
-                  intel.socials.facebook ||
-                  intel.socials.linkedin
-                ) {
-                  await persistDecisionMakerResearch(
-                    { decisionMakers: mergedAnalysis.decisionMakers || [] },
-                    { historyId: histId, domain, companyName }
-                  );
-                  const withContacts: AutomationResult = {
-                    ...completedTask,
-                    analysis: mergedAnalysis,
-                  };
-                  batchSeedByIdRef.current.set(task.id, withContacts);
-                  syncAutomationResults((prev) =>
-                    prev.map((t) => (t.id === task.id ? withContacts : t))
-                  );
-                  await saveAutomationTask(withContacts).catch(() => undefined);
+            // 仅挂机端：背调后静默四通道补全；业务员本机跳过，避免拖死交互
+            if (isWorkerModeActive()) {
+              try {
+                const domain = result.companyInfo?.website || task.website || '';
+                const companyName = result.companyInfo?.name || task.clientName || domain;
+                if (domain || companyName) {
+                  const intel = await gatherSilentCompanyChannelIntel({
+                    domain,
+                    companyName,
+                    productKeyword: kw || task.keyword || result.searchKeyword,
+                    country: task.country || result.searchCountry,
+                    existingDecisionMakers: result.decisionMakers || [],
+                  });
+                  const mergedAnalysis = mergeSilentIntelIntoAnalysis(result, intel);
+                  if (
+                    intel.decisionMakers.length ||
+                    intel.socials.facebook ||
+                    intel.socials.linkedin
+                  ) {
+                    await persistDecisionMakerResearch(
+                      { decisionMakers: mergedAnalysis.decisionMakers || [] },
+                      { historyId: histId, domain, companyName }
+                    );
+                    const withContacts: AutomationResult = {
+                      ...completedTask,
+                      analysis: mergedAnalysis,
+                    };
+                    batchSeedByIdRef.current.set(task.id, withContacts);
+                    syncAutomationResults((prev) =>
+                      prev.map((t) => (t.id === task.id ? withContacts : t))
+                    );
+                    await saveAutomationTask(withContacts).catch(() => undefined);
+                  }
                 }
+              } catch (seedErr) {
+                console.warn('[batch] silent channel intel skipped', seedErr);
               }
-            } catch (seedErr) {
-              console.warn('[batch] silent channel intel skipped', seedErr);
             }
 
             incrementUsage('analysis');
@@ -3713,9 +3721,9 @@ const App: React.FC = () => {
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [isAutomating, batchProgress.active, automationResults]);
 
-  /** 挂机端：每晚 22:00 进入窗口时自动续跑背调（含 Excel 夜间限定） */
+  /** admin 挂机端：每晚 22:00 进入窗口时自动续跑背调（含 Excel 夜间限定） */
   useEffect(() => {
-    if (!currentUser || !workerModeOn) return;
+    if (!currentUser || currentUser.role !== 'admin' || !workerModeOn) return;
     let wasInNight = isQwenNightPromoWindow();
     const wakeNightExcelBatch = () => {
       const inNight = isQwenNightPromoWindow();
@@ -3741,10 +3749,11 @@ const App: React.FC = () => {
     };
   }, [currentUser?.username, workerModeOn]);
 
-  /** 桌面工作站：登录后自动续跑本机未完成的背调队列（线上升级不刷新则本来就不会停） */
+  /** 仅挂机工作站：登录后自动续跑背调；业务员本机禁止隐式开跑 */
   const autoResumeBatchOnceRef = useRef(false);
   useEffect(() => {
     if (!currentUser || !userDataReadyRef.current) return;
+    if (currentUser.role !== 'admin') return;
     if (autoResumeBatchOnceRef.current) return;
     if (!shouldAutoResumeBatch()) return;
     if (isAutomating || batchRunnerActiveRef.current || shouldStopRef.current) return;

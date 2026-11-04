@@ -122,14 +122,26 @@ const notify = () => {
   });
 };
 
+/** 仅恢复队列状态，不自动开跑（避免非挂机用户进站即背调补全卡死） */
 export const hydrateEnrichmentQueue = () => {
   if (jobs.length) return;
   jobs = loadJobs();
-  if (jobs.some((j) => j.status === 'queued')) {
-    shouldStop = false;
-    void pump();
+  for (const j of jobs) {
+    if (j.status === 'running') j.status = 'queued';
   }
   notify();
+};
+
+/** 显式继续未完成的背调补全 */
+export const resumeEnrichmentQueue = () => {
+  if (!jobs.length) jobs = loadJobs();
+  if (!jobs.some((j) => j.status === 'queued')) {
+    notify();
+    return;
+  }
+  shouldStop = false;
+  notify();
+  void pump();
 };
 
 export const subscribeEnrichmentJobs = (listener: Listener): (() => void) => {

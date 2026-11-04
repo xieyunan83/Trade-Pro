@@ -54,6 +54,40 @@ export const findCrmClientIndex = (
   return clients.findIndex((c) => (c.name || '').trim().toLowerCase() === nameKey);
 };
 
+/** O(1) 查找用：营销列表等大批量合并时避免对 CRM 线性扫 */
+export type CrmLookupIndex = {
+  byHost: Map<string, number>;
+  byName: Map<string, number>;
+  clients: Client[];
+};
+
+export const buildCrmLookupIndex = (clients: Client[]): CrmLookupIndex => {
+  const byHost = new Map<string, number>();
+  const byName = new Map<string, number>();
+  for (let i = 0; i < (clients?.length || 0); i++) {
+    const c = clients[i];
+    const host = normalizeCrmHost(c.website);
+    if (host && !byHost.has(host)) byHost.set(host, i);
+    const nk = (c.name || '').trim().toLowerCase();
+    if (!isWeakCrmMatchName(nk) && !byName.has(nk)) byName.set(nk, i);
+  }
+  return { byHost, byName, clients: clients || [] };
+};
+
+export const findCrmClientIndexFast = (
+  index: CrmLookupIndex,
+  website?: string | null,
+  name?: string | null
+): number => {
+  const host = normalizeCrmHost(website);
+  if (host && index.byHost.has(host)) return index.byHost.get(host)!;
+  const nameKey = (name || '').trim().toLowerCase();
+  if (!isWeakCrmMatchName(nameKey) && index.byName.has(nameKey)) {
+    return index.byName.get(nameKey)!;
+  }
+  return -1;
+};
+
 const findClientIndex = findCrmClientIndex;
 
 const mapDiscoveryType = (t?: string): Client['type'] => {
