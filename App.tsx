@@ -5584,24 +5584,13 @@ const App: React.FC = () => {
     setSystemNotice('未开启挂机。本机仅作业务浏览；重任务请在专用挂机端确认执行。');
   };
 
-  // 管理员进业务工作台时跳过「等密钥」门禁（密钥由自己在后台配）
+  // 非 admin：短暂等待密钥探测；超时/未配齐也不整页封死（手机弱网常见），进工作台后按模块提示
   if (hasKey === null && currentUser.role !== 'admin') {
     return (
       <div className="h-screen flex items-center justify-center bg-slate-50">
         <Loader2 className="animate-spin text-blue-600" size={40} />
       </div>
     );
-  }
-
-  if (hasKey === false && currentUser.role !== 'admin') {
-      return (
-          <div className="min-h-screen min-h-[100dvh] flex flex-col items-center justify-center bg-slate-50 p-6 text-center">
-              <div className="bg-red-100 p-4 rounded-full text-red-600 mb-4"><AlertTriangle size={32}/></div>
-              <h2 className="text-xl font-bold text-slate-800">系统尚未配置 API 密钥</h2>
-              <p className="text-slate-500 mt-2 max-w-md text-sm sm:text-base">请联系管理员在控制台完成服务配置（将同步至云端），然后重新登录。</p>
-              <button onClick={handleLogout} className="mt-6 text-blue-600 hover:underline touch-manipulation">返回登录</button>
-          </div>
-      );
   }
 
   const alwaysActiveModules = ALWAYS_ACTIVE_MODULES;

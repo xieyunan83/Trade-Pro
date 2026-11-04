@@ -30,11 +30,36 @@ const WEEKDAY_LABELS = ['日', '一', '二', '三', '四', '五', '六'];
 export const isEmployeeRole = (user: User | null | undefined): boolean =>
   !!user && user.role === 'user';
 
-/** 该账号是否强制设备/网卡绑定（按账户设置；员工默认开启） */
+/**
+ * 是否像手机浏览器（非桌面客户端）。
+ * 手机与电脑指纹必不同；若仍强制设备绑定，密码正确也会被拒。
+ */
+export const isLikelyMobileBrowser = (): boolean => {
+  try {
+    if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
+    const ua = navigator.userAgent || '';
+    // Electron 桌面壳不算手机
+    if (/TradeCollabClient|BabyWorldClient/i.test(ua)) return false;
+    if (/Android|iPhone|iPad|iPod|Mobile|webOS|BlackBerry|IEMobile|Opera Mini/i.test(ua)) {
+      return true;
+    }
+    const shortSide = Math.min(screen.width || 0, screen.height || 0);
+    if ((navigator.maxTouchPoints || 0) > 1 && shortSide > 0 && shortSide < 920) return true;
+    if (window.matchMedia?.('(pointer: coarse) and (max-width: 900px)')?.matches) return true;
+    return false;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * 是否强制设备/网卡绑定。
+ * - 手机端一律不强制（否则桌面绑定后手机无法登录）
+ * - 电脑端仅当管理员显式开启 deviceBindRequired
+ */
 export const isDeviceBindRequired = (user: User): boolean => {
-  if (user.deviceBindRequired === true) return true;
-  if (user.deviceBindRequired === false) return false;
-  return user.role === 'user';
+  if (isLikelyMobileBrowser()) return false;
+  return user.deviceBindRequired === true;
 };
 
 /** 需要持续门禁校验（绑定或可用时段） */
@@ -233,7 +258,7 @@ export const checkDeviceAccess = async (user: User): Promise<AccessCheckResult> 
       ok: false,
       reason: 'device_mismatch',
       message:
-        '当前设备不是该账号已绑定的电脑/浏览器。请使用首次绑定的本机登录，或联系管理员重置设备绑定。',
+        '当前电脑/浏览器不是该账号已绑定的设备。请用首次绑定的电脑登录，或请管理员在后台关闭「设备绑定」/重置绑定。手机浏览器不受此限制，请用手机打开同一网址登录。',
       deviceId,
     };
   }

@@ -327,7 +327,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
                 <>
                   账号 <span className="font-black text-slate-900">{pendingUser.username}</span>{' '}
                   为普通员工，首次登录需绑定本机。
-                  请填写本机网卡物理地址（MAC）；系统会同时锁定当前浏览器设备指纹，其它电脑将无法使用。
+                  请填写本机网卡物理地址（MAC）；系统会同时锁定当前浏览器。仅限制电脑端；手机浏览器仍可用原账号登录。
                 </>
               )}
             </p>

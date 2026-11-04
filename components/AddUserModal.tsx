@@ -33,7 +33,7 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
   const [password, setPassword] = useState('');
   const [role, setRole] = useState<UserRole>('user');
   const [departmentId, setDepartmentId] = useState('');
-  const [deviceBindRequired, setDeviceBindRequired] = useState(true);
+  const [deviceBindRequired, setDeviceBindRequired] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -43,15 +43,10 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
     setPassword('');
     setRole('user');
     setDepartmentId('');
-    setDeviceBindRequired(true);
+    setDeviceBindRequired(false);
     setSaving(false);
     setError('');
   }, [open]);
-
-  useEffect(() => {
-    // 切角色时给合理默认：员工默认绑设备，其它默认不绑
-    setDeviceBindRequired(role === 'user');
-  }, [role]);
 
   if (!open) return null;
 
@@ -79,7 +74,7 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
       const newUser = normalizeUser({
         username: nameCheck.value,
         role: allowRolePick ? role : 'user',
-        password: await hashPassword(password),
+        password: await hashPassword(password.trim()),
         isFirstLogin: true,
         createdAt: Date.now(),
         departmentId: departmentId || undefined,
@@ -181,14 +176,20 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
             </div>
           )}
 
-          <label className="flex items-center gap-2 text-sm font-bold text-slate-700">
+          <label className="flex items-start gap-2 text-sm font-bold text-slate-700">
             <input
               type="checkbox"
+              className="mt-1"
               checked={deviceBindRequired}
               onChange={(e) => setDeviceBindRequired(e.target.checked)}
               disabled={saving}
             />
-            启用网卡/设备绑定
+            <span>
+              启用电脑端设备绑定
+              <span className="block text-[11px] font-medium text-slate-400 mt-0.5">
+                仅限制电脑浏览器；手机端始终可用原账号登录，不受此开关影响。
+              </span>
+            </span>
           </label>
 
           {error && <div className="text-xs font-bold text-red-600 bg-red-50 rounded-xl px-3 py-2">{error}</div>}

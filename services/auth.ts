@@ -119,12 +119,8 @@ export function saveUsersToStorage(users: User[], updatedAt: number = Date.now()
 export function normalizeUser(u: User): User {
   const role: User['role'] =
     u.role === 'admin' || u.role === 'director' || u.role === 'manager' ? u.role : 'user';
-  const deviceBindRequired =
-    u.deviceBindRequired === true
-      ? true
-      : u.deviceBindRequired === false
-        ? false
-        : role === 'user';
+  // 设备绑定改为显式开启；不再对普通员工默认 true（避免手机端无法登录）
+  const deviceBindRequired = u.deviceBindRequired === true;
   return {
     ...u,
     role,
