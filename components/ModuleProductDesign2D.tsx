@@ -136,6 +136,12 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
 
   /** 二次创作最终用户改动清单（结构化优先，否则用自由提示词） */
   const resolveEditBrief = (): string => {
+    const layoutMode =
+      lastRefIsLayout ||
+      skillId === 'multi_product_poster' ||
+      packImpliesLayoutLastRef(activePack);
+    const layoutSwapZh =
+      '【版式换品】末张是版式/海报模板：只借构图、色块、字体层级与装饰；必须把前面产品参考图换入成图；禁止复刻模板里的原商品（毛绒/字母罐等样本货）。';
     if (agentMode === 'secondary' && secondaryFieldsHaveEdits(secondaryFields)) {
       const meta = resolveSkuForSecondary();
       return [
@@ -144,6 +150,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
           skuCode: meta.code,
         }),
         buildSecondaryCreationEditEnglish(secondaryFields),
+        layoutMode ? layoutSwapZh : '',
         prompt.trim() && !prompt.includes('【产品二次创作')
           ? `补充：${prompt.trim()}`
           : '',
@@ -151,7 +158,11 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
         .filter(Boolean)
         .join('\n\n');
     }
-    return prompt.trim();
+    const base = prompt.trim();
+    if (layoutMode) {
+      return [layoutSwapZh, base].filter(Boolean).join('\n');
+    }
+    return base;
   };
 
   const active = projects.find((p) => p.id === activeId) || null;
@@ -480,18 +491,22 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
       skus.find((s) => s.id === skuPick || s.skuCode === skuPick) ||
       skus.find((s) => s.skuCode === proj.skuCode);
     const fromSku = (boundSku?.images || []).filter(Boolean);
+    const layoutSet = new Set((activePack?.layoutRefs || []).filter(Boolean));
     const productMerged: string[] = [];
-    // 上传 → 画布选中/生成图 → 产品库；版式位留给模板包 L1
-    const reserveLayout = activePack?.layoutRefs?.length
-      ? Math.min(2, activePack.layoutRefs.length)
-      : 0;
+    // 上传 → 画布选中/生成图 → 产品库；排除版式样本 URL；末位留给 1 张 L1 版式
+    const reserveLayout = activePack?.layoutRefs?.length ? 1 : 0;
     const productCap = Math.max(1, MAX_DESIGN_REF_IMAGES - reserveLayout);
     for (const u of [...refUploads, ...canvasProductRefUrls, ...fromSku]) {
-      if (!u || productMerged.includes(u)) continue;
+      if (!u || productMerged.includes(u) || layoutSet.has(u)) continue;
       productMerged.push(u);
       if (productMerged.length >= productCap) break;
     }
-    return mergeRefsWithPack(productMerged, activePack, MAX_DESIGN_REF_IMAGES).refs;
+    const merged = mergeRefsWithPack(
+      productMerged,
+      activePack,
+      MAX_DESIGN_REF_IMAGES
+    );
+    return merged.refs;
   };
 
   /** 把画布选中图写入右侧参考槽（可见、可删） */
@@ -1300,12 +1315,13 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                 type="checkbox"
                 className="mt-0.5 rounded border-slate-300"
                 checked={effectiveLastIsLayout}
-                disabled={skillId === 'multi_product_poster'}
+                disabled={skillId === 'multi_product_poster' || packImpliesLayoutLastRef(activePack)}
                 onChange={(e) => setLastRefIsLayout(e.target.checked)}
               />
               <span>
-                最后一张为<strong className="text-violet-800">版式/海报方案</strong>
-                （前几张产品全部出现在成图中，按末张构图补齐元素）
+                最后一张为<strong className="text-violet-800">版式/海报模板</strong>
+                （只借排版；前面产品图换入成图，
+                <strong className="text-rose-700">不会复刻模板里的原商品</strong>）
               </span>
             </label>
             <p className="text-[9px] text-slate-400 font-medium mt-1 leading-relaxed">

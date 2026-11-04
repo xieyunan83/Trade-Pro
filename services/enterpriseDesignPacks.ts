@@ -493,13 +493,21 @@ export const mergeRefsWithPack = (
   if (!pack?.layoutRefs?.length) {
     return { refs: productRefs.slice(0, maxTotal), lastRefIsLayout: false };
   }
-  const layout = pack.layoutRefs.filter(Boolean);
-  const products = productRefs.filter(Boolean);
-  const maxProducts = Math.max(0, maxTotal - Math.min(layout.length, 2));
-  const head = products.slice(0, maxProducts);
-  const tail = layout.slice(0, Math.max(1, maxTotal - head.length));
-  const refs = [...head, ...tail].slice(0, maxTotal);
-  return { refs, lastRefIsLayout: refs.length >= 2 && tail.length > 0 };
+  const layoutUrls = new Set(pack.layoutRefs.filter(Boolean));
+  // 产品槽不得混入版式样本（否则模型会把模板里的货当成要锁的产品）
+  const products = productRefs.filter((u) => u && !layoutUrls.has(u));
+  // 只保留 1 张版式末张，避免多张版式被误当成产品图
+  const layoutOne = pack.layoutRefs.find(Boolean);
+  if (!layoutOne) {
+    return { refs: products.slice(0, maxTotal), lastRefIsLayout: false };
+  }
+  const head = products.slice(0, Math.max(1, maxTotal - 1));
+  if (!head.length) {
+    // 没有产品图时不要只扔版式图去「生海报」，否则必出复刻样本
+    return { refs: [], lastRefIsLayout: false };
+  }
+  const refs = [...head, layoutOne].slice(0, maxTotal);
+  return { refs, lastRefIsLayout: true };
 };
 
 export const applyPackStyleToPrompt = (

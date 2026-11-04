@@ -11,9 +11,11 @@ import { resolveToDataUrlOrHttps } from './creativeAssetVault';
 import { compressImageDataUrl } from './catalogExcelService';
 import {
   COMMERCIAL_CRAFT_FOOTER,
+  LAYOUT_SWAP_NEGATIVES,
   UNIVERSAL_IMAGE_NEGATIVES,
   composeImageGenerationPrompt,
   identityLockBlock,
+  layoutProductSwapDirectiveBlock,
   mergeNegatives,
   multiImageRoleBlock,
   referenceEditDirectiveBlock,
@@ -182,7 +184,10 @@ const hardenDesignPrompt = (
   const alreadyHardened =
     /NEGATIVE CONSTRAINTS/i.test(prompt) && /IDENTITY LOCK/i.test(prompt);
   if (alreadyHardened) {
-    const extraNeg = mergeNegatives(opts.negativePrompt);
+    const extraNeg = mergeNegatives(
+      opts.negativePrompt,
+      opts.lastRefIsLayout ? LAYOUT_SWAP_NEGATIVES : ''
+    );
     let withNeg =
       extraNeg && !prompt.includes(extraNeg.slice(0, 24))
         ? `${prompt}\nAlso avoid: ${extraNeg}`
@@ -196,7 +201,20 @@ const hardenDesignPrompt = (
         withNeg = `${editBlock}\n${withNeg}`;
       }
     }
-    if ((opts.referenceCount || 0) > 0 && !/MULTI-IMAGE ROLES|REFERENCE: Image 1/i.test(withNeg)) {
+    // 版式换品：始终钉在最前，防止 Brief/模板风格把样本商品复刻出来
+    if (opts.lastRefIsLayout && (opts.referenceCount || 0) >= 2) {
+      const swap = layoutProductSwapDirectiveBlock((opts.referenceCount || 2) - 1);
+      if (!/CRITICAL TASK — LAYOUT SWAP/i.test(withNeg)) {
+        withNeg = `${swap}\n${withNeg}`;
+      }
+      const roles = multiImageRoleBlock(opts.referenceCount || 0, { lastIsLayout: true });
+      if (!/LAYOUT TEMPLATE ONLY/i.test(withNeg)) {
+        withNeg = `${withNeg}\n${roles}`;
+      }
+    } else if (
+      (opts.referenceCount || 0) > 0 &&
+      !/MULTI-IMAGE ROLES|REFERENCE: Image 1/i.test(withNeg)
+    ) {
       withNeg = `${withNeg}\n${multiImageRoleBlock(opts.referenceCount || 0, {
         lastIsLayout: opts.lastRefIsLayout,
       })}`;

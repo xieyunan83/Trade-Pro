@@ -60,6 +60,20 @@ export const referenceEditDirectiveBlock = (userEditBrief?: string): string => {
 };
 
 /**
+ * 末张版式 + 前面产品：强制「换品入版」，禁止复刻版式图里的原产品。
+ */
+export const layoutProductSwapDirectiveBlock = (productCount: number): string => {
+  const n = Math.max(1, productCount);
+  return [
+    'CRITICAL TASK — LAYOUT SWAP (NOT COPY):',
+    `Images 1–${n} are OUR product photos (same SKU or multiple SKUs). Image ${n + 1} is ONLY a layout / poster template.`,
+    `Rebuild the poster using Image ${n + 1}'s composition: color blocks, typography zones, hierarchy, decorative motifs, margins — BUT replace EVERY product shown in the template with OUR product(s) from Images 1–${n}.`,
+    `FORBIDDEN: outputting a near-copy of the template; keeping the template's original toys/plush/cans/props as heroes; ignoring Images 1–${n}.`,
+    `REQUIRED: a buyer must instantly recognize OUR product identity from Images 1–${n} in the final poster; template products must disappear.`,
+  ].join(' ');
+};
+
+/**
  * 多参考图角色说明：确保每张图都进入指令，避免模型只吃前 1～2 张。
  * lastIsLayout：末张为版式/海报方案，前面全部为需出现的独立产品。
  */
@@ -73,10 +87,10 @@ export const multiImageRoleBlock = (
     const nProd = count - 1;
     const list = Array.from({ length: nProd }, (_, i) => `Image ${i + 1}`).join(', ');
     return [
-      `MULTI-IMAGE ROLES (ALL must contribute): ${list} are SEPARATE product SKUs.`,
-      `For EACH of Images 1–${nProd}: lock exact silhouette, proportions, colors, materials, logos/decals — no merging products into one hybrid, no dropping any SKU.`,
-      `Image ${count} is LAYOUT / POSTER STYLE REFERENCE ONLY (composition, hierarchy, background treatment, decorative motif, typography zones) — NOT a product to replace the others.`,
-      `Output ONE poster/promotional frame that places ALL products from Images 1–${nProd} following Image ${count}'s layout scheme; invent missing props/decor only in that scheme's style; never redesign the products.`,
+      layoutProductSwapDirectiveBlock(nProd),
+      `MULTI-IMAGE ROLES: ${list} = PRODUCT ground truth (silhouette, colors, materials, logos locked).`,
+      `Image ${count} = LAYOUT TEMPLATE ONLY (composition / background / type hierarchy / decor). Do NOT treat Image ${count}'s merchandise as products to keep.`,
+      `Output ONE poster that places product(s) from Images 1–${nProd} into Image ${count}'s layout scheme; fill missing decor in that scheme's style; never redesign OUR product tooling.`,
     ].join(' ');
   }
   if (count === 1) {
@@ -85,6 +99,10 @@ export const multiImageRoleBlock = (
   const list = Array.from({ length: count }, (_, i) => `Image ${i + 1}`).join(', ');
   return `MULTI-IMAGE ROLES (ALL must contribute): ${list} are attached references. Use every image — do not ignore later ones. Prefer product identity consistency across all product photos; if angles differ, fuse complementary views of the SAME SKU without inventing a new design.`;
 };
+
+/** 版式换品场景的额外负向 */
+export const LAYOUT_SWAP_NEGATIVES =
+  'copying the layout reference products, keeping template plush toys, keeping template alphabet cans, near-duplicate of layout reference image, ignoring product reference photos, reproducing sample catalog merchandise';
 
 /** 系列一致性（Listing 套图 / 多张连出） */
 export const SERIES_CONSISTENCY_BLOCK =
@@ -147,11 +165,16 @@ export const composeImageGenerationPrompt = (opts: {
       : '';
 
   const editDirective = hasRefs ? referenceEditDirectiveBlock(opts.userBrief) : '';
+  const layoutSwap =
+    hasRefs && opts.lastRefIsLayout && refCount >= 2
+      ? layoutProductSwapDirectiveBlock(refCount - 1)
+      : '';
 
   const positive = opts.baseToolPrompt?.trim()
     ? joinBlocks([
         // 有参考时：先钉死「只改用户要求」，再叠 Brief，避免编排结果冲掉编辑范围
         hasRefs ? editDirective : '',
+        layoutSwap,
         opts.baseToolPrompt,
         roles,
         identity,
@@ -160,6 +183,7 @@ export const composeImageGenerationPrompt = (opts: {
       ])
     : joinBlocks([
         hasRefs ? editDirective : '',
+        layoutSwap,
         hasRefs
           ? opts.skillDefaultPrompt
             ? `Skill framing (secondary to edit request + identity lock): ${opts.skillDefaultPrompt}`
@@ -178,7 +202,11 @@ export const composeImageGenerationPrompt = (opts: {
         COMMERCIAL_CRAFT_FOOTER,
       ]);
 
-  const negative = mergeNegatives(UNIVERSAL_IMAGE_NEGATIVES, opts.skillNegative);
+  const negative = mergeNegatives(
+    UNIVERSAL_IMAGE_NEGATIVES,
+    opts.lastRefIsLayout ? LAYOUT_SWAP_NEGATIVES : '',
+    opts.skillNegative
+  );
   const prompt = opts.negativeAsFieldOnly
     ? positive
     : joinBlocks([positive, negative ? `NEGATIVE CONSTRAINTS (must avoid): ${negative}` : '']);
@@ -216,6 +244,7 @@ export const CREATIVE_LLM_SYSTEM_PLAN = `你是澄海玩具出口场景的「设
 }
 硬性规则：
 1) 有参考图时（二次创作）：toolPrompt 必须以「Reference-based edit」开头；明确 USER EDIT REQUEST；只改用户点名的部位/颜色/包装/功能/背景等；未点名区域必须与参考图一致；禁止整体换模、随意换色、换脸。
+1b) 若末张为版式模板：toolPrompt 必须写明 LAYOUT SWAP——只借末张构图/色块/标题区，前面产品图换入成图；禁止复刻模板内原商品。
 2) 无参考图时：按文字描述创作，仍保持商业玩具出口画质。
 3) 保留 SKU 身份；贴合 Skill；适合跨境电商/展会。
 4) 不要编造认证文字、平台徽章、水印或乱码字。
