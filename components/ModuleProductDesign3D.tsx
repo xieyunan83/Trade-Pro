@@ -1073,13 +1073,14 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                   />
                 </div>
               </div>
-            ) : active?.status === 'ready' && (previewUrl || downloadUrl) ? (
+            ) : active?.status === 'ready' && (rawPreviewUrl || rawDownloadUrl) ? (
               <Model3dOrbitViewer
-                src={previewUrl || downloadUrl}
+                // 直接传 vault:/https，由预览组件本机秒开；勿等 useVaultUrl 异步，否则会空转半小时
+                src={(rawPreviewUrl || rawDownloadUrl || '').trim()}
                 stableKey={active.id}
                 poster={previewPoster || undefined}
                 className="w-full h-full min-h-0"
-                downloadHref={downloadUrl || previewUrl}
+                downloadHref={downloadUrl || previewUrl || undefined}
                 onLocalBlob={(blob) => {
                   if (!activeId) return;
                   if (
