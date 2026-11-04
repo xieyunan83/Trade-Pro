@@ -353,13 +353,27 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
         ].filter(Boolean),
         onProgress: (msg) => setError(msg),
       });
+      let genRefs = refImages;
+      if (refImages.length) {
+        setError('正在抠出产品主体（去背景）…');
+        const { ensureProductCutouts } = await import('../services/productCutoutService');
+        genRefs = await ensureProductCutouts(refImages, {
+          allowApi: true,
+          onProgress: (msg) => setError(msg),
+        });
+      }
       const result = await generateDesignImages({
         prompt: finalPrompt,
         size,
         n: count,
         thinkingMode: false,
-        referenceImages: refImages.length ? refImages : undefined,
-        negativePrompt: negativePrompt.trim() || skill.negativePrompt,
+        referenceImages: genRefs.length ? genRefs : undefined,
+        negativePrompt: [
+          negativePrompt.trim() || skill.negativePrompt,
+          'white product cards, rounded photo frames, boxed thumbnails, studio white backdrop',
+        ]
+          .filter(Boolean)
+          .join(', '),
         series: count > 1,
         lockedOnImageCopy: copyPlan.approvedOnImageEn,
         onImageLockBlock: copyPlan.onImageLockBlock,

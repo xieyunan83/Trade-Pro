@@ -27,7 +27,11 @@ import {
   getActiveEnterprisePack,
   type EnterpriseDesignPack,
 } from '../services/enterpriseDesignPacks';
-import { lockedOnImageCopyBlock, multiImageRoleBlock } from '../services/creativeQualityKit';
+import {
+  lockedOnImageCopyBlock,
+  multiImageRoleBlock,
+  productCutoutCompositeBlock,
+} from '../services/creativeQualityKit';
 import { runMarketingCopyPipeline } from '../services/creativeMarketingCopyPipeline';
 import { downloadMediaFile } from '../services/creativeAssetVault';
 import { EnterpriseDesignPackPanel } from './EnterpriseDesignPackPanel';
@@ -151,15 +155,18 @@ export const ModulePosterStudio: React.FC = () => {
     return res.images[0];
   };
 
-  /** 参考图顺序：LOGO（可选）→ 原图（外观主依据）→ 抠图（干净合成）→ 模板版式页（末张） */
+  /** 参考图顺序：LOGO（可选）→ 抠图优先（避免白底方框）→ 原图兜底 → 模板版式页（末张） */
   const buildReferenceStack = (originals: string[], cut: string[], logo?: string): string[] => {
     const refs: string[] = [];
     if (logo) refs.push(logo);
-    for (const o of originals) {
-      if (o?.trim()) refs.push(o);
-    }
+    // 优先透明抠图，减少成图带棚拍白底/方框
     for (const c of cut) {
-      if (c?.trim() && !refs.includes(c)) refs.push(c);
+      if (c?.trim()) refs.push(c);
+    }
+    if (!cut.length) {
+      for (const o of originals) {
+        if (o?.trim()) refs.push(o);
+      }
     }
     const layout = activePack?.layoutRefs?.filter(Boolean) || [];
     const reserve = Math.min(2, layout.length);
@@ -231,9 +238,19 @@ export const ModulePosterStudio: React.FC = () => {
     try {
       // 长图以原图为外观主参考；抠图仅作轮廓辅助，避免「抠图贴灰底」的目录页观感
       const workingCutouts = cutouts;
+      setStep('正在抠出产品主体…');
+      let working = workingCutouts;
+      if (!working.length && originals.length) {
+        const { ensureProductCutouts } = await import('../services/productCutoutService');
+        working = await ensureProductCutouts(originals, {
+          allowApi: true,
+          onProgress: (msg) => setStep(msg),
+        });
+        setCutouts(working);
+      }
       setStep('正在分析产品并生成文案方案…');
       const logo = logoForGen();
-      const refs = buildReferenceStack(originals, workingCutouts, logo);
+      const refs = buildReferenceStack(originals, working, logo);
       const effectiveLogoMode =
         logoMode === 'builtin' && !logo ? 'none' : logoMode;
 
@@ -313,7 +330,9 @@ export const ModulePosterStudio: React.FC = () => {
         copyPlan.onImageLockBlock ||
         lockedOnImageCopyBlock(copyPlan.approvedOnImageEn);
       const prompt = applyPackStyleToPrompt(
-        [textLock, roleBlock, basePrompt].filter(Boolean).join('\n'),
+        [productCutoutCompositeBlock(), textLock, roleBlock, basePrompt]
+          .filter(Boolean)
+          .join('\n'),
         activePack
       );
 

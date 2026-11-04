@@ -87,6 +87,19 @@ const nearDuplicate = (a: string, b: string): boolean => {
   return overlap >= Math.max(2, Math.ceil(wb.length * 0.7));
 };
 
+const SAFE_FEATURE_BANK = [
+  'NEW for 2026',
+  'Smart Educational Robot',
+  'Voice Interactive Learning',
+  'Fun English Learning',
+  'Programmable Dance Moves',
+  'Walk Talk Light',
+  'Inspire Kids Creativity',
+  'Remote Control Play',
+  'Early Learning Fun',
+  'Catalog Ready Quality',
+];
+
 const filterApprovedLines = (lines: string[], seeds: string[]): string[] => {
   const out: string[] = [];
   for (const raw of [...seeds, ...lines]) {
@@ -96,9 +109,30 @@ const filterApprovedLines = (lines: string[], seeds: string[]): string[] => {
     if (line.split(/\s+/).length > 8) continue;
     if (out.some((x) => nearDuplicate(x, line))) continue;
     out.push(line);
-    if (out.length >= 5) break; // 图面最多 5 条，降低乱码与重复概率
+    if (out.length >= 6) break;
   }
   return out;
+};
+
+/** 白名单过短时用安全卖点库补齐（仍过乱码/去重门） */
+const ensureMinCopyLines = (
+  lines: string[],
+  opts: { productName?: string; min?: number }
+): string[] => {
+  const min = opts.min ?? 4;
+  let out = [...lines];
+  const fillers = [
+    opts.productName || '',
+    ...SAFE_FEATURE_BANK,
+  ];
+  for (const f of fillers) {
+    if (out.length >= min) break;
+    const line = normalizeLine(f);
+    if (!line || looksLikeGibberish(line)) continue;
+    if (out.some((x) => nearDuplicate(x, line))) continue;
+    out.push(line);
+  }
+  return out.slice(0, 6);
 };
 
 export const isMarketingCopyServiceReady = (): boolean => {
@@ -145,9 +179,9 @@ const SYSTEM = `你是澄海玩具出口目录文案专家。必须严格按流�
 }
 approvedOnImageEn 硬性规则：
 - 每条 2～6 个英文单词，真实词典词，禁止乱码/假词/拉丁胡拼（如 Sofs Commectipees）
-- 最多 5 条且禁止重复或近义重复；优先：年份钩子 / 品名 / 2～3 个功能卖点
+- 必须 4～6 条且禁止重复或近义重复；优先：年份钩子 / 品名 / 3～4 个功能卖点
 - 禁止假认证、假奖项、长段落、参数表、同一句出现两次
-- 若不确定英文拼写，宁可少写，也不要编造`;
+- 若不确定某句拼写，换一句真实卖点，不要整份留空`;
 
 /**
  * 分析 → 搜索 → 方案 → 校验 → 返回图面白名单文案。
@@ -172,15 +206,18 @@ export const runMarketingCopyPipeline = async (
 
   const emptyLock = lockedOnImageCopyBlock([]);
   if (!isMarketingCopyServiceReady()) {
-    const approved = fallbackLines.length ? fallbackLines : [];
+    const approved = ensureMinCopyLines(fallbackLines, {
+      productName: input.productName,
+      min: 4,
+    });
     return {
       productSummaryZh: input.productName || '产品',
       functions: [],
       approvedOnImageEn: approved,
       panelCaptionZh: input.userHighlight || '',
       panelCaptionEn: '',
-      qaPassed: approved.length > 0,
-      qaNotes: ['文案服务未就绪，仅使用品名/表单短句'],
+      qaPassed: approved.length >= 4,
+      qaNotes: ['文案服务未就绪，使用品名+安全卖点库'],
       onImageLockBlock: lockedOnImageCopyBlock(approved),
       engine: approved.length ? 'seed' : 'fallback',
     };
@@ -233,24 +270,27 @@ export const runMarketingCopyPipeline = async (
       if (m) parsed = JSON.parse(m[0]);
     }
 
-    const approved = filterApprovedLines(
-      Array.isArray(parsed.approvedOnImageEn) ? parsed.approvedOnImageEn.map(String) : [],
-      seeds.length ? seeds : fallbackLines
+    let approved = ensureMinCopyLines(
+      filterApprovedLines(
+        Array.isArray(parsed.approvedOnImageEn) ? parsed.approvedOnImageEn.map(String) : [],
+        seeds.length ? seeds : fallbackLines
+      ),
+      { productName: input.productName, min: 4 }
     );
 
     // 二次校验：再让模型挑出错词；失败则本地规则已滤
-    let qaPassed = approved.length > 0 && !approved.some(looksLikeGibberish);
+    let qaPassed = approved.length >= 4 && !approved.some(looksLikeGibberish);
     const qaNotes = [
       ...(Array.isArray(parsed.qaNotes) ? parsed.qaNotes.map(String) : []),
-      qaPassed ? 'local-spell-gate:pass' : 'local-spell-gate:fail→trimmed',
+      qaPassed ? 'local-spell-gate:pass' : 'local-spell-gate:fail→topped-up',
     ];
 
-    if (approved.length && qaPassed) {
+    if (approved.length) {
       try {
         input.onProgress?.('正在复核海报短句…');
         const checkRaw = await callQwen(
           `Check these English poster lines. Reply JSON {"ok":true|false,"fixed":["..."],"bad":["..."]}.
-Reject gibberish / non-words / duplicates. Keep meaning. Max 5 UNIQUE lines, 2-6 words each.
+Reject gibberish / non-words / duplicates. Keep 4-6 UNIQUE real marketing lines, 2-6 words each. Do NOT return empty.
 Lines:\n${approved.map((l, i) => `${i + 1}. ${l}`).join('\n')}`,
           {
             jsonMode: true,
@@ -268,8 +308,11 @@ Lines:\n${approved.map((l, i) => `${i + 1}. ${l}`).join('\n')}`,
           if (m) check = JSON.parse(m[0]);
         }
         if (Array.isArray(check.fixed) && check.fixed.length) {
-          const fixed = filterApprovedLines(check.fixed.map(String), seeds);
-          if (fixed.length) {
+          const fixed = ensureMinCopyLines(
+            filterApprovedLines(check.fixed.map(String), seeds),
+            { productName: input.productName, min: 4 }
+          );
+          if (fixed.length >= 4) {
             return {
               productSummaryZh: (parsed.productSummaryZh || '').trim() || productHint,
               functions: Array.isArray(parsed.functions)
@@ -291,32 +334,39 @@ Lines:\n${approved.map((l, i) => `${i + 1}. ${l}`).join('\n')}`,
       }
     }
 
-    const finalLines = approved.length ? approved : fallbackLines;
+    const finalLines = ensureMinCopyLines(
+      approved.length ? approved : fallbackLines,
+      { productName: input.productName, min: 4 }
+    );
     return {
       productSummaryZh: (parsed.productSummaryZh || '').trim() || productHint,
       functions: Array.isArray(parsed.functions) ? parsed.functions.map(String).slice(0, 8) : [],
       approvedOnImageEn: finalLines,
       panelCaptionZh: (parsed.panelCaptionZh || '').trim(),
       panelCaptionEn: (parsed.panelCaptionEn || '').trim(),
-      qaPassed: finalLines.length > 0 && !finalLines.some(looksLikeGibberish),
+      qaPassed: finalLines.length >= 4 && !finalLines.some(looksLikeGibberish),
       qaNotes,
       onImageLockBlock: lockedOnImageCopyBlock(finalLines),
       engine: finalLines.length ? (approved.length ? 'llm' : 'seed') : 'fallback',
     };
   } catch (e) {
     console.warn('[marketingCopyPipeline] failed', e);
+    const finalLines = ensureMinCopyLines(fallbackLines, {
+      productName: input.productName,
+      min: 4,
+    });
     return {
       productSummaryZh: productHint,
       functions: [],
-      approvedOnImageEn: fallbackLines,
+      approvedOnImageEn: finalLines,
       panelCaptionZh: input.userHighlight || '',
       panelCaptionEn: '',
-      qaPassed: fallbackLines.length > 0,
-      qaNotes: ['pipeline-error:fallback-to-seed'],
-      onImageLockBlock: fallbackLines.length
-        ? lockedOnImageCopyBlock(fallbackLines)
+      qaPassed: finalLines.length >= 4,
+      qaNotes: ['pipeline-error:fallback-to-seed-bank'],
+      onImageLockBlock: finalLines.length
+        ? lockedOnImageCopyBlock(finalLines)
         : emptyLock,
-      engine: fallbackLines.length ? 'seed' : 'fallback',
+      engine: finalLines.length ? 'seed' : 'fallback',
     };
   }
 };

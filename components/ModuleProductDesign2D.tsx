@@ -636,13 +636,24 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     setLoading(true);
     setError(null);
     try {
+      let genRefs = refImages;
+      if (refImages.length) {
+        setError('正在抠出产品主体（去背景）…');
+        const { ensureProductCutouts } = await import('../services/productCutoutService');
+        genRefs = await ensureProductCutouts(refImages, {
+          lastIsLayout: layoutLast,
+          allowApi: true,
+          onProgress: (msg) => setError(msg),
+        });
+        setError(null);
+      }
       const isMulti = skillId === 'multi_angle' || !!pendingBrief?.multiAngle;
       const result = isMulti
         ? await generateMultiAngleDesignImages({
             prompt: styledPrompt,
             size,
             thinkingMode: false,
-            referenceImages: refImages.length ? refImages : undefined,
+            referenceImages: genRefs.length ? genRefs : undefined,
             negativePrompt: mergedNeg,
             userEditBrief: editBrief,
             onProgress: (done, total, label) => {
@@ -657,8 +668,13 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             size,
             n: count,
             thinkingMode: false,
-            referenceImages: refImages.length ? refImages : undefined,
-            negativePrompt: mergedNeg,
+            referenceImages: genRefs.length ? genRefs : undefined,
+            negativePrompt: [
+              mergedNeg,
+              'white product cards, rounded photo frames, boxed thumbnails, studio white backdrop behind product',
+            ]
+              .filter(Boolean)
+              .join(', '),
             series: skillId === 'listing_set' || count > 1,
             lastRefIsLayout: layoutLast,
             distinctProducts: skillId === 'multi_product_poster' && !layoutLast,

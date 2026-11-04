@@ -119,12 +119,24 @@ export const multiImageRoleBlock = (
 export const LAYOUT_SWAP_NEGATIVES =
   'copying the layout reference products, keeping template plush toys, keeping template alphabet cans, near-duplicate of layout reference image, ignoring product reference photos, reproducing sample catalog merchandise';
 
+/**
+ * 产品须无缝融入海报：禁止白底方框、卡片、保留参考图棚拍底。
+ */
+export const productCutoutCompositeBlock = (): string =>
+  [
+    'PRODUCT COMPOSITE (STRICT):',
+    'Reference images are PRODUCT SUBJECT cutouts (transparent / no studio backdrop).',
+    'Place each product seamlessly into the poster scene or color field — soft contact shadow OK.',
+    'FORBIDDEN: white/rounded product cards, polaroid frames, boxed thumbnails, UI tiles, keeping the original studio white/gray background behind the toy, floating cutout rectangles, catalog contact-sheet cells.',
+    'REQUIRED: products appear as real objects in the design, not photos pasted inside boxes.',
+  ].join(' ');
+
 /** 图面文字白名单：只允许印这些短句，否则禁止任何正文（防乱码/重复） */
 export const lockedOnImageCopyBlock = (lines: string[]): string => {
   const cleaned = (lines || [])
     .map((l) => (l || '').replace(/\s+/g, ' ').trim())
     .filter(Boolean)
-    .slice(0, 5);
+    .slice(0, 6);
   if (!cleaned.length) {
     return [
       'ON-IMAGE TEXT POLICY (STRICT): (NO TEXT).',
@@ -211,6 +223,7 @@ export const composeImageGenerationPrompt = (opts: {
     (opts.lockedOnImageCopy
       ? lockedOnImageCopyBlock(opts.lockedOnImageCopy)
       : lockedOnImageCopyBlock([]));
+  const cutoutComposite = hasRefs ? productCutoutCompositeBlock() : '';
   const skuLine =
     opts.skuName || opts.skuCode
       ? `Product identity: ${[opts.skuName, opts.skuCode].filter(Boolean).join(' / ')}. Keep SKU appearance consistent.`
@@ -226,6 +239,7 @@ export const composeImageGenerationPrompt = (opts: {
     ? joinBlocks([
         // 多参考优先钉死「每张都要用」，避免 Brief/二次创作把后几张角度吃掉
         roles,
+        cutoutComposite,
         hasRefs ? editDirective : '',
         layoutSwap,
         textLock,
@@ -236,6 +250,7 @@ export const composeImageGenerationPrompt = (opts: {
       ])
     : joinBlocks([
         roles,
+        cutoutComposite,
         hasRefs ? editDirective : '',
         layoutSwap,
         textLock,
@@ -259,6 +274,7 @@ export const composeImageGenerationPrompt = (opts: {
   const negative = mergeNegatives(
     UNIVERSAL_IMAGE_NEGATIVES,
     'garbled English, invented words, Latin gibberish, fake body paragraphs on poster',
+    'white product cards, rounded photo frames, boxed thumbnails, studio white backdrop behind product, polaroid frames, contact-sheet cells',
     opts.lastRefIsLayout ? LAYOUT_SWAP_NEGATIVES : '',
     opts.skillNegative
   );

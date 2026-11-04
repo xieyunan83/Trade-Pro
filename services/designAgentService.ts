@@ -19,6 +19,7 @@ import {
   lockedOnImageCopyBlock,
   mergeNegatives,
   multiImageRoleBlock,
+  productCutoutCompositeBlock,
   referenceEditDirectiveBlock,
 } from './creativeQualityKit';
 
@@ -221,6 +222,7 @@ const hardenDesignPrompt = (
     const extraNeg = mergeNegatives(
       opts.negativePrompt,
       'garbled English, invented words, Latin gibberish, fake body paragraphs on poster',
+      'white product cards, rounded photo frames, boxed thumbnails, studio white backdrop behind product',
       opts.lastRefIsLayout ? LAYOUT_SWAP_NEGATIVES : ''
     );
     let withNeg =
@@ -241,7 +243,8 @@ const hardenDesignPrompt = (
       withNeg = withNeg
         .replace(/\n?REFERENCE: Image 1[^\n]*/gi, '')
         .replace(/\n?MULTI-IMAGE ROLES[^\n]*/gi, '')
-        .replace(/\n?MULTI-PRODUCT INTEGRATION[^\n]*/gi, '');
+        .replace(/\n?MULTI-PRODUCT INTEGRATION[^\n]*/gi, '')
+        .replace(/\n?MULTI-VIEW REFERENCES[^\n]*/gi, '');
       if (opts.lastRefIsLayout) {
         const swap = layoutProductSwapDirectiveBlock(refCount - 1);
         if (!/CRITICAL TASK — LAYOUT SWAP/i.test(withNeg)) {
@@ -249,8 +252,11 @@ const hardenDesignPrompt = (
         }
       }
       withNeg = `${multiImageRoleBlock(refCount, roleOpts)}\n${withNeg}`;
-    } else if (refCount === 1 && !/REFERENCE: Image 1|MULTI-IMAGE ROLES/i.test(withNeg)) {
+    } else if (refCount === 1 && !/REFERENCE: Image 1|MULTI-IMAGE ROLES|MULTI-VIEW/i.test(withNeg)) {
       withNeg = `${withNeg}\n${multiImageRoleBlock(1, roleOpts)}`;
+    }
+    if (hasRefs && !/PRODUCT COMPOSITE/i.test(withNeg)) {
+      withNeg = `${productCutoutCompositeBlock()}\n${withNeg}`;
     }
     // 始终重钉图面文字白名单，覆盖 Brief/模板里「写大段英文」的诱导
     withNeg = withNeg.replace(/\n?ON-IMAGE TEXT POLICY[\s\S]*?(?=\n[A-Z]{2,}|\nIDENTITY LOCK|\nNEGATIVE|$)/i, '\n');
