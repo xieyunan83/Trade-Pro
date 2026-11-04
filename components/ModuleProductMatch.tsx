@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import type { AnalysisResult, Client, HistoryItem, MailGroup, User } from '../types';
 import { ModuleType } from '../types';
 import { runGtmLaunchPack } from '../services/gtmExpertService';
