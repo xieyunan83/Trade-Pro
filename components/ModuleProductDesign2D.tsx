@@ -420,7 +420,17 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
         skillId,
         skillLabel: skill.label,
         skillHint: skill.hint,
-        skillDefaultPrompt: applyPackStyleToPrompt(skill.defaultPrompt, activePack),
+        skillDefaultPrompt: applyPackStyleToPrompt(
+          [
+            skill.defaultPrompt,
+            previewRefs.refs.length >= 2 && skillId !== 'multi_angle'
+              ? 'Multiple product reference photos are attached: compose a catalog-style layout that places EVERY product cutout on the poster (match each Image angle/pose). Forbidden: single-hero shot that invents other angles from Image 1 alone.'
+              : '',
+          ]
+            .filter(Boolean)
+            .join('\n'),
+          activePack
+        ),
         skillNegativePrompt: applyPackNegative(
           [
             negativePrompt.trim() || skill.negativePrompt,
@@ -439,11 +449,17 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
           skillId === 'multi_product_poster' && !layoutLast
             ? '多产品整合：每张产品参考图对应独立 SKU，成图必须全部出现，禁止只保留一张。'
             : '',
+          previewRefs.refs.length >= 2 &&
+            !(skillId === 'multi_product_poster' && !layoutLast)
+            ? layoutLast
+              ? `版式换品+多参考：前面 ${Math.max(1, previewRefs.refs.length - 1)} 张产品切图必须全部入画（正面/45°/侧面等各用对应参考），禁止只吃一张再编造角度；严格跟随末张版式模板的色块、文字区与产品坑位，产品不得压住标题。`
+              : `多角度参考 ${previewRefs.refs.length} 张：成图必须出现同等数量的产品切图，每张对应一张参考图的真实角度，禁止只复制正面或旋转编造侧面。`
+            : '',
           agentMode === 'secondary'
             ? buildSecondaryCreationEditEnglish(secondaryFields)
             : '',
           '图面文字只能使用已校验白名单短句；禁止自由编造英文段落。',
-          '产品与文字分区：产品不得挡住任何标题/卖点文字；文字放在右侧或左侧安全区。',
+          '产品与文字分区：产品只放在版式产品坑位；不得挡住任何标题/卖点文字。',
         ]
           .filter(Boolean)
           .join('\n'),
@@ -451,7 +467,12 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
           ...(skill.qaChecklist || []),
           '图面英文无乱码、无假词、仅白名单短句',
           '产品未遮挡文字，卖点短句完整可读',
-        ].slice(0, 8),
+          previewRefs.refs.length >= 2
+            ? '每一张产品参考图都出现在成图中（角度/SKU 对应）'
+            : '',
+        ]
+          .filter(Boolean)
+          .slice(0, 8),
         userBrief: [
           hasRefs
             ? `【参考图二次创作·改动清单】\n${resolveEditBrief()}`
@@ -649,6 +670,9 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
         agentMode === 'secondary' ? SECONDARY_CREATION_NEGATIVE : '',
         skillId === 'multi_product_poster'
           ? 'dropping any product SKU, single-product-only poster when multiple product refs provided'
+          : '',
+        refImages.length >= 2
+          ? 'using only first reference, inventing angles from one photo, cloning front view into every slot, dropping later reference images, product covering text'
           : '',
       ]
         .filter(Boolean)

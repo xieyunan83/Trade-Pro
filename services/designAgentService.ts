@@ -225,6 +225,7 @@ const hardenDesignPrompt = (
       'garbled English, invented words, Latin gibberish, fake body paragraphs on poster',
       'white product cards, rounded photo frames, boxed thumbnails, studio white backdrop behind product',
       'product covering text, toy overlapping headlines, text behind product, long prose paragraph on poster',
+      'using only first reference, inventing angles from one photo, cloning front view into every slot, dropping later reference images',
       opts.lastRefIsLayout ? LAYOUT_SWAP_NEGATIVES : ''
     );
     let withNeg =
@@ -261,7 +262,9 @@ const hardenDesignPrompt = (
       withNeg = `${productCutoutCompositeBlock()}\n${withNeg}`;
     }
     if (!/TYPOGRAPHY SAFE LAYOUT/i.test(withNeg)) {
-      withNeg = `${typographySafeLayoutBlock()}\n${withNeg}`;
+      withNeg = `${typographySafeLayoutBlock({
+        hasLayoutTemplate: !!opts.lastRefIsLayout,
+      })}\n${withNeg}`;
     }
     // 始终重钉图面文字白名单，覆盖 Brief/模板里「写大段英文」的诱导
     withNeg = withNeg.replace(/\n?ON-IMAGE TEXT POLICY[\s\S]*?(?=\n[A-Z]{2,}|\nIDENTITY LOCK|\nNEGATIVE|$)/i, '\n');

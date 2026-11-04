@@ -52,7 +52,7 @@ const LS_PACKS = 'trade_scout_enterprise_design_packs_v1';
 const LS_ACTIVE = 'trade_scout_enterprise_design_pack_active_v1';
 const LS_SEEDED = 'trade_scout_enterprise_design_packs_seeded_v1';
 /** 升级样本库时递增，强制刷新内置包 L1/L2 */
-const SEED_VERSION = 'edu_catalog_v2';
+const SEED_VERSION = 'edu_catalog_v3_layout_fidelity';
 
 const T = {
   coverIntro: '/enterprise-templates/cover-new-2026.jpg',
@@ -98,7 +98,7 @@ export const BUILTIN_ENTERPRISE_PACKS: EnterpriseDesignPack[] = [
       typographyNotes:
         '超大粗无衬线白字 NEW / for YEAR 层级压倒一切；中段左对齐白字使命段落（中等字重、舒适行距）；产品旁小白字「品名, pg. N」；禁止正文微字墙',
       layoutGrammar:
-        'Vertical split color-block cover: left ~25% deep navy with playful yellow dashed stars/swooshes, right ~75% bright sky blue; oversized white headline upper-center; short mission paragraph mid-page; 3–4 cut-out product heroes around text (top-left DIY vehicle, top-right literacy set, bottom plush row) each with tiny name+page caption; generous breathing room; catalog cover hierarchy not crowded poster',
+        'Vertical split color-block cover: left ~25% deep navy with playful yellow dashed stars/swooshes, right ~75% bright sky blue; oversized white headline upper-center CLEAR OF PRODUCTS; short mission paragraph mid-page with breathing room (products never overlap letters); 3–4 cut-out product heroes FRAMING the text (corners / edges / lower band) — each slot uses a different provided product reference cutout at that photo’s real angle; generous margins; catalog cover hierarchy, not a crowded single-toy-over-text poster',
       lightingMood:
         'Clean studio cut-outs on solid color fields, true toy colors, high commercial print sharpness, no muddy shadows',
       decorationSystem:
@@ -106,12 +106,12 @@ export const BUILTIN_ENTERPRISE_PACKS: EnterpriseDesignPack[] = [
       stylePrompt:
         'Educational toy wholesale catalog year-intro cover: deep navy left panel with yellow dashed star trails, bright sky-blue main field, massive bold white sans-serif NEW for YEAR headline, short white mission paragraph left-aligned mid page, multiple sharp product cut-outs framing the text with tiny white product-name and page captions, playful but premium B2B catalog energy, locked product identity from references',
       negativePrompt:
-        'dense micro-text walls, fake awards, flea-market collage, ignoring color-block split, watermark, illegible captions, cluttered icon spam',
+        'dense micro-text walls, fake awards, flea-market collage, ignoring color-block split, watermark, illegible captions, cluttered icon spam, product covering headline, single oversized product over text, inventing angles from one photo, dropping product reference cutouts',
       copyFormula: `${COPY_BENEFIT_LED}
 封面导语变体：开篇用「From … to … we introduce nearly N new toys that inspire and empower…」；强调 innovation / creativity / engagement / bringing learning to life；不要堆 SKU 价目。`,
       foolproofHint: '上传 1–3 张产品图 → 点「一键套用」→ 确认生成封面',
       foolproofPrompt:
-        '按年度新品封面模板做一页：左右海军蓝/天蓝色块分割，超大白色 NEW for 2026 标题，中间写 2–3 句使命短文（启发儿童、把学习变生动），周围排布我上传的产品切图并在旁标注品名；黄点星芒装饰仅放在海军蓝侧；产品外形锁定参考图。',
+        '按年度新品封面模板做一页：左右海军蓝/天蓝色块分割，超大白色 NEW for 2026 标题居中上方清晰可读、中间使命短文不被产品挡住；把我上传的每张产品切图都排布在文字周围各自坑位（多角度图要保留各自真实视角，禁止只画一张再编侧面）；黄点星芒装饰仅放在海军蓝侧；产品外形锁定参考图。',
       sourceNote: '样本学习 · 年度封面导语页',
     }),
     builtin: true,
@@ -517,19 +517,30 @@ export const applyPackStyleToPrompt = (
   if (!pack?.styleCard?.stylePrompt?.trim()) return basePrompt;
   const style = pack.styleCard.stylePrompt.trim();
   const copy = pack.styleCard.copyFormula?.trim();
+  const grammar = pack.styleCard.layoutGrammar?.trim();
+  const typeNotes = pack.styleCard.typographyNotes?.trim();
   const base = (basePrompt || '').trim();
   // copyFormula 只作文案结构参考，禁止诱导模型自由编造图面英文段落
   const extras = [
     `[Enterprise template style · ${pack.name}]`,
     style,
+    grammar
+      ? `[Layout grammar — follow faithfully]\n${grammar}\nPlace OUR product cutouts only in the template product slots; keep headline / mission / caption zones clear like the reference layout.`
+      : '',
+    typeNotes ? `[Typography system]\n${typeNotes}` : '',
     copy
       ? `[Copy craft — structure only, NOT free text to invent]\n${copy}\nIf APPROVED ON-IMAGE lines exist elsewhere in the prompt, render ONLY those exact lines. Otherwise NO TEXT on image.`
+      : '',
+    pack.layoutRefs?.length
+      ? '[Layout fidelity] Match the attached layout reference page: color blocks, decor, margins, and product-around-text rhythm. Do not invent a crowded single-hero overlay that covers the text.'
       : '',
   ]
     .filter(Boolean)
     .join('\n');
   if (!base) return extras;
-  if (base.includes(style.slice(0, 40))) return base;
+  if (base.includes(style.slice(0, 40)) && (!grammar || base.includes(grammar.slice(0, 32)))) {
+    return base;
+  }
   return `${base}\n\n${extras}`;
 };
 

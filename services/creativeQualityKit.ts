@@ -61,21 +61,24 @@ export const referenceEditDirectiveBlock = (userEditBrief?: string): string => {
 
 /**
  * 末张版式 + 前面产品：强制「换品入版」，禁止复刻版式图里的原产品。
+ * 前面多张图无论同 SKU 多角度还是多 SKU，都必须各自入画。
  */
 export const layoutProductSwapDirectiveBlock = (productCount: number): string => {
   const n = Math.max(1, productCount);
   return [
     'CRITICAL TASK — LAYOUT SWAP (NOT COPY):',
-    `Images 1–${n} are OUR product photos (same SKU or multiple SKUs). Image ${n + 1} is ONLY a layout / poster template.`,
-    `Rebuild the poster using Image ${n + 1}'s composition: color blocks, typography zones, hierarchy, decorative motifs, margins — BUT replace EVERY product shown in the template with OUR product(s) from Images 1–${n}.`,
-    `FORBIDDEN: outputting a near-copy of the template; keeping the template's original toys/plush/cans/props as heroes; ignoring Images 1–${n}.`,
-    `REQUIRED: a buyer must instantly recognize OUR product identity from Images 1–${n} in the final poster; template products must disappear.`,
+    `Images 1–${n} are OUR product PHOTO CUTOUTS (same SKU at different camera angles OR different SKUs). Image ${n + 1} is ONLY a layout / poster template.`,
+    `Rebuild the poster using Image ${n + 1}'s composition EXACTLY: color-block split, typography zones, hierarchy, decorative motifs, margins, product-slot positions — but replace EVERY template merchandise with OUR cutouts.`,
+    `PRODUCT SLOT RULE: the template shows multiple product heroes around the text — fill those slots with Images 1–${n}. EACH of Images 1–${n} MUST appear as its OWN separate cutout (one slot per Image).`,
+    `If the template has more slots than ${n}, reuse only after all ${n} refs are already placed; if fewer slots, prefer the clearest angles but NEVER drop a provided Image silently when space allows.`,
+    `FORBIDDEN: near-copy of the template merchandise; inventing new camera angles from Image 1 alone; cloning Image 1 into every slot; ignoring Images 2–${n}; stacking products over the template's headline/mission text zones.`,
+    `REQUIRED: buyer instantly recognizes OUR product identity from EACH of Images 1–${n}; text zones stay clear like the template.`,
   ].join(' ');
 };
 
 /**
  * 多参考图角色说明：确保每张图都进入指令，避免模型只吃前 1～2 张。
- * lastIsLayout：末张为版式/海报方案，前面全部为需出现的独立产品。
+ * lastIsLayout：末张为版式/海报方案，前面全部为需出现的产品切图。
  * distinctProducts：多 SKU 整合（每张产品都必须出现在成图中）。
  */
 export const multiImageRoleBlock = (
@@ -89,9 +92,9 @@ export const multiImageRoleBlock = (
     const list = Array.from({ length: nProd }, (_, i) => `Image ${i + 1}`).join(', ');
     return [
       layoutProductSwapDirectiveBlock(nProd),
-      `MULTI-IMAGE ROLES: ${list} = PRODUCT ground truth (silhouette, colors, materials, logos locked).`,
-      `Image ${count} = LAYOUT TEMPLATE ONLY (composition / background / type hierarchy / decor). Do NOT treat Image ${count}'s merchandise as products to keep.`,
-      `Output ONE poster that places ALL products from Images 1–${nProd} into Image ${count}'s layout scheme — every SKU must appear; fill missing decor in that scheme's style; never redesign OUR product tooling.`,
+      `MULTI-IMAGE ROLES: ${list} = PRODUCT ground truth cutouts (silhouette, colors, materials, logos, AND camera angle/pose locked per Image).`,
+      `Image ${count} = LAYOUT TEMPLATE ONLY (composition / background / type hierarchy / decor). Do NOT keep Image ${count}'s original merchandise.`,
+      `Output ONE poster that places ALL ${nProd} cutouts from Images 1–${nProd} into Image ${count}'s layout — never invent missing angles from a single photo.`,
     ].join(' ');
   }
   if (count === 1) {
@@ -106,12 +109,12 @@ export const multiImageRoleBlock = (
       `REQUIRED: one cohesive multi-SKU commercial cover featuring all ${count} products with identity locked to each reference.`,
     ].join(' ');
   }
-  // 同 SKU 多角度（用户勾选正面/45°/侧面等）：多坑位必须用不同视角，禁止三张都是正面复制
+  // 同 SKU 多角度：必须把每张参考图都摆进成图，禁止只吃正面再“编造”侧面
   return [
-    `MULTI-VIEW REFERENCES (MANDATORY): ${list} are DIFFERENT camera angles of the SAME product.`,
-    `If the poster shows ${count} (or more) product placements, placement 1 MUST match Image 1's angle/pose, placement 2 MUST match Image 2, placement 3 MUST match Image 3, and so on.`,
-    `FORBIDDEN: cloning only Image 1 into every slot; ignoring Images 2–${count}; three identical front views when 45°/side refs were provided.`,
-    `REQUIRED: visibly different viewing angles across product slots, identity locked to each corresponding reference image.`,
+    `MULTI-VIEW REFERENCES (MANDATORY — ALL ${count} MUST APPEAR): ${list} are DIFFERENT camera angles / poses of the SAME product.`,
+    `The final poster MUST show ${count} distinct product cutouts — placement 1 = Image 1's exact angle/pose, placement 2 = Image 2, … placement ${count} = Image ${count}.`,
+    `FORBIDDEN: using only Image 1; inventing a new 45°/side/back view by rotating Image 1; cloning Image 1 into every slot; dropping Images 2–${count}; two near-identical fronts when a side/45° ref was provided.`,
+    `REQUIRED: each provided reference photo is visibly used as a separate hero cutout; identity + angle locked to that Image.`,
   ].join(' ');
 };
 
@@ -132,16 +135,18 @@ export const productCutoutCompositeBlock = (): string =>
   ].join(' ');
 
 /**
- * 文字与产品分区：产品不得挡住介绍文字（用户常见投诉）。
+ * 文字与产品分区：产品不得挡住介绍文字；有版式模板时严格跟模板文字区。
  */
-export const typographySafeLayoutBlock = (): string =>
+export const typographySafeLayoutBlock = (opts?: { hasLayoutTemplate?: boolean }): string =>
   [
     'TYPOGRAPHY SAFE LAYOUT (STRICT):',
-    'Reserve a clear copy column / band (e.g. top-right or left strip) with NO product silhouette overlapping any letter.',
+    opts?.hasLayoutTemplate
+      ? 'Follow the layout template text zones exactly (headline / mission / captions). Products sit ONLY in the template product slots around the text — never over letters.'
+      : 'Reserve a clear copy column / band (e.g. upper-right or left strip) with NO product silhouette overlapping any letter.',
     'Products and text must not collide: no toy covering headlines, bullets, captions, or body areas.',
     'Keep ≥8% margin between product edges and any text; if space is tight, shrink or move the product — never cover copy.',
-    'FORBIDDEN: product standing on top of paragraphs; text running through the toy; stacking a product over the description block.',
-    'FORBIDDEN: inventing long body paragraphs — only the approved short lines may appear, fully legible.',
+    'FORBIDDEN: product standing on top of paragraphs; text running through the toy; stacking a product over the description block; crowding the center text with a large overlapping hero.',
+    'FORBIDDEN: inventing long body paragraphs — only the approved short lines may appear, fully legible, matching the template hierarchy when a layout ref is present.',
   ].join(' ');
 
 /** 图面文字白名单：只允许印这些短句，否则禁止任何正文（防乱码/重复） */
@@ -238,7 +243,9 @@ export const composeImageGenerationPrompt = (opts: {
       ? lockedOnImageCopyBlock(opts.lockedOnImageCopy)
       : lockedOnImageCopyBlock([]));
   const cutoutComposite = hasRefs ? productCutoutCompositeBlock() : '';
-  const typeSafe = typographySafeLayoutBlock();
+  const typeSafe = typographySafeLayoutBlock({
+    hasLayoutTemplate: !!opts.lastRefIsLayout,
+  });
   const skuLine =
     opts.skuName || opts.skuCode
       ? `Product identity: ${[opts.skuName, opts.skuCode].filter(Boolean).join(' / ')}. Keep SKU appearance consistent.`
@@ -293,6 +300,7 @@ export const composeImageGenerationPrompt = (opts: {
     'garbled English, invented words, Latin gibberish, fake body paragraphs on poster',
     'white product cards, rounded photo frames, boxed thumbnails, studio white backdrop behind product, polaroid frames, contact-sheet cells',
     'product covering text, toy overlapping headlines, text behind product, illegible occluded copy, long prose paragraph on poster',
+    'using only first reference, inventing angles from one photo, cloning front view into every slot, dropping later reference images',
     opts.lastRefIsLayout ? LAYOUT_SWAP_NEGATIVES : '',
     opts.skillNegative
   );
