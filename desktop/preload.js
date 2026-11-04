@@ -20,7 +20,7 @@ contextBridge.exposeInMainWorld('bwDesktop', {
       /* ignore */
     }
   },
-  /** 另存为：把 base64 写到用户选择的路径（Windows 下载用） */
+  /** 另存为：把 blob→base64 传来写盘（不阻塞主进程同步） */
   saveBytes: (payload) => {
     try {
       return ipcRenderer.invoke('bw-save-bytes', payload || {});
@@ -29,3 +29,16 @@ contextBridge.exposeInMainWorld('bwDesktop', {
     }
   },
 });
+
+// 尽早标记桌面端，减少页面侧轮询/等待
+try {
+  window.addEventListener('DOMContentLoaded', () => {
+    try {
+      localStorage.setItem('trade_scout_desktop_client', '1');
+    } catch {
+      /* ignore */
+    }
+  });
+} catch {
+  /* ignore */
+}

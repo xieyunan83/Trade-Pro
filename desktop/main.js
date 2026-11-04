@@ -36,7 +36,18 @@ const resolveAppOrigin = () => {
 };
 
 const APP_ORIGIN = resolveAppOrigin();
-const startUrl = () => `${APP_ORIGIN}/?_boot=${Date.now()}`;
+
+/** 稳定 URL 走 Chromium 磁盘缓存（冷启动快）；仅上次启动失败才 bust */
+const startUrl = (forceBust = false) => {
+  if (forceBust) return `${APP_ORIGIN}/?_boot=${Date.now()}`;
+  try {
+    const failFlagPath = path.join(app.getPath('userData'), 'last-boot-failed');
+    if (fs.existsSync(failFlagPath)) return `${APP_ORIGIN}/?_boot=${Date.now()}`;
+  } catch {
+    /* ignore */
+  }
+  return `${APP_ORIGIN}/`;
+};
 
 const isAppUrl = (url) => {
   try {
@@ -264,8 +275,7 @@ function createWindow() {
     // 与登录页 .tp-login 底色一致；避免网页未绘制时出现「假死深蓝空窗」
     backgroundColor: '#070b14',
     show: false,
-    // Mac / Windows 客户端默认占满屏幕（最大化 + 全屏）
-    fullscreen: true,
+    // 默认最大化占满工作区（比排他全屏启动更快，仍可菜单切换全屏）
     fullscreenable: true,
     autoHideMenuBar: process.platform !== 'darwin',
     webPreferences: {
@@ -276,6 +286,8 @@ function createWindow() {
       spellcheck: false,
       // 最小化/失焦时也不降速，保证 Windows 背调工作站可持续跑队列
       backgroundThrottling: false,
+      v8CacheOptions: 'code',
+      enableBlinkFeatures: 'CSSBackdropFilter',
       // 打包后仍允许诊断（菜单打开），便于排查白屏
       devTools: true,
     },
@@ -283,20 +295,19 @@ function createWindow() {
 
   buildMenu();
 
-  // 最多 2.5s 必须露脸，避免一直卡在「未 show」
+  // 尽快露脸：最大化占满屏，避免排他全屏切换卡顿
   const showSoon = () => {
     if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isVisible()) return;
     try {
       if (!mainWindow.isMaximized()) mainWindow.maximize();
-      if (!mainWindow.isFullScreen()) mainWindow.setFullScreen(true);
     } catch (e) {
-      console.warn('[window] maximize/fullscreen failed', e);
+      console.warn('[window] maximize failed', e);
     }
     mainWindow.show();
     mainWindow.focus();
   };
   mainWindow.once('ready-to-show', showSoon);
-  setTimeout(showSoon, 2500);
+  setTimeout(showSoon, 1200);
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isAppUrl(url)) return { action: 'allow' };
@@ -415,13 +426,24 @@ ipcMain.handle('bw-save-bytes', async (event, payload) => {
     if (canceled || !filePath) return { ok: false, canceled: true };
 
     const buf = Buffer.from(base64, 'base64');
-    fs.writeFileSync(filePath, buf);
+    await fs.promises.writeFile(filePath, buf);
     return { ok: true, filePath };
   } catch (e) {
     console.warn('[bw-save-bytes] failed', e);
     return { ok: false, error: String(e?.message || e) };
   }
 });
+
+// 启动/交互性能：GPU 光栅化 + 禁止后台节流（须在 ready 前）
+try {
+  app.commandLine.appendSwitch('enable-gpu-rasterization');
+  app.commandLine.appendSwitch('enable-zero-copy');
+  app.commandLine.appendSwitch('disable-renderer-backgrounding');
+  app.commandLine.appendSwitch('disable-background-timer-throttling');
+  app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+} catch {
+  /* ignore */
+}
 
 app.whenReady().then(async () => {
   // Windows 工作站休眠/锁屏时杀网络会导致批量背调大面积 FAILED
@@ -430,10 +452,13 @@ app.whenReady().then(async () => {
   } catch (e) {
     console.warn('[power] prevent-app-suspension failed', e);
   }
-  try {
-    powerSaveBlocker.start('prevent-display-sleep');
-  } catch (e) {
-    console.warn('[power] prevent-display-sleep failed', e);
+  // 显示防休眠会拖慢部分机器；仅 Windows 挂机场景需要
+  if (process.platform === 'win32') {
+    try {
+      powerSaveBlocker.start('prevent-display-sleep');
+    } catch (e) {
+      console.warn('[power] prevent-display-sleep failed', e);
+    }
   }
 
   const ses = session.defaultSession;
