@@ -106,10 +106,12 @@ export const multiImageRoleBlock = (
       `REQUIRED: one cohesive multi-SKU commercial cover featuring all ${count} products with identity locked to each reference.`,
     ].join(' ');
   }
+  // 同 SKU 多角度（用户勾选正面/45°/侧面等）：多坑位必须用不同视角，禁止三张都是正面复制
   return [
-    `MULTI-IMAGE ROLES (ALL must contribute): ${list} are attached references.`,
-    `Use EVERY image — do not ignore later ones.`,
-    `If they show different SKUs, feature each SKU clearly in the output; if they show angles of one SKU, fuse complementary views without inventing a new design.`,
+    `MULTI-VIEW REFERENCES (MANDATORY): ${list} are DIFFERENT camera angles of the SAME product.`,
+    `If the poster shows ${count} (or more) product placements, placement 1 MUST match Image 1's angle/pose, placement 2 MUST match Image 2, placement 3 MUST match Image 3, and so on.`,
+    `FORBIDDEN: cloning only Image 1 into every slot; ignoring Images 2–${count}; three identical front views when 45°/side refs were provided.`,
+    `REQUIRED: visibly different viewing angles across product slots, identity locked to each corresponding reference image.`,
   ].join(' ');
 };
 
@@ -117,25 +119,26 @@ export const multiImageRoleBlock = (
 export const LAYOUT_SWAP_NEGATIVES =
   'copying the layout reference products, keeping template plush toys, keeping template alphabet cans, near-duplicate of layout reference image, ignoring product reference photos, reproducing sample catalog merchandise';
 
-/** 图面文字白名单：只允许印这些短句，否则禁止任何正文（防乱码） */
+/** 图面文字白名单：只允许印这些短句，否则禁止任何正文（防乱码/重复） */
 export const lockedOnImageCopyBlock = (lines: string[]): string => {
   const cleaned = (lines || [])
     .map((l) => (l || '').replace(/\s+/g, ' ').trim())
     .filter(Boolean)
-    .slice(0, 8);
+    .slice(0, 5);
   if (!cleaned.length) {
     return [
       'ON-IMAGE TEXT POLICY (STRICT): (NO TEXT).',
-      'Leave all typography / headline / paragraph zones empty.',
-      'Do NOT invent English words, Latin-looking gibberish, product descriptions, or fake body copy.',
+      'Leave all typography / headline / bullet / paragraph zones empty.',
+      'Do NOT invent English words, Latin-looking gibberish, product descriptions, bullet lists, or fake body copy.',
     ].join(' ');
   }
   return [
     'ON-IMAGE TEXT POLICY (STRICT):',
-    'Render ONLY these exact strings (character-for-character). Do not rewrite, expand, translate, or add paragraphs.',
+    `Render AT MOST these ${cleaned.length} lines — each line AT MOST ONCE. Do not add extra bullets.`,
+    'Copy-paste character-for-character. Do not rewrite, expand, translate, or invent synonyms.',
     ...cleaned.map((l, i) => `LINE ${i + 1}: ${l}`),
-    'FORBIDDEN: invented words, gibberish letters, long body paragraphs, tiny micro-text, fake awards.',
-    'If a line would be blurry at size, omit it — never invent filler text.',
+    'FORBIDDEN: any English word not in the lines above; duplicate lines; gibberish (e.g. fake words like "Sofs Commectipees"); long paragraphs; tiny micro-text; fake awards.',
+    'If a line cannot be rendered sharply, OMIT it — never invent filler or repeat another line.',
   ].join('\n');
 };
 
@@ -221,17 +224,18 @@ export const composeImageGenerationPrompt = (opts: {
 
   const positive = opts.baseToolPrompt?.trim()
     ? joinBlocks([
-        // 有参考时：先钉死「只改用户要求」，再叠 Brief，避免编排结果冲掉编辑范围
+        // 多参考优先钉死「每张都要用」，避免 Brief/二次创作把后几张角度吃掉
+        roles,
         hasRefs ? editDirective : '',
         layoutSwap,
         textLock,
         opts.baseToolPrompt,
-        roles,
         identity,
         opts.series ? SERIES_CONSISTENCY_BLOCK : '',
         COMMERCIAL_CRAFT_FOOTER,
       ])
     : joinBlocks([
+        roles,
         hasRefs ? editDirective : '',
         layoutSwap,
         textLock,
@@ -247,7 +251,6 @@ export const composeImageGenerationPrompt = (opts: {
         opts.productNotes ? `Product notes: ${opts.productNotes}` : '',
         opts.channel ? `Retail channel context: ${opts.channel}` : '',
         opts.palette ? `Color / finish direction: ${opts.palette}` : '',
-        roles,
         identity,
         opts.series ? SERIES_CONSISTENCY_BLOCK : '',
         COMMERCIAL_CRAFT_FOOTER,

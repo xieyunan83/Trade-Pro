@@ -138,7 +138,10 @@ const shrinkRefForUpload = async (url: string, many: boolean): Promise<string> =
 const prepareReferenceImages = async (urls?: string[]): Promise<string[] | undefined> => {
   if (!urls?.length) return undefined;
   const capped = urls.filter(Boolean).slice(0, MAX_DESIGN_REF_IMAGES);
-  const many = capped.length >= 4;
+  const n = capped.length;
+  // ≥3 张时按「均分预算」压图，禁止前 1 张吃光额度导致后几张被丢弃
+  const many = n >= 3;
+  const perCap = Math.floor(MAX_REF_TOTAL_DATA_CHARS / Math.max(1, n));
   const out: string[] = [];
   let dataBudget = MAX_REF_TOTAL_DATA_CHARS;
   for (const u of capped) {
@@ -149,16 +152,30 @@ const prepareReferenceImages = async (urls?: string[]): Promise<string[] | undef
       if (!/^https?:\/\//i.test(resolved) && !resolved.startsWith('data:image/')) continue;
       let shrunk = await shrinkRefForUpload(resolved, many);
       if (shrunk.startsWith('data:image/')) {
-        if (shrunk.length > dataBudget) {
-          shrunk = await compressImageDataUrl(shrunk, 384, 0.48);
-          if (shrunk.length > dataBudget) continue;
+        let edge = many ? 448 : 640;
+        const hardCap = Math.min(perCap, dataBudget, MAX_REF_SINGLE_CHARS);
+        while (shrunk.length > hardCap && edge >= 240) {
+          shrunk = await compressImageDataUrl(shrunk, edge, edge <= 320 ? 0.42 : 0.5);
+          edge = Math.floor(edge * 0.72);
         }
-        dataBudget -= shrunk.length;
+        if (shrunk.length > dataBudget) {
+          shrunk = await compressImageDataUrl(shrunk, 240, 0.4);
+        }
+        // 仍超总预算：宁可再压也不跳过，保证用户选中的每张都尽量进请求
+        if (shrunk.length > dataBudget) {
+          console.warn(
+            `[design] ref #${out.length + 1}/${n} still large (${shrunk.length}), forcing include`
+          );
+        }
+        dataBudget = Math.max(0, dataBudget - shrunk.length);
       }
       out.push(shrunk);
     } catch {
       /* 跳过坏参考 */
     }
+  }
+  if (n >= 2 && out.length < n) {
+    console.warn(`[design] prepared ${out.length}/${n} refs — some failed resolve/compress`);
   }
   return out.length ? out : undefined;
 };
@@ -267,13 +284,20 @@ export const generateDesignImages = async (
   const override = wanOverride();
 
   try {
+    const requestedRefCount = (opts.referenceImages || []).filter(Boolean).length;
     const refs = await prepareReferenceImages(opts.referenceImages);
     const hasRefs = !!(refs && refs.length);
+    const refCount = refs?.length || 0;
+    if (requestedRefCount >= 2 && refCount < requestedRefCount) {
+      console.warn(
+        `[design] only ${refCount}/${requestedRefCount} refs survived prepare — multi-view may degrade`
+      );
+    }
     const prompt = hardenDesignPrompt(opts.prompt, hasRefs, {
       negativePrompt: opts.negativePrompt,
       series: opts.series || n > 1,
-      referenceCount: refs?.length || 0,
-      lastRefIsLayout: !!opts.lastRefIsLayout && (refs?.length || 0) >= 2,
+      referenceCount: refCount,
+      lastRefIsLayout: !!opts.lastRefIsLayout && refCount >= 2,
       distinctProducts: !!opts.distinctProducts,
       lockedOnImageCopy: opts.lockedOnImageCopy,
       onImageLockBlock: opts.onImageLockBlock,

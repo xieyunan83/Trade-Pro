@@ -1542,9 +1542,22 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                 · {size}
               </span>
             </p>
+            {(refUploads.length > 0 || canvasProductRefUrls.length > 0) && (
+              <p className="text-[11px] text-violet-800 bg-violet-50 rounded-xl px-3 py-2 font-medium">
+                参考图将使用{' '}
+                {Math.min(
+                  MAX_DESIGN_REF_IMAGES,
+                  Math.max(
+                    refUploads.length,
+                    selectedIds.length || canvasProductRefUrls.length
+                  )
+                )}{' '}
+                张；多角度须分别入画，禁止只复制正面。
+              </p>
+            )}
             {pendingBrief.copyPlanSummaryZh && (
               <div className="text-[11px] text-emerald-800 bg-emerald-50/90 rounded-xl px-3 py-2 font-medium leading-relaxed">
-                <span className="font-black">文案方案（已校验）</span>
+                <span className="font-black">文案方案（已校验·去重）</span>
                 <br />
                 {pendingBrief.copyPlanSummaryZh}
                 {pendingBrief.lockedOnImageCopy?.length ? (

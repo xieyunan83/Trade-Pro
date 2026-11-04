@@ -34,22 +34,38 @@ export type MarketingCopyPlan = {
   engine: 'llm' | 'seed' | 'fallback';
 };
 
+/** 常见外贸海报可用词根（宽松）；长词若不沾边更易判假词 */
+const COMMON_STEM =
+  /new|toy|robot|dog|cat|car|kids?|child|fun|play|smart|learn|voice|talk|walk|dance|light|music|educat|english|program|interact|inspire|creat|remote|control|safe|age|model|series|feature|bonus|pack|gift|export|oem|odm|b2b|for|and|with|the|a|an|of|to|in|on|by/i;
+
+const looksLikeGibberishWord = (bare: string): boolean => {
+  if (bare.length < 2) return false;
+  if (!/[aeiouyAEIOUY]/.test(bare) && bare.length >= 4) return true;
+  if (/[bcdfghjklmnpqrstvwxz]{4,}/i.test(bare)) return true;
+  if (/^[A-Za-z]{11,}$/.test(bare) && !/ing$|tion$|ment$|ness$|able$/i.test(bare)) return true;
+  // 胡拼长词且不含常见词根（如 Commectipees / Paglish）
+  if (bare.length >= 7 && !COMMON_STEM.test(bare) && /[aeiou].*[aeiou].*[aeiou]/i.test(bare)) {
+    // 三元音但词形怪异：连续双写 + 罕见尾缀
+    if (/([a-z])\1/i.test(bare) && /(ipees|tipees|lish|ectipe|ommect)/i.test(bare)) return true;
+    if (/(ipees|tipees|ommect|paglish|sofs|soice)/i.test(bare)) return true;
+  }
+  if (/^(sofs|soice|suo|paglish|commectipees|edricatiore|fnmbrating)$/i.test(bare)) return true;
+  return false;
+};
+
 const looksLikeGibberish = (line: string): boolean => {
   const s = line.trim();
   if (!s) return true;
-  if (/[\u4e00-\u9fff]/.test(s)) return false; // 中文另计
+  if (/[\u4e00-\u9fff]/.test(s)) return false;
   const words = s.split(/\s+/).filter(Boolean);
   if (!words.length) return true;
   let bad = 0;
   for (const w of words) {
     const bare = w.replace(/[^A-Za-z']/g, '');
     if (bare.length < 2) continue;
-    // 罕见辅音串 / 元音极少 → 疑似乱码
-    if (!/[aeiouyAEIOUY]/.test(bare) && bare.length >= 4) bad += 1;
-    if (/[bcdfghjklmnpqrstvwxz]{5,}/i.test(bare)) bad += 1;
-    if (/^[A-Za-z]{12,}$/.test(bare) && !/ing$|tion$|ment$|ness$/i.test(bare)) bad += 1;
+    if (looksLikeGibberishWord(bare)) bad += 1;
   }
-  return bad >= Math.max(1, Math.ceil(words.length * 0.35));
+  return bad >= 1; // 任一假词整行作废
 };
 
 const normalizeLine = (raw: string): string =>
@@ -57,22 +73,30 @@ const normalizeLine = (raw: string): string =>
     .replace(/\s+/g, ' ')
     .replace(/^[\d.\-•*)\]]+\s*/, '')
     .trim()
-    .slice(0, 64);
+    .slice(0, 48);
+
+const nearDuplicate = (a: string, b: string): boolean => {
+  const na = a.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const nb = b.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  if (na.includes(nb) || nb.includes(na)) return true;
+  const wa = new Set(na.split(/\s+/));
+  const wb = nb.split(/\s+/);
+  const overlap = wb.filter((w) => wa.has(w)).length;
+  return overlap >= Math.max(2, Math.ceil(wb.length * 0.7));
+};
 
 const filterApprovedLines = (lines: string[], seeds: string[]): string[] => {
   const out: string[] = [];
-  const seen = new Set<string>();
   for (const raw of [...seeds, ...lines]) {
     const line = normalizeLine(String(raw || ''));
     if (!line || line.length < 2) continue;
-    const key = line.toLowerCase();
-    if (seen.has(key)) continue;
     if (looksLikeGibberish(line)) continue;
-    // 拒超长段落
-    if (line.split(/\s+/).length > 10) continue;
-    seen.add(key);
+    if (line.split(/\s+/).length > 8) continue;
+    if (out.some((x) => nearDuplicate(x, line))) continue;
     out.push(line);
-    if (out.length >= 6) break;
+    if (out.length >= 5) break; // 图面最多 5 条，降低乱码与重复概率
   }
   return out;
 };
@@ -120,9 +144,9 @@ const SYSTEM = `你是澄海玩具出口目录文案专家。必须严格按流�
   "qaNotes": ["spelling ok", "no gibberish"]
 }
 approvedOnImageEn 硬性规则：
-- 每条 2～8 个英文单词，真实词典词，禁止乱码/假词/拉丁胡拼
-- 最多 6 条；优先：年份钩子 / 品名 / 2～3 个功能卖点
-- 禁止假认证、假奖项、长段落、参数表
+- 每条 2～6 个英文单词，真实词典词，禁止乱码/假词/拉丁胡拼（如 Sofs Commectipees）
+- 最多 5 条且禁止重复或近义重复；优先：年份钩子 / 品名 / 2～3 个功能卖点
+- 禁止假认证、假奖项、长段落、参数表、同一句出现两次
 - 若不确定英文拼写，宁可少写，也不要编造`;
 
 /**
@@ -226,7 +250,7 @@ export const runMarketingCopyPipeline = async (
         input.onProgress?.('正在复核海报短句…');
         const checkRaw = await callQwen(
           `Check these English poster lines. Reply JSON {"ok":true|false,"fixed":["..."],"bad":["..."]}.
-Reject gibberish / non-words. Keep meaning. Max 6 lines, 2-8 words each.
+Reject gibberish / non-words / duplicates. Keep meaning. Max 5 UNIQUE lines, 2-6 words each.
 Lines:\n${approved.map((l, i) => `${i + 1}. ${l}`).join('\n')}`,
           {
             jsonMode: true,
