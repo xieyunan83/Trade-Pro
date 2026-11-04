@@ -37,6 +37,7 @@ import {
   generateModel3d,
   getModel3dProviderStatus,
   hydrateModel3dProvider,
+  isModel3dEditReady,
   isTripoOfficialReady,
   recoverModel3dJobs,
   runTripoPostProcess,
@@ -47,6 +48,7 @@ import {
   type TripoSegmentGranularity,
   type TripoRigType,
 } from '../services/model3dService';
+import { getQwenTripo3dProviderStatus } from '../services/qwenTripo3dService';
 import { loadDataProviderLocal, saveDataProvider } from '../services/dataProviders';
 import { consumeCreativeHandoff } from '../services/creativeAssetBridge';
 import { persistModel3dJob, purgeDeletedCreativeMedia } from '../services/creativeAssetPersist';
@@ -111,7 +113,9 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
   const skus = useMemo(() => loadCatalogSkus(), []);
   const active = jobs.find((j) => j.id === activeId) || null;
   const isAdmin = currentUser.role === 'admin' || currentUser.role === 'director';
-  const editChannelReady = isTripoOfficialReady();
+  /** 千问主通道或官方编辑通道任一即可做拆分/重拓扑等 */
+  const editChannelReady = isModel3dEditReady();
+  const qwenEditReady = getQwenTripo3dProviderStatus().ready;
 
   useEffect(() => {
     let cancelled = false;
@@ -227,20 +231,18 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     setProvider(st);
     setSavingKey(false);
     setQuickKey('');
-    const editOk = target === 'tripo' && isTripoOfficialReady();
+    const editOk = isModel3dEditReady();
     setMsgTone(st.ready || editOk ? 'ok' : 'error');
     setMsg(
-      target === 'tripo'
-        ? editOk
-          ? '3D 编辑通道 Key 已保存：可进行部件拆分 / 重拓扑 / STL 制造导出'
-          : '编辑通道 Key 已写入，请确认已启用'
-        : st.ready
-          ? target === 'qwen_tripo'
-            ? '3D 主通道 Key 已保存并启用，可以开始生成'
-            : target === 'hunyuan3d'
+      target === 'qwen_tripo' && st.ready
+        ? '3D 主通道已启用：可生成，也可直接拆分 / 重拓扑 / 导出制造格式'
+        : target === 'tripo' && isTripoOfficialReady()
+          ? '官方编辑通道已启用：可拆分 / 重拓扑 / STL 导出'
+          : st.ready
+            ? target === 'hunyuan3d'
               ? '3D 备选 Key 已保存并启用，可以开始生成'
-              : '3D API 已保存并启用，可以开始生成'
-          : st.detail
+              : '3D API 已保存并启用'
+            : st.detail
     );
   };
 
@@ -565,13 +567,11 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     if (!active || active.status !== 'ready') return;
     if (!editChannelReady) {
       setMsgTone('error');
-      setMsg(
-        '制造级后处理需配置官方 3D 编辑通道 Key（tsk_ 开头）。图/文生可用主通道；拆分部件、重拓扑、导出 STL 请另配编辑 Key。'
-      );
+      setMsg('请先启用 3D 主通道 Key（与生成同一条即可），再使用拆分 / 重拓扑 / 制造导出。');
       return;
     }
     const modelUrl = pickLocalOrRemoteModelUrl(active);
-    if (!modelUrl && !(active.providerTaskId || active.officialTaskId)) {
+    if (!modelUrl && !(active.providerTaskId || active.officialTaskId || active.segmentTaskId)) {
       setMsgTone('error');
       setMsg('当前任务没有可用模型，请先生成或导入 GLB。');
       return;
@@ -600,50 +600,87 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     setMsg(kindHint);
 
     try {
-      // 千问/混元/本地 → 先导入官方编辑通道
-      const officialId = await ensureOfficialModelTaskId({
-        provider: active.provider,
-        providerTaskId: active.providerTaskId,
-        officialTaskId: active.officialTaskId,
-        modelUrl,
-        onProgress: (pct, status) => {
-          patchJob(active.id, {
-            status: 'running',
-            progress: Math.min(35, Math.round(pct * 0.35)),
-            previewHint: `导入编辑通道 ${status} ${Math.round(pct)}%`,
-          });
-        },
-      });
-      if (officialId !== active.officialTaskId) {
-        patchJob(active.id, { officialTaskId: officialId });
-      }
+      // 优先千问主通道：直接用生成 task_id，无需再贴 tsk_
+      // 仅当没有千问、只有官方 Key 时，才把模型导入官方编辑通道
+      let upstreamId = '';
+      let publicModelUrl: string | undefined;
 
-      const upstreamId =
-        kind === 'complete'
-          ? (active.segmentTaskId || officialId).trim()
-          : (active.provider === 'tripo'
-              ? (active.providerTaskId || officialId)
-              : officialId
-            ).trim();
+      if (qwenEditReady) {
+        if (kind === 'complete') {
+          upstreamId = (active.segmentTaskId || '').trim();
+        } else if (
+          active.provider === 'qwen_tripo' ||
+          (active.providerTaskId && !active.officialTaskId)
+        ) {
+          upstreamId = (
+            active.providerTaskId ||
+            active.sourceTaskId ||
+            active.segmentTaskId ||
+            ''
+          ).trim();
+        } else {
+          upstreamId = (
+            active.providerTaskId ||
+            active.sourceTaskId ||
+            active.segmentTaskId ||
+            ''
+          ).trim();
+        }
+        const cand = [active.modelUrl, active.pbrModelUrl, active.baseModelUrl, modelUrl].find(
+          (u) => u && /^https?:\/\//i.test(u) && !/localhost|127\.0\.0\.1/i.test(u)
+        );
+        publicModelUrl = cand;
+        if (!upstreamId && !publicModelUrl && !isTripoOfficialReady()) {
+          throw new Error(
+            '当前模型没有云端任务 ID 或公网地址。请用主通道重新生成后再拆分，或导入后先用带 https 链的结果。'
+          );
+        }
+      } else {
+        const officialId = await ensureOfficialModelTaskId({
+          provider: active.provider,
+          providerTaskId: active.providerTaskId,
+          officialTaskId: active.officialTaskId,
+          modelUrl,
+          onProgress: (pct, status) => {
+            patchJob(active.id, {
+              status: 'running',
+              progress: Math.min(35, Math.round(pct * 0.35)),
+              previewHint: `导入编辑通道 ${status} ${Math.round(pct)}%`,
+            });
+          },
+        });
+        if (officialId !== active.officialTaskId) {
+          patchJob(active.id, { officialTaskId: officialId });
+        }
+        upstreamId =
+          kind === 'complete'
+            ? (active.segmentTaskId || officialId).trim()
+            : (active.provider === 'tripo'
+                ? active.providerTaskId || officialId
+                : officialId
+              ).trim();
+      }
 
       const result = await runTripoPostProcess({
         kind,
-        originalTaskId: upstreamId,
+        originalTaskId: upstreamId || undefined,
+        modelUrl: publicModelUrl,
         format,
         texturePrompt: prompt.trim() || undefined,
         faceLimit: retopoFaceLimit,
         quad: retopoQuad,
         segmentGranularity,
         rigType,
+        preferOfficial: !qwenEditReady,
         onTaskCreated: (tid) =>
           patchJob(active.id, {
             providerTaskId: tid,
-            officialTaskId: tid,
+            ...(qwenEditReady ? {} : { officialTaskId: tid }),
           }),
         onProgress: (pct, status) => {
           patchJob(active.id, {
             status: 'running',
-            progress: Math.round(35 + pct * 0.65),
+            progress: Math.round(qwenEditReady ? pct : 35 + pct * 0.65),
             previewHint: `${kindHint.replace('…', '')} · ${status} ${Math.round(pct)}%`,
           });
         },
@@ -679,9 +716,13 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
       const next: Partial<Model3dJob> = {
         status: 'ready',
         progress: 100,
+        provider: result.provider || active.provider,
         providerTaskId: result.taskId,
-        officialTaskId: result.taskId,
-        sourceTaskId: active.sourceTaskId || active.providerTaskId || officialId,
+        officialTaskId: qwenEditReady
+          ? active.officialTaskId
+          : result.taskId || active.officialTaskId,
+        sourceTaskId:
+          active.sourceTaskId || active.providerTaskId || upstreamId || result.taskId,
         segmentTaskId: kind === 'segment' ? result.taskId : active.segmentTaskId,
         modelUrl: kind === 'convert' ? active.modelUrl || result.modelUrl : result.modelUrl,
         pbrModelUrl: kind === 'convert' ? active.pbrModelUrl : result.pbrModelUrl || result.modelUrl,
@@ -799,11 +840,15 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
               }`}
               title="部件拆分 / 重拓扑 / STL 导出依赖编辑通道"
             >
-              {editChannelReady ? '制造编辑已就绪' : '制造编辑待配置'}
+              {editChannelReady
+                ? qwenEditReady
+                  ? '制造编辑已就绪（主通道）'
+                  : '制造编辑已就绪'
+                : '制造编辑待配置'}
             </div>
           </div>
           <p className="text-[10px] text-slate-500 font-medium max-w-md text-right leading-snug">
-            生成 → 拆分部件 → 补全 → 重拓扑 → 导出 STL/OBJ，对接 3D 打印、手板与开模
+            生成 → 拆分部件 → 补全 → 重拓扑 → 导出 STL/OBJ；拆分与生成共用主通道 Key
           </p>
         </div>
         <div className="mt-1.5">
@@ -849,7 +894,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
             {!editChannelReady && workbenchTool !== 'generate' && (
               <div className="mt-2 space-y-1.5 px-1">
                 <p className="text-[9px] text-amber-200/90 font-medium leading-relaxed">
-                  拆分 / 补全 / 重拓扑 / 绑定 / 制造导出需编辑通道 Key（tsk_ 开头）。
+                  拆分 / 补全 / 重拓扑等与「生成」共用同一条 3D 主通道 Key。请先在数据接入启用主通道，或下方粘贴 Key。
                 </p>
                 {isAdmin && (
                   <div className="flex gap-1">
@@ -857,7 +902,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                       type="password"
                       value={quickKey}
                       onChange={(e) => setQuickKey(e.target.value)}
-                      placeholder="粘贴 tsk_ 编辑 Key"
+                      placeholder="粘贴 3D 主通道 Key"
                       className="flex-1 rounded-lg border border-white/20 bg-white/10 px-2 py-1.5 text-[10px] text-white placeholder:text-slate-500"
                       autoComplete="off"
                     />
@@ -1714,7 +1759,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                 )}
                 {!editChannelReady && (
                   <p className="text-[9px] text-amber-200/80 font-medium leading-relaxed">
-                    需配置官方编辑通道 Key（tsk_）后，才可拆分部件并导出打印/开模格式。
+                    请先启用 3D 主通道（与生成同一条 Key），即可拆分部件并导出打印/开模格式。
                   </p>
                 )}
               </div>

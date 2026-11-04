@@ -22,6 +22,7 @@ import {
   generateQwenTripoModel3d,
   getQwenTripo3dProviderStatus,
   hydrateQwenTripo3dProvider,
+  runQwenTripoPostProcess,
 } from './qwenTripo3dService';
 import type { Model3dJob } from './creativeStudioStore';
 
@@ -171,8 +172,12 @@ const isTripoReady = (): boolean => {
   return !!(key && (meta.enabled || sanitizeKey(env.tripoApiKey || '')));
 };
 
-/** UI：是否可走官方后处理（贴图 / 减面 / 格式转换） */
+/** UI：是否可走官方 tsk_ 后处理 */
 export const isTripoOfficialReady = (): boolean => isTripoReady();
+
+/** UI：制造编辑是否可用（千问主通道 sk- 或官方 tsk_ 任一即可） */
+export const isModel3dEditReady = (): boolean =>
+  getQwenTripo3dProviderStatus().ready || isTripoReady();
 
 const isCreditOrQuotaError = (msg: string): boolean =>
   /credit|余额|额度|quota|insufficient|payment|欠费|充值|balance|no funds|not enough/i.test(msg);
@@ -754,19 +759,15 @@ const postProcessLabel = (kind: TripoPostProcessKind, format?: TripoConvertForma
 };
 
 /**
- * 官方编辑通道后处理：部件拆分 / 补全 / 重拓扑 / 贴图 / 绑定 / 格式转换
- *（对齐编辑台工作流，便于 3D 打印、手板、模具）
+ * 官方 tsk_ 编辑通道后处理（垫底；优先走千问 sk-）
  */
-export const runTripoPostProcess = async (opts: {
+const runOfficialTripoPostProcess = async (opts: {
   kind: TripoPostProcessKind;
-  /** 最近一次成功任务；贴图/减面/转换均基于此 */
   originalTaskId: string;
   format?: TripoConvertFormat;
   texturePrompt?: string;
   faceLimit?: number;
-  /** 重拓扑：四边面（模具/细分友好）或三角面 */
   quad?: boolean;
-  /** 部件拆分粒度（写入 model_version 旁注；v2 主路径仍用 geometry 拆分） */
   segmentGranularity?: TripoSegmentGranularity;
   rigType?: TripoRigType;
   rigSpec?: 'tripo' | 'mixamo';
@@ -775,7 +776,7 @@ export const runTripoPostProcess = async (opts: {
 }): Promise<Model3dGenerateResult & { label: string }> => {
   if (!isTripoReady()) {
     throw new Error(
-      '当前未配置官方 3D 编辑通道，无法执行部件拆分 / 重拓扑 / 制造导出。请在数据接入填写编辑通道 Key。'
+      '当前未配置 3D 编辑能力。请确认主通道 Key 已启用，或另配官方编辑通道。'
     );
   }
   const { apiKey } = resolveMeta();
@@ -842,7 +843,6 @@ export const runTripoPostProcess = async (opts: {
       face_limit: opts.faceLimit && opts.faceLimit > 0 ? opts.faceLimit : 10000,
       bake: true,
       pivot_to_center_bottom: true,
-      // 打印友好：尽量贴平底面
       flatten_bottom: format === 'STL' || format === 'OBJ' || format === '3MF',
     };
   }
@@ -860,6 +860,69 @@ export const runTripoPostProcess = async (opts: {
     provider: 'tripo',
     label: postProcessLabel(opts.kind, opts.format),
   };
+};
+
+/**
+ * 制造后处理：优先千问主通道（与生成同一条 Key），官方 tsk_ 作垫底。
+ */
+export const runTripoPostProcess = async (opts: {
+  kind: TripoPostProcessKind;
+  /** 最近一次成功任务；贴图/减面/转换均基于此 */
+  originalTaskId?: string;
+  /** 公网模型 URL（千问通道在无 task_id 时可用） */
+  modelUrl?: string;
+  format?: TripoConvertFormat;
+  texturePrompt?: string;
+  faceLimit?: number;
+  /** 重拓扑：四边面（模具/细分友好）或三角面 */
+  quad?: boolean;
+  /** 部件拆分粒度 */
+  segmentGranularity?: TripoSegmentGranularity;
+  rigType?: TripoRigType;
+  rigSpec?: 'tripo' | 'mixamo';
+  /** 优先强制官方通道（一般不用） */
+  preferOfficial?: boolean;
+  onProgress?: (pct: number, status: string) => void;
+  onTaskCreated?: (taskId: string) => void;
+}): Promise<Model3dGenerateResult & { label: string }> => {
+  const qwenOk = getQwenTripo3dProviderStatus().ready;
+  const officialOk = isTripoReady();
+
+  if (!opts.preferOfficial && qwenOk) {
+    try {
+      return await runQwenTripoPostProcess({
+        kind: opts.kind,
+        originalTaskId: opts.originalTaskId,
+        modelUrl: opts.modelUrl,
+        format: opts.format,
+        texturePrompt: opts.texturePrompt,
+        faceLimit: opts.faceLimit,
+        quad: opts.quad,
+        segmentGranularity: opts.segmentGranularity,
+        rigType: opts.rigType,
+        onProgress: opts.onProgress,
+        onTaskCreated: opts.onTaskCreated,
+      });
+    } catch (e: any) {
+      // 千问未开通某后处理模型时，有官方 Key 再垫底
+      if (!officialOk) throw e;
+      console.warn('[model3d] qwen post-process failed, fallback official', e?.message || e);
+    }
+  }
+
+  if (!officialOk) {
+    throw new Error(
+      '无法执行部件拆分 / 重拓扑 / 制造导出。请确认已启用 3D 主通道 Key，并在控制台开通对应后处理能力。'
+    );
+  }
+  const original = (opts.originalTaskId || '').trim();
+  if (!original) {
+    throw new Error('缺少上游任务 ID，无法后处理');
+  }
+  return runOfficialTripoPostProcess({
+    ...opts,
+    originalTaskId: original,
+  });
 };
 
 /** 单次查询 Tripo 官方任务（用于刷新恢复） */

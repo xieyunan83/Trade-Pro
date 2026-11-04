@@ -19,7 +19,14 @@ import {
 } from './dataProviders';
 import { humanizeCreativeProviderError } from './providerErrorMessage';
 import { uploadLocalImageToDashscopeTemp } from './dashscopeTempUpload';
-import type { Model3dGenerateInput, Model3dGenerateResult } from './model3dService';
+import type {
+  Model3dGenerateInput,
+  Model3dGenerateResult,
+  TripoConvertFormat,
+  TripoPostProcessKind,
+  TripoRigType,
+  TripoSegmentGranularity,
+} from './model3dService';
 
 const CREATE_PATH = '/api/v1/services/aigc/video-generation/3d-generation';
 const TASK_PATH = (id: string) => `/api/v1/tasks/${encodeURIComponent(id)}`;
@@ -27,6 +34,16 @@ const TASK_PATH = (id: string) => `/api/v1/tasks/${encodeURIComponent(id)}`;
 export const DEFAULT_QWEN_TRIPO_ORIGIN = 'https://cn-beijing.maas.qianwenaiapi.com';
 /** 主模型：高精度（对应官方 v3.1）；勿默认切 P1，避免未开通导致整条链路失败 */
 const DEFAULT_MODEL = 'Tripo/Tripo-H3.1';
+
+/** 制造后处理模型（与生成共用同一条 sk- Key / 同一异步入口） */
+const QWEN_TRIPO_EDIT_MODELS = {
+  segment: 'Tripo/Tripo-Segmentation',
+  complete: 'Tripo/Tripo-MeshCompletion',
+  retopo: 'Tripo/Tripo-Retopology',
+  texture_hd: 'Tripo/Tripo-Texture',
+  convert: 'Tripo/Tripo-ConvertFormat',
+  rig: 'Tripo/Tripo-AutoRig',
+} as const;
 
 const sanitizeKey = (k: string) =>
   (k || '')
@@ -128,7 +145,8 @@ const inputUsesOss = (input: Record<string, unknown>): boolean => {
 const createTask = async (
   cfg: ResolvedCfg,
   input: Record<string, unknown>,
-  parameters: Record<string, unknown>
+  parameters: Record<string, unknown>,
+  modelId?: string
 ): Promise<string> => {
   const { url, proxyOrigin } = buildUrl(cfg.origin, CREATE_PATH);
   const extra: Record<string, string> = {
@@ -151,7 +169,7 @@ const createTask = async (
       method: 'POST',
       headers,
       body: JSON.stringify({
-        model: cfg.modelId,
+        model: (modelId || cfg.modelId || '').trim() || DEFAULT_MODEL,
         input,
         parameters,
       }),
@@ -234,9 +252,16 @@ const pickUrls = (out: any, taskId: string): Model3dGenerateResult => {
   const results = Array.isArray(out.results) ? out.results : [];
   const first = results[0] || out;
   const modelUrl =
+    first.seg_model_url ||
     first.pbr_model_url ||
     first.model_url ||
     first.base_model_url ||
+    first.fbx_url ||
+    first.obj_url ||
+    first.stl_url ||
+    first.gltf_url ||
+    first.usdz_url ||
+    out.seg_model_url ||
     out.pbr_model_url ||
     out.model_url ||
     '';
@@ -255,6 +280,148 @@ const pickUrls = (out: any, taskId: string): Model3dGenerateResult => {
     pbrModelUrl: first.pbr_model_url ? String(first.pbr_model_url) : undefined,
     baseModelUrl: first.base_model_url ? String(first.base_model_url) : undefined,
     raw: out,
+  };
+};
+
+const postProcessLabel = (kind: TripoPostProcessKind, format?: TripoConvertFormat): string => {
+  switch (kind) {
+    case 'segment':
+      return '部件拆分';
+    case 'complete':
+      return '部件补全';
+    case 'lowpoly':
+    case 'retopo':
+      return '重拓扑';
+    case 'texture_hd':
+      return '高清贴图';
+    case 'rig':
+      return '自动绑定';
+    case 'convert':
+      return `导出 ${format || 'STL'}`;
+    default:
+      return '后处理';
+  }
+};
+
+const isPublicModelUrl = (u: string) =>
+  /^https?:\/\//i.test(u) && !/localhost|127\.0\.0\.1/i.test(u);
+
+/**
+ * 制造后处理：与图/文生共用千问 Tripo Key（sk-），无需再配官方 tsk_。
+ * 优先传前序 task_id；否则传公网 model_url（本地 vault 需已有 https 链）。
+ */
+export const runQwenTripoPostProcess = async (opts: {
+  kind: TripoPostProcessKind;
+  /** 前序任务（生成 / 拆分等） */
+  originalTaskId?: string;
+  /** 公网模型 URL（与 task_id 二选一；补全仅支持 task_id） */
+  modelUrl?: string;
+  format?: TripoConvertFormat;
+  texturePrompt?: string;
+  faceLimit?: number;
+  quad?: boolean;
+  segmentGranularity?: TripoSegmentGranularity;
+  rigType?: TripoRigType;
+  onProgress?: (pct: number, status: string) => void;
+  onTaskCreated?: (taskId: string) => void;
+}): Promise<Model3dGenerateResult & { label: string }> => {
+  const cfg = resolveCfg();
+  const kind = opts.kind === 'lowpoly' ? 'retopo' : opts.kind;
+  const modelId =
+    kind === 'retopo'
+      ? QWEN_TRIPO_EDIT_MODELS.retopo
+      : QWEN_TRIPO_EDIT_MODELS[kind as keyof typeof QWEN_TRIPO_EDIT_MODELS];
+  if (!modelId) throw new Error('不支持的后处理类型');
+
+  const taskIdIn = (opts.originalTaskId || '').trim();
+  const urlIn = (opts.modelUrl || '').trim();
+
+  let input: Record<string, unknown> = {};
+  let parameters: Record<string, unknown> = {};
+
+  if (kind === 'complete') {
+    if (!taskIdIn) {
+      throw new Error('部件补全须基于「部件拆分」任务，请先完成拆分');
+    }
+    input = { original_model_task_id: taskIdIn };
+    parameters = {
+      model_version: 'v1.0-20250506',
+      completion_mode: 'ai_completion',
+    };
+  } else if (kind === 'convert') {
+    if (!taskIdIn) {
+      throw new Error('格式转换需有前序 3D 任务 ID。请用本通道生成的模型再导出，或先做拆分/重拓扑。');
+    }
+    input = {
+      original_model_task_id: taskIdIn,
+      format: opts.format || 'STL',
+    };
+    parameters = {
+      bake: true,
+      pivot_to_center_bottom: true,
+      flatten_bottom: opts.format === 'STL' || opts.format === 'OBJ' || opts.format === '3MF',
+    };
+    if (opts.faceLimit && opts.faceLimit > 0) {
+      parameters.face_limit = Math.round(opts.faceLimit);
+    }
+  } else if (kind === 'segment') {
+    if (taskIdIn) input = { original_model_task_id: taskIdIn };
+    else if (urlIn && isPublicModelUrl(urlIn)) input = { model_url: urlIn };
+    else throw new Error('部件拆分需要前序任务 ID，或公网可访问的模型地址');
+    const gran = opts.segmentGranularity || 'balanced';
+    parameters = {
+      model_version: 'v2.0-20260430',
+      segmentation_granularity: gran,
+      split_by_connectivity: true,
+    };
+  } else if (kind === 'retopo') {
+    if (taskIdIn) input = { original_model_task_id: taskIdIn };
+    else if (urlIn && isPublicModelUrl(urlIn)) input = { model_url: urlIn };
+    else throw new Error('重拓扑需要前序任务 ID，或公网可访问的模型地址');
+    const faceLimit =
+      opts.faceLimit && opts.faceLimit > 0
+        ? Math.min(20000, Math.max(500, Math.round(opts.faceLimit)))
+        : 8000;
+    parameters = {
+      model_version: 'v2.0',
+      face_limit: faceLimit,
+      quad: opts.quad === true,
+      bake: true,
+    };
+  } else if (kind === 'texture_hd') {
+    if (taskIdIn) input = { original_model_task_id: taskIdIn };
+    else if (urlIn && isPublicModelUrl(urlIn)) input = { model_url: urlIn };
+    else throw new Error('贴图需要前序任务 ID，或公网可访问的模型地址');
+    parameters = {
+      texture_quality: 'detailed',
+      bake: true,
+      model_version: 'v3.0-20250812',
+    };
+    if (opts.texturePrompt?.trim()) {
+      parameters.texture_prompt = { text: opts.texturePrompt.trim().slice(0, 1024) };
+    }
+  } else if (kind === 'rig') {
+    if (taskIdIn) input = { original_model_task_id: taskIdIn };
+    else if (urlIn && isPublicModelUrl(urlIn)) input = { model_url: urlIn };
+    else throw new Error('绑定需要前序任务 ID，或公网可访问的模型地址');
+    parameters = {
+      rig_type: opts.rigType || 'biped',
+      out_format: 'glb',
+    };
+  }
+
+  opts.onProgress?.(8, 'queued');
+  const taskId = await createTask(cfg, input, parameters, modelId);
+  opts.onTaskCreated?.(taskId);
+  opts.onProgress?.(15, 'running');
+  const out = await pollTask(cfg, taskId, opts.onProgress);
+  const picked = pickUrls(out, taskId);
+  return {
+    ...picked,
+    provider: 'qwen_tripo',
+    modelVersion: modelId,
+    sourceTaskId: taskIdIn || undefined,
+    label: postProcessLabel(opts.kind, opts.format),
   };
 };
 

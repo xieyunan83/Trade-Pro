@@ -72,7 +72,7 @@ export const DATA_PROVIDER_DEFS: DataProviderDef[] = [
     id: 'qwen_tripo',
     label: '千问通道 · Tripo 3D',
     description:
-      '经千问 MaaS 调用 Tripo/Tripo-H3.1（文生/图生 3D，异步）。只需填写「按量付费」API Key（sk-…），默认网关 cn-beijing.maas.qianwenaiapi.com；启用后「产品设计 · 3D」优先走此通道。',
+      '经千问 MaaS 调用 Tripo（文生/图生 3D + 部件拆分/重拓扑/贴图/格式转换等，异步）。填写按量 API Key（sk-…），默认网关 cn-beijing.maas.qianwenaiapi.com；启用后「产品设计 · 3D」生成与制造编辑共用此通道。',
     docsHint: 'https://www.qianwenai.com/models/Tripo/Tripo-H3.1',
   },
   {
