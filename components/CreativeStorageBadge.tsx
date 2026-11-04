@@ -5,7 +5,7 @@ import {
   enforceVaultQuota,
   formatBytes,
   getVaultStats,
-  VAULT_SOFT_QUOTA_BYTES,
+  VAULT_DB_NAME,
 } from '../services/creativeAssetVault';
 
 type Props = {
@@ -15,7 +15,7 @@ type Props = {
 };
 
 /**
- * 演示期素材库用量提示：本机 IndexedDB，带软上限与清理。
+ * 本机 IndexedDB 素材库用量；无总容量硬限制，可清理/清空。
  */
 export const CreativeStorageBadge: React.FC<Props> = ({ className = '', compact }) => {
   const [bytes, setBytes] = useState(0);
@@ -39,10 +39,16 @@ export const CreativeStorageBadge: React.FC<Props> = ({ className = '', compact 
   }, [refresh]);
 
   const onTrim = async () => {
+    if (
+      !window.confirm(
+        '删除一批最久未访问的本机素材（约腾出 150MB）？画布上仍引用这些文件的预览可能裂图。'
+      )
+    ) {
+      return;
+    }
     setBusy(true);
     try {
-      // 主动腾出约 30% 配额
-      await enforceVaultQuota(Math.floor(VAULT_SOFT_QUOTA_BYTES * 0.3));
+      await enforceVaultQuota(150 * 1024 * 1024);
       await refresh();
     } finally {
       setBusy(false);
@@ -50,7 +56,12 @@ export const CreativeStorageBadge: React.FC<Props> = ({ className = '', compact 
   };
 
   const onClear = async () => {
-    if (!window.confirm('清空本机创作素材库？已生成的图片 / 3D / 视频预览将无法再打开（可重新生成）。')) {
+    if (
+      !window.confirm(
+        '清空本机创作素材库？已生成的图片 / 3D / 视频预览将无法再打开（可重新生成）。\n\n存储位置：浏览器 IndexedDB → ' +
+          VAULT_DB_NAME
+      )
+    ) {
       return;
     }
     setBusy(true);
@@ -62,28 +73,30 @@ export const CreativeStorageBadge: React.FC<Props> = ({ className = '', compact 
     }
   };
 
-  const pct = Math.min(100, Math.round((bytes / VAULT_SOFT_QUOTA_BYTES) * 100));
-  const warn = pct >= 80;
-
   if (compact) {
     return (
       <div
-        className={`inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[10px] font-bold ${
-          warn
-            ? 'border-amber-300 bg-amber-50 text-amber-900'
-            : 'border-slate-200 bg-white text-slate-600'
-        } ${className}`}
-        title="素材保存在本机浏览器 IndexedDB，不依赖临时外链"
+        className={`inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 px-2 py-1 text-[10px] font-bold ${className}`}
+        title={`本机 IndexedDB「${VAULT_DB_NAME}」，无总容量上限`}
       >
         <HardDrive size={12} />
-        本机素材 {formatBytes(bytes)} · {pct}%
+        本机素材 {formatBytes(bytes)}
+        {count ? ` · ${count} 个` : ''}
         <button
           type="button"
-          disabled={busy}
+          disabled={busy || bytes <= 0}
           onClick={() => void onTrim()}
-          className="underline decoration-dotted hover:text-slate-900 disabled:opacity-50"
+          className="underline decoration-dotted hover:text-slate-900 disabled:opacity-40"
         >
           {busy ? '…' : '清理旧文件'}
+        </button>
+        <button
+          type="button"
+          disabled={busy || bytes <= 0}
+          onClick={() => void onClear()}
+          className="underline decoration-dotted text-rose-600 hover:text-rose-800 disabled:opacity-40"
+        >
+          清空
         </button>
       </div>
     );
@@ -91,31 +104,22 @@ export const CreativeStorageBadge: React.FC<Props> = ({ className = '', compact 
 
   return (
     <div
-      className={`rounded-xl border px-3 py-2 flex flex-wrap items-center gap-2 text-xs font-bold ${
-        warn
-          ? 'border-amber-300 bg-amber-50 text-amber-950'
-          : 'border-teal-200/70 bg-teal-50/40 text-slate-700'
-      } ${className}`}
+      className={`rounded-xl border border-teal-200/70 bg-teal-50/40 px-3 py-2 flex flex-wrap items-center gap-2 text-xs font-bold text-slate-700 ${className}`}
     >
       <HardDrive size={14} className="text-teal-700 shrink-0" />
       <div className="min-w-0 flex-1">
         <div>
-          本机素材库（演示期）· {count} 个 · {formatBytes(bytes)} /{' '}
-          {formatBytes(VAULT_SOFT_QUOTA_BYTES)}（{pct}%）
+          本机素材库 · {count} 个 · {formatBytes(bytes)}
+          <span className="text-slate-400 font-medium"> · 无总容量上限</span>
         </div>
-        <div className="text-[10px] font-medium text-slate-500 mt-0.5">
-          图片 / 3D / 视频生成后自动下载到本机 IndexedDB，避免供应商临时链接过期丢失；接近上限会自动淘汰最旧文件。
-        </div>
-        <div className="mt-1.5 h-1 rounded-full bg-slate-200/80 overflow-hidden max-w-xs">
-          <div
-            className={`h-full transition-all ${warn ? 'bg-amber-500' : 'bg-teal-500'}`}
-            style={{ width: `${pct}%` }}
-          />
+        <div className="text-[10px] font-medium text-slate-500 mt-0.5 leading-snug">
+          存于浏览器 IndexedDB「{VAULT_DB_NAME}」（非普通文件夹）。Chrome：F12 → Application →
+          IndexedDB；桌面客户端同理。可点清空，或在开发者工具里删除该库。
         </div>
       </div>
       <button
         type="button"
-        disabled={busy}
+        disabled={busy || bytes <= 0}
         onClick={() => void onTrim()}
         className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 hover:bg-slate-50 disabled:opacity-50"
       >
@@ -124,11 +128,11 @@ export const CreativeStorageBadge: React.FC<Props> = ({ className = '', compact 
       </button>
       <button
         type="button"
-        disabled={busy}
+        disabled={busy || bytes <= 0}
         onClick={() => void onClear()}
-        className="text-[10px] text-slate-400 hover:text-rose-600 underline disabled:opacity-50"
+        className="text-[10px] text-rose-600 hover:text-rose-800 underline disabled:opacity-50"
       >
-        清空
+        清空全部
       </button>
     </div>
   );

@@ -1,8 +1,8 @@
 /**
  * 创作素材本地库（IndexedDB）
- * - 演示期：图片 / GLB / 视频下载后落本机，不依赖供应商临时外链（常 2h 过期）
+ * - 图片 / GLB / 视频下载后落本机，不依赖供应商临时外链（常 2h 过期）
  * - localStorage 只存 vault:id 元数据，避免撑爆 5MB 配额
- * - 软上限约 450MB，超出按最久未访问淘汰
+ * - 本机库不设总容量软上限；仅单文件有上限。清理请用界面「清空」或浏览器 IndexedDB。
  */
 
 export const VAULT_PREFIX = 'vault:';
@@ -21,16 +21,22 @@ type VaultMeta = {
 
 type VaultRow = VaultMeta & { blob: Blob };
 
-const DB_NAME = 'trade_pro_creative_vault_v1';
+/** 浏览器 / 桌面客户端 IndexedDB 库名（开发者工具 → Application → IndexedDB） */
+export const VAULT_DB_NAME = 'trade_pro_creative_vault_v1';
+const DB_NAME = VAULT_DB_NAME;
 const DB_VER = 1;
 const STORE = 'assets';
 /** 仅存元数据，避免 list/配额扫描时 getAll() 把全部 GLB blob 拖进内存 */
-const META_LS = 'trade_pro_creative_vault_meta_v1';
+export const VAULT_META_LS = 'trade_pro_creative_vault_meta_v1';
+const META_LS = VAULT_META_LS;
 
-/** 演示期软上限：约 450MB，防磁盘/配额溢出 */
-export const VAULT_SOFT_QUOTA_BYTES = 450 * 1024 * 1024;
-/** 单文件上限：120MB（视频/GLB） */
-const MAX_SINGLE_BYTES = 120 * 1024 * 1024;
+/**
+ * 展示用参考容量（仅用于进度条比例，不再作为淘汰阈值）。
+ * 本机素材总库不强制限额。
+ */
+export const VAULT_SOFT_QUOTA_BYTES = 0;
+/** 单文件上限：200MB（视频/GLB） */
+const MAX_SINGLE_BYTES = 200 * 1024 * 1024;
 
 const objectUrlCache = new Map<string, string>();
 let metaMemory: VaultMeta[] | null = null;
@@ -152,7 +158,7 @@ export const getVaultStats = async (): Promise<{
     bytes += r.size || 0;
     byKind[r.kind] = (byKind[r.kind] || 0) + (r.size || 0);
   }
-  return { count: rows.length, bytes, quotaBytes: VAULT_SOFT_QUOTA_BYTES, byKind };
+  return { count: rows.length, bytes, quotaBytes: 0, byKind };
 };
 
 const putRow = async (row: VaultRow): Promise<void> => {
@@ -198,21 +204,20 @@ const deleteRow = async (id: string): Promise<void> => {
   }
 };
 
-/** 超出软上限时淘汰最久未访问的条目，直到腾出空间 */
-export const enforceVaultQuota = async (extraBytes = 0): Promise<number> => {
+/**
+ * 兼容旧调用：本机库已取消总容量软上限，默认不淘汰。
+ * 若传入 targetFreeBytes>0，则按最久未访问删除，直到腾出约该字节数（手动「清理旧文件」用）。
+ */
+export const enforceVaultQuota = async (targetFreeBytes = 0): Promise<number> => {
+  if (!targetFreeBytes || targetFreeBytes <= 0) return 0;
   const rows = await listVaultMeta();
-  let bytes = 0;
-  for (const r of rows) bytes += r.size || 0;
-  let need = bytes + extraBytes - VAULT_SOFT_QUOTA_BYTES;
-  if (need <= 0) return 0;
   const sorted = [...rows].sort((a, b) => a.lastAccessAt - b.lastAccessAt);
-  let freed = 0;
+  let need = targetFreeBytes;
   let removed = 0;
   for (const r of sorted) {
     if (need <= 0) break;
     await deleteRow(r.id);
-    freed += r.size;
-    need -= r.size;
+    need -= r.size || 0;
     removed += 1;
   }
   return removed;
@@ -230,7 +235,7 @@ export const putBlobInVault = async (opts: {
       `单文件过大（${Math.round(opts.blob.size / 1024 / 1024)}MB），上限 ${MAX_SINGLE_BYTES / 1024 / 1024}MB`
     );
   }
-  await enforceVaultQuota(opts.blob.size);
+  // 不再因总库软上限自动删旧文件
   const id = opts.id || `va_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const now = Date.now();
   const mime = opts.mime || opts.blob.type || guessMime(opts.kind, '', '');
