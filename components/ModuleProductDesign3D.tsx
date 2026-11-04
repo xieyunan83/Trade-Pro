@@ -37,7 +37,13 @@ import {
 import { loadDataProviderLocal, saveDataProvider } from '../services/dataProviders';
 import { consumeCreativeHandoff } from '../services/creativeAssetBridge';
 import { persistModel3dJob, purgeDeletedCreativeMedia } from '../services/creativeAssetPersist';
-import { isVaultRef, putBlobInVault, tryPersistMediaUrl } from '../services/creativeAssetVault';
+import {
+  findModel3dVaultRefForJob,
+  isVaultRef,
+  model3dVaultIdForJob,
+  putBlobInVault,
+  tryPersistMediaUrl,
+} from '../services/creativeAssetVault';
 import { CreativePipelineBar, CreativeRefPicker } from './CreativeRefPicker';
 import { MODEL3D_SKILLS, type Model3dSkillId } from '../services/creativeSkills/model3dSkills';
 import { UNIVERSAL_3D_NEGATIVES, mergeNegatives } from '../services/creativeQualityKit';
@@ -640,21 +646,46 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     }
   };
 
-  const rawDownloadUrl = active?.pbrModelUrl || active?.modelUrl || active?.baseModelUrl;
-  /** 预览优先已本机化的地址，避免落库前后反复换链重载 */
-  const rawPreviewUrl = useMemo(() => {
-    if (!active) return undefined;
-    const candidates = [active.modelUrl, active.pbrModelUrl, active.baseModelUrl].filter(
-      Boolean
-    ) as string[];
+  /** 任意候选里只要有本机 vault/blob 就优先，避免还去拉已 403 的临时链 */
+  const pickLocalOrRemoteModelUrl = (job: Model3dJob | null | undefined): string | undefined => {
+    if (!job) return undefined;
+    const candidates = [job.modelUrl, job.pbrModelUrl, job.baseModelUrl].filter(Boolean) as string[];
     const local = candidates.find(
       (u) => isVaultRef(u) || u.startsWith('blob:') || u.startsWith('data:')
     );
-    return local || rawDownloadUrl;
-  }, [active, rawDownloadUrl]);
+    return local || candidates[0];
+  };
+  const rawDownloadUrl = pickLocalOrRemoteModelUrl(active);
+  const rawPreviewUrl = rawDownloadUrl;
   const downloadUrl = useVaultUrl(rawDownloadUrl);
   const previewUrl = useVaultUrl(rawPreviewUrl);
   const previewPoster = useVaultUrl(active?.previewImageUrl || active?.sourceImage);
+
+  // 远程链过期(403)时：把本机 mesh_${jobId} 回挂到任务，避免黑屏空转
+  useEffect(() => {
+    if (!active || active.status !== 'ready') return;
+    const primary = pickLocalOrRemoteModelUrl(active);
+    if (primary && (isVaultRef(primary) || primary.startsWith('blob:') || primary.startsWith('data:'))) {
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const hit = await findModel3dVaultRefForJob(active);
+      if (cancelled || !hit) return;
+      patchJob(active.id, {
+        modelUrl: hit,
+        pbrModelUrl: isVaultRef(active.pbrModelUrl) ? active.pbrModelUrl : hit,
+        previewHint: '模型已就绪 · 已从本机素材库回挂 · 可拖动环视',
+        updatedAt: Date.now(),
+      });
+      setMsgTone('ok');
+      setMsg('已从本机素材库找回 GLB，可预览 / 下载（无需重新生成）');
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active?.id, active?.status, active?.modelUrl, active?.pbrModelUrl, active?.baseModelUrl]);
 
   return (
     <div className="max-w-[96rem] mx-auto space-y-3 animate-fade-in px-1">
@@ -1081,6 +1112,26 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                 poster={previewPoster || undefined}
                 className="w-full h-full min-h-0"
                 downloadHref={downloadUrl || previewUrl || undefined}
+                onRemoteExpired={() => {
+                  if (!active) return;
+                  void findModel3dVaultRefForJob(active).then((hit) => {
+                    if (!hit) {
+                      setMsgTone('error');
+                      setMsg(
+                        '远程链已过期，且本机未匹配到该任务的 GLB。请用「导入本地 GLB」或重新生成。'
+                      );
+                      return;
+                    }
+                    patchJob(active.id, {
+                      modelUrl: hit,
+                      pbrModelUrl: isVaultRef(active.pbrModelUrl) ? active.pbrModelUrl : hit,
+                      previewHint: '模型已就绪 · 已从本机素材库回挂 · 可拖动环视',
+                      updatedAt: Date.now(),
+                    });
+                    setMsgTone('ok');
+                    setMsg('已从本机素材库找回 GLB，可预览 / 下载');
+                  });
+                }}
                 onLocalBlob={(blob) => {
                   if (!activeId) return;
                   if (
@@ -1095,7 +1146,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                       const vaultRef = await putBlobInVault({
                         blob,
                         kind: 'model3d',
-                        id: `mesh_${activeId}`,
+                        id: model3dVaultIdForJob(activeId),
                         sourceHint: active?.providerTaskId || activeId,
                         mime: blob.type || 'model/gltf-binary',
                       });
@@ -1156,7 +1207,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                       try {
                         const { downloadMediaFile } = await import('../services/creativeAssetVault');
                         await downloadMediaFile(
-                          downloadUrl,
+                          rawDownloadUrl || downloadUrl,
                           `${(active.title || 'model').replace(/\s+/g, '_')}.glb`
                         );
                       } catch (e: any) {

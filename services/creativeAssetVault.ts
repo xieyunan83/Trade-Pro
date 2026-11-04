@@ -83,6 +83,63 @@ export const isVaultRef = (url: string | undefined | null): boolean =>
 export const vaultIdFromRef = (url: string): string =>
   url.startsWith(VAULT_PREFIX) ? url.slice(VAULT_PREFIX.length) : url;
 
+/** 3D 任务本机网格的稳定 ID（与任务 id 绑定，刷新后可回挂） */
+export const model3dVaultIdForJob = (jobId: string): string => `mesh_${jobId}`;
+
+/**
+ * 按任务回挂本机 GLB：优先 mesh_${jobId}，再按 sourceHint / taskId 匹配。
+ * 用于远程临时链 403 过期后，仍能预览/下载已缓存文件。
+ */
+export const findModel3dVaultRefForJob = async (job: {
+  id: string;
+  providerTaskId?: string;
+  sourceTaskId?: string;
+  modelUrl?: string;
+  pbrModelUrl?: string;
+  baseModelUrl?: string;
+}): Promise<string | null> => {
+  const primaryId = model3dVaultIdForJob(job.id);
+  const primary = await getRow(primaryId);
+  if (primary?.blob) {
+    void touchAccess(primaryId);
+    return `${VAULT_PREFIX}${primaryId}`;
+  }
+
+  const hints = [job.providerTaskId, job.sourceTaskId, job.id]
+    .map((s) => (s || '').trim())
+    .filter(Boolean);
+  const remotes = [job.modelUrl, job.pbrModelUrl, job.baseModelUrl]
+    .map((s) => (s || '').trim())
+    .filter((s) => /^https?:\/\//i.test(s));
+
+  const meta = await listVaultMeta();
+  const models = meta.filter((m) => m.kind === 'model3d');
+  const scored = models
+    .map((m) => {
+      const bag = `${m.id} ${m.sourceHint || ''}`;
+      let score = 0;
+      if (hints.some((h) => bag.includes(h))) score += 10;
+      for (const r of remotes) {
+        const head = r.slice(0, 96);
+        if (m.sourceHint && (m.sourceHint.includes(head) || r.includes(m.sourceHint.slice(0, 96)))) {
+          score += 8;
+        }
+      }
+      return { m, score };
+    })
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score || b.m.lastAccessAt - a.m.lastAccessAt);
+
+  for (const { m } of scored) {
+    const row = await getRow(m.id);
+    if (row?.blob) {
+      void touchAccess(m.id);
+      return `${VAULT_PREFIX}${m.id}`;
+    }
+  }
+  return null;
+};
+
 const openDb = (): Promise<IDBDatabase> =>
   new Promise((resolve, reject) => {
     if (!isBrowser()) {
@@ -283,7 +340,8 @@ const persistTimeoutMs = (kind: VaultKind): number => {
 export const persistMediaUrl = async (
   url: string,
   kind: VaultKind,
-  sourceHint?: string
+  sourceHint?: string,
+  opts?: { id?: string }
 ): Promise<string> => {
   const raw = (url || '').trim();
   if (!raw) return raw;
@@ -310,6 +368,7 @@ export const persistMediaUrl = async (
   return putBlobInVault({
     blob: blob.type ? blob : new Blob([blob], { type: mime }),
     kind,
+    id: opts?.id,
     sourceHint: sourceHint || raw.slice(0, 120),
     mime,
   });
@@ -319,10 +378,11 @@ export const persistMediaUrl = async (
 export const tryPersistMediaUrl = async (
   url: string,
   kind: VaultKind,
-  sourceHint?: string
+  sourceHint?: string,
+  opts?: { id?: string }
 ): Promise<string> => {
   try {
-    return await persistMediaUrl(url, kind, sourceHint);
+    return await persistMediaUrl(url, kind, sourceHint, opts);
   } catch (e) {
     console.warn('[creativeAssetVault] persist failed', e);
     return url;

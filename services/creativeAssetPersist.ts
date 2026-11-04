@@ -10,7 +10,9 @@ import { loadPackagingAssets } from './packagingAgentStore';
 import { loadCatalogSkus } from './productCatalogTypes';
 import { loadEnterprisePacks } from './enterpriseDesignPacks';
 import {
+  findModel3dVaultRefForJob,
   isVaultRef,
+  model3dVaultIdForJob,
   purgeMediaUrls,
   resolveMediaUrl,
   tryPersistMediaUrl,
@@ -29,11 +31,12 @@ const needsPersist = (url: string | undefined): boolean => {
 
 export const persistUrlField = async (
   url: string | undefined,
-  kind: VaultKind
+  kind: VaultKind,
+  opts?: { id?: string; sourceHint?: string }
 ): Promise<string | undefined> => {
   if (!url) return url;
   if (!needsPersist(url)) return url;
-  return tryPersistMediaUrl(url, kind);
+  return tryPersistMediaUrl(url, kind, opts?.sourceHint, { id: opts?.id });
 };
 
 export const persistDesignAssets = async (rows: DesignAsset[]): Promise<DesignAsset[]> => {
@@ -63,29 +66,47 @@ export const persistPackagingAssets = async (
 /**
  * 3D 落库：只优先缓存「主网格」一份（PBR > model > base），避免高细节多文件串行下载卡死。
  * 失败/超时保留原临时链，不阻断预览与下载。
+ * 远程 403 过期时，若本机已有 mesh_${jobId} 则直接回挂。
  */
 export const persistModel3dJob = async (job: Model3dJob): Promise<Model3dJob> => {
+  const existingLocal = await findModel3dVaultRefForJob(job);
+  if (existingLocal) {
+    return {
+      ...job,
+      modelUrl: existingLocal,
+      pbrModelUrl: isVaultRef(job.pbrModelUrl) ? job.pbrModelUrl : existingLocal,
+      baseModelUrl: isVaultRef(job.baseModelUrl) ? job.baseModelUrl : job.baseModelUrl,
+      previewHint: job.previewHint?.includes('本机')
+        ? job.previewHint
+        : '模型已就绪 · 已存本机 · 可拖动环视',
+    };
+  }
+
   const primary =
     (job.pbrModelUrl || job.modelUrl || job.baseModelUrl || '').trim() || undefined;
+  const meshId = model3dVaultIdForJob(job.id);
+  const hint = job.providerTaskId || job.sourceTaskId || job.id;
 
   const [sourceImage, sourceImages, primaryVault, previewImageUrl] = await Promise.all([
     persistUrlField(job.sourceImage, 'image'),
     job.sourceImages?.length
       ? Promise.all(job.sourceImages.map((u) => persistUrlField(u, 'image').then((x) => x || u)))
       : Promise.resolve(job.sourceImages),
-    primary ? persistUrlField(primary, 'model3d') : Promise.resolve(undefined),
+    primary
+      ? persistUrlField(primary, 'model3d', { id: meshId, sourceHint: hint })
+      : Promise.resolve(undefined),
     persistUrlField(job.previewImageUrl, 'image'),
   ]);
 
   let modelUrl = job.modelUrl;
   let pbrModelUrl = job.pbrModelUrl;
   let baseModelUrl = job.baseModelUrl;
-  if (primary && primaryVault) {
+  if (primary && primaryVault && isVaultRef(primaryVault)) {
     if (job.pbrModelUrl === primary) pbrModelUrl = primaryVault;
     else if (job.modelUrl === primary) modelUrl = primaryVault;
     else if (job.baseModelUrl === primary) baseModelUrl = primaryVault;
     // 预览优先用已落库主网格
-    if (!modelUrl || modelUrl === primary) modelUrl = primaryVault;
+    if (!modelUrl || modelUrl === primary || !isVaultRef(modelUrl)) modelUrl = primaryVault;
   }
 
   return {

@@ -20,6 +20,8 @@ type Props = {
   downloadHref?: string;
   /** 成功拉到本机 Blob 时回调（用于写入素材库） */
   onLocalBlob?: (blob: Blob, sourceUrl: string) => void;
+  /** 远程链 403/过期时通知父级尝试本机回挂 */
+  onRemoteExpired?: () => void;
 };
 
 const isLocalSrc = (u: string) =>
@@ -41,11 +43,14 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
   autoRotate = true,
   downloadHref,
   onLocalBlob,
+  onRemoteExpired,
 }) => {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<HTMLElement | null>(null);
   const onBlobRef = useRef(onLocalBlob);
   onBlobRef.current = onLocalBlob;
+  const onExpiredRef = useRef(onRemoteExpired);
+  onExpiredRef.current = onRemoteExpired;
   const readyRef = useRef(false);
   const objectUrlRef = useRef<string | null>(null);
   const [ready, setReady] = useState(false);
@@ -172,9 +177,19 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
       } catch (e: any) {
         if (cancelled) return;
         setPhase('error');
+        const msg = String(e?.message || e);
+        const expired = /403|401|410|Expired|forbidden/i.test(msg);
+        if (expired) {
+          try {
+            onExpiredRef.current?.();
+          } catch {
+            /* ignore */
+          }
+        }
         setLoadErr(
-          String(e?.message || e) +
-            '。请点「下载 GLB」保存到电脑——模型已生成，不会白费。'
+          expired
+            ? '远程临时链已过期。正在尝试从本机素材库回挂；若仍失败请点「重试预览」，或重新生成 / 导入本地 GLB。'
+            : `${msg}。请点「下载 GLB」保存到电脑——模型已生成，不会白费。`
         );
       }
     })();
