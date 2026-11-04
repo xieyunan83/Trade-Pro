@@ -8,9 +8,17 @@ import {
 } from '../services/creativeAssetBridge';
 import {
   loadGtmLaunchPacks,
+  upsertGtmLaunchPack,
   type GtmClientMatch,
   type GtmLaunchPack,
 } from '../services/gtmExpertStore';
+import { publishGtmOutreachHandoff } from '../services/gtmOutreachBridge';
+import {
+  loadProductCampaigns,
+  upsertProductCampaign,
+  type ProductCampaignRecord,
+} from '../services/productCampaignStore';
+import { loadStrategyMailDraftHistory } from '../services/strategyMailDraftStore';
 import {
   buildProductProfileFromAnalysis,
   loadProductCatalog,
@@ -23,6 +31,7 @@ import { CreativePipelineBar } from './CreativeRefPicker';
 import { CatalogCoveragePanel } from './CatalogCoveragePanel';
 import { DesignConstraintCardPanel } from './DesignConstraintCardPanel';
 import { MatchInputForm, type MatchFormValues } from './MatchInputForm';
+import { VaultImg } from './VaultMedia';
 import {
   Search,
   Loader2,
@@ -38,6 +47,9 @@ import {
   ArrowLeft,
   Package,
   Target,
+  Send,
+  History,
+  PenLine,
 } from 'lucide-react';
 
 interface ModuleProductMatchProps {
@@ -145,6 +157,10 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
     imageUrls: [],
     source: 'catalog',
   }));
+  const [campaignId, setCampaignId] = useState<string | undefined>();
+  const [campaigns, setCampaigns] = useState<ProductCampaignRecord[]>(() =>
+    loadProductCampaigns()
+  );
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -248,12 +264,92 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
     void runClientMatch();
   }, [showClientMatch, focusCompany, focusWebsite, runClientMatch]);
 
+  const persistPackRecords = useCallback(
+    (next: GtmLaunchPack, values?: MatchFormValues, campId?: string) => {
+      const campaign = upsertProductCampaign({
+        id: campId || campaignId,
+        productName: next.productName || values?.productName || '未命名产品',
+        category: next.category || values?.category,
+        skuCode: next.skuCode || values?.skuCode,
+        priceBand: next.priceBand || values?.priceBand,
+        notes: next.notes || values?.notes,
+        source: values?.source || next.productSource,
+        imageUrls: values?.imageUrls || next.imageUrls || [],
+        packId: next.id,
+        status: 'matched',
+      });
+      setCampaignId(campaign.id);
+      const enriched: GtmLaunchPack = {
+        ...next,
+        imageUrls: values?.imageUrls || next.imageUrls || campaign.imageUrls,
+        productSource: values?.source || next.productSource || campaign.source,
+        campaignId: campaign.id,
+      };
+      upsertGtmLaunchPack(enriched);
+      publishGtmOutreachHandoff(enriched, 'both', { campaignId: campaign.id });
+      setCampaigns(loadProductCampaigns());
+      return enriched;
+    },
+    [campaignId]
+  );
+
+  const openStrategyWithPack = (p: GtmLaunchPack) => {
+    publishGtmOutreachHandoff(p, 'strategy', { campaignId: p.campaignId || campaignId });
+    onNavigateModule?.(ModuleType.STRATEGY);
+  };
+
+  const openEmailWithPack = (p: GtmLaunchPack) => {
+    publishGtmOutreachHandoff(p, 'email_campaign', {
+      campaignId: p.campaignId || campaignId,
+    });
+    onNavigateModule?.(ModuleType.EMAIL_CAMPAIGN);
+  };
+
+  const restoreCampaign = (row: ProductCampaignRecord) => {
+    setCampaignId(row.id);
+    setFormInitial({
+      productName: row.productName,
+      category: row.category || '',
+      priceBand: row.priceBand || '',
+      skuCode: row.skuCode || '',
+      notes: row.notes || '',
+      imageUrls: row.imageUrls || [],
+      source:
+        row.source === 'upload' || row.source === 'design' || row.source === 'catalog'
+          ? row.source
+          : 'catalog',
+    });
+    setFormSeed((n) => n + 1);
+    if (row.packId) {
+      const hit = loadGtmLaunchPacks().find((p) => p.id === row.packId);
+      if (hit) {
+        setPack(hit);
+        setExpandedMail(hit.matches.find((m) => m.mailGroup)?.companyName || null);
+      }
+    }
+    setForceLaunchMode(true);
+  };
+
   const run = useCallback(
     async (values: MatchFormValues) => {
       setBusy(true);
       setError(null);
       setProgress('启动双专家…');
       try {
+        const draftCamp = upsertProductCampaign({
+          id: campaignId,
+          productName: values.productName,
+          category: values.category,
+          skuCode: values.skuCode,
+          priceBand: values.priceBand,
+          notes: values.notes,
+          source: values.source,
+          imageUrls: values.imageUrls || [],
+          status: 'draft',
+        });
+        setCampaignId(draftCamp.id);
+        setCampaigns(loadProductCampaigns());
+
         const imageNote = values.imageUrls?.length
           ? `已附 ${values.imageUrls.length} 张产品图（来源:${
               values.source === 'catalog'
@@ -274,18 +370,19 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
           },
           crmClients,
           history,
-          mailTopN: 2,
-          skipBatchMail: true,
+          mailTopN: 3,
+          skipBatchMail: false,
           onProgress: (_pct, label) => setProgress(label),
           onPartial: (partial) => {
-            // 匹配结果先上屏，开发信后台并行补写
-            setPack({ ...partial });
+            const enriched = persistPackRecords(partial, values, draftCamp.id);
+            setPack(enriched);
             setExpandedMail(null);
             setProgress(`已匹配 ${partial.matches.length} 家，正在补写开发信…`);
           },
         });
-        setPack(next);
-        setExpandedMail(next.matches.find((m) => m.mailGroup)?.companyName || null);
+        const enriched = persistPackRecords(next, values, draftCamp.id);
+        setPack(enriched);
+        setExpandedMail(enriched.matches.find((m) => m.mailGroup)?.companyName || null);
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : '编排失败，请稍后重试');
       } finally {
@@ -293,7 +390,7 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
         setProgress('');
       }
     },
-    [crmClients, history]
+    [crmClients, history, campaignId, persistPackRecords]
   );
 
   if (showClientMatch) {
@@ -491,6 +588,60 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
         </div>
       </div>
 
+      {campaigns.length > 0 && (
+        <section className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-sm font-black text-slate-800 inline-flex items-center gap-1.5">
+              <History size={14} className="text-emerald-600" /> 产品投放档案
+            </h3>
+            <span className="text-[10px] font-bold text-slate-400">
+              已存 {campaigns.length} 条 · 开发信历史{' '}
+              {loadStrategyMailDraftHistory().length} 组
+            </span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-48 overflow-y-auto custom-scrollbar">
+            {campaigns.slice(0, 12).map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => restoreCampaign(c)}
+                className={`text-left rounded-xl border p-2.5 space-y-1.5 transition ${
+                  campaignId === c.id
+                    ? 'border-emerald-400 ring-1 ring-emerald-200 bg-emerald-50/40'
+                    : 'border-slate-200 hover:border-emerald-300 bg-white'
+                }`}
+              >
+                <div className="flex gap-2">
+                  <div className="w-12 h-12 rounded-lg bg-slate-50 border border-slate-100 overflow-hidden shrink-0">
+                    {c.imageUrls?.[0] ? (
+                      <VaultImg src={c.imageUrls[0]} alt="" className="w-full h-full object-contain" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-[9px] text-slate-300 font-bold">
+                        无图
+                      </div>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-black text-slate-900 truncate">{c.productName}</div>
+                    <div className="text-[10px] font-bold text-slate-500 truncate">
+                      {[c.skuCode, c.category].filter(Boolean).join(' · ') || '未填货号'}
+                    </div>
+                    <div className="text-[9px] font-bold text-emerald-700 mt-0.5">
+                      {c.status === 'mailed'
+                        ? `已存开发信 ${c.mailDraftCount || 0} 组`
+                        : c.status === 'matched'
+                          ? '已匹配客户'
+                          : '草稿'}
+                      {c.lastMailCompany ? ` · ${c.lastMailCompany}` : ''}
+                    </div>
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
       <MatchInputForm
         key={formSeed}
         seedKey={formSeed}
@@ -647,8 +798,37 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
             </section>
           </div>
 
+          <section className="rounded-2xl border border-indigo-200 bg-gradient-to-br from-indigo-50 via-white to-emerald-50 p-4 space-y-3 shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <div className="text-sm font-black text-slate-900 inline-flex items-center gap-1.5">
+                  <Sparkles size={14} className="text-indigo-600" /> 下一步：开发信 → 邮件群发
+                </div>
+                <p className="text-[11px] text-slate-600 font-medium mt-1 max-w-xl leading-relaxed">
+                  本产品的选品资料、匹配客户与开发信已自动存档。可到开发策略继续润色，或一键导入邮件营销做群发——资料全平台互通。
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => openStrategyWithPack(pack)}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black px-3 py-2"
+                >
+                  <PenLine size={13} /> 去写/完善开发信
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openEmailWithPack(pack)}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black px-3 py-2"
+                >
+                  <Send size={13} /> 导入邮件群发
+                </button>
+              </div>
+            </div>
+          </section>
+
           {pack.batchMailGroup && (
-            <MailGroupCard title="批量开发信模板（同市场可复用）" group={pack.batchMailGroup} />
+            <MailGroupCard title="批量开发信模板（同市场可复用 · 已存档）" group={pack.batchMailGroup} />
           )}
 
           <section className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
@@ -657,7 +837,9 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
                 <Search size={16} className="text-emerald-600" />
                 匹配客户 {pack.matches.length ? `(${pack.matches.length})` : ''}
               </h3>
-              <span className="text-[10px] font-bold text-slate-400">含专业匹配理由 · 前 3 家已写开发信</span>
+              <span className="text-[10px] font-bold text-slate-400">
+                含专业匹配理由 · 开发信已写入本机档案
+              </span>
             </div>
             {!pack.matches.length ? (
               <div className="p-10 text-center text-slate-400 font-bold text-sm">
@@ -726,12 +908,26 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
                             {expandedMail === m.companyName ? '收起开发信' : '查看开发信组'}
                           </button>
                         )}
+                        {m.mailGroup && onNavigateModule && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              publishGtmOutreachHandoff(pack, 'email_campaign', {
+                                campaignId: pack.campaignId || campaignId,
+                              });
+                              onNavigateModule(ModuleType.EMAIL_CAMPAIGN);
+                            }}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 text-white text-xs font-bold"
+                          >
+                            <Send size={12} /> 群发此信
+                          </button>
+                        )}
                       </div>
                     </div>
                     {expandedMail === m.companyName && m.mailGroup && (
                       <div className="mt-3">
                         <MailGroupCard
-                          title={`${m.companyName} · 专属开发信组`}
+                          title={`${m.companyName} · 专属开发信组（已存档）`}
                           group={m.mailGroup}
                         />
                       </div>

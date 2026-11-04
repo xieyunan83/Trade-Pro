@@ -25,7 +25,15 @@ import {
 } from '../services/emailCampaignStore';
 import { isDirectMailConfigured, sendDirectMail } from '../services/directMailService';
 import { filterOwnedRecords } from '../services/permissions';
-import { loadStrategyMailDraft } from '../services/strategyMailDraftStore';
+import {
+  loadStrategyMailDraft,
+  loadStrategyMailDraftHistory,
+} from '../services/strategyMailDraftStore';
+import {
+  consumeGtmOutreachHandoff,
+  emailTasksFromGtmOutreach,
+  templatesFromGtmOutreach,
+} from '../services/gtmOutreachBridge';
 
 interface ModuleEmailCampaignProps {
   crmClients: Client[];
@@ -93,6 +101,7 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
 
   const macros = ['{{company_name}}', '{{contact_name}}'];
   const dmReady = isDirectMailConfigured(config);
+  const [gtmImportHint, setGtmImportHint] = useState('');
 
   const stampOwnership = useCallback(
     <T extends { ownerUsername?: string; departmentId?: string }>(item: T): T => ({
@@ -102,6 +111,55 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
     }),
     [currentUser.username, currentUser.departmentId]
   );
+
+  /** 从产品匹配导入：开发信模板 + 匹配客户收件人 */
+  useEffect(() => {
+    const handoff = consumeGtmOutreachHandoff('email_campaign');
+    if (!handoff) return;
+    const owner = { username: currentUser.username, departmentId: currentUser.departmentId };
+    const tpl = templatesFromGtmOutreach(handoff, owner).map(stampOwnership);
+    setTasks((prevTasks) => {
+      const existing = new Set(prevTasks.map((t) => t.recipientEmail.toLowerCase()));
+      const newTasks = emailTasksFromGtmOutreach(
+        handoff,
+        visibleCrmClients,
+        owner,
+        existing
+      ).map(stampOwnership);
+      if (newTasks.length) {
+        setActiveTab('tasks');
+        setGtmImportHint(
+          [
+            `已从「${handoff.productName}」匹配导入`,
+            tpl.length ? `${tpl.length} 套开发信模板` : '',
+            `${newTasks.length} 位收件人`,
+          ]
+            .filter(Boolean)
+            .join(' · ')
+        );
+        return [...newTasks, ...prevTasks];
+      }
+      setGtmImportHint(
+        [
+          `已从「${handoff.productName}」匹配导入`,
+          tpl.length ? `${tpl.length} 套开发信模板` : '',
+          '（匹配客户在 CRM 尚无邮箱时，请先补决策人邮箱或手动添加）',
+        ]
+          .filter(Boolean)
+          .join(' · ')
+      );
+      return prevTasks;
+    });
+    if (tpl.length) {
+      setTemplates((prev) => {
+        const names = new Set(prev.map((t) => t.name));
+        const add = tpl.filter((t) => !names.has(t.name));
+        return add.length ? [...add, ...prev] : prev;
+      });
+      if (!handoff.matches.some((m) => m.clientId)) setActiveTab('templates');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser.username, stampOwnership, visibleCrmClients]);
 
   // 切换登录用户时重载可见数据
   useEffect(() => {
@@ -425,8 +483,13 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
   return (
     <div className="max-w-7xl mx-auto space-y-4 sm:space-y-8 animate-fade-in">
       <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-bold text-slate-600">
-        数据隔离：员工仅见自己导入/添加的收件人；主管仅见本部门；跨部门不可见。CRM 导入范围与客户管理一致。
+        数据隔离：员工仅见自己导入/添加的收件人；主管仅见本部门；跨部门不可见。CRM 导入范围与客户管理一致。产品匹配生成的开发信会自动进入「邮件模板」。
       </div>
+      {gtmImportHint ? (
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-bold text-emerald-900">
+          {gtmImportHint}
+        </div>
+      ) : null}
 
       <div className="flex flex-wrap gap-2 bg-white p-2 rounded-2xl border border-slate-200 shadow-sm w-full sm:w-fit overflow-x-auto">
         <button
@@ -695,53 +758,70 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
             <p className="text-slate-400 font-bold text-sm">手动编写，支持宏变量</p>
           </div>
           {(() => {
-            const draft = loadStrategyMailDraft();
-            if (!draft?.mailGroup) return null;
-            const g = draft.mailGroup;
-            const items = [
-              { label: '匹配破冰', subject: g.subject1, body: g.email1 },
-              { label: '实力证明', subject: g.subject2, body: g.email2 },
-              { label: '钩子收口', subject: g.subject3, body: g.email3 },
-            ].filter((x) => x.body || x.subject);
-            if (!items.length) return null;
+            const latest = loadStrategyMailDraft();
+            const history = loadStrategyMailDraftHistory();
+            const drafts = [
+              ...(latest ? [latest] : []),
+              ...history.filter((d) => !latest || d.id !== latest.id || d.savedAt !== latest.savedAt),
+            ].slice(0, 8);
+            if (!drafts.length) return null;
             return (
-              <div className="md:col-span-2 rounded-2xl border border-indigo-200 bg-indigo-50/50 p-4 space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <div className="text-sm font-black text-indigo-950">从开发策略导入</div>
-                    <p className="text-[11px] font-bold text-indigo-800/80">
-                      {draft.companyName}
-                      {draft.savedAt
-                        ? ` · ${new Date(draft.savedAt).toLocaleString('zh-CN')}`
-                        : ''}
-                    </p>
-                  </div>
+              <div className="md:col-span-2 rounded-2xl border border-indigo-200 bg-indigo-50/50 p-4 space-y-4">
+                <div>
+                  <div className="text-sm font-black text-indigo-950">从开发信档案导入</div>
+                  <p className="text-[11px] font-bold text-indigo-800/80">
+                    含产品匹配 / 开发策略已存档的开发信组，点选即可填入群发模板
+                  </p>
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                  {items.map((item) => (
-                    <button
-                      key={item.label}
-                      type="button"
-                      onClick={() => {
-                        setNewTemplate({
-                          id: '',
-                          name: `${draft.companyName} · ${item.label}`,
-                          subject: item.subject || '',
-                          body: (item.body || '').replace(/\n/g, '<br/>'),
-                          lastUpdated: Date.now(),
-                        });
-                        setIsCreatingTemplate(true);
-                      }}
-                      className="text-left rounded-xl border border-indigo-100 bg-white px-3 py-2.5 hover:border-indigo-300 hover:shadow-sm transition-all"
-                    >
-                      <div className="text-[10px] font-black text-indigo-600 uppercase">{item.label}</div>
-                      <div className="text-xs font-bold text-slate-800 mt-1 line-clamp-2">
-                        {item.subject || '（无主题）'}
+                {drafts.map((draft) => {
+                  const g = draft.mailGroup;
+                  const items = [
+                    { label: '匹配破冰', subject: g.subject1, body: g.email1 },
+                    { label: '实力证明', subject: g.subject2, body: g.email2 },
+                    { label: '钩子收口', subject: g.subject3, body: g.email3 },
+                  ].filter((x) => x.body || x.subject);
+                  if (!items.length) return null;
+                  return (
+                    <div key={`${draft.id || draft.companyName}_${draft.savedAt}`} className="space-y-2">
+                      <p className="text-[11px] font-black text-indigo-900">
+                        {draft.productName ? `${draft.productName} · ` : ''}
+                        {draft.companyName}
+                        {draft.savedAt
+                          ? ` · ${new Date(draft.savedAt).toLocaleString('zh-CN')}`
+                          : ''}
+                      </p>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        {items.map((item) => (
+                          <button
+                            key={`${draft.companyName}_${item.label}`}
+                            type="button"
+                            onClick={() => {
+                              setNewTemplate({
+                                id: '',
+                                name: `${draft.companyName} · ${item.label}`,
+                                subject: item.subject || '',
+                                body: (item.body || '').replace(/\n/g, '<br/>'),
+                                lastUpdated: Date.now(),
+                              });
+                              setIsCreatingTemplate(true);
+                            }}
+                            className="text-left rounded-xl border border-indigo-100 bg-white px-3 py-2.5 hover:border-indigo-300 hover:shadow-sm transition-all"
+                          >
+                            <div className="text-[10px] font-black text-indigo-600 uppercase">
+                              {item.label}
+                            </div>
+                            <div className="text-xs font-bold text-slate-800 mt-1 line-clamp-2">
+                              {item.subject || '（无主题）'}
+                            </div>
+                            <div className="text-[10px] text-indigo-700 font-black mt-2">
+                              填入编辑器 →
+                            </div>
+                          </button>
+                        ))}
                       </div>
-                      <div className="text-[10px] text-indigo-700 font-black mt-2">填入编辑器 →</div>
-                    </button>
-                  ))}
-                </div>
+                    </div>
+                  );
+                })}
               </div>
             );
           })()}

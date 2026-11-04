@@ -52,6 +52,11 @@ export type GtmLaunchPack = {
   priceBand?: string;
   skuCode?: string;
   notes?: string;
+  /** 选品图（库/上传/设计），便于档案回看 */
+  imageUrls?: string[];
+  productSource?: 'catalog' | 'upload' | 'design' | 'manual';
+  /** 关联产品投放档案 */
+  campaignId?: string;
   market: GtmMarketBrief;
   pm: GtmPmBrief;
   matches: GtmClientMatch[];

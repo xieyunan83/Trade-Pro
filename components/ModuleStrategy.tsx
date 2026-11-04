@@ -27,6 +27,10 @@ import {
   saveStrategyMailDraft,
   type StrategyMailDraft,
 } from '../services/strategyMailDraftStore';
+import {
+  consumeGtmOutreachHandoff,
+  gtmOutreachStrategyBrief,
+} from '../services/gtmOutreachBridge';
 import { VaultImg } from './VaultMedia';
 import {
   Send,
@@ -123,6 +127,33 @@ export const ModuleStrategy: React.FC<Props> = ({
       return [data, ...prev].slice(0, 8);
     });
   }, [data?.companyInfo?.website, data?.companyInfo?.name]);
+
+  /** 产品匹配投放包 → 自动载入产品卖点与优先客户，开发信可接着写 */
+  useEffect(() => {
+    const handoff = consumeGtmOutreachHandoff('strategy');
+    if (!handoff) return;
+    const brief = gtmOutreachStrategyBrief(handoff);
+    setSelectedKeywords((prev) => {
+      const add = [handoff.productName, handoff.category, handoff.skuCode]
+        .filter(Boolean)
+        .map(String);
+      return Array.from(new Set([...add, ...prev])).slice(0, 12);
+    });
+    setSelectedCountries((prev) => {
+      const add = handoff.matches.map((m) => m.country).filter(Boolean);
+      return Array.from(new Set([...add, ...prev])).slice(0, 12);
+    });
+    setMailDraft(loadStrategyMailDraft());
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: `gtm_${Date.now()}`,
+        role: 'model',
+        text: `**已载入产品匹配档案** ✅\n\n${brief}\n\n可直接说「按这些客户写开发信组」或点顶部「生成开发信」。生成结果会自动存档，并可一键带到邮件群发。`,
+        timestamp: Date.now(),
+      },
+    ]);
+  }, []);
 
   useEffect(() => {
     const loadFiles = async () => {
@@ -577,7 +608,9 @@ export const ModuleStrategy: React.FC<Props> = ({
         companyName: primaryCompany.companyInfo?.name || '客户',
         website: primaryCompany.companyInfo?.website,
         mailGroup,
+        productName: selectedKeywords[0],
         savedAt: Date.now(),
+        source: 'strategy',
       };
       saveStrategyMailDraft(draft);
       setMailDraft(draft);
