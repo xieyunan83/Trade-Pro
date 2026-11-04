@@ -26,6 +26,8 @@ import {
   getActiveEnterprisePack,
   type EnterpriseDesignPack,
 } from '../services/enterpriseDesignPacks';
+import { multiImageRoleBlock } from '../services/creativeQualityKit';
+import { downloadMediaFile } from '../services/creativeAssetVault';
 import { EnterpriseDesignPackPanel } from './EnterpriseDesignPackPanel';
 
 const LOGO_LS = 'trade_scout_brand_logo';
@@ -233,15 +235,24 @@ export const ModulePosterStudio: React.FC = () => {
       const effectiveLogoMode =
         logoMode === 'builtin' && !logo ? 'none' : logoMode;
 
+      const productCount = Math.max(originals.length, workingCutouts.length || 1);
+      const layoutTail = !!(activePack?.layoutRefs?.length);
       const basePrompt =
         mode === 'single'
           ? buildSingleProductPosterPrompt(singleFields, effectiveLogoMode)
           : buildMultiProductPosterPrompt(
               multiFields,
-              Math.max(originals.length, workingCutouts.length || 1),
+              productCount,
               effectiveLogoMode
             );
-      const prompt = applyPackStyleToPrompt(basePrompt, activePack);
+      const roleBlock = multiImageRoleBlock(refs.length, {
+        lastIsLayout: layoutTail && refs.length >= 2,
+        distinctProducts: mode === 'multi' && !layoutTail && productCount > 1,
+      });
+      const prompt = applyPackStyleToPrompt(
+        [roleBlock, basePrompt].filter(Boolean).join('\n'),
+        activePack
+      );
 
       const res = await generateWanImage(
         {
@@ -523,15 +534,13 @@ export const ModulePosterStudio: React.FC = () => {
         <div className="bg-white p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm space-y-3">
           <div className="flex justify-between items-center">
             <h3 className="font-black text-slate-800">生成结果</h3>
-            <a
-              href={resultUrl}
-              download="product-poster.png"
-              target="_blank"
-              rel="noreferrer"
+            <button
+              type="button"
+              onClick={() => void downloadMediaFile(resultUrl, 'product-poster')}
               className="inline-flex items-center gap-1 text-sm font-black text-blue-600"
             >
               <Download size={16} /> 下载
-            </a>
+            </button>
           </div>
           <img src={resultUrl} alt="poster" className="w-full rounded-xl border border-slate-100" />
         </div>

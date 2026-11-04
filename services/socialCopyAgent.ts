@@ -169,6 +169,7 @@ export const generateSocialCoverImage = async (opts: {
 
   opts.onProgress?.('正在生成渠道配图…');
   const { composeImageGenerationPrompt } = await import('./creativeQualityKit');
+  const socialRefs = (opts.referenceImages || []).filter(Boolean).slice(0, 4);
   const composed = composeImageGenerationPrompt({
     skillDefaultPrompt: [
       vertical
@@ -179,13 +180,18 @@ export const generateSocialCoverImage = async (opts: {
       'Commercial toy product photography, clean background, bold but sparse cover typography area left empty',
       opts.locale === 'zh' ? '适合中国玩具外贸社媒' : 'for global toy importers feed',
       meta ? `Target canvas ${meta.size}` : '',
+      socialRefs.length > 1
+        ? `Feature EVERY product from the ${socialRefs.length} reference images — do not drop later SKUs.`
+        : '',
     ]
       .filter(Boolean)
       .join('. '),
     userBrief: opts.highlight ? `Highlight: ${opts.highlight}` : undefined,
     skuName: opts.productName,
-    hasReferenceImages: !!(opts.referenceImages && opts.referenceImages.length),
-    skillNegative: 'platform UI chrome, garbled cover text, watermark, fake badges',
+    hasReferenceImages: socialRefs.length > 0,
+    referenceCount: socialRefs.length,
+    distinctProducts: socialRefs.length > 1,
+    skillNegative: 'platform UI chrome, garbled cover text, watermark, fake badges, dropping product refs',
   });
 
   try {
@@ -194,8 +200,9 @@ export const generateSocialCoverImage = async (opts: {
       size: '1K',
       n: 1,
       thinkingMode: false,
-      referenceImages: opts.referenceImages?.slice(0, 2),
+      referenceImages: socialRefs,
       negativePrompt: composed.negative,
+      distinctProducts: socialRefs.length > 1,
     });
     const url = result.images[0];
     if (!url) return undefined;

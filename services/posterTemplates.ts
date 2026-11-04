@@ -148,11 +148,12 @@ export const buildMultiProductPosterPrompt = (
     .join('\n') || '(NO TEXT)';
 
   return `
-TASK: One EXTRA-TALL vertical LONG IMAGE for ${productCount} uploaded product photo(s). Single-column lifestyle campaign.
+TASK: One EXTRA-TALL vertical LONG IMAGE featuring ALL ${productCount} uploaded product SKU(s). Single-column lifestyle campaign.
 
 HARD RULES:
-- Product looks must match uploads exactly.
-- ≥5 different full-width real-world usage scenes. No plain studio backgrounds.
+- Images 1–${productCount} are DISTINCT products. EVERY SKU must appear as a clear hero in the long image — do not use only the first upload.
+- Product looks must match each upload exactly (no chimera / redesign).
+- ≥5 different full-width real-world usage scenes. No plain studio backgrounds. Distribute all ${productCount} products across scenes so none is missing.
 - Text ONLY from:
 ${copy}
 - Huge sharp English only. No tables. No tiny blurry text.
@@ -161,7 +162,7 @@ ${copy}
 ${logoLine(logoMode)}
 
 Stack full-width: hero lifestyle → scene2 → scene3 → scene4 → in-environment beauty → scene5 (no packaging) → closing.
-NEGATIVE: studio void, two-column, spec table, blurry micro text, virtual packaging, wrong product, gibberish.
+NEGATIVE: studio void, two-column, spec table, blurry micro text, virtual packaging, wrong product, gibberish, dropping later product SKUs, single-product-only when ${productCount} products provided.
 `.trim();
 };
 

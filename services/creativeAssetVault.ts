@@ -469,10 +469,30 @@ const blobToBase64 = (blob: Blob): Promise<string> =>
     reader.readAsDataURL(blob);
   });
 
-/** Windows 桌面端 / Chromium：系统「另存为」，不依赖 <a download>（Electron 上常无效） */
+/** Windows/macOS 桌面端 / 浏览器：系统「另存为」。桌面端必须先走 IPC，避免 Electron 内 FSA 弹窗卡死。 */
 const saveBlobViaPickerOrDesktop = async (blob: Blob, name: string): Promise<boolean> => {
-  // 1) File System Access API（Chrome / 桌面客户端内嵌 Chromium 均可用）
   const w = typeof window !== 'undefined' ? (window as any) : null;
+
+  // 1) 桌面客户端：原生 dialog（挂在 BrowserWindow 上），禁止走 showSaveFilePicker
+  const saveBytes = w?.bwDesktop?.saveBytes;
+  if (typeof saveBytes === 'function') {
+    try {
+      const base64 = await blobToBase64(blob);
+      const res = await saveBytes({
+        filename: name,
+        base64,
+        mime: blob.type || 'application/octet-stream',
+      });
+      if (res?.canceled) return true;
+      if (res?.ok) return true;
+    } catch (e) {
+      console.warn('[vault] bwDesktop.saveBytes failed', e);
+    }
+    // 桌面端 IPC 失败时不要再开 FSA（易弹到窗后导致假死），交给锚点/will-download
+    return false;
+  }
+
+  // 2) 纯浏览器：File System Access API
   if (w && typeof w.showSaveFilePicker === 'function') {
     try {
       const ext = (name.split('.').pop() || 'png').toLowerCase();
@@ -492,24 +512,7 @@ const saveBlobViaPickerOrDesktop = async (blob: Blob, name: string): Promise<boo
       return true;
     } catch (e: any) {
       if (e?.name === 'AbortError') return true; // 用户取消，视为已处理
-      console.warn('[vault] showSaveFilePicker failed, try desktop IPC', e);
-    }
-  }
-
-  // 2) 桌面客户端 IPC 另存为（需较新安装包；网页刷新即可用上面的 picker）
-  const saveBytes = w?.bwDesktop?.saveBytes;
-  if (typeof saveBytes === 'function') {
-    try {
-      const base64 = await blobToBase64(blob);
-      const res = await saveBytes({
-        filename: name,
-        base64,
-        mime: blob.type || 'application/octet-stream',
-      });
-      if (res?.canceled) return true;
-      if (res?.ok) return true;
-    } catch (e) {
-      console.warn('[vault] bwDesktop.saveBytes failed', e);
+      console.warn('[vault] showSaveFilePicker failed', e);
     }
   }
 

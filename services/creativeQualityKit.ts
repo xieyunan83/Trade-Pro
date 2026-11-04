@@ -76,10 +76,11 @@ export const layoutProductSwapDirectiveBlock = (productCount: number): string =>
 /**
  * 多参考图角色说明：确保每张图都进入指令，避免模型只吃前 1～2 张。
  * lastIsLayout：末张为版式/海报方案，前面全部为需出现的独立产品。
+ * distinctProducts：多 SKU 整合（每张产品都必须出现在成图中）。
  */
 export const multiImageRoleBlock = (
   count: number,
-  opts?: { lastIsLayout?: boolean }
+  opts?: { lastIsLayout?: boolean; distinctProducts?: boolean }
 ): string => {
   if (count <= 0) return '';
   const lastIsLayout = !!opts?.lastIsLayout && count >= 2;
@@ -90,14 +91,26 @@ export const multiImageRoleBlock = (
       layoutProductSwapDirectiveBlock(nProd),
       `MULTI-IMAGE ROLES: ${list} = PRODUCT ground truth (silhouette, colors, materials, logos locked).`,
       `Image ${count} = LAYOUT TEMPLATE ONLY (composition / background / type hierarchy / decor). Do NOT treat Image ${count}'s merchandise as products to keep.`,
-      `Output ONE poster that places product(s) from Images 1–${nProd} into Image ${count}'s layout scheme; fill missing decor in that scheme's style; never redesign OUR product tooling.`,
+      `Output ONE poster that places ALL products from Images 1–${nProd} into Image ${count}'s layout scheme — every SKU must appear; fill missing decor in that scheme's style; never redesign OUR product tooling.`,
     ].join(' ');
   }
   if (count === 1) {
     return 'REFERENCE: Image 1 is the product ground truth — keep identity locked.';
   }
   const list = Array.from({ length: count }, (_, i) => `Image ${i + 1}`).join(', ');
-  return `MULTI-IMAGE ROLES (ALL must contribute): ${list} are attached references. Use every image — do not ignore later ones. Prefer product identity consistency across all product photos; if angles differ, fuse complementary views of the SAME SKU without inventing a new design.`;
+  if (opts?.distinctProducts) {
+    return [
+      `MULTI-PRODUCT INTEGRATION (MANDATORY): ${list} are DISTINCT product SKUs (not alternate angles of one item).`,
+      `EVERY product in Images 1–${count} MUST appear as a clear, recognizable hero in the final single promotional poster.`,
+      `FORBIDDEN: using only Image 1; dropping/hiding Images 2–${count}; merging SKUs into a chimera; outputting a single-product catalog shot.`,
+      `REQUIRED: one cohesive multi-SKU commercial cover featuring all ${count} products with identity locked to each reference.`,
+    ].join(' ');
+  }
+  return [
+    `MULTI-IMAGE ROLES (ALL must contribute): ${list} are attached references.`,
+    `Use EVERY image — do not ignore later ones.`,
+    `If they show different SKUs, feature each SKU clearly in the output; if they show angles of one SKU, fuse complementary views without inventing a new design.`,
+  ].join(' ');
 };
 
 /** 版式换品场景的额外负向 */
@@ -148,6 +161,8 @@ export const composeImageGenerationPrompt = (opts: {
   referenceCount?: number;
   /** 末张为版式/海报方案参考 */
   lastRefIsLayout?: boolean;
+  /** 多 SKU 整合：每张产品图都必须入画 */
+  distinctProducts?: boolean;
   skillNegative?: string;
   series?: boolean;
   /** 已由 Brief 拼好的主提示；传入则不再重复 Skill 底稿 */
@@ -156,9 +171,12 @@ export const composeImageGenerationPrompt = (opts: {
   negativeAsFieldOnly?: boolean;
 }): CreativePromptParts => {
   const hasRefs = !!opts.hasReferenceImages;
-  const refCount = Math.max(0, opts.referenceCount || (hasRefs ? 1 : 0));
+  const refCount = Math.max(0, opts.referenceCount ?? (hasRefs ? 1 : 0));
   const identity = identityLockBlock(hasRefs, 'image');
-  const roles = multiImageRoleBlock(refCount, { lastIsLayout: opts.lastRefIsLayout });
+  const roles = multiImageRoleBlock(refCount, {
+    lastIsLayout: opts.lastRefIsLayout,
+    distinctProducts: opts.distinctProducts,
+  });
   const skuLine =
     opts.skuName || opts.skuCode
       ? `Product identity: ${[opts.skuName, opts.skuCode].filter(Boolean).join(' / ')}. Keep SKU appearance consistent.`

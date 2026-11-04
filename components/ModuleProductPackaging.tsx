@@ -186,6 +186,7 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
       channel: skill.channel,
       palette: skill.palette,
       hasReferenceImages: hasRefs,
+      referenceCount: hasRefs ? Math.max(1, refUploads.length + pickedRefs.length) : 0,
       skillNegative: negativePrompt.trim() || skill.negativePrompt,
     }).prompt;
   };
@@ -241,7 +242,7 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
     try {
       const next = [...refUploads];
       for (const file of Array.from(files)) {
-        if (next.length >= 2) break;
+        if (next.length >= 6) break;
         if (!file.type.startsWith('image/')) continue;
         const raw = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader();
@@ -253,7 +254,7 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
         const compressed = await compressImageDataUrl(raw, 1024, 0.72);
         next.push(compressed);
       }
-      setRefUploads(next.slice(0, 2));
+      setRefUploads(next.slice(0, 6));
     } catch (e: any) {
       setError(e?.message || '参考图处理失败');
     } finally {
@@ -268,11 +269,11 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
       skus.find((s) => s.skuCode === proj.skuCode);
     const fromSku = (boundSku?.images || []).filter(Boolean);
     const merged: string[] = [];
-    // 最多 2 张，避免多参考图 dataURL 触发云函数 413
+    // 最多 6 张；过大时由 prepareReferenceImages 压缩，避免只吃第 1 张
     for (const u of [...refUploads, ...pickedRefs, ...fromSku]) {
       if (!u || merged.includes(u)) continue;
       merged.push(u);
-      if (merged.length >= 2) break;
+      if (merged.length >= 6) break;
     }
     return merged;
   };
@@ -281,7 +282,24 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
     setConfirmOpen(false);
     const proj = ensureProject();
     const refImages = collectRefImages(proj);
-    let finalPrompt = buildFinalPrompt(refImages.length > 0);
+    let finalPrompt = composeImageGenerationPrompt({
+      skillDefaultPrompt:
+        skill.defaultPrompt ||
+        'Create a polished commercial toy packaging design visual',
+      craftNotes: skill.craftNotes,
+      userBrief: prompt.trim(),
+      skuName:
+        active?.skuName ||
+        (skuPick ? skus.find((x) => x.id === skuPick)?.name : undefined),
+      skuCode:
+        active?.skuCode ||
+        (skuPick ? skus.find((x) => x.id === skuPick)?.skuCode : undefined),
+      channel: skill.channel,
+      palette: skill.palette,
+      hasReferenceImages: refImages.length > 0,
+      referenceCount: refImages.length,
+      skillNegative: negativePrompt.trim() || skill.negativePrompt,
+    }).prompt;
     try {
       const skuRow = skus.find((s) => s.id === skuPick || s.skuCode === skuPick);
       const profiles = await loadProductCatalog();
@@ -647,9 +665,9 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
             value={pickedRefs}
             onChange={setPickedRefs}
             multiple
-            max={2}
+            max={6}
             accent="violet"
-            title="选用平面主图 / 产品库图（最多 2 张，过大易失败）"
+            title="选用平面主图 / 产品库图（最多 6 张，每张都会参与生成）"
             onSkuMeta={(meta) => {
               if (!meta?.skuCode) return;
               const hit = skus.find((s) => s.skuCode === meta.skuCode);
@@ -685,7 +703,7 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
                   </button>
                 </div>
               ))}
-              {refUploads.length < 2 && (
+              {refUploads.length < 6 && (
                 <button
                   type="button"
                   disabled={refBusy || loading}

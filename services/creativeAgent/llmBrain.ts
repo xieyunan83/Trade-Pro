@@ -56,6 +56,9 @@ export const llmCreativeBrain: CreativeBrainPort = {
       const hardened = composeImageGenerationPrompt({
         baseToolPrompt: llmCore || fallback.toolPrompt,
         hasReferenceImages: input.hasReferenceImages,
+        referenceCount: input.referenceCount,
+        lastRefIsLayout: input.lastRefIsLayout,
+        distinctProducts: input.distinctProducts,
         skillNegative: input.skillNegativePrompt,
         series: input.skillId === 'listing_set' || input.skillId === 'multi_angle',
       });

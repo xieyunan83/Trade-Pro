@@ -166,20 +166,20 @@ export const DESIGN_SKILLS: DesignSkillDef[] = [
     id: 'multi_product_poster',
     label: '多品海报拼版',
     category: '营销',
-    hint: '多张产品图 + 末张版式参考 → 一张海报（每张产品都要出现）',
+    hint: '多张独立产品图 → 一张整合宣传海报（每张产品都必须出现）；有版式模板再勾选末张或套用企业模板',
     defaultPrompt:
-      'Commercial multi-SKU promotional poster for toy/gift export: arrange EVERY provided product into one cohesive poster layout, matching the style/composition of the layout reference image, fill missing decorative or supporting elements in the same visual system, catalog-sharp product fidelity, bilingual title-safe margins, no watermark',
+      'Commercial multi-SKU promotional poster for toy/gift export: arrange EVERY provided product SKU into one cohesive poster — each reference product must appear as a clear hero, catalog-sharp product fidelity, bilingual title-safe margins, no watermark. If a layout template image is attached as the last reference, match its composition only and replace its merchandise with OUR products.',
     negativePrompt:
-      'dropping any product SKU, hybrid chimera products, redesigning tooling, ignoring layout reference, watermark, garbled micro-text wall, fake awards',
+      'dropping any product SKU, single-product-only when multiple product refs given, hybrid chimera products, redesigning tooling, watermark, garbled micro-text wall, fake awards',
     craftNotes:
-      '上传顺序：前 N 张为独立产品图（全部必须出现在成图中），最后 1 张为海报/宣传版式参考。按末张的构图、层级、背景与装饰方案排布全部产品；缺失元素按该方案风格补齐，禁止改产品外形。',
+      '默认：全部上传图均为独立产品（每张都必须出现在成图）。若勾选「末张为版式」或套用企业模板，则末张只借构图/色块/字体层级，前面产品全部换入。禁止只画其中一张产品。',
     qaChecklist: [
       '每一张产品参考图对应的产品都出现在成图中',
       '产品外形/配色与各自参考一致',
-      '整体版式贴近末张版式参考',
+      '若有版式模板则整体贴近模板排版，且未复刻模板原商品',
       '无水印乱码、无假认证',
     ],
-    aspectHint: '按版式参考 / 1:1·竖版',
+    aspectHint: '1:1·竖版 / 按版式参考',
   },
   {
     id: 'multi_angle',

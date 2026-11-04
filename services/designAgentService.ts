@@ -33,6 +33,8 @@ export type DesignGenerateOpts = {
   series?: boolean;
   /** 末张参考图为版式/海报方案（前面为产品） */
   lastRefIsLayout?: boolean;
+  /** 多 SKU 整合：每张产品图都必须入画 */
+  distinctProducts?: boolean;
   /** 用户二次创作说明：改颜色/部位/包装/功能等（有参考图时强制执行） */
   userEditBrief?: string;
 };
@@ -178,9 +180,15 @@ const hardenDesignPrompt = (
     series?: boolean;
     referenceCount?: number;
     lastRefIsLayout?: boolean;
+    distinctProducts?: boolean;
     userEditBrief?: string;
   }
 ): string => {
+  const refCount = Math.max(0, opts.referenceCount || 0);
+  const roleOpts = {
+    lastIsLayout: !!opts.lastRefIsLayout && refCount >= 2,
+    distinctProducts: !!opts.distinctProducts && !opts.lastRefIsLayout,
+  };
   const alreadyHardened =
     /NEGATIVE CONSTRAINTS/i.test(prompt) && /IDENTITY LOCK/i.test(prompt);
   if (alreadyHardened) {
@@ -201,23 +209,21 @@ const hardenDesignPrompt = (
         withNeg = `${editBlock}\n${withNeg}`;
       }
     }
-    // 版式换品：始终钉在最前，防止 Brief/模板风格把样本商品复刻出来
-    if (opts.lastRefIsLayout && (opts.referenceCount || 0) >= 2) {
-      const swap = layoutProductSwapDirectiveBlock((opts.referenceCount || 2) - 1);
-      if (!/CRITICAL TASK — LAYOUT SWAP/i.test(withNeg)) {
-        withNeg = `${swap}\n${withNeg}`;
+    // 多图：始终按真实张数重钉角色（纠正 Brief 默认「只认 Image 1」）
+    if (refCount >= 2) {
+      withNeg = withNeg
+        .replace(/\n?REFERENCE: Image 1[^\n]*/gi, '')
+        .replace(/\n?MULTI-IMAGE ROLES[^\n]*/gi, '')
+        .replace(/\n?MULTI-PRODUCT INTEGRATION[^\n]*/gi, '');
+      if (opts.lastRefIsLayout) {
+        const swap = layoutProductSwapDirectiveBlock(refCount - 1);
+        if (!/CRITICAL TASK — LAYOUT SWAP/i.test(withNeg)) {
+          withNeg = `${swap}\n${withNeg}`;
+        }
       }
-      const roles = multiImageRoleBlock(opts.referenceCount || 0, { lastIsLayout: true });
-      if (!/LAYOUT TEMPLATE ONLY/i.test(withNeg)) {
-        withNeg = `${withNeg}\n${roles}`;
-      }
-    } else if (
-      (opts.referenceCount || 0) > 0 &&
-      !/MULTI-IMAGE ROLES|REFERENCE: Image 1/i.test(withNeg)
-    ) {
-      withNeg = `${withNeg}\n${multiImageRoleBlock(opts.referenceCount || 0, {
-        lastIsLayout: opts.lastRefIsLayout,
-      })}`;
+      withNeg = `${multiImageRoleBlock(refCount, roleOpts)}\n${withNeg}`;
+    } else if (refCount === 1 && !/REFERENCE: Image 1|MULTI-IMAGE ROLES/i.test(withNeg)) {
+      withNeg = `${withNeg}\n${multiImageRoleBlock(1, roleOpts)}`;
     }
     if (hasRefs && !/IDENTITY LOCK/i.test(withNeg)) {
       withNeg = `${withNeg}\n${identityLockBlock(true, 'image')}`;
@@ -230,6 +236,7 @@ const hardenDesignPrompt = (
     hasReferenceImages: hasRefs,
     referenceCount: opts.referenceCount,
     lastRefIsLayout: opts.lastRefIsLayout,
+    distinctProducts: opts.distinctProducts,
     skillNegative: opts.negativePrompt,
     series: !!opts.series,
   }).prompt;
@@ -252,6 +259,7 @@ export const generateDesignImages = async (
       series: opts.series || n > 1,
       referenceCount: refs?.length || 0,
       lastRefIsLayout: !!opts.lastRefIsLayout && (refs?.length || 0) >= 2,
+      distinctProducts: !!opts.distinctProducts,
       userEditBrief: opts.userEditBrief,
     });
     const result = await generateWanImage(

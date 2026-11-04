@@ -106,7 +106,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
   const [skuPick, setSkuPick] = useState('');
   /** 用户上传的参考图（data URL），可与文字描述组合图生图；最多 9 张 */
   const [refUploads, setRefUploads] = useState<string[]>([]);
-  /** 末张为版式/海报方案参考（多品海报默认开启） */
+  /** 末张为版式/海报方案参考（仅用户勾选或企业模板时生效；多品技能不再默认把末张当版式） */
   const [lastRefIsLayout, setLastRefIsLayout] = useState(false);
   const [refBusy, setRefBusy] = useState(false);
   /** 画布多选：用于删除 / 推送到下游模块 */
@@ -136,12 +136,13 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
 
   /** 二次创作最终用户改动清单（结构化优先，否则用自由提示词） */
   const resolveEditBrief = (): string => {
-    const layoutMode =
-      lastRefIsLayout ||
-      skillId === 'multi_product_poster' ||
-      packImpliesLayoutLastRef(activePack);
+    const layoutMode = lastRefIsLayout || packImpliesLayoutLastRef(activePack);
     const layoutSwapZh =
       '【版式换品】末张是版式/海报模板：只借构图、色块、字体层级与装饰；必须把前面产品参考图换入成图；禁止复刻模板里的原商品（毛绒/字母罐等样本货）。';
+    const multiProductZh =
+      skillId === 'multi_product_poster' && !layoutMode
+        ? '【多产品整合】上传的每张产品图都是独立 SKU，成图必须全部出现，禁止只画其中一张。'
+        : '';
     if (agentMode === 'secondary' && secondaryFieldsHaveEdits(secondaryFields)) {
       const meta = resolveSkuForSecondary();
       return [
@@ -151,6 +152,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
         }),
         buildSecondaryCreationEditEnglish(secondaryFields),
         layoutMode ? layoutSwapZh : '',
+        multiProductZh,
         prompt.trim() && !prompt.includes('【产品二次创作')
           ? `补充：${prompt.trim()}`
           : '',
@@ -159,10 +161,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
         .join('\n\n');
     }
     const base = prompt.trim();
-    if (layoutMode) {
-      return [layoutSwapZh, base].filter(Boolean).join('\n');
-    }
-    return base;
+    return [layoutMode ? layoutSwapZh : '', multiProductZh, base].filter(Boolean).join('\n');
   };
 
   const active = projects.find((p) => p.id === activeId) || null;
@@ -256,7 +255,10 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     setLeftTab('projects');
     if (sk.defaultPrompt) setPrompt(sk.defaultPrompt);
     setNegativePrompt(sk.negativePrompt || '');
-    if (sid === 'multi_product_poster') setLastRefIsLayout(true);
+    // 多品技能：默认全部上传图都是产品；仅套用企业模板或用户勾选时末张才当版式
+    if (sid === 'multi_product_poster' && !packImpliesLayoutLastRef(activePack)) {
+      setLastRefIsLayout(false);
+    }
   };
 
   const resolveSkuMeta = () => {
@@ -268,7 +270,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     return s ? { code: s.skuCode, name: s.name } : { code: undefined, name: undefined };
   };
 
-  const buildFinalPrompt = () => {
+  const buildFinalPrompt = (refCountOverride?: number, layoutOverride?: boolean) => {
     if (pendingBrief?.toolPrompt) return pendingBrief.toolPrompt;
     const skuMeta = resolveSkuMeta();
     const skuRow = skus.find((s) => s.id === skuPick || s.skuCode === skuPick);
@@ -277,12 +279,15 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
       canvasProductRefUrls.length > 0 ||
       !!(skuRow?.images?.length) ||
       !!(activePack?.layoutRefs?.length);
-    const refCountHint = Math.max(
-      refUploads.length +
-        canvasProductRefUrls.length +
-        (activePack?.layoutRefs?.length || 0),
-      hasRefs ? Math.min(skuRow?.images?.length || 0, MAX_DESIGN_REF_IMAGES) : 0
-    );
+    const refCountHint =
+      refCountOverride ??
+      Math.max(
+        refUploads.length +
+          canvasProductRefUrls.length +
+          (activePack?.layoutRefs?.length || 0),
+        hasRefs ? Math.min(skuRow?.images?.length || 0, MAX_DESIGN_REF_IMAGES) : 0
+      );
+    const layoutLast = layoutOverride ?? (effectiveLastIsLayout && refCountHint >= 2);
     const composed = composeImageGenerationPrompt({
       skillDefaultPrompt:
         skill.defaultPrompt || 'Create a polished commercial product design visual',
@@ -292,7 +297,8 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
       skuCode: skuMeta.code,
       hasReferenceImages: hasRefs,
       referenceCount: refCountHint || (hasRefs ? 1 : 0),
-      lastRefIsLayout: effectiveLastIsLayout && refCountHint >= 2,
+      lastRefIsLayout: layoutLast,
+      distinctProducts: skillId === 'multi_product_poster' && !layoutLast,
       skillNegative: applyPackNegative(
         negativePrompt.trim() || skill.negativePrompt,
         activePack
@@ -369,6 +375,11 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
       } catch {
         /* 约束卡失败不阻断设计 */
       }
+      const previewProj = ensureProject();
+      const previewRefs = collectRefImagesDetailed(previewProj);
+      const layoutLast =
+        previewRefs.lastRefIsLayout ||
+        (lastRefIsLayout && previewRefs.refs.length >= 2);
       const brief = await planCreativeBrief({
         domain: 'design_2d',
         skillId,
@@ -390,6 +401,9 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
           hasRefs
             ? '二次创作：以参考图为唯一外形真相；用户提示词仅为改动清单（颜色/部位/包装/功能等）；未提及处保持一致。禁止整体换模。'
             : '',
+          skillId === 'multi_product_poster' && !layoutLast
+            ? '多产品整合：每张产品参考图对应独立 SKU，成图必须全部出现，禁止只保留一张。'
+            : '',
           agentMode === 'secondary'
             ? buildSecondaryCreationEditEnglish(secondaryFields)
             : '',
@@ -410,7 +424,10 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
           .join('\n'),
         skuCode: skuMeta.code,
         skuName: skuMeta.name,
-        hasReferenceImages: hasRefs,
+        hasReferenceImages: hasRefs || previewRefs.refs.length > 0,
+        referenceCount: previewRefs.refs.length || (hasRefs ? 1 : 0),
+        lastRefIsLayout: layoutLast,
+        distinctProducts: skillId === 'multi_product_poster' && !layoutLast,
       });
       setPendingBrief(brief);
       setConfirmOpen(true);
@@ -486,7 +503,9 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     }
   };
 
-  const collectRefImages = (proj: DesignProject): string[] => {
+  const collectRefImagesDetailed = (
+    proj: DesignProject
+  ): { refs: string[]; lastRefIsLayout: boolean } => {
     const boundSku =
       skus.find((s) => s.id === skuPick || s.skuCode === skuPick) ||
       skus.find((s) => s.skuCode === proj.skuCode);
@@ -506,8 +525,15 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
       activePack,
       MAX_DESIGN_REF_IMAGES
     );
-    return merged.refs;
+    // 仅：企业模板末张 / 用户勾选末张为版式。多品技能本身不再自动把末张当版式。
+    const layoutLast =
+      merged.lastRefIsLayout ||
+      (lastRefIsLayout && merged.refs.length >= 2);
+    return { refs: merged.refs, lastRefIsLayout: layoutLast };
   };
+
+  const collectRefImages = (proj: DesignProject): string[] =>
+    collectRefImagesDetailed(proj).refs;
 
   /** 把画布选中图写入右侧参考槽（可见、可删） */
   const useSelectedAsRefs = () => {
@@ -529,18 +555,19 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
   };
 
   const effectiveLastIsLayout =
-    lastRefIsLayout ||
-    skillId === 'multi_product_poster' ||
-    packImpliesLayoutLastRef(activePack);
+    lastRefIsLayout || packImpliesLayoutLastRef(activePack);
 
   const runGenerate = async () => {
     setConfirmOpen(false);
     const proj = ensureProject();
-    const finalPrompt = pendingBrief?.toolPrompt || buildFinalPrompt();
+    const collected = collectRefImagesDetailed(proj);
+    const refImages = collected.refs;
+    const layoutLast = collected.lastRefIsLayout;
+    const finalPrompt =
+      pendingBrief?.toolPrompt || buildFinalPrompt(refImages.length, layoutLast);
     const qaLine = pendingBrief?.qaChecklist?.length
       ? `\n质检关注：${pendingBrief.qaChecklist.slice(0, 3).join('；')}`
       : '';
-    const refImages = collectRefImages(proj);
     const packHint = activePack ? ` · 模板「${activePack.name}」` : '';
     const modeHint = refImages.length
       ? `参考图 ${refImages.length} 张 + 文字${packHint}`
@@ -556,6 +583,9 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
       [
         negativePrompt.trim() || skill.negativePrompt,
         agentMode === 'secondary' ? SECONDARY_CREATION_NEGATIVE : '',
+        skillId === 'multi_product_poster'
+          ? 'dropping any product SKU, single-product-only poster when multiple product refs provided'
+          : '',
       ]
         .filter(Boolean)
         .join(', '),
@@ -590,7 +620,8 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             referenceImages: refImages.length ? refImages : undefined,
             negativePrompt: mergedNeg,
             series: skillId === 'listing_set' || count > 1,
-            lastRefIsLayout: effectiveLastIsLayout && refImages.length >= 2,
+            lastRefIsLayout: layoutLast,
+            distinctProducts: skillId === 'multi_product_poster' && !layoutLast,
             userEditBrief: editBrief,
           });
       const now = Date.now();
@@ -866,7 +897,12 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                       setSkillId(s.id);
                       if (s.defaultPrompt) setPrompt(s.defaultPrompt);
                       setNegativePrompt(s.negativePrompt || '');
-                      if (s.id === 'multi_product_poster') setLastRefIsLayout(true);
+                      if (
+                        s.id === 'multi_product_poster' &&
+                        !packImpliesLayoutLastRef(activePack)
+                      ) {
+                        setLastRefIsLayout(false);
+                      }
                     }}
                     onDoubleClick={() => createProject(s.id)}
                     className={`w-full text-left rounded-xl px-3 py-2.5 border ${
@@ -1315,7 +1351,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                 type="checkbox"
                 className="mt-0.5 rounded border-slate-300"
                 checked={effectiveLastIsLayout}
-                disabled={skillId === 'multi_product_poster' || packImpliesLayoutLastRef(activePack)}
+                disabled={packImpliesLayoutLastRef(activePack)}
                 onChange={(e) => setLastRefIsLayout(e.target.checked)}
               />
               <span>
@@ -1325,7 +1361,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
               </span>
             </label>
             <p className="text-[9px] text-slate-400 font-medium mt-1 leading-relaxed">
-              产品图优先；末张可勾选为版式参考。系统强制身份锁。
+              多品整合：默认每张上传图都是产品且必须入画；仅有独立版式图时再勾选末张为模板。
             </p>
           </div>
 

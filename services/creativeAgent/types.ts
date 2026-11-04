@@ -25,6 +25,12 @@ export type CreativePlanInput = {
   skuName?: string;
   productNotes?: string;
   hasReferenceImages?: boolean;
+  /** 参考图张数（用于强制每张入画；缺省有参考时按 1 处理） */
+  referenceCount?: number;
+  /** 末张为版式/海报模板 */
+  lastRefIsLayout?: boolean;
+  /** 多 SKU 整合：每张产品都必须出现 */
+  distinctProducts?: boolean;
   /** 渠道 / 卖场等扩展字段（包装等） */
   channel?: string;
   palette?: string;
