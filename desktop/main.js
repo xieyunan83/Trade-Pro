@@ -264,6 +264,9 @@ function createWindow() {
     // 与登录页 .tp-login 底色一致；避免网页未绘制时出现「假死深蓝空窗」
     backgroundColor: '#070b14',
     show: false,
+    // Mac / Windows 客户端默认占满屏幕（最大化 + 全屏）
+    fullscreen: true,
+    fullscreenable: true,
     autoHideMenuBar: process.platform !== 'darwin',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -283,6 +286,12 @@ function createWindow() {
   // 最多 2.5s 必须露脸，避免一直卡在「未 show」
   const showSoon = () => {
     if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isVisible()) return;
+    try {
+      if (!mainWindow.isMaximized()) mainWindow.maximize();
+      if (!mainWindow.isFullScreen()) mainWindow.setFullScreen(true);
+    } catch (e) {
+      console.warn('[window] maximize/fullscreen failed', e);
+    }
     mainWindow.show();
     mainWindow.focus();
   };
