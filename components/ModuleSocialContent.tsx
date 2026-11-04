@@ -232,9 +232,19 @@ export const ModuleSocialContent: React.FC<Props> = ({ currentUser }) => {
 
   const remove = (id: string) => {
     if (!confirm('删除该素材？')) return;
+    const doomed = pieces.find((p) => p.id === id);
     const next = pieces.filter((p) => p.id !== id);
     persist(next);
     if (activeId === id) setActiveId(next[0]?.id || null);
+    if (doomed) {
+      void import('../services/creativeAssetPersist').then(({ purgeDeletedCreativeMedia }) =>
+        purgeDeletedCreativeMedia([
+          doomed.referenceImageDataUrl,
+          doomed.productImageDataUrl,
+          doomed.coverImageDataUrl,
+        ])
+      );
+    }
   };
 
   const saveConnection = () => {

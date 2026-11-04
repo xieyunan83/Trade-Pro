@@ -36,7 +36,7 @@ import {
 } from '../services/model3dService';
 import { loadDataProviderLocal, saveDataProvider } from '../services/dataProviders';
 import { consumeCreativeHandoff } from '../services/creativeAssetBridge';
-import { persistModel3dJob } from '../services/creativeAssetPersist';
+import { persistModel3dJob, purgeDeletedCreativeMedia } from '../services/creativeAssetPersist';
 import { isVaultRef, putBlobInVault, tryPersistMediaUrl } from '../services/creativeAssetVault';
 import { CreativePipelineBar, CreativeRefPicker } from './CreativeRefPicker';
 import { MODEL3D_SKILLS, type Model3dSkillId } from '../services/creativeSkills/model3dSkills';
@@ -511,9 +511,21 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
 
   const removeJob = (id: string) => {
     if (!confirm('删除该 3D 任务？')) return;
+    const doomed = jobs.find((j) => j.id === id);
     const next = jobs.filter((j) => j.id !== id);
     persist(next);
     if (activeId === id) setActiveId(next[0]?.id || null);
+    if (doomed) {
+      void purgeDeletedCreativeMedia([
+        doomed.sourceImage,
+        ...(doomed.sourceImages || []),
+        doomed.modelUrl,
+        doomed.pbrModelUrl,
+        doomed.baseModelUrl,
+        doomed.previewImageUrl,
+        ...(doomed.convertedUrls ? Object.values(doomed.convertedUrls) : []),
+      ]);
+    }
   };
 
   /** Tripo 后处理：贴图 / 减面 / 格式转换 */

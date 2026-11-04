@@ -588,6 +588,89 @@ export const downloadMediaFile = async (
   triggerAnchorDownload(blob, name);
 };
 
+/** 通知角标等 UI 刷新本机素材用量 */
+export const notifyVaultChanged = (): void => {
+  try {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('trade-pro-vault-changed'));
+    }
+  } catch {
+    /* ignore */
+  }
+};
+
+/** 按 vault:id / vault 引用删除一条，并释放 blob: 缓存 */
+export const deleteVaultRef = async (urlOrId: string | undefined | null): Promise<boolean> => {
+  const raw = (urlOrId || '').trim();
+  if (!raw) return false;
+  const id = isVaultRef(raw) ? vaultIdFromRef(raw) : raw.startsWith('va_') ? raw : '';
+  if (!id) {
+    if (raw.startsWith('blob:')) {
+      try {
+        URL.revokeObjectURL(raw);
+      } catch {
+        /* ignore */
+      }
+      return true;
+    }
+    return false;
+  }
+  try {
+    await deleteRow(id);
+    return true;
+  } catch (e) {
+    console.warn('[vault] delete failed', id, e);
+    return false;
+  }
+};
+
+/**
+ * 删除一批媒体 URL 对应的本机缓存（IndexedDB + blob 内存）。
+ * keepUrls：其它地方仍在引用的 URL，不会删（避免裂图）。
+ * 同时尽量清理 Cache Storage 里同 URL 的条目。
+ */
+export const purgeMediaUrls = async (
+  candidateUrls: Array<string | undefined | null>,
+  keepUrls?: Iterable<string>
+): Promise<number> => {
+  const keep = new Set<string>();
+  if (keepUrls) {
+    for (const u of keepUrls) {
+      if (u?.trim()) keep.add(u.trim());
+    }
+  }
+  const seen = new Set<string>();
+  let removed = 0;
+  for (const raw of candidateUrls) {
+    const u = (raw || '').trim();
+    if (!u || keep.has(u) || seen.has(u)) continue;
+    seen.add(u);
+    if (await deleteVaultRef(u)) removed += 1;
+  }
+  // 浏览器 / 桌面 Chromium：清 Cache Storage 中同 URL（不整站 clearCache，避免逼着重下整站）
+  if (typeof caches !== 'undefined' && seen.size) {
+    try {
+      const keys = await caches.keys();
+      for (const name of keys) {
+        const cache = await caches.open(name);
+        for (const u of seen) {
+          if (keep.has(u)) continue;
+          if (!/^https?:\/\//i.test(u)) continue;
+          try {
+            await cache.delete(u);
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[vault] cache storage purge skipped', e);
+    }
+  }
+  if (removed > 0) notifyVaultChanged();
+  return removed;
+};
+
 /** 清空全部本地素材（管理员紧急清理） */
 export const clearVault = async (): Promise<void> => {
   for (const [, obj] of objectUrlCache) {
@@ -606,6 +689,7 @@ export const clearVault = async (): Promise<void> => {
   } finally {
     db.close();
   }
+  notifyVaultChanged();
 };
 
 export const formatBytes = (n: number): string => {

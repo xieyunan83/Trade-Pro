@@ -278,8 +278,14 @@ export const EnterpriseDesignPackPanel: React.FC<Props> = ({
                 type="button"
                 onClick={() => {
                   if (!confirm(`删除模板包「${active.name}」？`)) return;
+                  const doomedRefs = [...(active.layoutRefs || [])];
                   setPacks(deleteEnterprisePack(active.id));
                   refresh();
+                  if (doomedRefs.length) {
+                    void import('../services/creativeAssetPersist').then(
+                      ({ purgeDeletedCreativeMedia }) => purgeDeletedCreativeMedia(doomedRefs)
+                    );
+                  }
                 }}
                 className="inline-flex items-center gap-1 rounded-lg text-rose-600 text-[10px] font-bold px-2 py-1.5"
               >

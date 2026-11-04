@@ -25,7 +25,7 @@ import {
   saveVideoJobs,
   newCreativeId,
 } from '../services/creativeStudioStore';
-import { persistVideoJob } from '../services/creativeAssetPersist';
+import { persistVideoJob, purgeDeletedCreativeMedia } from '../services/creativeAssetPersist';
 import { tryPersistMediaUrl } from '../services/creativeAssetVault';
 import { CreativeStorageBadge } from './CreativeStorageBadge';
 import { VaultImg, useVaultUrl } from './VaultMedia';
@@ -428,9 +428,18 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
 
   const removeJob = (id: string) => {
     if (!confirm('删除该视频任务？')) return;
+    const doomed = jobs.find((j) => j.id === id);
     const next = jobs.filter((j) => j.id !== id);
     persist(next);
     if (activeId === id) setActiveId(next[0]?.id || null);
+    if (doomed) {
+      void purgeDeletedCreativeMedia([
+        ...(doomed.sourceImages || []),
+        doomed.lastFrameImage,
+        doomed.draftVideoUrl,
+        doomed.videoUrl,
+      ]);
+    }
   };
 
   const draftUrl = useVaultUrl(active?.draftVideoUrl);

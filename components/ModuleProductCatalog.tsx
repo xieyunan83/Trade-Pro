@@ -123,7 +123,13 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
 
   const removeSku = (id: string) => {
     if (!confirm('从产品库删除该 SKU？不会删除 CRM 或背调记录。')) return;
+    const doomed = rows.find((r) => r.id === id);
     persist(rows.filter((r) => r.id !== id));
+    if (doomed?.images?.length) {
+      void import('../services/creativeAssetPersist').then(({ purgeDeletedCreativeMedia }) =>
+        purgeDeletedCreativeMedia(doomed.images)
+      );
+    }
   };
 
   const onManualImage = async (file: File | null) => {

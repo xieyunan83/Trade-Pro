@@ -2,10 +2,16 @@
  * 创作模块统一落库：生成结果 / 参考图 → IndexedDB，元数据仍在 localStorage。
  */
 import type { DesignAsset } from './designAgentStore';
-import type { Model3dJob, VideoJob } from './creativeStudioStore';
+import { loadDesignAssets } from './designAgentStore';
+import type { Model3dJob, VideoJob, SocialPiece } from './creativeStudioStore';
+import { loadModel3dJobs, loadVideoJobs, loadSocialPieces } from './creativeStudioStore';
 import type { PackagingAsset } from './packagingAgentStore';
+import { loadPackagingAssets } from './packagingAgentStore';
+import { loadCatalogSkus } from './productCatalogTypes';
+import { loadEnterprisePacks } from './enterpriseDesignPacks';
 import {
   isVaultRef,
+  purgeMediaUrls,
   resolveMediaUrl,
   tryPersistMediaUrl,
   type VaultKind,
@@ -115,4 +121,66 @@ export const hydrateUrls = async (urls: string[]): Promise<Map<string, string>> 
     map.set(u, await resolveMediaUrl(u));
   }
   return map;
+};
+
+const pushUrl = (set: Set<string>, u?: string | null) => {
+  const t = (u || '').trim();
+  if (t) set.add(t);
+};
+
+const collectModel3dUrls = (job: Model3dJob, set: Set<string>) => {
+  pushUrl(set, job.sourceImage);
+  job.sourceImages?.forEach((u) => pushUrl(set, u));
+  pushUrl(set, job.modelUrl);
+  pushUrl(set, job.pbrModelUrl);
+  pushUrl(set, job.baseModelUrl);
+  pushUrl(set, job.previewImageUrl);
+  if (job.convertedUrls) {
+    Object.values(job.convertedUrls).forEach((u) => pushUrl(set, u));
+  }
+};
+
+const collectVideoUrls = (job: VideoJob, set: Set<string>) => {
+  job.sourceImages?.forEach((u) => pushUrl(set, u));
+  pushUrl(set, job.lastFrameImage);
+  pushUrl(set, job.draftVideoUrl);
+  pushUrl(set, job.videoUrl);
+};
+
+const collectSocialUrls = (p: SocialPiece, set: Set<string>) => {
+  pushUrl(set, p.referenceImageDataUrl);
+  pushUrl(set, p.productImageDataUrl);
+  pushUrl(set, p.coverImageDataUrl);
+};
+
+/** 扫本机仍被引用的创作媒体 URL（删库前保活） */
+export const collectReferencedCreativeMediaUrls = (): Set<string> => {
+  const set = new Set<string>();
+  try {
+    for (const a of loadDesignAssets()) pushUrl(set, a.url);
+    for (const a of loadPackagingAssets()) pushUrl(set, a.url);
+    for (const j of loadModel3dJobs()) collectModel3dUrls(j, set);
+    for (const j of loadVideoJobs()) collectVideoUrls(j, set);
+    for (const p of loadSocialPieces()) collectSocialUrls(p, set);
+    for (const sku of loadCatalogSkus()) sku.images?.forEach((u) => pushUrl(set, u));
+    for (const pack of loadEnterprisePacks()) {
+      pack.layoutRefs?.forEach((u) => pushUrl(set, u));
+    }
+  } catch (e) {
+    console.warn('[persist] collectReferencedCreativeMediaUrls failed', e);
+  }
+  return set;
+};
+
+/**
+ * 界面删除素材后调用：从 IndexedDB / blob / Cache Storage 清掉已无引用的文件，释放磁盘。
+ * 须在 persist/localStorage 更新完成后再调用。
+ */
+export const purgeDeletedCreativeMedia = async (
+  removedUrls: Array<string | undefined | null>
+): Promise<number> => {
+  const candidates = removedUrls.map((u) => (u || '').trim()).filter(Boolean);
+  if (!candidates.length) return 0;
+  const keep = collectReferencedCreativeMediaUrls();
+  return purgeMediaUrls(candidates, keep);
 };

@@ -41,7 +41,7 @@ import { composeImageGenerationPrompt } from '../services/creativeQualityKit';
 import { loadCatalogSkus } from '../services/productCatalogTypes';
 import { compressImageDataUrl } from '../services/catalogExcelService';
 import { setCreativeHandoff } from '../services/creativeAssetBridge';
-import { persistDesignAssets } from '../services/creativeAssetPersist';
+import { persistDesignAssets, purgeDeletedCreativeMedia } from '../services/creativeAssetPersist';
 import {
   applyPackNegative,
   applyPackStyleToPrompt,
@@ -693,6 +693,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     if (!ids.length) return;
     if (!window.confirm(`确定删除 ${ids.length} 张图片？删除后不可恢复。`)) return;
     const ban = new Set(ids);
+    const removedUrls = assets.filter((a) => ban.has(a.id)).map((a) => a.url);
     persistAssets(assets.filter((a) => !ban.has(a.id)));
     persistProjects(
       projects.map((p) => ({
@@ -703,6 +704,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     );
     setSelectedIds((prev) => prev.filter((id) => !ban.has(id)));
     setError(null);
+    void purgeDeletedCreativeMedia(removedUrls);
   };
 
   const sendAssetsTo = (
@@ -1326,7 +1328,11 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                     <button
                       type="button"
                       aria-label="移除参考图"
-                      onClick={() => setRefUploads((prev) => prev.filter((_, j) => j !== i))}
+                      onClick={() => {
+                        const removed = refUploads[i];
+                        setRefUploads((prev) => prev.filter((_, j) => j !== i));
+                        if (removed) void purgeDeletedCreativeMedia([removed]);
+                      }}
                       className="absolute top-0.5 right-0.5 rounded-full bg-slate-900/80 text-white p-0.5"
                     >
                       <X size={10} />

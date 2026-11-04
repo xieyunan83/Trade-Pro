@@ -400,6 +400,7 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
     if (!ids.length) return;
     if (!window.confirm(`确定删除 ${ids.length} 张包装图？`)) return;
     const ban = new Set(ids);
+    const removedUrls = assets.filter((a) => ban.has(a.id)).map((a) => a.url);
     persistAssets(assets.filter((a) => !ban.has(a.id)));
     persistProjects(
       projects.map((p) => ({
@@ -407,6 +408,9 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
         assetIds: (p.assetIds || []).filter((id) => !ban.has(id)),
         updatedAt: Date.now(),
       }))
+    );
+    void import('../services/creativeAssetPersist').then(({ purgeDeletedCreativeMedia }) =>
+      purgeDeletedCreativeMedia(removedUrls)
     );
   };
 
@@ -696,7 +700,15 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
                   <button
                     type="button"
                     aria-label="移除参考图"
-                    onClick={() => setRefUploads((prev) => prev.filter((_, j) => j !== i))}
+                    onClick={() => {
+                      const removed = refUploads[i];
+                      setRefUploads((prev) => prev.filter((_, j) => j !== i));
+                      if (removed) {
+                        void import('../services/creativeAssetPersist').then(
+                          ({ purgeDeletedCreativeMedia }) => purgeDeletedCreativeMedia([removed])
+                        );
+                      }
+                    }}
                     className="absolute top-0.5 right-0.5 rounded-full bg-slate-900/80 text-white p-0.5"
                   >
                     <X size={10} />

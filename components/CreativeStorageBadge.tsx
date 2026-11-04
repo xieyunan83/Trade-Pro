@@ -35,7 +35,12 @@ export const CreativeStorageBadge: React.FC<Props> = ({ className = '', compact 
   useEffect(() => {
     void refresh();
     const t = window.setInterval(() => void refresh(), 60_000);
-    return () => window.clearInterval(t);
+    const onVault = () => void refresh();
+    window.addEventListener('trade-pro-vault-changed', onVault);
+    return () => {
+      window.clearInterval(t);
+      window.removeEventListener('trade-pro-vault-changed', onVault);
+    };
   }, [refresh]);
 
   const onTrim = async () => {
