@@ -1,6 +1,10 @@
 @import "tailwindcss";
 
-/* 布局锁：跟在 Tailwind 之后，确保宽屏主区吃满，右侧不留白 */
+/*
+ * 全站布局锁（必须在 Tailwind 之后）：
+ * 主区按「剩余列宽」吃满，不能 width:auto 跟内容收缩——
+ * 否则只有带宽表的 CRM/营销工具看起来满屏，其它模块右侧大片留白。
+ */
 html,
 body,
 #root {
@@ -8,49 +12,81 @@ body,
   max-width: none !important;
   margin: 0 !important;
 }
+html,
+body {
+  overflow-x: hidden;
+  overflow-y: auto;
+}
 #root {
-  display: flex !important;
-  flex-direction: column !important;
+  display: block !important;
   min-height: 100dvh !important;
 }
 .tp-app {
   display: flex !important;
   flex-direction: row !important;
+  align-items: stretch !important;
   width: 100% !important;
   max-width: none !important;
-  flex: 1 1 auto !important;
   min-width: 0 !important;
+  min-height: 100dvh !important;
+  box-sizing: border-box !important;
 }
-.tp-workspace {
-  flex: 1 1 auto !important;
-  width: auto !important;
-  max-width: none !important;
-  min-width: 0 !important;
-  overflow: visible !important;
-}
+/* 侧栏：文档流，跟页面一起滚，禁止 sticky/锁死视口 */
 .tp-sidebar.tp-sphere-rail {
+  flex: 0 0 auto !important;
   position: relative !important;
   top: auto !important;
   height: auto !important;
-  min-height: 100dvh !important;
+  min-height: 100% !important;
   align-self: stretch !important;
 }
-.tp-main-stage,
+/* 主区：强制吃满侧栏右侧全部剩余宽度（所有模块统一） */
+.tp-workspace {
+  flex: 1 1 0% !important;
+  width: 100% !important;
+  max-width: none !important;
+  min-width: 0 !important;
+  overflow: visible !important;
+  box-sizing: border-box !important;
+}
+.tp-header,
 .tp-app-main,
+.tp-main-stage,
 .tp-module-pane.is-active,
 .tp-main-stage [data-module-pane][data-active="1"],
+.tp-main-stage [data-module-pane][data-active="1"] > *,
 .tp-3d-studio,
 .tp-3d-workbench,
-.tp-landing,
-.tp-2d-studio {
+.tp-2d-studio,
+.tp-2d-workbench,
+.tp-landing {
   width: 100% !important;
   max-width: none !important;
   min-width: 0 !important;
   box-sizing: border-box !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+/* 仅打掉模块根级宽屏封顶；文案/对话框的 max-w-2xl 等保留 */
+.tp-main-stage .max-w-7xl,
+.tp-main-stage .max-w-6xl,
+.tp-main-stage .max-w-5xl,
+.tp-main-stage .max-w-\[96rem\],
+.tp-main-stage .max-w-\[90rem\],
+.tp-main-stage .max-w-\[80rem\],
+.tp-main-stage .max-w-screen-2xl,
+.tp-main-stage .max-w-screen-xl {
+  max-width: none !important;
+  width: 100% !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
 }
 @media (min-width: 1024px) {
   .tp-3d-workbench {
     grid-template-columns: 280px minmax(0, 1fr) minmax(260px, 0.42fr) !important;
+  }
+  .tp-2d-workbench {
+    grid-template-columns: minmax(220px, 20%) minmax(0, 1fr) minmax(260px, 24%) !important;
   }
 }
 @media (min-width: 1600px) {

@@ -5833,7 +5833,7 @@ const App: React.FC = () => {
       {/* 主区：与侧栏并列，吃满剩余宽度 */}
       <div className={`tp-workspace ${dockPadClass} flex-1 min-w-0 w-full max-w-none flex flex-col`}>
       <main className="tp-app-main flex-1 flex flex-col relative min-w-0 w-full max-w-none">
-        <header className="tp-header px-3 sm:px-6 lg:px-8 py-3 sm:py-4 flex flex-col gap-3 z-10">
+        <header className="tp-header w-full max-w-none px-3 sm:px-6 py-3 sm:py-4 flex flex-col gap-3 z-10">
           {activeModule === ModuleType.HOME ? (
             <div className="flex items-center gap-3">
               <button onClick={() => setMobileMenuOpen(true)} className="md:hidden p-2 text-slate-500 flex-shrink-0 touch-manipulation" aria-label="打开菜单"><Menu size={24} /></button>

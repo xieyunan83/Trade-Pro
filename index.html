@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="build-stamp" content="BUILD_STAMP_PLACEHOLDER">
+    <meta name="build-stamp" content="fullwidth-unify-20261105">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
     <meta http-equiv="Pragma" content="no-cache" />
     <title>外贸智慧协同</title>
@@ -249,7 +249,6 @@
           width: 100%;
           max-width: 100%;
           background: transparent;
-          content-visibility: auto;
         }
         .tp-main-stage::before {
           content: '';
@@ -597,7 +596,7 @@
           animation: tpPulse 2.2s ease-in-out infinite;
         }
 
-        /* ——— 主区按视口铺满（禁止 width:0，Electron 下会把主区算窄） ——— */
+        /* ——— 全模块统一满宽：主区吃满侧栏右侧，禁止按内容收缩 ——— */
         html, body, #root {
           width: 100% !important;
           max-width: none !important;
@@ -606,17 +605,16 @@
           min-height: 100dvh !important;
         }
         #root {
-          display: flex !important;
-          flex-direction: column !important;
+          display: block !important;
         }
         .tp-app {
           display: flex !important;
           flex-direction: row !important;
           align-items: stretch !important;
-          flex: 1 1 auto !important;
           width: 100% !important;
           max-width: none !important;
           min-width: 0 !important;
+          min-height: 100dvh !important;
           box-sizing: border-box !important;
         }
         .tp-sidebar.tp-sphere-rail {
@@ -624,12 +622,12 @@
           position: relative !important;
           top: auto !important;
           height: auto !important;
-          min-height: 100dvh !important;
+          min-height: 100% !important;
           align-self: stretch !important;
         }
         .tp-workspace {
-          flex: 1 1 auto !important;
-          width: auto !important;
+          flex: 1 1 0% !important;
+          width: 100% !important;
           max-width: none !important;
           min-width: 0 !important;
           display: flex !important;
@@ -637,6 +635,7 @@
           overflow: visible !important;
           box-sizing: border-box !important;
         }
+        .tp-header,
         .tp-app main,
         .tp-app-main,
         .tp-main-stage {
@@ -649,7 +648,6 @@
         .tp-app-main {
           flex: 1 1 auto !important;
         }
-        /* 模块面板：block 满宽，吃掉右侧留白 */
         .tp-main-stage .tp-module-pane.is-active,
         .tp-main-stage [data-module-pane][data-active="1"] {
           display: block !important;
@@ -666,15 +664,14 @@
           margin-right: 0 !important;
           box-sizing: border-box !important;
         }
-        .tp-app main .max-w-7xl,
-        .tp-app main .max-w-6xl,
-        .tp-app main .max-w-5xl,
-        .tp-app main .max-w-4xl,
-        .tp-app main .max-w-\[96rem\],
-        .tp-app main .max-w-\[90rem\],
-        .tp-app main .max-w-\[80rem\],
-        .tp-app main .max-w-screen-2xl,
-        .tp-app main .max-w-screen-xl {
+        .tp-main-stage .max-w-7xl,
+        .tp-main-stage .max-w-6xl,
+        .tp-main-stage .max-w-5xl,
+        .tp-main-stage .max-w-\[96rem\],
+        .tp-main-stage .max-w-\[90rem\],
+        .tp-main-stage .max-w-\[80rem\],
+        .tp-main-stage .max-w-screen-2xl,
+        .tp-main-stage .max-w-screen-xl {
           max-width: none !important;
           width: 100% !important;
           margin-left: 0 !important;
