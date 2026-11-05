@@ -186,6 +186,7 @@
           text-rendering: optimizeLegibility;
           letter-spacing: -0.011em;
           overflow-x: hidden;
+          overflow-y: auto;
         }
         #root { display: block; }
         ::selection {
@@ -620,6 +621,11 @@
         }
         .tp-sidebar.tp-sphere-rail {
           flex: 0 0 auto !important;
+          position: relative !important;
+          top: auto !important;
+          height: auto !important;
+          min-height: 100dvh !important;
+          align-self: stretch !important;
         }
         .tp-workspace {
           flex: 1 1 auto !important;
@@ -628,7 +634,7 @@
           min-width: 0 !important;
           display: flex !important;
           flex-direction: column !important;
-          overflow: hidden !important;
+          overflow: visible !important;
           box-sizing: border-box !important;
         }
         .tp-app main,
@@ -693,13 +699,13 @@
         }
         @media (min-width: 1024px) {
           .tp-3d-workbench {
-            /* 侧栏可随超宽略增，中间 1fr 必须吃掉全部剩余，禁止右侧空白 */
-            grid-template-columns: minmax(260px, 300px) minmax(0, 1fr) minmax(240px, 320px) !important;
+            /* 左固定工具 | 中预览吃剩余 | 右项目库随宽略增，三者合起来必须 100% */
+            grid-template-columns: 280px minmax(0, 1fr) minmax(260px, 0.42fr) !important;
           }
         }
         @media (min-width: 1600px) {
           .tp-3d-workbench {
-            grid-template-columns: minmax(280px, 340px) minmax(0, 1fr) minmax(280px, 380px) !important;
+            grid-template-columns: 300px minmax(0, 1fr) minmax(300px, 0.38fr) !important;
           }
         }
         .tp-3d-workbench-stage {
@@ -711,6 +717,10 @@
         .tp-3d-workbench-library {
           min-width: 0 !important;
           width: 100% !important;
+          max-width: none !important;
+        }
+        .tp-3d-workbench-library {
+          max-height: none !important;
         }
 
         /* 平面设计等同理：≥1024 三栏铺满 */
@@ -728,6 +738,18 @@
         @media (min-width: 1024px) {
           .tp-2d-workbench {
             grid-template-columns: minmax(220px, 20%) minmax(0, 1fr) minmax(260px, 24%) !important;
+          }
+        }
+        /* 平面画布缩略图：宽屏多列，单卡不要撑成半屏 */
+        .tp-2d-canvas-grid {
+          width: 100% !important;
+        }
+        .tp-2d-canvas-card {
+          max-width: 16rem;
+        }
+        @media (min-width: 1280px) {
+          .tp-2d-canvas-card {
+            max-width: 14rem;
           }
         }
 

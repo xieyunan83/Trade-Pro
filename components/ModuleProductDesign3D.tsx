@@ -156,26 +156,25 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
           : '部件预览已打开。拖拽旋转 / 滚轮缩放；可切「原模」看拆分前'
       );
     } else {
-      // 打开拆分工作台也不自动进分件着色
+      // 打开拆分工作台也不自动进分件着色；无原模地址则保持当前 GLB
       const hasOrig = !!(active?.originalModelUrl || active?.baseModelUrl);
-      setPreviewMode(hasOrig || hasSegmentResult ? 'original' : 'current');
+      setPreviewMode(hasOrig ? 'original' : 'current');
     }
     requestAnimationFrame(() => {
       workbenchPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     });
   };
 
-  // 切换 / 打开任务：一律默认原模；有拆分也不自动进分件着色
+  // 切换 / 打开任务：有原模地址才默认原模，否则用当前 GLB（切勿落到平面预览图）
   useEffect(() => {
     if (!active) {
-      setPreviewMode('original');
+      setPreviewMode('current');
       setPartNames([]);
       return;
     }
-    const hasOrig = !!(active.originalModelUrl || active.baseModelUrl || hasSegmentResult);
-    setPreviewMode(hasOrig ? 'original' : 'current');
+    const hasOrigUrl = !!(active.originalModelUrl || active.baseModelUrl);
+    setPreviewMode(hasOrigUrl ? 'original' : 'current');
     setPartNames([]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在换任务时重置；勿跟 hasSegmentResult 抖动
   }, [active?.id]);
 
   useEffect(() => {
@@ -837,8 +836,12 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
       setBusy(false);
       setMsgTone('ok');
       if (kind === 'segment') {
-        // 拆分完成后仍默认看原模；用户要看拆分再点「分件着色」
-        setPreviewMode('original');
+        // 拆分完成后仍默认看原模（有地址才 original，否则 current GLB）；要看拆分再点「分件着色」
+        setPreviewMode(
+          next.originalModelUrl || next.baseModelUrl || vaultedOriginal || keepOriginal
+            ? 'original'
+            : 'current'
+        );
         setWorkbenchTool('segment');
         setMsg('部件拆分完成：仍显示原模。要点「分件着色」才看拆分效果');
       } else {
@@ -1045,10 +1048,19 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     }
   };
 
-  const rawDownloadUrl =
-    previewMode === 'original'
-      ? pickLocalOrRemoteModelUrl(active, 'original')
-      : pickLocalOrRemoteModelUrl(active, 'current');
+  // 原模模式若地址缺失，必须回落到当前 GLB，绝不能只剩平面预览图
+  const rawDownloadUrl = (() => {
+    if (previewMode === 'parts') {
+      return pickLocalOrRemoteModelUrl(active, 'current');
+    }
+    if (previewMode === 'original') {
+      return (
+        pickLocalOrRemoteModelUrl(active, 'original') ||
+        pickLocalOrRemoteModelUrl(active, 'current')
+      );
+    }
+    return pickLocalOrRemoteModelUrl(active, 'current');
+  })();
   const rawPreviewUrl = rawDownloadUrl;
   const downloadUrl = useVaultUrl(rawDownloadUrl);
   const previewUrl = useVaultUrl(rawPreviewUrl);
@@ -1877,12 +1889,13 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         <div className="tp-3d-workbench-stage min-w-0 rounded-2xl border border-slate-200 bg-slate-950 text-white overflow-hidden flex flex-col">
           <div className="px-3 py-2 border-b border-white/10 flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-slate-300">
             <span>
-              {active?.status === 'ready' && downloadUrl
+              {active?.status === 'ready' && (rawDownloadUrl || downloadUrl)
                 ? previewMode === 'parts' && hasSegmentResult
                   ? '拆分效果 · 分件着色'
-                  : previewMode === 'original'
+                  : previewMode === 'original' &&
+                      !!(active.originalModelUrl || active.baseModelUrl)
                     ? '原模环视（拆分前）'
-                    : '3D 环视预览'
+                    : '3D 环视预览 · 可拖转'
                 : '视口预览'}
             </span>
             <CreativeStorageBadge compact className="!bg-white/10 !border-white/20 !text-slate-200" />
@@ -1896,7 +1909,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
               </span>
             )}
           </div>
-          <div className="relative w-full flex-1 min-h-[min(52vh,28rem)] max-h-[min(78vh,48rem)] flex items-stretch justify-center">
+          <div className="relative w-full h-[min(70vh,42rem)] min-h-[22rem] flex items-stretch justify-center">
             {active?.status === 'running' ? (
               <div className="flex-1 flex flex-col items-center justify-center space-y-3 p-6">
                 <Loader2 className="mx-auto animate-spin text-indigo-400" size={36} />
@@ -1997,12 +2010,15 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
               />
               )
             ) : active?.previewImageUrl ? (
-              <div className="flex-1 flex items-center justify-center p-6">
+              <div className="flex-1 flex flex-col items-center justify-center gap-2 p-6">
                 <VaultImg
                   src={active.previewImageUrl}
                   alt=""
                   className="max-h-72 rounded-2xl shadow-2xl shadow-indigo-500/20 object-contain"
                 />
+                <p className="text-[10px] font-bold text-amber-200/90">
+                  尚未找到可环视的 3D 文件，正在显示预览图。请点「导入本地 GLB」或重新生成。
+                </p>
               </div>
             ) : active?.sourceImage ? (
               <div className="flex-1 flex items-center justify-center p-6">
@@ -2245,7 +2261,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
           )}
         </div>
 
-        <div className="tp-3d-workbench-library min-w-0 rounded-2xl border border-slate-200 bg-white overflow-hidden flex flex-col max-h-[min(78vh,52rem)]">
+        <div className="tp-3d-workbench-library min-w-0 rounded-2xl border border-slate-200 bg-white overflow-hidden flex flex-col min-h-[22rem]">
           <div className="px-3 py-2.5 border-b border-slate-100 text-xs font-black text-slate-700">
             项目库 ({jobs.length})
           </div>

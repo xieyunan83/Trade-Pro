@@ -1212,7 +1212,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                 <p className="text-[10px] text-slate-400 font-medium">
                   勾选后可「选中 → 作参考」做二次创作，或直接确认生成（会自动用选中/画布图作身份锁）。也可推送 3D / 视频 / 包装。
                 </p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="tp-2d-canvas-grid grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-2.5">
                   {canvasAssets.map((a, i) => {
                     const selected = selectedIds.includes(a.id);
                     return (
@@ -1227,7 +1227,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                             toggleSelect(a.id);
                           }
                         }}
-                        className={`rounded-xl overflow-hidden border shadow-sm bg-white group relative cursor-pointer ${
+                        className={`tp-2d-canvas-card rounded-xl overflow-hidden border shadow-sm bg-white group relative cursor-pointer ${
                           selected
                             ? 'border-violet-500 ring-2 ring-violet-200'
                             : 'border-white hover:border-violet-200'
@@ -1236,7 +1236,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                         <VaultImg
                           src={a.url}
                           alt=""
-                          className="w-full aspect-square object-contain bg-slate-50 pointer-events-none"
+                          className="w-full aspect-square max-h-56 object-contain bg-slate-50 pointer-events-none"
                         />
                         <span
                           className={`absolute top-2 right-2 h-6 w-6 rounded-full border-2 flex items-center justify-center ${
