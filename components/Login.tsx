@@ -1,5 +1,5 @@
 
-import React, { useEffect, useState, startTransition } from 'react';
+import React, { useState, startTransition } from 'react';
 import { User } from '../types';
 import { User as UserIcon, Lock, Loader2, AlertTriangle, Cpu, Sparkles } from 'lucide-react';
 import { authenticateUser, changeUserPassword } from '../services/auth';
@@ -35,17 +35,25 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
   const [newPwd, setNewPwd] = useState('');
   const [newPwd2, setNewPwd2] = useState('');
 
-  useEffect(() => {
-    prefetchCoreModules();
-  }, []);
-
   const finishLogin = (user: User) => {
     setPendingUser(null);
     setMacInput('');
     setForceChange(null);
     setNewPwd('');
     setNewPwd2('');
-    prefetchCoreModules();
+    // 登录成功后再预热；用 idle 避免挡住首屏切换
+    const warm = () => {
+      try {
+        prefetchCoreModules();
+      } catch {
+        /* ignore */
+      }
+    };
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(warm, { timeout: 4000 });
+    } else {
+      setTimeout(warm, 800);
+    }
     startTransition(() => {
       onLogin(user);
     });

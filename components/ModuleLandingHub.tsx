@@ -100,7 +100,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
   };
 
   return (
-    <div className="tp-landing relative -mx-1 sm:mx-0 space-y-2.5">
+    <div className="tp-landing relative w-full max-w-none -mx-1 sm:mx-0 space-y-2.5">
       {/* 单行顶栏 */}
       <section className="tp-hub-hero text-white">
         <div className="relative px-3 sm:px-4 py-2 flex flex-nowrap items-center gap-2 sm:gap-3 min-h-[2.75rem]">

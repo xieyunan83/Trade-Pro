@@ -868,21 +868,47 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     }
   };
 
-  /** 任意候选里只要有本机 vault/blob 就优先，避免还去拉已 403 的临时链 */
+  /**
+   * 选预览地址。拆分后「原模」与「当前/分件」必须隔离：
+   * - original：只用 original / base（且不能是主槽 mesh_${id}）
+   * - current：只用 model / pbr（不要回落到原模，否则「拆分后整体」看起来像原模）
+   */
   const pickLocalOrRemoteModelUrl = (
     job: Model3dJob | null | undefined,
     prefer: 'current' | 'original' = 'current'
   ): string | undefined => {
     if (!job) return undefined;
-    const candidates =
-      prefer === 'original'
-        ? [job.originalModelUrl, job.baseModelUrl, job.modelUrl, job.pbrModelUrl]
-        : [job.modelUrl, job.pbrModelUrl, job.baseModelUrl, job.originalModelUrl];
-    const list = candidates.filter(Boolean) as string[];
-    const local = list.find(
-      (u) => isVaultRef(u) || u.startsWith('blob:') || u.startsWith('data:')
+    const primaryId = model3dVaultIdForJob(job.id);
+    const primaryRef = `vault:${primaryId}`;
+    const segmented = !!(
+      job.segmentTaskId || job.meshOps?.some((o) => o.kind === 'segment')
     );
-    return local || list[0];
+    const isLocal = (u: string) =>
+      isVaultRef(u) || u.startsWith('blob:') || u.startsWith('data:');
+    const isOrigSlot = (u: string) =>
+      isVaultRef(u) && (u.endsWith('_orig') || u.includes('_orig'));
+
+    if (prefer === 'original') {
+      const list = [job.originalModelUrl, job.baseModelUrl]
+        .filter(Boolean)
+        .filter((u) => {
+          const s = u as string;
+          if (isOrigSlot(s)) return true;
+          // 拆分后禁止把主槽 / 当前分件链当成原模
+          if (segmented && (s === primaryRef || s === job.modelUrl || s === job.pbrModelUrl)) {
+            return false;
+          }
+          return true;
+        }) as string[];
+      return list.find(isLocal) || list[0];
+    }
+
+    const list = (
+      segmented
+        ? [job.modelUrl, job.pbrModelUrl]
+        : [job.modelUrl, job.pbrModelUrl, job.baseModelUrl, job.originalModelUrl]
+    ).filter(Boolean) as string[];
+    return list.find(isLocal) || list[0];
   };
 
   /**
@@ -1023,17 +1049,32 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
       : active?.previewImageUrl || active?.sourceImage
   );
 
-  // 远程链过期(403)时：把本机 mesh_${jobId} 回挂到任务，避免黑屏空转
+  // 远程链过期(403)时：回挂本机主槽。已拆分且仍握有 https 分件链时不要用旧原模主槽顶替。
   useEffect(() => {
     if (!active || active.status !== 'ready') return;
-    const primary = pickLocalOrRemoteModelUrl(active);
+    const primary = pickLocalOrRemoteModelUrl(active, 'current');
     if (primary && (isVaultRef(primary) || primary.startsWith('blob:') || primary.startsWith('data:'))) {
+      return;
+    }
+    if (
+      active.segmentTaskId &&
+      primary &&
+      /^https?:\/\//i.test(primary) &&
+      primary !== active.originalModelUrl
+    ) {
       return;
     }
     let cancelled = false;
     void (async () => {
       const hit = await findModel3dVaultRefForJob(active);
       if (cancelled || !hit) return;
+      // 拆分任务：若命中的是原模槽，不要写进 modelUrl
+      if (
+        active.segmentTaskId &&
+        (hit.endsWith('_orig') || hit.includes('_orig'))
+      ) {
+        return;
+      }
       patchJob(active.id, {
         modelUrl: hit,
         pbrModelUrl: isVaultRef(active.pbrModelUrl) ? active.pbrModelUrl : hit,
@@ -1049,8 +1090,66 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active?.id, active?.status, active?.modelUrl, active?.pbrModelUrl, active?.baseModelUrl]);
 
+  // 拆分结果曾被旧原模冲掉时：用 segmentTaskId 从云端再拉分件网格
+  useEffect(() => {
+    if (!active || active.status !== 'ready' || !active.segmentTaskId) return;
+    const cur = pickLocalOrRemoteModelUrl(active, 'current');
+    const orig = pickLocalOrRemoteModelUrl(active, 'original');
+    const same =
+      !!cur &&
+      !!orig &&
+      cur === orig;
+    const missingCurrent = !cur;
+    if (!same && !missingCurrent) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const tid = (active.segmentTaskId || '').trim();
+        if (!tid) return;
+        let result =
+          active.provider === 'tripo'
+            ? await fetchTripoTaskOnce(tid)
+            : await fetchQwenTripoTaskOnce(tid);
+        if (!result?.modelUrl && active.provider !== 'tripo') {
+          result = (await fetchTripoTaskOnce(tid)) || result;
+        }
+        if (cancelled || !result?.modelUrl) return;
+        // 先确保原模进 _orig，再写入分件主槽
+        const keepOrig =
+          (await preserveOriginalModel3dInVault({
+            ...active,
+            originalModelUrl: active.originalModelUrl || active.baseModelUrl || cur,
+          })) || orig || active.originalModelUrl;
+        const vaulted = await persistModel3dJob({
+          ...active,
+          modelUrl: result.modelUrl,
+          pbrModelUrl: result.pbrModelUrl || result.modelUrl,
+          originalModelUrl: keepOrig,
+          segmentTaskId: tid,
+        });
+        if (cancelled) return;
+        patchJob(active.id, {
+          modelUrl: vaulted.modelUrl || result.modelUrl,
+          pbrModelUrl: vaulted.pbrModelUrl || result.pbrModelUrl || result.modelUrl,
+          originalModelUrl: vaulted.originalModelUrl || keepOrig,
+          baseModelUrl: vaulted.baseModelUrl || keepOrig,
+          updatedAt: Date.now(),
+          previewHint: '分件网格已恢复 · 可切换原模 / 分件着色',
+        });
+        setMsgTone('ok');
+        setMsg('已重新拉回拆分结果；「拆分后整体」应显示分件网格，「原模」显示拆分前');
+      } catch {
+        /* 云端也可能过期，忽略 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active?.id, active?.segmentTaskId, active?.modelUrl, active?.originalModelUrl]);
+
   return (
-    <div className="max-w-[96rem] mx-auto space-y-3 animate-fade-in px-1">
+    <div className="w-full max-w-none space-y-3 animate-fade-in px-0 sm:px-1">
       <div className="rounded-2xl border border-indigo-200/70 bg-gradient-to-br from-indigo-50/80 via-white to-slate-50 px-3 py-2.5 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-2 min-w-0">
@@ -1094,8 +1193,8 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
       </div>
 
       {/* 工作台：左侧工具轨 + 参数 | 中预览 | 右项目库 */}
-      <div className="grid lg:grid-cols-12 gap-3">
-        <div className="lg:col-span-3 space-y-3 max-h-[min(78vh,52rem)] overflow-y-auto custom-scrollbar pr-0.5">
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(260px,300px)_minmax(0,1fr)_minmax(220px,280px)] gap-3 items-start">
+        <div className="space-y-3 max-h-[min(78vh,52rem)] overflow-y-auto custom-scrollbar pr-0.5 min-w-0">
           {/* 制造流水线工具轨 */}
           <div
             ref={workbenchPanelRef}
@@ -1766,7 +1865,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
           )}
         </div>
 
-        <div className="lg:col-span-6 rounded-2xl border border-slate-200 bg-slate-950 text-white overflow-hidden flex flex-col">
+        <div className="min-w-0 rounded-2xl border border-slate-200 bg-slate-950 text-white overflow-hidden flex flex-col">
           <div className="px-3 py-2 border-b border-white/10 flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-slate-300">
             <span>
               {active?.status === 'ready' && downloadUrl
@@ -2014,9 +2113,23 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                     <button
                       type="button"
                       onClick={() => {
+                        const url = pickLocalOrRemoteModelUrl(active, 'current');
+                        const orig = pickLocalOrRemoteModelUrl(active, 'original');
                         setPreviewMode('current');
+                        if (!url) {
+                          setMsgTone('error');
+                          setMsg('分件网格暂不可用，请稍候自动恢复或重新点「部件拆分」');
+                          return;
+                        }
+                        if (orig && url === orig) {
+                          setMsgTone('info');
+                          setMsg(
+                            '当前分件链与原模相同（历史数据可能被冲掉），正在尝试按拆分任务重新拉取…'
+                          );
+                          return;
+                        }
                         setMsgTone('info');
-                        setMsg('当前模型整体环视（拆分后网格）');
+                        setMsg('拆分后整体环视（未着色的分件网格，不是拆分前原模）');
                       }}
                       className={`rounded-lg text-[10px] font-black px-2.5 py-1.5 ${
                         previewMode === 'current'
@@ -2123,7 +2236,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
           )}
         </div>
 
-        <div className="lg:col-span-3 rounded-2xl border border-slate-200 bg-white overflow-hidden flex flex-col max-h-[32rem]">
+        <div className="min-w-0 rounded-2xl border border-slate-200 bg-white overflow-hidden flex flex-col max-h-[min(78vh,52rem)]">
           <div className="px-3 py-2.5 border-b border-slate-100 text-xs font-black text-slate-700">
             项目库 ({jobs.length})
           </div>

@@ -80,15 +80,22 @@ export const persistModel3dJob = async (job: Model3dJob): Promise<Model3dJob> =>
     (job.pbrModelUrl || job.modelUrl || job.baseModelUrl || '').trim() || undefined;
   const meshId = model3dVaultIdForJob(job.id);
   const hint = job.providerTaskId || job.sourceTaskId || job.id;
-  const primaryIsLocal = !!(primary && (isVaultRef(primary) || primary.startsWith('blob:') || primary.startsWith('data:')));
+  const primaryIsLocal = !!(
+    primary &&
+    (isVaultRef(primary) || primary.startsWith('blob:') || primary.startsWith('data:'))
+  );
+  /** 拆分/后处理返回的新 https 链：绝不能被「旧的本机主槽」短路掉，否则原模/分件对调 */
+  const primaryIsRemote = !!(primary && /^https?:\/\//i.test(primary));
 
   const existingLocal = await findModel3dVaultRefForJob(job);
-  // 主网格已在本机、且当前 primary 也是本机引用：无需再下远程，但仍回写 original
-  if (existingLocal && (!primary || primaryIsLocal || isVaultRef(primary))) {
+  // 仅当没有新的远程主网格时，才用本机主槽短路
+  if (existingLocal && !primaryIsRemote && (!primary || primaryIsLocal)) {
     const orig =
       preservedOrig ||
-      (isVaultRef(job.originalModelUrl) ? job.originalModelUrl : undefined) ||
-      existingLocal;
+      (isVaultRef(job.originalModelUrl) &&
+      job.originalModelUrl !== existingLocal
+        ? job.originalModelUrl
+        : undefined);
     return {
       ...job,
       modelUrl: isVaultRef(job.modelUrl) ? job.modelUrl : existingLocal,
@@ -96,7 +103,8 @@ export const persistModel3dJob = async (job: Model3dJob): Promise<Model3dJob> =>
       baseModelUrl: isVaultRef(job.baseModelUrl)
         ? job.baseModelUrl
         : preservedOrig || job.baseModelUrl,
-      originalModelUrl: orig,
+      // 禁止把主槽冒充原模（拆分后主槽可能已是分件结果）
+      originalModelUrl: orig || preservedOrig || job.originalModelUrl,
       previewHint: job.previewHint?.includes('本机')
         ? job.previewHint
         : '模型已就绪 · 已存本机 · 可拖动环视',
