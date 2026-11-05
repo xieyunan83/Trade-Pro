@@ -86,6 +86,141 @@ export const vaultIdFromRef = (url: string): string =>
 /** 3D 任务本机网格的稳定 ID（与任务 id 绑定，刷新后可回挂） */
 export const model3dVaultIdForJob = (jobId: string): string => `mesh_${jobId}`;
 
+/** 拆分前原模单独槽位：避免后处理写入 mesh_${id} 时把原模冲掉 */
+export const model3dOriginalVaultIdForJob = (jobId: string): string =>
+  `mesh_${jobId}_orig`;
+
+/**
+ * 查找拆分前原模本机引用。
+ * 优先 mesh_${id}_orig；再按 sourceTaskId / _orig 提示匹配。
+ */
+export const findOriginalModel3dVaultRefForJob = async (job: {
+  id: string;
+  providerTaskId?: string;
+  sourceTaskId?: string;
+  originalModelUrl?: string;
+  baseModelUrl?: string;
+}): Promise<string | null> => {
+  const origId = model3dOriginalVaultIdForJob(job.id);
+  const origRow = await getRow(origId);
+  if (origRow?.blob) {
+    void touchAccess(origId);
+    return `${VAULT_PREFIX}${origId}`;
+  }
+
+  const declared = (job.originalModelUrl || '').trim();
+  if (declared && isVaultRef(declared)) {
+    const id = vaultIdFromRef(declared);
+    // 若仍指向主槽 mesh_${id}，可能已被拆分结果覆盖，不能当原模
+    if (id !== model3dVaultIdForJob(job.id)) {
+      const row = await getRow(id);
+      if (row?.blob) {
+        void touchAccess(id);
+        return declared;
+      }
+    }
+  }
+
+  const hints = [job.sourceTaskId, job.id]
+    .map((s) => (s || '').trim())
+    .filter(Boolean);
+  const meta = await listVaultMeta();
+  const models = meta.filter((m) => m.kind === 'model3d');
+  const scored = models
+    .map((m) => {
+      const bag = `${m.id} ${m.sourceHint || ''}`;
+      let score = 0;
+      if (m.id.endsWith('_orig') || bag.includes('_orig')) score += 12;
+      if (hints.some((h) => bag.includes(h) && bag.includes('_orig'))) score += 10;
+      if (hints.some((h) => m.id.includes(h) && m.id.includes('orig'))) score += 8;
+      return { m, score };
+    })
+    .filter((x) => x.score >= 12)
+    .sort((a, b) => b.score - a.score || b.m.lastAccessAt - a.m.lastAccessAt);
+
+  for (const { m } of scored) {
+    if (m.id === model3dVaultIdForJob(job.id)) continue;
+    const row = await getRow(m.id);
+    if (row?.blob) {
+      void touchAccess(m.id);
+      return `${VAULT_PREFIX}${m.id}`;
+    }
+  }
+  return null;
+};
+
+/**
+ * 在写入/覆盖主网格前，把当前原模固化到 mesh_${id}_orig。
+ * 解决：originalModelUrl 与 modelUrl 同为 vault:mesh_${id} 时，拆分落库冲掉原模。
+ */
+export const preserveOriginalModel3dInVault = async (job: {
+  id: string;
+  providerTaskId?: string;
+  sourceTaskId?: string;
+  segmentTaskId?: string;
+  originalModelUrl?: string;
+  baseModelUrl?: string;
+  modelUrl?: string;
+  pbrModelUrl?: string;
+}): Promise<string | null> => {
+  const existing = await findOriginalModel3dVaultRefForJob(job);
+  if (existing) return existing;
+
+  const meshId = model3dVaultIdForJob(job.id);
+  const origId = model3dOriginalVaultIdForJob(job.id);
+  const hint = `${job.sourceTaskId || job.providerTaskId || job.id}_orig`;
+  const alreadySegmented = !!(job.segmentTaskId || '').trim();
+
+  // 已拆分后：绝不能再把主槽（多半是分件结果）误拷成「原模」
+  const candidates = (
+    alreadySegmented
+      ? [job.originalModelUrl, job.baseModelUrl]
+      : [job.originalModelUrl, job.baseModelUrl, job.modelUrl, job.pbrModelUrl]
+  )
+    .map((u) => (u || '').trim())
+    .filter(Boolean);
+
+  for (const url of candidates) {
+    if (isVaultRef(url)) {
+      const id = vaultIdFromRef(url);
+      const row = await getRow(id);
+      if (!row?.blob) continue;
+      if (id === origId) return `${VAULT_PREFIX}${origId}`;
+      // 已拆分且候选仍指向主槽 → 主槽已是分件，跳过
+      if (alreadySegmented && id === meshId) continue;
+      await putBlobInVault({
+        blob: row.blob,
+        kind: 'model3d',
+        id: origId,
+        sourceHint: hint,
+        mime: row.mime || row.blob.type || 'model/gltf-binary',
+      });
+      return `${VAULT_PREFIX}${origId}`;
+    }
+    if (/^https?:\/\//i.test(url) || url.startsWith('blob:') || url.startsWith('data:')) {
+      const saved = await tryPersistMediaUrl(url, 'model3d', hint, { id: origId });
+      if (saved && isVaultRef(saved)) return saved;
+    }
+  }
+
+  // 仅未拆分时：主槽即原模，拷一份到 _orig
+  if (!alreadySegmented) {
+    const primary = await getRow(meshId);
+    if (primary?.blob) {
+      await putBlobInVault({
+        blob: primary.blob,
+        kind: 'model3d',
+        id: origId,
+        sourceHint: hint,
+        mime: primary.mime || primary.blob.type || 'model/gltf-binary',
+      });
+      return `${VAULT_PREFIX}${origId}`;
+    }
+  }
+
+  return null;
+};
+
 /**
  * 按任务回挂本机 GLB：优先 mesh_${jobId}，再按 sourceHint / taskId 匹配。
  * 用于远程临时链 403 过期后，仍能预览/下载已缓存文件。
@@ -118,6 +253,8 @@ export const findModel3dVaultRefForJob = async (job: {
     .map((m) => {
       const bag = `${m.id} ${m.sourceHint || ''}`;
       let score = 0;
+      // 主网格回挂不要误用 _orig 槽
+      if (m.id.endsWith('_orig') || bag.includes('_orig')) score -= 20;
       if (hints.some((h) => bag.includes(h))) score += 10;
       for (const r of remotes) {
         const head = r.slice(0, 96);

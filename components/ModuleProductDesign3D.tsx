@@ -58,8 +58,10 @@ import { consumeCreativeHandoff } from '../services/creativeAssetBridge';
 import { persistModel3dJob, purgeDeletedCreativeMedia } from '../services/creativeAssetPersist';
 import {
   findModel3dVaultRefForJob,
+  findOriginalModel3dVaultRefForJob,
   isVaultRef,
   model3dVaultIdForJob,
+  preserveOriginalModel3dInVault,
   putBlobInVault,
   tryPersistMediaUrl,
 } from '../services/creativeAssetVault';
@@ -771,12 +773,24 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         label: result.label,
         at: Date.now(),
       };
-      // 拆分/重拓扑等会换 modelUrl：首次后处理前把当前模型固化为原模
+      // 拆分/重拓扑会换 modelUrl：先把当前本机网格拷到 _orig，再写入新结果
       const keepOriginal =
         active.originalModelUrl ||
         (kind !== 'convert'
           ? active.modelUrl || active.pbrModelUrl || active.baseModelUrl
           : undefined);
+      let vaultedOriginal: string | undefined;
+      if (kind !== 'convert') {
+        try {
+          vaultedOriginal =
+            (await preserveOriginalModel3dInVault({
+              ...active,
+              originalModelUrl: keepOriginal || active.originalModelUrl,
+            })) || undefined;
+        } catch {
+          /* 原模备份失败不阻断拆分结果展示 */
+        }
+      }
       const next: Partial<Model3dJob> = {
         status: 'ready',
         progress: 100,
@@ -793,8 +807,11 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         baseModelUrl:
           kind === 'convert'
             ? active.baseModelUrl
-            : result.baseModelUrl || active.baseModelUrl || keepOriginal,
-        originalModelUrl: keepOriginal || active.originalModelUrl,
+            : result.baseModelUrl ||
+              vaultedOriginal ||
+              active.baseModelUrl ||
+              keepOriginal,
+        originalModelUrl: vaultedOriginal || keepOriginal || active.originalModelUrl,
         originalPreviewImageUrl:
           active.originalPreviewImageUrl || active.previewImageUrl,
         previewImageUrl: result.previewImageUrl || active.previewImageUrl,
@@ -829,6 +846,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
             modelUrl: vaulted.modelUrl,
             pbrModelUrl: vaulted.pbrModelUrl,
             baseModelUrl: vaulted.baseModelUrl,
+            originalModelUrl: vaulted.originalModelUrl || vaultedOriginal || keepOriginal,
             previewImageUrl: vaulted.previewImageUrl,
           });
         });
@@ -867,25 +885,59 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     return local || list[0];
   };
 
-  /** 从云端任务捞回拆分前原模（仅当本地没留 originalModelUrl） */
+  /**
+   * 找回拆分前原模：本机 _orig 槽 → 已声明 vault → 云端任务。
+   * 分件结果（segmentTaskId / 分件着色）一律保留，不会被冲掉。
+   */
   const recoverOriginalModel = async () => {
     if (!active) return;
-    if (active.originalModelUrl) {
+
+    const useLocalOriginal = (url: string, note: string) => {
+      patchJob(active.id, {
+        originalModelUrl: url,
+        baseModelUrl:
+          isVaultRef(active.baseModelUrl) && active.baseModelUrl !== active.modelUrl
+            ? active.baseModelUrl
+            : url,
+        updatedAt: Date.now(),
+      });
       setPreviewMode('original');
       setMsgTone('ok');
-      setMsg('已切回拆分前的原模预览 / 可下载');
-      return;
+      setMsg(note);
+    };
+
+    // 已有可用本机原模（且不是被拆分结果占用的主槽）
+    if (active.originalModelUrl && isVaultRef(active.originalModelUrl)) {
+      const oid = active.originalModelUrl.replace(/^vault:/, '');
+      if (oid !== model3dVaultIdForJob(active.id)) {
+        useLocalOriginal(active.originalModelUrl, '已切回拆分前的原模预览 / 可下载');
+        return;
+      }
     }
-    const tid = (active.sourceTaskId || '').trim();
-    if (!tid) {
-      setMsgTone('error');
-      setMsg('未找到原模存档。请用「项目库」里拆分前的任务，或重新生成一版原模。');
-      return;
-    }
+
     setRecoveringOriginal(true);
     setMsgTone('info');
-    setMsg('正在从云端恢复拆分前的原模…');
+    setMsg('正在从本机素材库查找拆分前原模…');
     try {
+      const localOrig = await findOriginalModel3dVaultRefForJob(active);
+      if (localOrig) {
+        useLocalOriginal(
+          localOrig,
+          '已从本机素材库找回原模；分件着色仍保留，可随时切换'
+        );
+        return;
+      }
+
+      const tid = (active.sourceTaskId || '').trim();
+      if (!tid) {
+        setMsgTone('error');
+        setMsg(
+          '本机未找到原模备份。可把此前下载的 GLB 用下方「设为当前任务原模」绑定回来，不会丢掉分件。'
+        );
+        return;
+      }
+
+      setMsg('本机没有原模备份，正在尝试云端…');
       let result =
         active.provider === 'tripo'
           ? await fetchTripoTaskOnce(tid)
@@ -894,22 +946,67 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         result = (await fetchTripoTaskOnce(tid)) || result;
       }
       if (!result?.modelUrl) {
-        throw new Error('云端原模已过期或不可用，请重新生成');
+        throw new Error(
+          '云端原模已过期。请勿清空本机素材；若曾下载过 GLB，用「设为当前任务原模」绑定，分件不会丢。'
+        );
       }
-      patchJob(active.id, {
-        originalModelUrl: result.modelUrl,
-        originalPreviewImageUrl: result.previewImageUrl || active.originalPreviewImageUrl,
-        baseModelUrl: active.baseModelUrl || result.baseModelUrl || result.modelUrl,
-        updatedAt: Date.now(),
-      });
-      setPreviewMode('original');
-      setMsgTone('ok');
-      setMsg('原模已恢复，可环视 / 下载；分件结果仍保留在「分件着色」');
+      const saved =
+        (await tryPersistMediaUrl(
+          result.modelUrl,
+          'model3d',
+          `${tid}_orig`,
+          { id: `${model3dVaultIdForJob(active.id)}_orig` }
+        )) || result.modelUrl;
+      useLocalOriginal(saved, '原模已恢复，可环视 / 下载；分件结果仍保留在「分件着色」');
     } catch (e: any) {
       setMsgTone('error');
       setMsg(e?.message || '恢复原模失败');
     } finally {
       setRecoveringOriginal(false);
+    }
+  };
+
+  /** 把本地 GLB 绑到「当前任务」的原模槽，不新建任务、不清除拆分 */
+  const onAttachOriginalGlb = async (files: FileList | null) => {
+    const file = files?.[0];
+    if (!file || !active) return;
+    const lower = file.name.toLowerCase();
+    if (!lower.endsWith('.glb') && !lower.endsWith('.gltf')) {
+      setMsgTone('error');
+      setMsg('请上传 .glb 或 .gltf 作为拆分前原模');
+      return;
+    }
+    if (file.size > 120 * 1024 * 1024) {
+      setMsgTone('error');
+      setMsg('GLB 过大（上限约 120MB）');
+      return;
+    }
+    setBusy(true);
+    setMsgTone('info');
+    setMsg('正在把本地 GLB 设为当前任务的原模（分件会保留）…');
+    try {
+      const mime =
+        file.type || (lower.endsWith('.gltf') ? 'model/gltf+json' : 'model/gltf-binary');
+      const vaultRef = await putBlobInVault({
+        blob: file,
+        kind: 'model3d',
+        id: `${model3dVaultIdForJob(active.id)}_orig`,
+        sourceHint: `${active.sourceTaskId || active.id}_orig`,
+        mime,
+      });
+      patchJob(active.id, {
+        originalModelUrl: vaultRef,
+        baseModelUrl: vaultRef,
+        updatedAt: Date.now(),
+      });
+      setPreviewMode('original');
+      setMsgTone('ok');
+      setMsg('原模已绑定到本任务；「分件着色」仍在，可切换查看');
+    } catch (e: any) {
+      setMsgTone('error');
+      setMsg(e?.message || '绑定原模失败');
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -1929,16 +2026,26 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                     >
                       拆分后整体
                     </button>
+                    <label className="rounded-lg bg-white/10 hover:bg-white/15 text-[10px] font-black px-2.5 py-1.5 cursor-pointer inline-flex items-center gap-1">
+                      <Upload size={10} /> 设为当前任务原模
+                      <input
+                        type="file"
+                        accept=".glb,.gltf,model/gltf-binary,model/gltf+json"
+                        className="hidden"
+                        onChange={(e) => {
+                          void onAttachOriginalGlb(e.target.files);
+                          e.target.value = '';
+                        }}
+                      />
+                    </label>
                     {partNames.length > 0 && (
                       <span className="text-[9px] font-bold text-teal-200/80 self-center">
                         {partNames.length} 个部件
                       </span>
                     )}
-                    {!active.originalModelUrl && hasOriginalModel && (
-                      <span className="text-[9px] text-amber-200/80 font-medium self-center">
-                        原模可点上方恢复
-                      </span>
-                    )}
+                    <span className="text-[9px] text-slate-400 font-medium self-center basis-full">
+                      勿清空本机素材。左侧「导入本地 GLB」会新建任务；要用「设为当前任务原模」才不会丢分件。
+                    </span>
                   </div>
                 )}
                 <div className="flex flex-wrap gap-1.5">

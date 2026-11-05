@@ -11,8 +11,10 @@ import { loadCatalogSkus } from './productCatalogTypes';
 import { loadEnterprisePacks } from './enterpriseDesignPacks';
 import {
   findModel3dVaultRefForJob,
+  findOriginalModel3dVaultRefForJob,
   isVaultRef,
   model3dVaultIdForJob,
+  preserveOriginalModel3dInVault,
   purgeMediaUrls,
   resolveMediaUrl,
   tryPersistMediaUrl,
@@ -64,30 +66,44 @@ export const persistPackagingAssets = async (
 };
 
 /**
- * 3D 落库：只优先缓存「主网格」一份（PBR > model > base），避免高细节多文件串行下载卡死。
- * 失败/超时保留原临时链，不阻断预览与下载。
- * 远程 403 过期时，若本机已有 mesh_${jobId} 则直接回挂。
+ * 3D 落库：主网格 → mesh_${id}；拆分前原模单独 → mesh_${id}_orig。
+ * 必须先固化原模再写主槽，否则拆分结果会冲掉「原模」指向的同一 vault。
+ * 远程 403 过期时，若本机已有对应槽则回挂。
  */
 export const persistModel3dJob = async (job: Model3dJob): Promise<Model3dJob> => {
+  // 先固化原模到 _orig（即使主槽已有文件也要做，防止后续覆盖）
+  const preservedOrig =
+    (await preserveOriginalModel3dInVault(job)) ||
+    (await findOriginalModel3dVaultRefForJob(job));
+
+  const primary =
+    (job.pbrModelUrl || job.modelUrl || job.baseModelUrl || '').trim() || undefined;
+  const meshId = model3dVaultIdForJob(job.id);
+  const hint = job.providerTaskId || job.sourceTaskId || job.id;
+  const primaryIsLocal = !!(primary && (isVaultRef(primary) || primary.startsWith('blob:') || primary.startsWith('data:')));
+
   const existingLocal = await findModel3dVaultRefForJob(job);
-  if (existingLocal) {
+  // 主网格已在本机、且当前 primary 也是本机引用：无需再下远程，但仍回写 original
+  if (existingLocal && (!primary || primaryIsLocal || isVaultRef(primary))) {
+    const orig =
+      preservedOrig ||
+      (isVaultRef(job.originalModelUrl) ? job.originalModelUrl : undefined) ||
+      existingLocal;
     return {
       ...job,
-      modelUrl: existingLocal,
+      modelUrl: isVaultRef(job.modelUrl) ? job.modelUrl : existingLocal,
       pbrModelUrl: isVaultRef(job.pbrModelUrl) ? job.pbrModelUrl : existingLocal,
-      baseModelUrl: isVaultRef(job.baseModelUrl) ? job.baseModelUrl : job.baseModelUrl,
+      baseModelUrl: isVaultRef(job.baseModelUrl)
+        ? job.baseModelUrl
+        : preservedOrig || job.baseModelUrl,
+      originalModelUrl: orig,
       previewHint: job.previewHint?.includes('本机')
         ? job.previewHint
         : '模型已就绪 · 已存本机 · 可拖动环视',
     };
   }
 
-  const primary =
-    (job.pbrModelUrl || job.modelUrl || job.baseModelUrl || '').trim() || undefined;
-  const meshId = model3dVaultIdForJob(job.id);
-  const hint = job.providerTaskId || job.sourceTaskId || job.id;
-
-  const originalRaw = (job.originalModelUrl || '').trim();
+  const originalRaw = (job.originalModelUrl || preservedOrig || '').trim();
   const origId = `${meshId}_orig`;
   const [sourceImage, sourceImages, primaryVault, previewImageUrl, originalVault] =
     await Promise.all([
@@ -99,30 +115,38 @@ export const persistModel3dJob = async (job: Model3dJob): Promise<Model3dJob> =>
         ? persistUrlField(primary, 'model3d', { id: meshId, sourceHint: hint })
         : Promise.resolve(undefined),
       persistUrlField(job.previewImageUrl, 'image'),
-      originalRaw && originalRaw !== primary
-        ? persistUrlField(originalRaw, 'model3d', {
-            id: origId,
-            sourceHint: `${hint || job.id}_orig`,
-          })
-        : Promise.resolve(undefined),
+      preservedOrig
+        ? Promise.resolve(preservedOrig)
+        : originalRaw && originalRaw !== primary
+          ? persistUrlField(originalRaw, 'model3d', {
+              id: origId,
+              sourceHint: `${hint || job.id}_orig`,
+            })
+          : Promise.resolve(undefined),
     ]);
 
   let modelUrl = job.modelUrl;
   let pbrModelUrl = job.pbrModelUrl;
   let baseModelUrl = job.baseModelUrl;
-  let originalModelUrl = job.originalModelUrl;
+  let originalModelUrl = preservedOrig || job.originalModelUrl;
   if (primary && primaryVault && isVaultRef(primaryVault)) {
     if (job.pbrModelUrl === primary) pbrModelUrl = primaryVault;
     else if (job.modelUrl === primary) modelUrl = primaryVault;
     else if (job.baseModelUrl === primary) baseModelUrl = primaryVault;
-    // 预览优先用已落库主网格
     if (!modelUrl || modelUrl === primary || !isVaultRef(modelUrl)) modelUrl = primaryVault;
   }
   if (originalVault && isVaultRef(originalVault)) {
     originalModelUrl = originalVault;
-    if (!baseModelUrl || baseModelUrl === originalRaw) baseModelUrl = originalVault;
+    if (!baseModelUrl || baseModelUrl === originalRaw || baseModelUrl === job.originalModelUrl) {
+      baseModelUrl = originalVault;
+    }
   } else if (originalRaw && primaryVault && originalRaw === primary && isVaultRef(primaryVault)) {
-    originalModelUrl = primaryVault;
+    // 尚未拆分：主网格即原模，同时写一份 _orig 备份
+    originalModelUrl = (await preserveOriginalModel3dInVault({
+      ...job,
+      originalModelUrl: primaryVault,
+      modelUrl: primaryVault,
+    })) || primaryVault;
   }
 
   return {
