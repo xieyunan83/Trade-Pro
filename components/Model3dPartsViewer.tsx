@@ -9,7 +9,7 @@ import { isVaultRef, resolveMediaUrl } from '../services/creativeAssetVault';
 type Props = {
   src: string;
   className?: string;
-  /** 0=贴合，1=最大炸开 */
+  /** 初始炸开 0~1 */
   explode?: number;
   onPartsFound?: (names: string[]) => void;
 };
@@ -63,13 +63,13 @@ const tintMaterial = (mat: THREE.Material, color: THREE.Color): THREE.Material =
 };
 
 /**
- * 拆分结果预览：按网格部件着色 + 可炸开。
- * 注意：回调用 ref，避免父组件 setState 触发无限重载。
+ * 拆分结果预览：部件着色 + 可控炸开。
+ * 炸开尺度按「加载时」包围盒固定，禁止每帧用已炸开包围盒累加（否则模型飞出视野）。
  */
 export const Model3dPartsViewer: React.FC<Props> = ({
   src,
   className = '',
-  explode = 0.35,
+  explode = 0.25,
   onPartsFound,
 }) => {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -78,12 +78,19 @@ export const Model3dPartsViewer: React.FC<Props> = ({
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [partCount, setPartCount] = useState(0);
-  const [explodeAmt, setExplodeAmt] = useState(explode);
+  const [explodeAmt, setExplodeAmt] = useState(() => Math.min(0.45, Math.max(0, explode)));
   const explodeRef = useRef(explodeAmt);
   explodeRef.current = explodeAmt;
   const rootsRef = useRef<{ mesh: THREE.Object3D; origin: THREE.Vector3; dir: THREE.Vector3 }[]>(
     []
   );
+  const explodeScaleRef = useRef(0.3);
+  const controlsRef = useRef<OrbitControls | null>(null);
+  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const homeRef = useRef<{
+    pos: THREE.Vector3;
+    target: THREE.Vector3;
+  } | null>(null);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -97,16 +104,30 @@ export const Model3dPartsViewer: React.FC<Props> = ({
     scene.background = new THREE.Color(0x0b1220);
     const camera = new THREE.PerspectiveCamera(42, 1, 0.01, 500);
     camera.position.set(1.6, 1.2, 1.8);
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: false,
+      powerPreference: 'high-performance',
+    });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // 确保画布可接收拖拽（覆盖层用 pointer-events-none）
+    renderer.domElement.style.display = 'block';
+    renderer.domElement.style.width = '100%';
+    renderer.domElement.style.height = '100%';
+    renderer.domElement.style.touchAction = 'none';
     host.innerHTML = '';
     host.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
-    controls.autoRotate = true;
-    controls.autoRotateSpeed = 0.55;
+    controls.enablePan = true;
+    controls.enableZoom = true;
+    controls.enableRotate = true;
+    controls.autoRotate = false; // 拆分查看时关闭自转，方便拖动观察
+    controls.dampingFactor = 0.08;
+    controlsRef.current = controls;
+    cameraRef.current = camera;
 
     scene.add(new THREE.HemisphereLight(0xffffff, 0x334155, 1.05));
     const key = new THREE.DirectionalLight(0xffffff, 1.15);
@@ -126,11 +147,7 @@ export const Model3dPartsViewer: React.FC<Props> = ({
 
     const applyExplode = () => {
       const t = explodeRef.current;
-      const box = new THREE.Box3();
-      for (const r of rootsRef.current) box.expandByObject(r.mesh);
-      const size = new THREE.Vector3();
-      box.getSize(size);
-      const scale = Math.max(size.x, size.y, size.z, 0.2) * 0.55;
+      const scale = explodeScaleRef.current;
       for (const r of rootsRef.current) {
         r.mesh.position.copy(r.origin).addScaledVector(r.dir, t * scale);
       }
@@ -152,7 +169,7 @@ export const Model3dPartsViewer: React.FC<Props> = ({
       if (disposed) return;
       setLoading((prev) => {
         if (!prev) return prev;
-        setErr('部件预览超时。请点「整体环视」查看模型，或重新点「分件着色」重试。');
+        setErr('部件预览超时。请点「整体环视」或「原模」查看。');
         return false;
       });
     }, 45_000);
@@ -167,8 +184,7 @@ export const Model3dPartsViewer: React.FC<Props> = ({
         if (resolved.owned) ownedUrl = resolved.url;
 
         const gltf = await new Promise<GLTF>((resolve, reject) => {
-          const loader = new GLTFLoader();
-          loader.load(
+          new GLTFLoader().load(
             resolved.url,
             resolve,
             undefined,
@@ -179,6 +195,14 @@ export const Model3dPartsViewer: React.FC<Props> = ({
 
         const root = gltf.scene;
         scene.add(root);
+
+        // 先归零到世界原点附近，避免生成模型自带大偏移
+        root.updateMatrixWorld(true);
+        const preBox = new THREE.Box3().setFromObject(root);
+        const preCenter = new THREE.Vector3();
+        preBox.getCenter(preCenter);
+        root.position.sub(preCenter);
+        root.updateMatrixWorld(true);
 
         const meshes: THREE.Mesh[] = [];
         root.traverse((obj) => {
@@ -197,13 +221,11 @@ export const Model3dPartsViewer: React.FC<Props> = ({
           if (kids.length > 1) units = kids;
         }
 
-        // 过多细碎三角面时按父节点聚合，避免卡死
         if (units.length > 80) {
           const parents = new Map<string, THREE.Object3D>();
           for (const m of meshes) {
             const p = m.parent || m;
-            const key = p.uuid;
-            if (!parents.has(key)) parents.set(key, p);
+            if (!parents.has(p.uuid)) parents.set(p.uuid, p);
           }
           if (parents.size > 1 && parents.size < units.length) {
             units = Array.from(parents.values());
@@ -212,8 +234,13 @@ export const Model3dPartsViewer: React.FC<Props> = ({
           }
         }
 
+        const whole = new THREE.Box3().setFromObject(root);
         const center = new THREE.Vector3();
-        new THREE.Box3().setFromObject(root).getCenter(center);
+        const size0 = new THREE.Vector3();
+        whole.getCenter(center);
+        whole.getSize(size0);
+        // 固定炸开半径：相对原模对角线，绝不每帧重算
+        explodeScaleRef.current = Math.max(size0.x, size0.y, size0.z, 0.15) * 0.45;
 
         const names: string[] = [];
         units.forEach((unit, i) => {
@@ -239,25 +266,34 @@ export const Model3dPartsViewer: React.FC<Props> = ({
 
         if (disposed) return;
 
-        setPartCount(units.length);
-        try {
-          onPartsRef.current?.(names);
-        } catch {
-          /* ignore parent callback errors */
-        }
-
+        // 初始按当前炸开量摆一次，再框入视野
+        applyExplode();
         const fit = new THREE.Box3().setFromObject(root);
         const size = new THREE.Vector3();
         const mid = new THREE.Vector3();
         fit.getSize(size);
         fit.getCenter(mid);
         const maxDim = Math.max(size.x, size.y, size.z, 0.1);
-        camera.near = maxDim / 100;
-        camera.far = maxDim * 100;
-        camera.position.copy(mid).add(new THREE.Vector3(maxDim * 1.25, maxDim * 0.95, maxDim * 1.35));
+        camera.near = Math.max(maxDim / 200, 0.001);
+        camera.far = maxDim * 80;
+        camera.position.set(mid.x + maxDim * 1.35, mid.y + maxDim * 0.85, mid.z + maxDim * 1.35);
         camera.updateProjectionMatrix();
         controls.target.copy(mid);
+        controls.minDistance = maxDim * 0.15;
+        controls.maxDistance = maxDim * 12;
         controls.update();
+        homeRef.current = {
+          pos: camera.position.clone(),
+          target: mid.clone(),
+        };
+        controls.saveState();
+
+        setPartCount(units.length);
+        try {
+          onPartsRef.current?.(names);
+        } catch {
+          /* ignore */
+        }
 
         setLoading(false);
         window.clearTimeout(watchdog);
@@ -265,7 +301,7 @@ export const Model3dPartsViewer: React.FC<Props> = ({
       } catch (e: any) {
         if (!disposed) {
           window.clearTimeout(watchdog);
-          setErr(e?.message || '部件预览加载失败，请改用「整体环视」');
+          setErr(e?.message || '部件预览加载失败，请改用「整体环视」或「原模」');
           setLoading(false);
         }
       }
@@ -277,6 +313,7 @@ export const Model3dPartsViewer: React.FC<Props> = ({
       cancelAnimationFrame(raf);
       ro.disconnect();
       controls.dispose();
+      controlsRef.current = null;
       renderer.dispose();
       scene.traverse((o) => {
         const m = o as THREE.Mesh;
@@ -294,35 +331,54 @@ export const Model3dPartsViewer: React.FC<Props> = ({
       }
       host.innerHTML = '';
     };
-    // 仅随模型地址变化重建；切勿把 onPartsFound 放进依赖
   }, [src]);
+
+  const resetView = () => {
+    setExplodeAmt(0.2);
+    const c = controlsRef.current;
+    const cam = cameraRef.current;
+    const home = homeRef.current;
+    if (c && cam && home) {
+      cam.position.copy(home.pos);
+      c.target.copy(home.target);
+      c.update();
+    } else if (c) {
+      c.reset();
+    }
+  };
 
   return (
     <div className={`relative w-full h-full min-h-0 bg-slate-950 ${className}`}>
-      <div ref={hostRef} className="absolute inset-0" />
+      <div ref={hostRef} className="absolute inset-0 z-0" />
       {loading && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-slate-950/70 z-10 pointer-events-none">
           <Loader2 className="animate-spin text-amber-300" size={28} />
           <p className="text-xs font-bold text-slate-300">正在按部件着色预览…</p>
-          <p className="text-[10px] text-slate-500 font-medium">大模型首次加载约需数秒，请稍候</p>
         </div>
       )}
       {err && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-4 z-10 bg-slate-950/80">
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-4 z-10 pointer-events-none">
           <p className="text-xs font-bold text-rose-300 text-center max-w-sm">{err}</p>
         </div>
       )}
       {!loading && !err && (
-        <div className="absolute left-2 right-2 bottom-2 z-10 flex flex-wrap items-center gap-2 rounded-xl bg-black/55 border border-white/10 px-2.5 py-2 backdrop-blur-sm">
-          <span className="inline-flex items-center gap-1 text-[10px] font-black text-amber-200">
-            <Layers size={12} /> 已识别 {partCount} 个部件 · 不同颜色区分
+        <div className="absolute left-2 right-2 bottom-2 z-10 flex flex-wrap items-center gap-2 rounded-xl bg-black/55 border border-white/10 px-2.5 py-2 backdrop-blur-sm pointer-events-auto">
+          <span className="inline-flex items-center gap-1 text-[10px] font-black text-amber-200 pointer-events-none">
+            <Layers size={12} /> 已识别 {partCount} 个部件 · 拖拽旋转 / 滚轮缩放
           </span>
+          <button
+            type="button"
+            onClick={resetView}
+            className="text-[9px] font-black text-slate-200 underline-offset-2 hover:underline"
+          >
+            复位视角
+          </button>
           <label className="ml-auto flex items-center gap-1.5 text-[9px] font-bold text-slate-300">
             <Maximize2 size={11} /> 炸开
             <input
               type="range"
               min={0}
-              max={100}
+              max={80}
               value={Math.round(explodeAmt * 100)}
               onChange={(e) => setExplodeAmt(Number(e.target.value) / 100)}
               className="w-24 accent-amber-400"

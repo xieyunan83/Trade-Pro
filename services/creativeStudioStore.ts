@@ -61,10 +61,16 @@ export type Model3dJob = {
   segmentTaskId?: string;
   provider?: Model3dProvider;
   modelVersion?: string;
-  /** GLB / 网格下载地址 */
+  /** GLB / 网格下载地址（当前展示用，拆分后可能是分件模型） */
   modelUrl?: string;
   pbrModelUrl?: string;
   baseModelUrl?: string;
+  /**
+   * 首次生成/导入的原模地址（拆分前）。拆分后必须保留，可随时切回「原模」查看。
+   */
+  originalModelUrl?: string;
+  /** 原模预览图 */
+  originalPreviewImageUrl?: string;
   /** 渲染预览图 */
   previewImageUrl?: string;
   /** UV 预览图（若后处理返回） */

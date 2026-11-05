@@ -87,26 +87,42 @@ export const persistModel3dJob = async (job: Model3dJob): Promise<Model3dJob> =>
   const meshId = model3dVaultIdForJob(job.id);
   const hint = job.providerTaskId || job.sourceTaskId || job.id;
 
-  const [sourceImage, sourceImages, primaryVault, previewImageUrl] = await Promise.all([
-    persistUrlField(job.sourceImage, 'image'),
-    job.sourceImages?.length
-      ? Promise.all(job.sourceImages.map((u) => persistUrlField(u, 'image').then((x) => x || u)))
-      : Promise.resolve(job.sourceImages),
-    primary
-      ? persistUrlField(primary, 'model3d', { id: meshId, sourceHint: hint })
-      : Promise.resolve(undefined),
-    persistUrlField(job.previewImageUrl, 'image'),
-  ]);
+  const originalRaw = (job.originalModelUrl || '').trim();
+  const origId = `${meshId}_orig`;
+  const [sourceImage, sourceImages, primaryVault, previewImageUrl, originalVault] =
+    await Promise.all([
+      persistUrlField(job.sourceImage, 'image'),
+      job.sourceImages?.length
+        ? Promise.all(job.sourceImages.map((u) => persistUrlField(u, 'image').then((x) => x || u)))
+        : Promise.resolve(job.sourceImages),
+      primary
+        ? persistUrlField(primary, 'model3d', { id: meshId, sourceHint: hint })
+        : Promise.resolve(undefined),
+      persistUrlField(job.previewImageUrl, 'image'),
+      originalRaw && originalRaw !== primary
+        ? persistUrlField(originalRaw, 'model3d', {
+            id: origId,
+            sourceHint: `${hint || job.id}_orig`,
+          })
+        : Promise.resolve(undefined),
+    ]);
 
   let modelUrl = job.modelUrl;
   let pbrModelUrl = job.pbrModelUrl;
   let baseModelUrl = job.baseModelUrl;
+  let originalModelUrl = job.originalModelUrl;
   if (primary && primaryVault && isVaultRef(primaryVault)) {
     if (job.pbrModelUrl === primary) pbrModelUrl = primaryVault;
     else if (job.modelUrl === primary) modelUrl = primaryVault;
     else if (job.baseModelUrl === primary) baseModelUrl = primaryVault;
     // 预览优先用已落库主网格
     if (!modelUrl || modelUrl === primary || !isVaultRef(modelUrl)) modelUrl = primaryVault;
+  }
+  if (originalVault && isVaultRef(originalVault)) {
+    originalModelUrl = originalVault;
+    if (!baseModelUrl || baseModelUrl === originalRaw) baseModelUrl = originalVault;
+  } else if (originalRaw && primaryVault && originalRaw === primary && isVaultRef(primaryVault)) {
+    originalModelUrl = primaryVault;
   }
 
   return {
@@ -116,6 +132,7 @@ export const persistModel3dJob = async (job: Model3dJob): Promise<Model3dJob> =>
     modelUrl,
     pbrModelUrl,
     baseModelUrl,
+    originalModelUrl: originalModelUrl || job.originalModelUrl,
     previewImageUrl: previewImageUrl || job.previewImageUrl,
   };
 };

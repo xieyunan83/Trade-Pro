@@ -306,8 +306,9 @@ function createWindow() {
     mainWindow.show();
     mainWindow.focus();
   };
+  // 尽快露出窗口（登录页）；过长延迟会让用户以为客户端卡死
   mainWindow.once('ready-to-show', showSoon);
-  setTimeout(showSoon, 1200);
+  setTimeout(showSoon, 280);
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isAppUrl(url)) return { action: 'allow' };

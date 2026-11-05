@@ -34,6 +34,7 @@ import {
 } from '../services/creativeStudioStore';
 import {
   ensureOfficialModelTaskId,
+  fetchTripoTaskOnce,
   generateModel3d,
   getModel3dProviderStatus,
   hydrateModel3dProvider,
@@ -48,7 +49,10 @@ import {
   type TripoSegmentGranularity,
   type TripoRigType,
 } from '../services/model3dService';
-import { getQwenTripo3dProviderStatus } from '../services/qwenTripo3dService';
+import {
+  fetchQwenTripoTaskOnce,
+  getQwenTripo3dProviderStatus,
+} from '../services/qwenTripo3dService';
 import { loadDataProviderLocal, saveDataProvider } from '../services/dataProviders';
 import { consumeCreativeHandoff } from '../services/creativeAssetBridge';
 import { persistModel3dJob, purgeDeletedCreativeMedia } from '../services/creativeAssetPersist';
@@ -109,9 +113,16 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
   const [retopoFaceLimit, setRetopoFaceLimit] = useState(8000);
   const [retopoQuad, setRetopoQuad] = useState(true);
   const [rigType, setRigType] = useState<TripoRigType>('biped');
-  /** 拆分后：部件着色 + 炸开预览 */
-  const [partsPreview, setPartsPreview] = useState(false);
+  /**
+   * 预览模式：
+   * - original：拆分前原模（必须可找回）
+   * - parts：分件着色
+   * - current：当前 modelUrl（拆分后=分件整体环视）
+   */
+  type PreviewMode = 'original' | 'parts' | 'current';
+  const [previewMode, setPreviewMode] = useState<PreviewMode>('current');
   const [partNames, setPartNames] = useState<string[]>([]);
+  const [recoveringOriginal, setRecoveringOriginal] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const glbFileRef = useRef<HTMLInputElement>(null);
   const workbenchPanelRef = useRef<HTMLDivElement>(null);
@@ -121,17 +132,24 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
   /** 千问主通道或官方编辑通道任一即可做拆分/重拓扑等 */
   const editChannelReady = isModel3dEditReady();
   const qwenEditReady = getQwenTripo3dProviderStatus().ready;
-  const hasSegmentResult = !!(active?.segmentTaskId || active?.meshOps?.some((o) => o.kind === 'segment'));
+  const hasSegmentResult = !!(
+    active?.segmentTaskId || active?.meshOps?.some((o) => o.kind === 'segment')
+  );
+  const hasOriginalModel = !!(
+    active?.originalModelUrl ||
+    active?.baseModelUrl ||
+    (hasSegmentResult && active?.sourceTaskId)
+  );
 
   const openSegmentWorkbench = (opts?: { viewParts?: boolean }) => {
     setWorkbenchTool('segment');
     if (opts?.viewParts !== false && hasSegmentResult) {
-      setPartsPreview(true);
+      setPreviewMode('parts');
       setMsgTone('ok');
       setMsg(
         partNames.length
-          ? `部件预览已打开：共 ${partNames.length} 件，不同颜色区分；可拖动下方「炸开」查看分件`
-          : '部件预览已打开：不同颜色区分各部件，可拖动下方「炸开」查看分件'
+          ? `部件预览：共 ${partNames.length} 件。拖拽旋转，底部调节炸开；可切「原模」看拆分前`
+          : '部件预览已打开。拖拽旋转 / 滚轮缩放；可切「原模」看拆分前'
       );
     }
     requestAnimationFrame(() => {
@@ -139,15 +157,14 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     });
   };
 
-  // 切换任务时：有拆分记录则默认看部件预览
+  // 切换任务：有拆分则默认可看分件，但仍保留切回原模
   useEffect(() => {
     if (!active) {
-      setPartsPreview(false);
+      setPreviewMode('current');
       setPartNames([]);
       return;
     }
-    if (active.segmentTaskId) setPartsPreview(true);
-    else setPartsPreview(false);
+    setPreviewMode(active.segmentTaskId ? 'parts' : 'current');
     setPartNames([]);
   }, [active?.id, active?.segmentTaskId]);
 
@@ -503,6 +520,8 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         modelUrl: result.modelUrl,
         pbrModelUrl: result.pbrModelUrl,
         baseModelUrl: result.baseModelUrl,
+        originalModelUrl: result.modelUrl,
+        originalPreviewImageUrl: result.previewImageUrl,
         previewImageUrl: result.previewImageUrl,
         previewHint: '模型已就绪 · 可拖动环视 · 正在写入本机缓存…',
         error: undefined,
@@ -518,6 +537,8 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         modelUrl: readyNow.modelUrl,
         pbrModelUrl: readyNow.pbrModelUrl,
         baseModelUrl: readyNow.baseModelUrl,
+        originalModelUrl: readyNow.originalModelUrl,
+        originalPreviewImageUrl: readyNow.originalPreviewImageUrl,
         previewImageUrl: readyNow.previewImageUrl,
         previewHint: readyNow.previewHint,
         error: undefined,
@@ -536,6 +557,9 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
             modelUrl: vaulted.modelUrl,
             pbrModelUrl: vaulted.pbrModelUrl,
             baseModelUrl: vaulted.baseModelUrl,
+            originalModelUrl: vaulted.originalModelUrl || vaulted.modelUrl,
+            originalPreviewImageUrl:
+              vaulted.originalPreviewImageUrl || vaulted.previewImageUrl,
             previewImageUrl: vaulted.previewImageUrl,
             sourceImage: vaulted.sourceImage,
             sourceImages: vaulted.sourceImages,
@@ -747,6 +771,12 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         label: result.label,
         at: Date.now(),
       };
+      // 拆分/重拓扑等会换 modelUrl：首次后处理前把当前模型固化为原模
+      const keepOriginal =
+        active.originalModelUrl ||
+        (kind !== 'convert'
+          ? active.modelUrl || active.pbrModelUrl || active.baseModelUrl
+          : undefined);
       const next: Partial<Model3dJob> = {
         status: 'ready',
         progress: 100,
@@ -760,12 +790,21 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         segmentTaskId: kind === 'segment' ? result.taskId : active.segmentTaskId,
         modelUrl: kind === 'convert' ? active.modelUrl || result.modelUrl : result.modelUrl,
         pbrModelUrl: kind === 'convert' ? active.pbrModelUrl : result.pbrModelUrl || result.modelUrl,
-        baseModelUrl: kind === 'convert' ? active.baseModelUrl : result.baseModelUrl,
+        baseModelUrl:
+          kind === 'convert'
+            ? active.baseModelUrl
+            : result.baseModelUrl || active.baseModelUrl || keepOriginal,
+        originalModelUrl: keepOriginal || active.originalModelUrl,
+        originalPreviewImageUrl:
+          active.originalPreviewImageUrl || active.previewImageUrl,
         previewImageUrl: result.previewImageUrl || active.previewImageUrl,
         convertedUrls: converted,
         exportFormats: formats,
         meshOps: [...(active.meshOps || []), op].slice(-20),
-        previewHint: `${result.label}完成 · 可环视 / 导出制造格式`,
+        previewHint:
+          kind === 'segment'
+            ? '拆分完成 · 可看分件或切回原模'
+            : `${result.label}完成 · 可环视 / 导出制造格式`,
         error: undefined,
         updatedAt: Date.now(),
       };
@@ -773,9 +812,9 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
       setBusy(false);
       setMsgTone('ok');
       if (kind === 'segment') {
-        setPartsPreview(true);
+        setPreviewMode('parts');
         setWorkbenchTool('segment');
-        setMsg('部件拆分完成：右侧已切换为「分件着色」预览，拖动「炸开」可看各部件');
+        setMsg('部件拆分完成：可看「分件着色」，也可随时切「原模」找回拆分前的 3D');
       } else {
         setMsg(
           kind === 'convert'
@@ -812,19 +851,80 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
   };
 
   /** 任意候选里只要有本机 vault/blob 就优先，避免还去拉已 403 的临时链 */
-  const pickLocalOrRemoteModelUrl = (job: Model3dJob | null | undefined): string | undefined => {
+  const pickLocalOrRemoteModelUrl = (
+    job: Model3dJob | null | undefined,
+    prefer: 'current' | 'original' = 'current'
+  ): string | undefined => {
     if (!job) return undefined;
-    const candidates = [job.modelUrl, job.pbrModelUrl, job.baseModelUrl].filter(Boolean) as string[];
-    const local = candidates.find(
+    const candidates =
+      prefer === 'original'
+        ? [job.originalModelUrl, job.baseModelUrl, job.modelUrl, job.pbrModelUrl]
+        : [job.modelUrl, job.pbrModelUrl, job.baseModelUrl, job.originalModelUrl];
+    const list = candidates.filter(Boolean) as string[];
+    const local = list.find(
       (u) => isVaultRef(u) || u.startsWith('blob:') || u.startsWith('data:')
     );
-    return local || candidates[0];
+    return local || list[0];
   };
-  const rawDownloadUrl = pickLocalOrRemoteModelUrl(active);
+
+  /** 从云端任务捞回拆分前原模（仅当本地没留 originalModelUrl） */
+  const recoverOriginalModel = async () => {
+    if (!active) return;
+    if (active.originalModelUrl) {
+      setPreviewMode('original');
+      setMsgTone('ok');
+      setMsg('已切回拆分前的原模预览 / 可下载');
+      return;
+    }
+    const tid = (active.sourceTaskId || '').trim();
+    if (!tid) {
+      setMsgTone('error');
+      setMsg('未找到原模存档。请用「项目库」里拆分前的任务，或重新生成一版原模。');
+      return;
+    }
+    setRecoveringOriginal(true);
+    setMsgTone('info');
+    setMsg('正在从云端恢复拆分前的原模…');
+    try {
+      let result =
+        active.provider === 'tripo'
+          ? await fetchTripoTaskOnce(tid)
+          : await fetchQwenTripoTaskOnce(tid);
+      if (!result?.modelUrl && active.provider !== 'tripo') {
+        result = (await fetchTripoTaskOnce(tid)) || result;
+      }
+      if (!result?.modelUrl) {
+        throw new Error('云端原模已过期或不可用，请重新生成');
+      }
+      patchJob(active.id, {
+        originalModelUrl: result.modelUrl,
+        originalPreviewImageUrl: result.previewImageUrl || active.originalPreviewImageUrl,
+        baseModelUrl: active.baseModelUrl || result.baseModelUrl || result.modelUrl,
+        updatedAt: Date.now(),
+      });
+      setPreviewMode('original');
+      setMsgTone('ok');
+      setMsg('原模已恢复，可环视 / 下载；分件结果仍保留在「分件着色」');
+    } catch (e: any) {
+      setMsgTone('error');
+      setMsg(e?.message || '恢复原模失败');
+    } finally {
+      setRecoveringOriginal(false);
+    }
+  };
+
+  const rawDownloadUrl =
+    previewMode === 'original'
+      ? pickLocalOrRemoteModelUrl(active, 'original')
+      : pickLocalOrRemoteModelUrl(active, 'current');
   const rawPreviewUrl = rawDownloadUrl;
   const downloadUrl = useVaultUrl(rawDownloadUrl);
   const previewUrl = useVaultUrl(rawPreviewUrl);
-  const previewPoster = useVaultUrl(active?.previewImageUrl || active?.sourceImage);
+  const previewPoster = useVaultUrl(
+    previewMode === 'original'
+      ? active?.originalPreviewImageUrl || active?.previewImageUrl || active?.sourceImage
+      : active?.previewImageUrl || active?.sourceImage
+  );
 
   // 远程链过期(403)时：把本机 mesh_${jobId} 回挂到任务，避免黑屏空转
   useEffect(() => {
@@ -1005,17 +1105,27 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                     {busy ? '拆分中…' : hasSegmentResult ? '重新拆分' : '开始拆分'}
                   </button>
                   {hasSegmentResult && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPartsPreview(true);
-                        setMsgTone('ok');
-                        setMsg('已切换到分件着色预览：颜色=部件，可调节「炸开」看间隙');
-                      }}
-                      className="w-full rounded-xl border border-teal-300 bg-white text-teal-900 text-[11px] font-black py-2"
-                    >
-                      查看拆分效果（着色 / 炸开）
-                    </button>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPreviewMode('parts');
+                          setMsgTone('ok');
+                          setMsg('分件着色：拖拽旋转，底部调节炸开');
+                        }}
+                        className="rounded-xl border border-teal-300 bg-white text-teal-900 text-[11px] font-black py-2"
+                      >
+                        看拆分效果
+                      </button>
+                      <button
+                        type="button"
+                        disabled={recoveringOriginal}
+                        onClick={() => void recoverOriginalModel()}
+                        className="rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-900 text-[11px] font-black py-2 disabled:opacity-50"
+                      >
+                        {recoveringOriginal ? '恢复中…' : '看原模'}
+                      </button>
+                    </div>
                   )}
                 </>
               )}
@@ -1563,9 +1673,11 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
           <div className="px-3 py-2 border-b border-white/10 flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-slate-300">
             <span>
               {active?.status === 'ready' && downloadUrl
-                ? partsPreview && hasSegmentResult
+                ? previewMode === 'parts' && hasSegmentResult
                   ? '拆分效果 · 分件着色'
-                  : '3D 环视预览'
+                  : previewMode === 'original'
+                    ? '原模环视（拆分前）'
+                    : '3D 环视预览'
                 : '视口预览'}
             </span>
             <CreativeStorageBadge compact className="!bg-white/10 !border-white/20 !text-slate-200" />
@@ -1598,12 +1710,17 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                 </div>
               </div>
             ) : active?.status === 'ready' && (rawPreviewUrl || rawDownloadUrl) ? (
-              partsPreview && hasSegmentResult ? (
+              previewMode === 'parts' && hasSegmentResult ? (
                 <Model3dPartsViewer
                   key={`parts-${active.id}-${active.segmentTaskId || active.providerTaskId || ''}`}
-                  src={(rawPreviewUrl || rawDownloadUrl || '').trim()}
+                  src={(
+                    pickLocalOrRemoteModelUrl(active, 'current') ||
+                    rawPreviewUrl ||
+                    rawDownloadUrl ||
+                    ''
+                  ).trim()}
                   className="w-full h-full min-h-0"
-                  explode={0.4}
+                  explode={0.22}
                   onPartsFound={(names) => {
                     setPartNames((prev) =>
                       prev.length === names.length && prev.every((n, i) => n === names[i])
@@ -1616,7 +1733,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
               <Model3dOrbitViewer
                 // 直接传 vault:/https，由预览组件本机秒开；勿等 useVaultUrl 异步，否则会空转半小时
                 src={(rawPreviewUrl || rawDownloadUrl || '').trim()}
-                stableKey={`${active.id}|${active.segmentTaskId || ''}|${active.providerTaskId || ''}|${active.updatedAt || 0}`}
+                stableKey={`${active.id}|${previewMode}|${active.segmentTaskId || ''}|${active.originalModelUrl || ''}|${active.providerTaskId || ''}|${active.updatedAt || 0}`}
                 poster={previewPoster || undefined}
                 className="w-full h-full min-h-0"
                 downloadHref={downloadUrl || previewUrl || undefined}
@@ -1773,12 +1890,12 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                     <button
                       type="button"
                       onClick={() => {
-                        setPartsPreview(true);
+                        setPreviewMode('parts');
                         setMsgTone('ok');
-                        setMsg('分件着色预览：颜色区分部件，底部可调节炸开距离');
+                        setMsg('分件着色：拖拽旋转 / 滚轮缩放，底部调节炸开');
                       }}
                       className={`rounded-lg text-[10px] font-black px-2.5 py-1.5 ${
-                        partsPreview
+                        previewMode === 'parts'
                           ? 'bg-amber-400 text-slate-950'
                           : 'bg-white/10 hover:bg-white/15'
                       }`}
@@ -1787,22 +1904,39 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                     </button>
                     <button
                       type="button"
+                      disabled={recoveringOriginal}
+                      onClick={() => void recoverOriginalModel()}
+                      className={`rounded-lg text-[10px] font-black px-2.5 py-1.5 ${
+                        previewMode === 'original'
+                          ? 'bg-amber-400 text-slate-950'
+                          : 'bg-white/10 hover:bg-white/15'
+                      } disabled:opacity-50`}
+                    >
+                      {recoveringOriginal ? '恢复原模…' : '原模（拆分前）'}
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => {
-                        setPartsPreview(false);
+                        setPreviewMode('current');
                         setMsgTone('info');
-                        setMsg('已切回整体环视预览');
+                        setMsg('当前模型整体环视（拆分后网格）');
                       }}
                       className={`rounded-lg text-[10px] font-black px-2.5 py-1.5 ${
-                        !partsPreview
+                        previewMode === 'current'
                           ? 'bg-amber-400 text-slate-950'
                           : 'bg-white/10 hover:bg-white/15'
                       }`}
                     >
-                      整体环视
+                      拆分后整体
                     </button>
                     {partNames.length > 0 && (
                       <span className="text-[9px] font-bold text-teal-200/80 self-center">
                         {partNames.length} 个部件
+                      </span>
+                    )}
+                    {!active.originalModelUrl && hasOriginalModel && (
+                      <span className="text-[9px] text-amber-200/80 font-medium self-center">
+                        原模可点上方恢复
                       </span>
                     )}
                   </div>
