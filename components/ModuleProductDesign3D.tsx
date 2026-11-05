@@ -1600,10 +1600,17 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
             ) : active?.status === 'ready' && (rawPreviewUrl || rawDownloadUrl) ? (
               partsPreview && hasSegmentResult ? (
                 <Model3dPartsViewer
+                  key={`parts-${active.id}-${active.segmentTaskId || active.providerTaskId || ''}`}
                   src={(rawPreviewUrl || rawDownloadUrl || '').trim()}
                   className="w-full h-full min-h-0"
                   explode={0.4}
-                  onPartsFound={(names) => setPartNames(names)}
+                  onPartsFound={(names) => {
+                    setPartNames((prev) =>
+                      prev.length === names.length && prev.every((n, i) => n === names[i])
+                        ? prev
+                        : names
+                    );
+                  }}
                 />
               ) : (
               <Model3dOrbitViewer

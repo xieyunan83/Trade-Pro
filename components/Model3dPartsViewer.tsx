@@ -31,15 +31,40 @@ const resolveToObjectUrl = async (raw: string): Promise<{ url: string; owned: bo
   if (/^https?:\/\//i.test(u)) {
     const peeked = peekRemoteBlob(u);
     if (peeked) return { url: URL.createObjectURL(peeked), owned: true };
-    const blob = await fetchRemoteBlob(u);
+    const blob = await fetchRemoteBlob(u, { timeoutMs: 90_000 });
     rememberRemoteBlob(u, blob);
     return { url: URL.createObjectURL(blob), owned: true };
   }
   throw new Error('不支持的模型地址');
 };
 
+const tintMaterial = (mat: THREE.Material, color: THREE.Color): THREE.Material => {
+  try {
+    const clone =
+      typeof (mat as THREE.MeshStandardMaterial).clone === 'function'
+        ? (mat as THREE.MeshStandardMaterial).clone()
+        : new THREE.MeshStandardMaterial();
+    if ((clone as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
+      const std = clone as THREE.MeshStandardMaterial;
+      std.color.copy(color);
+      std.emissive.copy(color).multiplyScalar(0.06);
+      std.metalness = Math.min(0.35, std.metalness || 0.2);
+      std.roughness = Math.max(0.45, std.roughness || 0.55);
+      return std;
+    }
+    return clone;
+  } catch {
+    return new THREE.MeshStandardMaterial({
+      color: color.clone(),
+      metalness: 0.2,
+      roughness: 0.55,
+    });
+  }
+};
+
 /**
- * 拆分结果预览：按网格部件着色 + 可炸开，便于确认手板/开模分件。
+ * 拆分结果预览：按网格部件着色 + 可炸开。
+ * 注意：回调用 ref，避免父组件 setState 触发无限重载。
  */
 export const Model3dPartsViewer: React.FC<Props> = ({
   src,
@@ -48,6 +73,8 @@ export const Model3dPartsViewer: React.FC<Props> = ({
   onPartsFound,
 }) => {
   const hostRef = useRef<HTMLDivElement>(null);
+  const onPartsRef = useRef(onPartsFound);
+  onPartsRef.current = onPartsFound;
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [partCount, setPartCount] = useState(0);
@@ -60,16 +87,17 @@ export const Model3dPartsViewer: React.FC<Props> = ({
 
   useEffect(() => {
     const host = hostRef.current;
-    if (!host || !src.trim()) return;
+    const srcTrim = (src || '').trim();
+    if (!host || !srcTrim) return;
 
     let disposed = false;
     let ownedUrl: string | null = null;
     let raf = 0;
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0b1220);
-    const camera = new THREE.PerspectiveCamera(42, 1, 0.01, 200);
+    const camera = new THREE.PerspectiveCamera(42, 1, 0.01, 500);
     camera.position.set(1.6, 1.2, 1.8);
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     host.innerHTML = '';
@@ -78,13 +106,12 @@ export const Model3dPartsViewer: React.FC<Props> = ({
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.autoRotate = true;
-    controls.autoRotateSpeed = 0.6;
+    controls.autoRotateSpeed = 0.55;
 
-    const hemi = new THREE.HemisphereLight(0xffffff, 0x334155, 1.1);
-    scene.add(hemi);
-    const dir = new THREE.DirectionalLight(0xffffff, 1.2);
-    dir.position.set(3, 5, 2);
-    scene.add(dir);
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x334155, 1.05));
+    const key = new THREE.DirectionalLight(0xffffff, 1.15);
+    key.position.set(3, 5, 2);
+    scene.add(key);
 
     const resize = () => {
       const w = host.clientWidth || 1;
@@ -121,9 +148,18 @@ export const Model3dPartsViewer: React.FC<Props> = ({
     setErr(null);
     rootsRef.current = [];
 
+    const watchdog = window.setTimeout(() => {
+      if (disposed) return;
+      setLoading((prev) => {
+        if (!prev) return prev;
+        setErr('部件预览超时。请点「整体环视」查看模型，或重新点「分件着色」重试。');
+        return false;
+      });
+    }, 45_000);
+
     (async () => {
       try {
-        const resolved = await resolveToObjectUrl(src);
+        const resolved = await resolveToObjectUrl(srcTrim);
         if (disposed) {
           if (resolved.owned) URL.revokeObjectURL(resolved.url);
           return;
@@ -131,7 +167,13 @@ export const Model3dPartsViewer: React.FC<Props> = ({
         if (resolved.owned) ownedUrl = resolved.url;
 
         const gltf = await new Promise<GLTF>((resolve, reject) => {
-          new GLTFLoader().load(resolved.url, resolve, undefined, reject);
+          const loader = new GLTFLoader();
+          loader.load(
+            resolved.url,
+            resolve,
+            undefined,
+            (e) => reject(e instanceof Error ? e : new Error('GLB 解析失败'))
+          );
         });
         if (disposed) return;
 
@@ -143,7 +185,6 @@ export const Model3dPartsViewer: React.FC<Props> = ({
           if ((obj as THREE.Mesh).isMesh) meshes.push(obj as THREE.Mesh);
         });
 
-        // 优先按独立 Mesh；若几乎一体则按直接子节点组
         let units: THREE.Object3D[] = meshes;
         if (meshes.length <= 1) {
           const kids = root.children.filter((c) => {
@@ -156,9 +197,23 @@ export const Model3dPartsViewer: React.FC<Props> = ({
           if (kids.length > 1) units = kids;
         }
 
+        // 过多细碎三角面时按父节点聚合，避免卡死
+        if (units.length > 80) {
+          const parents = new Map<string, THREE.Object3D>();
+          for (const m of meshes) {
+            const p = m.parent || m;
+            const key = p.uuid;
+            if (!parents.has(key)) parents.set(key, p);
+          }
+          if (parents.size > 1 && parents.size < units.length) {
+            units = Array.from(parents.values());
+          } else {
+            units = meshes.slice(0, 64);
+          }
+        }
+
         const center = new THREE.Vector3();
-        const big = new THREE.Box3().setFromObject(root);
-        big.getCenter(center);
+        new THREE.Box3().setFromObject(root).getCenter(center);
 
         const names: string[] = [];
         units.forEach((unit, i) => {
@@ -166,56 +221,51 @@ export const Model3dPartsViewer: React.FC<Props> = ({
           unit.traverse((o) => {
             const m = o as THREE.Mesh;
             if (!m.isMesh) return;
-            const tint = (mat: THREE.Material): THREE.Material => {
-              const clone =
-                typeof (mat as THREE.MeshStandardMaterial).clone === 'function'
-                  ? (mat as THREE.MeshStandardMaterial).clone()
-                  : mat;
-              if ((clone as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
-                const std = clone as THREE.MeshStandardMaterial;
-                std.color.copy(color);
-                std.emissive.copy(color).multiplyScalar(0.08);
-                std.metalness = 0.25;
-                std.roughness = 0.55;
-              }
-              return clone;
-            };
             if (Array.isArray(m.material)) {
-              m.material = m.material.map(tint);
+              m.material = m.material.map((mat) => tintMaterial(mat, color));
             } else if (m.material) {
-              m.material = tint(m.material);
+              m.material = tintMaterial(m.material, color);
             }
           });
           const ub = new THREE.Box3().setFromObject(unit);
           const uc = new THREE.Vector3();
           ub.getCenter(uc);
           const d = uc.clone().sub(center);
-          if (d.lengthSq() < 1e-8) d.set((i % 3) - 1, 0.2, (Math.floor(i / 3) % 3) - 1);
+          if (d.lengthSq() < 1e-8) d.set((i % 3) - 1, 0.15, (Math.floor(i / 3) % 3) - 1);
           d.normalize();
-          const origin = unit.position.clone();
-          rootsRef.current.push({ mesh: unit, origin, dir: d });
-          names.push(unit.name || `部件 ${i + 1}`);
+          rootsRef.current.push({ mesh: unit, origin: unit.position.clone(), dir: d });
+          names.push((unit.name || '').trim() || `部件 ${i + 1}`);
         });
 
-        setPartCount(units.length);
-        onPartsFound?.(names);
+        if (disposed) return;
 
-        // 框入视野
+        setPartCount(units.length);
+        try {
+          onPartsRef.current?.(names);
+        } catch {
+          /* ignore parent callback errors */
+        }
+
         const fit = new THREE.Box3().setFromObject(root);
         const size = new THREE.Vector3();
         const mid = new THREE.Vector3();
         fit.getSize(size);
         fit.getCenter(mid);
         const maxDim = Math.max(size.x, size.y, size.z, 0.1);
-        camera.position.copy(mid).add(new THREE.Vector3(maxDim * 1.2, maxDim * 0.9, maxDim * 1.3));
+        camera.near = maxDim / 100;
+        camera.far = maxDim * 100;
+        camera.position.copy(mid).add(new THREE.Vector3(maxDim * 1.25, maxDim * 0.95, maxDim * 1.35));
+        camera.updateProjectionMatrix();
         controls.target.copy(mid);
         controls.update();
 
         setLoading(false);
+        window.clearTimeout(watchdog);
         tick();
       } catch (e: any) {
         if (!disposed) {
-          setErr(e?.message || '部件预览加载失败');
+          window.clearTimeout(watchdog);
+          setErr(e?.message || '部件预览加载失败，请改用「整体环视」');
           setLoading(false);
         }
       }
@@ -223,17 +273,17 @@ export const Model3dPartsViewer: React.FC<Props> = ({
 
     return () => {
       disposed = true;
+      window.clearTimeout(watchdog);
       cancelAnimationFrame(raf);
       ro.disconnect();
       controls.dispose();
       renderer.dispose();
       scene.traverse((o) => {
         const m = o as THREE.Mesh;
-        if (m.isMesh) {
-          m.geometry?.dispose?.();
-          const mats = Array.isArray(m.material) ? m.material : [m.material];
-          mats.forEach((x) => x?.dispose?.());
-        }
+        if (!m.isMesh) return;
+        m.geometry?.dispose?.();
+        const mats = Array.isArray(m.material) ? m.material : [m.material];
+        mats.forEach((x) => x?.dispose?.());
       });
       if (ownedUrl) {
         try {
@@ -244,20 +294,22 @@ export const Model3dPartsViewer: React.FC<Props> = ({
       }
       host.innerHTML = '';
     };
-  }, [src, onPartsFound]);
+    // 仅随模型地址变化重建；切勿把 onPartsFound 放进依赖
+  }, [src]);
 
   return (
     <div className={`relative w-full h-full min-h-0 bg-slate-950 ${className}`}>
       <div ref={hostRef} className="absolute inset-0" />
       {loading && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-slate-950/70 z-10">
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-slate-950/70 z-10 pointer-events-none">
           <Loader2 className="animate-spin text-amber-300" size={28} />
           <p className="text-xs font-bold text-slate-300">正在按部件着色预览…</p>
+          <p className="text-[10px] text-slate-500 font-medium">大模型首次加载约需数秒，请稍候</p>
         </div>
       )}
       {err && (
-        <div className="absolute inset-0 flex items-center justify-center p-4 z-10">
-          <p className="text-xs font-bold text-rose-300 text-center">{err}</p>
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-4 z-10 bg-slate-950/80">
+          <p className="text-xs font-bold text-rose-300 text-center max-w-sm">{err}</p>
         </div>
       )}
       {!loading && !err && (
