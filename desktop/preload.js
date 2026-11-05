@@ -20,6 +20,14 @@ contextBridge.exposeInMainWorld('bwDesktop', {
       /* ignore */
     }
   },
+  /** 错误页「立即重试」：主进程重新走连接中 → 拉站 */
+  retryBoot: () => {
+    try {
+      ipcRenderer.send('bw-boot-retry');
+    } catch {
+      /* ignore */
+    }
+  },
   /** 另存为：把 blob→base64 传来写盘（不阻塞主进程同步） */
   saveBytes: (payload) => {
     try {

@@ -1,7 +1,7 @@
 {
   "name": "waimao-zhihui-xietong-desktop",
   "productName": "外贸智慧协同",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "外贸智慧协同桌面客户端",
   "main": "main.js",
   "author": "外贸智慧协同",
@@ -29,6 +29,7 @@
       "main.js",
       "preload.js",
       "boot-error.html",
+      "boot-connecting.html",
       "package.json",
       "lib/**/*"
     ],

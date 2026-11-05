@@ -78,6 +78,11 @@ let powerSaveId = null;
 let loadWatchdog = null;
 let bootOk = false;
 let showingError = false;
+/** 当前启动尝试次数（弱网自动重试） */
+let bootAttempt = 0;
+const MAX_BOOT_ATTEMPTS = 3;
+/** 首次拉站超时（国内访问海外节点常需更久） */
+const BOOT_LOAD_TIMEOUT_MS = 60_000;
 
 const LS_FAIL_FLAG = 'trade_scout_desktop_last_boot_failed';
 
@@ -200,12 +205,28 @@ function clearLoadWatchdog() {
   }
 }
 
-function armLoadWatchdog(ms = 28000) {
+function armLoadWatchdog(ms = BOOT_LOAD_TIMEOUT_MS) {
   clearLoadWatchdog();
   loadWatchdog = setTimeout(() => {
     if (bootOk || showingError) return;
+    if (bootAttempt < MAX_BOOT_ATTEMPTS) {
+      console.warn('[boot] load timeout, retry', bootAttempt + 1);
+      void loadAppShell({ retry: true });
+      return;
+    }
     showBootError('timeout', '加载超时：网络过慢或无法访问线上站点');
   }, ms);
+}
+
+function showConnectingSplash(attempt = 1) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const connecting = path.join(__dirname, 'boot-connecting.html');
+  if (!fs.existsSync(connecting)) return;
+  void mainWindow
+    .loadFile(connecting, {
+      query: { origin: APP_ORIGIN, attempt: String(attempt) },
+    })
+    .catch(() => undefined);
 }
 
 function showBootError(reason, errMsg = '') {
@@ -252,17 +273,38 @@ function showBootError(reason, errMsg = '') {
   }
 }
 
-function loadAppShell() {
+/**
+ * @param {{ retry?: boolean, forceBust?: boolean }} [opts]
+ */
+function loadAppShell(opts = {}) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   bootOk = false;
   showingError = false;
-  armLoadWatchdog(28000);
-  const baseUa = mainWindow.webContents.getUserAgent().replace(/Electron\/\S+\s*/i, '');
-  mainWindow
-    .loadURL(startUrl(), {
-      userAgent: `${baseUa} TradeCollabClient/1.0 BabyWorldClient/1.0`,
-    })
-    .catch((e) => showBootError('loadURL', e?.message || String(e)));
+  if (opts.retry) bootAttempt += 1;
+  else bootAttempt = 1;
+
+  const attempt = bootAttempt;
+  showConnectingSplash(attempt);
+
+  // 稍等本地「连接中」页绘出后再拉线上，避免用户只见深蓝空窗
+  const delay = opts.retry ? 600 : 120;
+  setTimeout(() => {
+    if (!mainWindow || mainWindow.isDestroyed() || bootOk || showingError) return;
+    armLoadWatchdog(BOOT_LOAD_TIMEOUT_MS);
+    const baseUa = mainWindow.webContents.getUserAgent().replace(/Electron\/\S+\s*/i, '');
+    const forceBust = !!opts.forceBust || attempt > 1;
+    mainWindow
+      .loadURL(startUrl(forceBust), {
+        userAgent: `${baseUa} TradeCollabClient/1.0 BabyWorldClient/1.0`,
+      })
+      .catch((e) => {
+        if (bootAttempt < MAX_BOOT_ATTEMPTS) {
+          void loadAppShell({ retry: true, forceBust: true });
+        } else {
+          showBootError('loadURL', e?.message || String(e));
+        }
+      });
+  }, delay);
 }
 
 function createWindow() {
@@ -328,17 +370,34 @@ function createWindow() {
     if (!isMainFrame) return;
     // -3 = aborted（被新导航取消）
     if (code === -3) return;
-    if (showingError && url && url.includes('boot-error')) return;
+    if (showingError && url && (url.includes('boot-error') || url.includes('boot-connecting'))) return;
+    if (url && url.includes('boot-connecting')) return;
+    // 弱网：自动重试，用尽次数再出错误页
+    if (bootAttempt < MAX_BOOT_ATTEMPTS && !showingError) {
+      console.warn('[boot] did-fail-load retry', code, desc);
+      clearLoadWatchdog();
+      void loadAppShell({ retry: true, forceBust: true });
+      return;
+    }
     showBootError(`fail:${code}`, desc || url || '');
   });
 
   mainWindow.webContents.on('did-finish-load', () => {
     const url = mainWindow.webContents.getURL();
-    if (url.includes('boot-error') || url.startsWith('data:')) return;
-    if (isAppUrl(url)) showingError = false;
-    // 主文档到了；若 12s 内页面未 reportBootOk，仍提示（JS 挂了）
+    if (url.includes('boot-error') || url.includes('boot-connecting') || url.startsWith('data:')) {
+      return;
+    }
+    if (!isAppUrl(url)) return;
+    // 主文档已到即可视为登录壳可用（不必等 React reportBootOk，弱网下 JS 很慢会误报超时）
+    showingError = false;
+    bootOk = true;
     clearLoadWatchdog();
-    armLoadWatchdog(12000);
+    try {
+      const failFlagPath = path.join(app.getPath('userData'), 'last-boot-failed');
+      if (fs.existsSync(failFlagPath)) fs.unlinkSync(failFlagPath);
+    } catch {
+      /* ignore */
+    }
   });
 
   mainWindow.webContents.on('render-process-gone', (_e, details) => {
@@ -397,6 +456,21 @@ ipcMain.on('bw-boot-ok', () => {
   bootOk = true;
   showingError = false;
   clearLoadWatchdog();
+  try {
+    const failFlagPath = path.join(app.getPath('userData'), 'last-boot-failed');
+    if (fs.existsSync(failFlagPath)) fs.unlinkSync(failFlagPath);
+  } catch {
+    /* ignore */
+  }
+});
+
+ipcMain.on('bw-boot-retry', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  showingError = false;
+  bootOk = false;
+  bootAttempt = 0;
+  clearLoadWatchdog();
+  void loadAppShell({ forceBust: true });
 });
 
 /**

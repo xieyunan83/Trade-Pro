@@ -83,6 +83,11 @@
       document.getElementById('detail').textContent =
         '原因: ' + reason + (err ? ' · ' + err : '') + ' · 目标: ' + origin;
       document.getElementById('btn-retry').onclick = function () {
+        // 走主进程重试（本地「连接中」页 + 自动再试），避免错误页里直接导航仍超时无反馈
+        if (window.bwDesktop && typeof window.bwDesktop.retryBoot === 'function') {
+          window.bwDesktop.retryBoot();
+          return;
+        }
         location.href = origin.replace(/\/$/, '') + '/?_boot=' + Date.now();
       };
       document.getElementById('btn-browser').onclick = function () {
