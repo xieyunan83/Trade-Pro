@@ -344,14 +344,19 @@ const App: React.FC = () => {
   const [sphereNavPhase, setSphereNavPhase] = useState<SphereNavPhase>('start');
   const [sphereNavSectionId, setSphereNavSectionId] = useState<PlatformSectionId | null>(null);
   const sphereNavExpanded = sphereNavPhase !== 'start';
+  /** 侧栏实际像素宽：主区用 calc(100% - 此值) 铺满，禁止再靠 flex 猜宽 */
+  const sidebarWidth =
+    sphereNavPhase === 'submenu'
+      ? '15.5rem'
+      : sphereNavPhase === 'sections'
+        ? '4.5rem'
+        : '4.25rem';
   const dockWidthClass =
     sphereNavPhase === 'submenu'
       ? 'w-[min(100vw-1rem,15.5rem)]'
       : sphereNavPhase === 'sections'
         ? 'w-[4.5rem]'
         : 'w-[4.25rem]';
-  /** 侧栏改为文档流 flex 子项后，主区不再需要 padding 让位 */
-  const dockPadClass = '';
   
   const [historyOpen, setHistoryOpen] = useState(false);
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -5598,16 +5603,17 @@ const App: React.FC = () => {
       className={`tp-app min-h-screen min-h-[100dvh] w-full max-w-none ${
         sphereNavExpanded ? 'is-nav-expanded' : ''
       } ${sphereNavPhase === 'submenu' ? 'is-nav-submenu' : ''}`}
+      style={{ ['--tp-sidebar-w' as string]: sidebarWidth }}
     >
       {/* Mobile sidebar backdrop */}
       {mobileMenuOpen && (
         <div className="fixed inset-0 bg-ink-950/50 backdrop-blur-sm z-30 md:hidden" onClick={() => setMobileMenuOpen(false)} />
       )}
-      {/* 左侧圆形按钮：文档流，随整页上下滚（禁止 sticky/fixed） */}
+      {/* 左侧圆形按钮：固定贴左边，内部可滚；主区用 calc 吃满剩余宽度 */}
       <aside
-        className={`tp-sidebar tp-sphere-rail z-40 shrink-0 flex-col self-stretch min-h-full ${
+        className={`tp-sidebar tp-sphere-rail z-40 flex-col ${
           mobileMenuOpen
-            ? 'fixed inset-y-0 left-0 z-50 flex translate-x-0 md:relative md:z-40'
+            ? 'fixed inset-y-0 left-0 z-50 flex translate-x-0'
             : 'hidden md:flex'
         } ${dockWidthClass}`}
         aria-label="平台导航坞"
@@ -5830,8 +5836,8 @@ const App: React.FC = () => {
           </div>
       )}
 
-      {/* 主区：与侧栏并列，吃满剩余宽度 */}
-      <div className={`tp-workspace ${dockPadClass} min-w-0 max-w-none flex flex-col`}>
+      {/* 主区：margin 让开固定侧栏，宽度 calc(100% - 侧栏) 保证满屏 */}
+      <div className="tp-workspace min-w-0 max-w-none flex flex-col">
       <main className="tp-app-main flex-1 flex flex-col relative min-w-0 w-full max-w-none">
         <header className="tp-header w-full max-w-none px-3 sm:px-5 py-3 sm:py-4 flex flex-col gap-3 z-10">
           {activeModule === ModuleType.HOME ? (

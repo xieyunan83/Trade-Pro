@@ -1,10 +1,10 @@
 @import "tailwindcss";
 
 /*
- * 全站布局锁：
- * 1) .tp-app 必须占满视口宽度
- * 2) 主区用 flex:1 1 0% 吃掉侧栏右侧全部剩余（禁止 width:100%，会和侧栏抢宽导致布局崩）
- * 3) 左侧圆形按钮在文档流里，跟整页一起上下滚
+ * 全站布局（最终方案）：
+ * - 左侧圆形菜单 fixed 贴边，内部 overflow 可滑
+ * - 主区 width: calc(100% - var(--tp-sidebar-w))，所有模块统一满屏
+ * 不再用 flex 猜剩余宽度（Electron/宽屏下会缩成右侧大片留白）
  */
 html,
 body,
@@ -25,40 +25,51 @@ body {
 }
 
 .tp-app {
-  display: flex !important;
-  flex-direction: row !important;
-  align-items: stretch !important;
+  --tp-sidebar-w: 4.25rem;
+  position: relative !important;
+  display: block !important;
   width: 100% !important;
   max-width: none !important;
   min-width: 100% !important;
   min-height: 100dvh !important;
   box-sizing: border-box !important;
 }
+.tp-app.is-nav-submenu {
+  --tp-sidebar-w: 15.5rem;
+}
+.tp-app.is-nav-expanded:not(.is-nav-submenu) {
+  --tp-sidebar-w: 4.5rem;
+}
 
-/* 左侧圆形按钮所在侧栏：跟页面一起滚 */
+/* 左侧圆形按钮：固定贴窗左侧，菜单自身可上下滑 */
 .tp-sidebar.tp-sphere-rail {
-  flex: 0 0 auto !important;
-  position: relative !important;
-  top: auto !important;
-  left: auto !important;
-  right: auto !important;
-  bottom: auto !important;
-  height: auto !important;
-  min-height: 100% !important;
-  align-self: stretch !important;
+  position: fixed !important;
+  left: 0 !important;
+  top: 0 !important;
+  bottom: 0 !important;
+  width: var(--tp-sidebar-w) !important;
+  max-width: var(--tp-sidebar-w) !important;
+  height: 100dvh !important;
+  min-height: 100dvh !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch;
+  z-index: 40 !important;
+  box-sizing: border-box !important;
   transform: none !important;
 }
 
-/* 主区：只靠 flex 吃剩余宽度 */
+/* 主区：让开侧栏，吃满剩余 —— 这是满屏的唯一可靠算法 */
 .tp-workspace {
-  flex: 1 1 0% !important;
-  width: auto !important;
-  max-width: none !important;
-  min-width: 0 !important;
-  overflow: visible !important;
-  box-sizing: border-box !important;
   display: flex !important;
   flex-direction: column !important;
+  margin-left: var(--tp-sidebar-w) !important;
+  width: calc(100% - var(--tp-sidebar-w)) !important;
+  max-width: none !important;
+  min-width: 0 !important;
+  min-height: 100dvh !important;
+  box-sizing: border-box !important;
+  overflow: visible !important;
 }
 
 .tp-header,
@@ -92,6 +103,16 @@ body {
   width: 100% !important;
   margin-left: 0 !important;
   margin-right: 0 !important;
+}
+
+@media (max-width: 767px) {
+  .tp-sidebar.tp-sphere-rail {
+    /* 移动端由 App 的 fixed 抽屉控制，这里不强制占位 */
+  }
+  .tp-workspace {
+    margin-left: 0 !important;
+    width: 100% !important;
+  }
 }
 
 @media (min-width: 1024px) {
