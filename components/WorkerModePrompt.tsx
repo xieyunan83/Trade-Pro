@@ -28,9 +28,13 @@ export const WorkerModePrompt: React.FC<Props> = ({ open, onConfirm, onDecline }
             <Cpu size={20} />
           </div>
           <div className="min-w-0 flex-1">
-            <h2 className="text-base font-black text-slate-900">本机挂机执行任务？</h2>
+            <h2 className="text-base font-black text-slate-900">
+              {status.active ? '继续本机挂机执行？' : '本机挂机执行任务？'}
+            </h2>
             <p className="text-[12px] text-slate-600 mt-1.5 leading-relaxed font-medium">
-              检测到管理员进入业务工作台。确认后，本机会按日程自动跑队列（可关页以外的其它电脑上操作）。
+              {status.active
+                ? '本机此前已开启挂机。确认后继续按日程跑队列；选「否」将停止本机自动作业。'
+                : '管理员进入业务工作台。确认后，本机会按日程自动跑队列（其它电脑可只浏览业务）。'}
             </p>
           </div>
           <button
@@ -74,7 +78,7 @@ export const WorkerModePrompt: React.FC<Props> = ({ open, onConfirm, onDecline }
             onClick={onConfirm}
             className="px-3.5 py-2 rounded-xl text-[12px] font-black text-white bg-indigo-600 hover:bg-indigo-500 shadow-sm"
           >
-            是，开始挂机执行
+            {status.active ? '是，继续挂机' : '是，开始挂机执行'}
           </button>
         </div>
       </div>

@@ -169,11 +169,13 @@ export const deleteAutomationTaskFromCloud = async (
 
 export const fetchAutomationQueueFromCloud = async (): Promise<AutomationResult[]> => {
   if (!isSupabaseConfigured()) return [];
+  // 与 CRM/背调历史一致：拉取全表再按 local_id 合并。
+  // 旧逻辑按 user_id(=workspace) 过滤，两台客户端若 workspace 不一致会各看各的，表现为「数据库不共用」。
   const { rows, error } = await selectAllRows<{ task_data: AutomationResult }>(
     getSupabaseClient(),
     'automation_queue',
     'task_data, updated_at',
-    { orderCol: 'updated_at', ascending: false, eq: { user_id: cloudUid() } }
+    { orderCol: 'updated_at', ascending: false }
   );
   if (error) {
     if (/automation_queue|schema cache|does not exist/i.test(error)) {

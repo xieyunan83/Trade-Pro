@@ -75,6 +75,9 @@ export const mergeClientsById = (local: Client[], cloud: Client[]): Client[] => 
       ...b,
       ...a,
       productType,
+      // 归属：保留已有拥有人，避免后登录端把自己写成拥有人盖掉同事
+      ownerUsername: (a.ownerUsername || '').trim() || (b.ownerUsername || '').trim() || undefined,
+      departmentId: (a.departmentId || '').trim() || (b.departmentId || '').trim() || undefined,
       contacts: (a.contacts?.length || 0) >= (b.contacts?.length || 0) ? a.contacts : b.contacts,
       tags: Array.from(new Set([...(b.tags || []), ...(a.tags || [])])),
       searchedKeywords: Array.from(

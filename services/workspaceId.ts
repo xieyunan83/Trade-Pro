@@ -1,10 +1,11 @@
 /**
  * 云端行隔离用的 workspace id（与 scripts/supabase-rls-harden.sql 对齐）。
- * 未配置时仍为 default，保证现有环境不停用。
+ * 未配置时统一为 default，保证多客户端共用同一公司库。
  *
  * 多租户建议：
- * - 公司共享 CRM：设 VITE_WORKSPACE_ID 或 trade_scout_workspace_id 为同一长随机串
- * - 按部门隔离：另存 trade_scout_workspace_id = `${base}:${departmentId}`（需同步迁库）
+ * - 公司共享：设 VITE_WORKSPACE_ID 为同一长随机串（所有客户端同一值）
+ * - 勿在单机 localStorage 私自改 trade_scout_workspace_id，否则写入会落到另一分区
+ * - 按部门隔离：另需迁库，见 suggestDeptWorkspaceId
  */
 export const getCloudWorkspaceId = (): string => {
   try {
@@ -14,8 +15,19 @@ export const getCloudWorkspaceId = (): string => {
         ''
     ).trim();
     if (fromEnv) return fromEnv;
+    // 本机若曾误设隔离 id，强制回退 default，避免两台电脑各写各的库
     const fromLs = (localStorage.getItem('trade_scout_workspace_id') || '').trim();
-    if (fromLs) return fromLs;
+    if (fromLs && fromLs !== 'default') {
+      console.warn(
+        '[workspace] 忽略本机 trade_scout_workspace_id=%s，改用 default 共享库',
+        fromLs
+      );
+      try {
+        localStorage.setItem('trade_scout_workspace_id', 'default');
+      } catch {
+        /* ignore */
+      }
+    }
   } catch {
     /* ignore */
   }

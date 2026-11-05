@@ -1003,9 +1003,9 @@ const App: React.FC = () => {
                 }
                 if (!cancelled) {
                   setWorkspaceSyncStatus(
-                    `已同步 CRM ${ws.crm.merged} · 作业 ${ws.automation.merged} · 历史 ${ws.history.merged}`
+                    `已同步 CRM ${ws.crm.merged}（云 ${ws.crm.cloud}）· 作业 ${ws.automation.merged}（云 ${ws.automation.cloud}）· 历史 ${ws.history.merged}`
                   );
-                  // 云同步写入本机后，再刷一次 CRM（不阻塞首屏）
+                  // 云同步写入本机后，刷新 CRM / 作业 / 历史到界面（全量合并后再按权限过滤）
                   try {
                     const afterSyncAll = loadAllCrmClients();
                     reconcileCrmTombstonesWithLiveClients(afterSyncAll);
@@ -1015,16 +1015,35 @@ const App: React.FC = () => {
                   } catch {
                     /* ignore */
                   }
+                  try {
+                    const histAfter = applyDmPersistToHistory(await getHistory());
+                    setHistory(scope(migrateLegacyOwnership(histAfter, users, depts()).items));
+                  } catch {
+                    /* ignore */
+                  }
                 }
                 const qAfter = await getAutomationQueue();
                 if (qAfter.length) queueTasks = qAfter;
                 void syncAllWorkspaceData({ upload: true })
-                  .then((up) => {
+                  .then(async (up) => {
                     console.info('[workspace-sync upload]\n' + formatWorkspaceSyncReport(up));
-                    if (!cancelled) {
-                      setWorkspaceSyncStatus(
-                        `资料已就绪 · CRM ${up.crm.merged} · 作业 ${up.automation.merged}`
+                    if (cancelled) return;
+                    setWorkspaceSyncStatus(
+                      `资料已就绪 · CRM ${up.crm.merged} · 作业 ${up.automation.merged}（云端作业 ${up.automation.cloud}）`
+                    );
+                    try {
+                      const q = await getAutomationQueue();
+                      setAutomationResults(scope(q));
+                    } catch {
+                      /* ignore */
+                    }
+                    try {
+                      const afterUp = filterOutCrmTombstones(loadAllCrmClients());
+                      setCrmClients(
+                        scope(migrateLegacyCrmOwnership(afterUp, users, depts()).clients)
                       );
+                    } catch {
+                      /* ignore */
                     }
                   })
                   .catch((e) => console.warn('[workspace-sync upload] failed', e));
@@ -1567,12 +1586,14 @@ const App: React.FC = () => {
       )
     );
     setAutomationResults((prev) => {
-      // 先给无归属的内存项打上当前用户，避免重过滤后「突然消失」
-      const stamped = prev.map((t) =>
-        !t.ownerUsername && !t.departmentId
-          ? { ...t, ownerUsername: currentUser.username, departmentId: currentUser.departmentId }
-          : t
-      );
+      // 员工：无归属项打上本人以免被权限滤掉；admin/总管可看无归属，禁止改写成自己
+      const stamped = canBrowseAllDepartments(currentUser)
+        ? prev
+        : prev.map((t) =>
+            !t.ownerUsername && !t.departmentId
+              ? { ...t, ownerUsername: currentUser.username, departmentId: currentUser.departmentId }
+              : t
+          );
       return filterOwnedRecords(
         currentUser,
         migrateLegacyOwnership(stamped, users, depts).items,
@@ -5588,12 +5609,8 @@ const App: React.FC = () => {
         onEnterWorkspace={() => {
           setAdminInWorkspace(true);
           setActiveModule(ModuleType.HOME);
-          // 已挂机：续跑未完成补全；未挂机：弹确认（本会话已拒过则不再弹）
-          if (isWorkerModeActive()) {
-            window.setTimeout(() => kickWorkerTaskResume(), 400);
-          } else if (!hasAnsweredWorkerPromptThisSession()) {
-            setWorkerPromptOpen(true);
-          }
+          // 每次进入业务台都询问是否挂机（不因本机会话/上次已开而静默跳过）
+          setWorkerPromptOpen(true);
         }}
       />
     );

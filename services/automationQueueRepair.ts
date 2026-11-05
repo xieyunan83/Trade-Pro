@@ -1,5 +1,6 @@
 import type { AutomationResult, DecisionMaker, User } from '../types';
 import { saveAutomationTask, getAutomationQueue, deleteAutomationTask } from './db';
+import { canBrowseAllDepartments } from './permissions';
 
 /** 稳定唯一 ID，避免短 random 碰撞导致 IndexedDB put 互相覆盖丢任务 */
 export const newAutomationTaskId = (): string => {
@@ -51,7 +52,13 @@ export const loadAndRepairAutomationQueue = async (
     }
     seen.add(t.id);
 
-    if (!t.ownerUsername && !t.departmentId && currentUser?.username) {
+    // 无归属旧任务：员工认领后才能看见；admin/总管能看无归属，禁止认领以免盖掉同事归属并污染云端
+    if (
+      !t.ownerUsername &&
+      !t.departmentId &&
+      currentUser?.username &&
+      !canBrowseAllDepartments(currentUser)
+    ) {
       t = {
         ...t,
         ownerUsername: currentUser.username,
