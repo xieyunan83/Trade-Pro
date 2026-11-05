@@ -129,7 +129,7 @@ export const getModel3dProviderStatus = (): {
   if (hasKey && !meta.enabled) {
     return {
       ready: false,
-      detail: '已填写 Key，请在「数据接入」打开「图生 3D」相关开关（或配置千问通道 / 备选 Key）',
+      detail: '已填写 Key，请在「数据接入」打开「图生 3D」相关开关（或配置主通道 / 备选 Key）',
       hasKey,
       enabled: false,
     };
@@ -144,7 +144,7 @@ export const getModel3dProviderStatus = (): {
   }
   return {
     ready: false,
-    detail: '请先配置图生 3D API Key（系统管理 → 数据接入 · 千问通道 Tripo，或本页管理员快捷配置）',
+    detail: '请先配置图生 3D API Key（系统管理 → 数据接入 · 图生 3D，或本页管理员快捷配置）',
     hasKey: false,
     enabled: false,
   };
@@ -395,7 +395,7 @@ export const generateModel3d = async (input: Model3dGenerateInput): Promise<Mode
   if (!qwenOk && !tripoOk && !hunyuanOk) {
     throw new Error(
       humanizeCreativeProviderError(
-        '未配置图生 3D API。请在「数据接入」填写千问通道 Tripo Key，或使用本页管理员快捷配置。'
+        '未配置图生 3D API。请在「数据接入」填写图生 3D Key，或使用本页管理员快捷配置。'
       )
     );
   }

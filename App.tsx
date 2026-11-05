@@ -6655,6 +6655,7 @@ const App: React.FC = () => {
           open={workerPromptOpen}
           onConfirm={handleWorkerConfirm}
           onDecline={handleWorkerDecline}
+          onDismiss={() => setWorkerPromptOpen(false)}
         />
       )}
 

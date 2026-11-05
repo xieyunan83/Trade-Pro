@@ -95,7 +95,7 @@ const resolveVideoConfig = (): ResolvedVideoConfig => {
 
   if (!apiKey) {
     throw new Error(
-      '未配置视频生成 API。请管理员在「系统管理 → 数据接入」启用「视频生成 API」并填写 Key（可与通义图像同一账号）。'
+      '未配置视频生成 API。请管理员在「系统管理 → 数据接入」启用「视频生成 API」并填写 Key（可与图像生成同一账号）。'
     );
   }
 

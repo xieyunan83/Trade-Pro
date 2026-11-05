@@ -165,15 +165,28 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     });
   };
 
-  // 切换 / 打开任务：有原模地址才默认原模，否则用当前 GLB（切勿落到平面预览图）
+  // 切换 / 打开任务：本机原模优先；原模仅远程且当前已有本机 GLB 时默认看当前，避免演示卡在过期链
   useEffect(() => {
     if (!active) {
       setPreviewMode('current');
       setPartNames([]);
       return;
     }
-    const hasOrigUrl = !!(active.originalModelUrl || active.baseModelUrl);
-    setPreviewMode(hasOrigUrl ? 'original' : 'current');
+    const isLocal = (u?: string) =>
+      !!u && (isVaultRef(u) || u.startsWith('blob:') || u.startsWith('data:'));
+    const origCand = [active.originalModelUrl, active.baseModelUrl].filter(Boolean) as string[];
+    const localOrig = origCand.find(isLocal);
+    const remoteOrig = origCand.find((u) => /^https?:\/\//i.test(u));
+    const curLocal = [active.modelUrl, active.pbrModelUrl].find(isLocal);
+    if (localOrig) {
+      setPreviewMode('original');
+    } else if (remoteOrig && curLocal) {
+      setPreviewMode('current');
+    } else if (origCand.length) {
+      setPreviewMode('original');
+    } else {
+      setPreviewMode('current');
+    }
     setPartNames([]);
   }, [active?.id]);
 
@@ -1971,8 +1984,10 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                       previewHint: '模型已就绪 · 已从本机素材库回挂 · 可拖动环视',
                       updatedAt: Date.now(),
                     });
+                    // 原模远程过期时切到当前本机 GLB，避免一直卡在失败预览
+                    setPreviewMode('current');
                     setMsgTone('ok');
-                    setMsg('已从本机素材库找回 GLB，可预览 / 下载');
+                    setMsg('远程链已过期，已切到本机 GLB，可预览 / 下载');
                   });
                 }}
                 onLocalBlob={(blob) => {

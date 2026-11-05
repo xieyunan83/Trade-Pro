@@ -11,14 +11,25 @@ type Props = {
   open: boolean;
   onConfirm: () => void;
   onDecline: () => void;
+  /** 仅关弹窗、不停挂机（已挂机时点 X 用） */
+  onDismiss?: () => void;
 };
 
 /** admin 进入业务页时：确认是否本机挂机执行 */
-export const WorkerModePrompt: React.FC<Props> = ({ open, onConfirm, onDecline }) => {
+export const WorkerModePrompt: React.FC<Props> = ({ open, onConfirm, onDecline, onDismiss }) => {
   const [status, setStatus] = useState<WorkerModeStatus>(() => getWorkerModeStatus());
   useEffect(() => subscribeWorkerMode(setStatus), []);
 
   if (!open) return null;
+
+  const handleCloseX = () => {
+    // 已挂机：X 只关窗，避免演示时误点停掉整机作业
+    if (status.active && onDismiss) {
+      onDismiss();
+      return;
+    }
+    onDecline();
+  };
 
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-900/50 p-4">
@@ -40,7 +51,7 @@ export const WorkerModePrompt: React.FC<Props> = ({ open, onConfirm, onDecline }
           <button
             type="button"
             className="text-slate-400 hover:text-slate-700 p-1"
-            onClick={onDecline}
+            onClick={handleCloseX}
             aria-label="关闭"
           >
             <X size={16} />

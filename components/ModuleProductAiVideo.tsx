@@ -878,7 +878,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
             )}
             {!provider.ready && (
               <p className="text-[11px] text-amber-800 font-medium">
-                管理员请到「系统管理 → 数据接入 → 视频生成 API」填写 Key（也可复用已配置的通义图像/千问 Key）。
+                管理员请到「系统管理 → 数据接入 → 视频生成 API」填写 Key（也可复用已配置的图像/对话通道 Key）。
               </p>
             )}
           </div>
