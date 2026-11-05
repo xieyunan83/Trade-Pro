@@ -122,7 +122,8 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
    * - current：当前 modelUrl（拆分后=分件整体环视）
    */
   type PreviewMode = 'original' | 'parts' | 'current';
-  const [previewMode, setPreviewMode] = useState<PreviewMode>('current');
+  /** 默认原模环视；分件着色必须用户主动点「分件着色 / 看拆分效果」 */
+  const [previewMode, setPreviewMode] = useState<PreviewMode>('original');
   const [partNames, setPartNames] = useState<string[]>([]);
   const [recoveringOriginal, setRecoveringOriginal] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -145,7 +146,8 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
 
   const openSegmentWorkbench = (opts?: { viewParts?: boolean }) => {
     setWorkbenchTool('segment');
-    if (opts?.viewParts !== false && hasSegmentResult) {
+    // 仅明确要求看分件时才切；默认保持原模
+    if (opts?.viewParts === true && hasSegmentResult) {
       setPreviewMode('parts');
       setMsgTone('ok');
       setMsg(
@@ -153,22 +155,28 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
           ? `部件预览：共 ${partNames.length} 件。拖拽旋转，底部调节炸开；可切「原模」看拆分前`
           : '部件预览已打开。拖拽旋转 / 滚轮缩放；可切「原模」看拆分前'
       );
+    } else {
+      // 打开拆分工作台也不自动进分件着色
+      const hasOrig = !!(active?.originalModelUrl || active?.baseModelUrl);
+      setPreviewMode(hasOrig || hasSegmentResult ? 'original' : 'current');
     }
     requestAnimationFrame(() => {
       workbenchPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     });
   };
 
-  // 切换任务：有拆分则默认可看分件，但仍保留切回原模
+  // 切换 / 打开任务：一律默认原模；有拆分也不自动进分件着色
   useEffect(() => {
     if (!active) {
-      setPreviewMode('current');
+      setPreviewMode('original');
       setPartNames([]);
       return;
     }
-    setPreviewMode(active.segmentTaskId ? 'parts' : 'current');
+    const hasOrig = !!(active.originalModelUrl || active.baseModelUrl || hasSegmentResult);
+    setPreviewMode(hasOrig ? 'original' : 'current');
     setPartNames([]);
-  }, [active?.id, active?.segmentTaskId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在换任务时重置；勿跟 hasSegmentResult 抖动
+  }, [active?.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -829,9 +837,10 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
       setBusy(false);
       setMsgTone('ok');
       if (kind === 'segment') {
-        setPreviewMode('parts');
+        // 拆分完成后仍默认看原模；用户要看拆分再点「分件着色」
+        setPreviewMode('original');
         setWorkbenchTool('segment');
-        setMsg('部件拆分完成：可看「分件着色」，也可随时切「原模」找回拆分前的 3D');
+        setMsg('部件拆分完成：仍显示原模。要点「分件着色」才看拆分效果');
       } else {
         setMsg(
           kind === 'convert'

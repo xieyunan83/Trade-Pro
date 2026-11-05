@@ -10,6 +10,7 @@ import {
 } from '../services/platformSections';
 import { ALWAYS_ACTIVE_MODULES } from '../services/moduleNav';
 import { prefetchModule } from '../services/modulePrefetch';
+import { XiaoYuanAssistant } from './XiaoYuanAssistant';
 
 export type SphereNavPhase = 'start' | 'sections' | 'submenu';
 
@@ -191,7 +192,9 @@ export const SphereNav: React.FC<Props> = ({
           )}
         </div>
 
-        <div className="tp-sphere-foot py-2 space-y-1 shrink-0 w-full px-1.5 border-t border-cyan-400/10">
+        <div className="tp-sphere-foot py-2 space-y-1.5 shrink-0 w-full px-1.5 border-t border-cyan-400/10 mt-auto">
+          {/* 小媛：只在左侧菜单栏底部，绝不浮动到主区 */}
+          <XiaoYuanAssistant visible />
           {currentUser.role === 'manager' && onOpenTeamManage && (
             <button
               type="button"

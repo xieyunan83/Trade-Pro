@@ -441,10 +441,15 @@
             linear-gradient(118deg, #070b12 0%, #0d1520 46%, #0a2a28 100%);
           box-shadow: 0 14px 32px -22px rgba(8, 24, 48, 0.55);
         }
-        /* 小媛可拖动 FAB */
-        .tp-xiaoyuan-fab {
+        /* 小媛：钉在左侧导航栏底部，禁止浮动定位 */
+        .tp-xiaoyuan-rail {
           pointer-events: auto;
-          will-change: left, top;
+          position: relative !important;
+          left: auto !important;
+          top: auto !important;
+          right: auto !important;
+          bottom: auto !important;
+          transform: none !important;
         }
         .tp-landing .tp-kpi {
           display: flex;
@@ -591,30 +596,44 @@
           animation: tpPulse 2.2s ease-in-out infinite;
         }
 
-        /* ——— 主区按视口铺满：任何分辨率都吃满剩余宽度 ——— */
-        .tp-app {
+        /* ——— 主区按视口铺满：侧栏+主区同一行，吃满剩余宽度 ——— */
+        html, body, #root {
           width: 100% !important;
           max-width: none !important;
-          min-width: 0;
+          margin: 0 !important;
+        }
+        .tp-app {
+          display: flex !important;
+          flex-direction: row !important;
+          align-items: stretch !important;
+          width: 100% !important;
+          max-width: none !important;
+          min-width: 0 !important;
+          box-sizing: border-box !important;
+        }
+        .tp-sidebar.tp-sphere-rail {
+          flex: 0 0 auto !important;
         }
         .tp-workspace {
+          /* width:0 + flex:1 = 经典「吃满剩余列宽」写法，避免内容撑不开 */
           flex: 1 1 0% !important;
-          width: auto !important;
+          width: 0 !important;
           max-width: none !important;
           min-width: 0 !important;
           display: flex !important;
           flex-direction: column !important;
-          overflow: hidden;
+          overflow: hidden !important;
+          box-sizing: border-box !important;
         }
         .tp-app main,
         .tp-main-stage {
           width: 100% !important;
           max-width: none !important;
           min-width: 0 !important;
-          box-sizing: border-box;
+          box-sizing: border-box !important;
         }
         .tp-app main {
-          flex: 1 1 auto;
+          flex: 1 1 auto !important;
         }
         /* 取消各模块根上的 max-w-* + mx-auto，避免宽屏右侧大片留白 */
         .tp-main-stage > *,
@@ -654,11 +673,6 @@
           .tp-3d-workbench {
             grid-template-columns: minmax(260px, 280px) minmax(0, 1fr) minmax(220px, 260px);
           }
-        }
-        .tp-sidebar.tp-sphere-rail {
-          position: sticky;
-          top: 0;
-          align-self: flex-start;
         }
         .tp-3d-workbench-stage {
           min-width: 0;
