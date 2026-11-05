@@ -891,7 +891,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
   };
 
   return (
-    <div className="max-w-[96rem] mx-auto animate-fade-in px-1 space-y-3">
+    <div className="tp-2d-studio w-full animate-fade-in px-0 sm:px-1 space-y-3">
       {/* 顶栏：标题 / 流水线 / 适市约束压成一行，主画布尽量露出来 */}
       <div className="rounded-2xl border border-violet-200/70 bg-gradient-to-br from-violet-50/80 via-white to-cyan-50/50 px-3 py-2.5 space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -937,7 +937,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
         />
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-3 min-h-[36rem]">
+      <div className="tp-2d-workbench">
         {/* 左：Projects / Skills / Assets */}
         <aside className="xl:col-span-3 rounded-2xl border border-slate-200 bg-white flex flex-col min-h-[20rem] overflow-hidden">
           <div className="flex border-b border-slate-100">

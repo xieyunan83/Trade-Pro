@@ -6203,7 +6203,7 @@ const App: React.FC = () => {
                     />
                 </ModulePane>
                 <ModulePane id={ModuleType.STRATEGY} activeId={activeModule} maxAlive={10}>
-                    <div className="animate-fade-in max-w-7xl mx-auto pb-10">
+                    <div className="animate-fade-in w-full pb-10">
                         {analysisData && (
                             <div className="mb-3 flex flex-wrap items-center justify-between gap-2 bg-white px-3 py-2 rounded-2xl border border-slate-200 shadow-sm">
                                 <div className="min-w-0 flex items-center gap-2">
@@ -6291,7 +6291,7 @@ const App: React.FC = () => {
                 </ModulePane>
                 {analysisData && !alwaysActiveModules.includes(activeModule) && (
                     <ErrorBoundary label="背调报告">
-                    <div className="animate-fade-in max-w-7xl mx-auto pb-10">
+                    <div className="animate-fade-in w-full pb-10">
                     <div className="mb-6 sm:mb-8 flex flex-col md:flex-row md:items-end justify-between gap-4 bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-panel">
                         <div className="min-w-0">
                             <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-600 mb-1">Target Profile</div>

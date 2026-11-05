@@ -16,7 +16,7 @@ export const ModuleComingSoon: React.FC<Props> = ({ module }) => {
   const Icon = item?.icon || Construction;
 
   return (
-    <div className="max-w-[90rem] mx-auto animate-fade-in px-1 space-y-4">
+    <div className="w-full animate-fade-in px-0 sm:px-1 space-y-4">
       <div className="relative overflow-hidden rounded-3xl border border-cyan-200/60 bg-white/90 shadow-signal p-8 sm:p-12">
         <div
           className="pointer-events-none absolute -right-16 -top-16 h-56 w-56 rounded-full opacity-40 blur-3xl"

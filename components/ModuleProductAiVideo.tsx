@@ -447,7 +447,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
   const playUrl = fullUrl || draftUrl;
 
   return (
-    <div className="max-w-[96rem] mx-auto space-y-4 animate-fade-in px-1">
+    <div className="w-full space-y-4 animate-fade-in px-0 sm:px-1">
       <div className="rounded-3xl border border-rose-200/70 bg-gradient-to-br from-rose-50/70 via-white to-amber-50/40 p-5 sm:p-6 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>

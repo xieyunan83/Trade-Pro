@@ -481,7 +481,7 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
   };
 
   return (
-    <div className="max-w-7xl mx-auto space-y-4 sm:space-y-8 animate-fade-in">
+    <div className="w-full space-y-4 sm:space-y-8 animate-fade-in">
       <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-bold text-slate-600">
         数据隔离：员工仅见自己导入/添加的收件人；主管仅见本部门；跨部门不可见。CRM 导入范围与客户管理一致。产品匹配生成的开发信会自动进入「邮件模板」。
       </div>

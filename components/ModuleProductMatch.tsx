@@ -395,7 +395,7 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
 
   if (showClientMatch) {
     return (
-      <div className="space-y-6 animate-fade-in max-w-6xl mx-auto">
+      <div className="space-y-6 animate-fade-in w-full">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-2">
             {onBackToReport && (
@@ -563,7 +563,7 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
   }
 
   return (
-    <div className="space-y-6 animate-fade-in max-w-6xl mx-auto">
+    <div className="space-y-6 animate-fade-in w-full">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <CreativePipelineBar current="match" onNavigate={onNavigateModule} />
         <div className="flex flex-wrap items-center gap-3">

@@ -380,7 +380,7 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
     continent.countries.filter((c) => selectedCountries.includes(countrySearchValue(c))).length;
 
   return (
-    <div className="max-w-7xl mx-auto space-y-4 sm:space-y-6 animate-fade-in px-0">
+    <div className="w-full space-y-4 sm:space-y-6 animate-fade-in px-0">
       <div className="bg-white p-4 sm:p-5 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
         <div className="flex flex-col lg:flex-row lg:items-start gap-3 lg:gap-4 mb-3">
           <div className="tp-panel-title mb-0 min-w-0 flex-1">

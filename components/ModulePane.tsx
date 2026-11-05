@@ -40,7 +40,7 @@ export const ModulePane: React.FC<Props> = ({
   return (
     <div
       className={isActive ? 'contents' : undefined}
-      style={isActive ? undefined : { display: 'none' }}
+      style={isActive ? { display: 'contents' } : { display: 'none' }}
       aria-hidden={!isActive}
       data-module-pane={id}
       data-active={isActive ? '1' : '0'}

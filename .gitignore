@@ -33,3 +33,4 @@ desktop/resources/seed.bin
 *.sln
 *.sw?
 supabase/.temp/
+desktop/.cache/

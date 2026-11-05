@@ -199,8 +199,8 @@ export const TradeJourneyPanel: React.FC<Props> = ({
       </div>
 
       {expanded ? (
-        <div className="p-3 sm:p-4 grid grid-cols-1 lg:grid-cols-12 gap-3">
-          <div className="lg:col-span-5 space-y-3">
+        <div className="p-3 sm:p-4 grid grid-cols-1 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] gap-3 lg:gap-5">
+          <div className="space-y-3 min-w-0">
             <div>
               <div className="text-[10px] font-black text-slate-400 uppercase tracking-wide mb-1.5">
                 我有什么 · 决定推荐路径
@@ -285,7 +285,7 @@ export const TradeJourneyPanel: React.FC<Props> = ({
             )}
           </div>
 
-          <div className="lg:col-span-7">
+          <div className="min-w-0">
             <div className="flex items-center justify-between gap-2 mb-1.5">
               <div className="text-[10px] font-black text-slate-400 uppercase tracking-wide">
                 七步任务 · 可单做或按序推进

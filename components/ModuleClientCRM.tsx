@@ -686,7 +686,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selectedClientIds.has(id));
 
   return (
-    <div className="max-w-7xl mx-auto space-y-3 sm:space-y-4 animate-fade-in">
+    <div className="w-full space-y-3 sm:space-y-4 animate-fade-in">
       {/* 漏斗：单行紧凑，给客户列表留屏 */}
       <div className="bg-white px-3 py-2.5 rounded-2xl border border-slate-200 shadow-sm space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">

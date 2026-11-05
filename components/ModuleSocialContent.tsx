@@ -307,7 +307,7 @@ export const ModuleSocialContent: React.FC<Props> = ({ currentUser }) => {
   };
 
   return (
-    <div className="max-w-[96rem] mx-auto space-y-4 animate-fade-in px-1">
+    <div className="w-full space-y-4 animate-fade-in px-0 sm:px-1">
       <div className="rounded-3xl border border-fuchsia-200/70 bg-gradient-to-br from-fuchsia-50/70 via-white to-violet-50/50 p-5 sm:p-6 shadow-sm">
         <div className="inline-flex items-center gap-2 text-fuchsia-700 font-black text-xs uppercase tracking-widest">
           <Share2 size={14} /> Social Studio

@@ -610,7 +610,7 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
   /* —— 空态：选型 + 提示词 + 模板 —— */
   if (!active) {
     return (
-      <div className="max-w-[96rem] mx-auto animate-fade-in px-1 space-y-5">
+      <div className="w-full animate-fade-in px-0 sm:px-1 space-y-5">
         {deployCatalogModal}
         <SiteOneClickForm
           open={oneClickOpen}
@@ -843,7 +843,7 @@ export const ModuleSiteBuilder: React.FC<Props> = ({ currentUser }) => {
 
   /* —— 对话 + 预览 —— */
   return (
-    <div className="max-w-[96rem] mx-auto space-y-3 animate-fade-in px-1">
+    <div className="w-full space-y-3 animate-fade-in px-0 sm:px-1">
       <SiteOneClickForm
         open={oneClickOpen}
         onClose={closeOneClick}

@@ -581,7 +581,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   };
 
   return (
-    <div className="max-w-7xl mx-auto space-y-4 sm:space-y-8 animate-fade-in">
+    <div className="w-full space-y-4 sm:space-y-8 animate-fade-in">
       <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
         <h2 className="text-xl sm:text-2xl font-black text-slate-800 mb-2 flex items-center gap-2">
           <Ruler className="text-blue-600" /> 自动化获客工作流

@@ -111,7 +111,7 @@ export const ModuleContactTools: React.FC<Props> = ({ currentUser, crmClients = 
   };
 
   return (
-    <div className="max-w-[90rem] mx-auto space-y-4 animate-fade-in px-1">
+    <div className="w-full space-y-4 animate-fade-in px-0 sm:px-1">
       <div className="rounded-3xl border border-emerald-200/70 bg-gradient-to-br from-emerald-50/80 via-white to-cyan-50/40 p-5 sm:p-6 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>

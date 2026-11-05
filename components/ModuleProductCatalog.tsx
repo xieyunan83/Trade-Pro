@@ -227,7 +227,7 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
   };
 
   return (
-    <div className="max-w-[90rem] mx-auto space-y-4 animate-fade-in px-1">
+    <div className="w-full space-y-4 animate-fade-in px-0 sm:px-1">
       <div className="rounded-3xl border border-violet-200/70 bg-white/95 p-5 sm:p-6 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>

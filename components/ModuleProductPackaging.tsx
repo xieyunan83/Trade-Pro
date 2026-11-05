@@ -455,7 +455,7 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
   };
 
   return (
-    <div className="max-w-[96rem] mx-auto animate-fade-in px-1 space-y-3">
+    <div className="w-full animate-fade-in px-0 sm:px-1 space-y-3">
       <div className="rounded-2xl border border-amber-200/70 bg-gradient-to-br from-amber-50/80 via-white to-orange-50/40 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
         <div>
           <div className="inline-flex items-center gap-1.5 rounded-full bg-slate-900 text-amber-200 text-[10px] font-black uppercase tracking-widest px-2.5 py-1">

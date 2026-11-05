@@ -396,7 +396,7 @@ export const ModulePosterStudio: React.FC = () => {
     setMultiFields((p) => ({ ...p, [key]: value }));
 
   return (
-    <div className="max-w-7xl mx-auto space-y-4 sm:space-y-6 animate-fade-in pb-24 md:pb-10">
+    <div className="w-full space-y-4 sm:space-y-6 animate-fade-in pb-24 md:pb-10">
       <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
         <h2 className="text-xl sm:text-2xl font-black text-slate-800 mb-2 flex items-center gap-2">
           <Sparkles className="text-pink-600" /> 产品海报工作室

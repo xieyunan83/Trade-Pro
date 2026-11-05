@@ -125,7 +125,7 @@ export const ModuleBuyerLibrary: React.FC<Props> = ({ currentUser, history }) =>
   };
 
   return (
-    <div className="max-w-[90rem] mx-auto space-y-4 animate-fade-in px-1">
+    <div className="w-full space-y-4 animate-fade-in px-0 sm:px-1">
       <div className="rounded-3xl border border-cyan-200/70 bg-white/95 p-5 sm:p-6 shadow-sm">
         <div className="inline-flex items-center gap-2 text-cyan-700 font-black text-xs uppercase tracking-widest">
           <Library size={14} /> Buyer Library

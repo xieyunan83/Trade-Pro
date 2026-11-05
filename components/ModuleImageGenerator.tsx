@@ -47,7 +47,7 @@ export const ModuleImageGenerator: React.FC = () => {
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-2 max-w-7xl mx-auto px-0">
+      <div className="flex gap-2 w-full px-0">
         <button
           type="button"
           onClick={() => setTab('poster')}
@@ -71,7 +71,7 @@ export const ModuleImageGenerator: React.FC = () => {
       {tab === 'poster' ? (
         <ModulePosterStudio />
       ) : (
-        <div className="max-w-7xl mx-auto space-y-4 sm:space-y-8 animate-fade-in">
+        <div className="w-full space-y-4 sm:space-y-8 animate-fade-in">
           <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
             <h2 className="text-xl sm:text-2xl font-black text-slate-800 mb-2 flex items-center gap-2">
               <Image className="text-pink-600 flex-shrink-0" /> AI 图片生成
