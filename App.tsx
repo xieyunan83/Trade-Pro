@@ -5595,7 +5595,7 @@ const App: React.FC = () => {
   return (
     <AccessGate user={currentUser} onLogout={handleLogout}>
     <div
-      className={`tp-app flex min-h-screen min-h-[100dvh] w-full max-w-none ${
+      className={`tp-app min-h-screen min-h-[100dvh] w-full max-w-none ${
         sphereNavExpanded ? 'is-nav-expanded' : ''
       } ${sphereNavPhase === 'submenu' ? 'is-nav-submenu' : ''}`}
     >
@@ -5603,9 +5603,9 @@ const App: React.FC = () => {
       {mobileMenuOpen && (
         <div className="fixed inset-0 bg-ink-950/50 backdrop-blur-sm z-30 md:hidden" onClick={() => setMobileMenuOpen(false)} />
       )}
-      {/* 导航坞：文档流随页面一起滚，不再 sticky/锁死视口高度 */}
+      {/* 左侧圆形按钮：文档流，随整页上下滚（禁止 sticky/fixed） */}
       <aside
-        className={`tp-sidebar tp-sphere-rail z-40 shrink-0 flex-col self-stretch min-h-[100dvh] ${
+        className={`tp-sidebar tp-sphere-rail z-40 shrink-0 flex-col self-stretch min-h-full ${
           mobileMenuOpen
             ? 'fixed inset-y-0 left-0 z-50 flex translate-x-0 md:relative md:z-40'
             : 'hidden md:flex'
@@ -5831,9 +5831,9 @@ const App: React.FC = () => {
       )}
 
       {/* 主区：与侧栏并列，吃满剩余宽度 */}
-      <div className={`tp-workspace ${dockPadClass} flex-1 min-w-0 w-full max-w-none flex flex-col`}>
+      <div className={`tp-workspace ${dockPadClass} min-w-0 max-w-none flex flex-col`}>
       <main className="tp-app-main flex-1 flex flex-col relative min-w-0 w-full max-w-none">
-        <header className="tp-header w-full max-w-none px-3 sm:px-6 py-3 sm:py-4 flex flex-col gap-3 z-10">
+        <header className="tp-header w-full max-w-none px-3 sm:px-5 py-3 sm:py-4 flex flex-col gap-3 z-10">
           {activeModule === ModuleType.HOME ? (
             <div className="flex items-center gap-3">
               <button onClick={() => setMobileMenuOpen(true)} className="md:hidden p-2 text-slate-500 flex-shrink-0 touch-manipulation" aria-label="打开菜单"><Menu size={24} /></button>

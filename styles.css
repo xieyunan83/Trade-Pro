@@ -1,9 +1,10 @@
 @import "tailwindcss";
 
 /*
- * 全站布局锁（必须在 Tailwind 之后）：
- * 主区按「剩余列宽」吃满，不能 width:auto 跟内容收缩——
- * 否则只有带宽表的 CRM/营销工具看起来满屏，其它模块右侧大片留白。
+ * 全站布局锁：
+ * 1) .tp-app 必须占满视口宽度
+ * 2) 主区用 flex:1 1 0% 吃掉侧栏右侧全部剩余（禁止 width:100%，会和侧栏抢宽导致布局崩）
+ * 3) 左侧圆形按钮在文档流里，跟整页一起上下滚
  */
 html,
 body,
@@ -11,44 +12,55 @@ body,
   width: 100% !important;
   max-width: none !important;
   margin: 0 !important;
+  padding: 0 !important;
 }
 html,
 body {
-  overflow-x: hidden;
-  overflow-y: auto;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
 }
 #root {
   display: block !important;
   min-height: 100dvh !important;
 }
+
 .tp-app {
   display: flex !important;
   flex-direction: row !important;
   align-items: stretch !important;
   width: 100% !important;
   max-width: none !important;
-  min-width: 0 !important;
+  min-width: 100% !important;
   min-height: 100dvh !important;
   box-sizing: border-box !important;
 }
-/* 侧栏：文档流，跟页面一起滚，禁止 sticky/锁死视口 */
+
+/* 左侧圆形按钮所在侧栏：跟页面一起滚 */
 .tp-sidebar.tp-sphere-rail {
   flex: 0 0 auto !important;
   position: relative !important;
   top: auto !important;
+  left: auto !important;
+  right: auto !important;
+  bottom: auto !important;
   height: auto !important;
   min-height: 100% !important;
   align-self: stretch !important;
+  transform: none !important;
 }
-/* 主区：强制吃满侧栏右侧全部剩余宽度（所有模块统一） */
+
+/* 主区：只靠 flex 吃剩余宽度 */
 .tp-workspace {
   flex: 1 1 0% !important;
-  width: 100% !important;
+  width: auto !important;
   max-width: none !important;
   min-width: 0 !important;
   overflow: visible !important;
   box-sizing: border-box !important;
+  display: flex !important;
+  flex-direction: column !important;
 }
+
 .tp-header,
 .tp-app-main,
 .tp-main-stage,
@@ -67,7 +79,7 @@ body {
   margin-left: 0 !important;
   margin-right: 0 !important;
 }
-/* 仅打掉模块根级宽屏封顶；文案/对话框的 max-w-2xl 等保留 */
+
 .tp-main-stage .max-w-7xl,
 .tp-main-stage .max-w-6xl,
 .tp-main-stage .max-w-5xl,
@@ -81,12 +93,17 @@ body {
   margin-left: 0 !important;
   margin-right: 0 !important;
 }
+
 @media (min-width: 1024px) {
   .tp-3d-workbench {
+    display: grid !important;
     grid-template-columns: 280px minmax(0, 1fr) minmax(260px, 0.42fr) !important;
+    width: 100% !important;
   }
   .tp-2d-workbench {
+    display: grid !important;
     grid-template-columns: minmax(220px, 20%) minmax(0, 1fr) minmax(260px, 24%) !important;
+    width: 100% !important;
   }
 }
 @media (min-width: 1600px) {
