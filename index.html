@@ -596,13 +596,41 @@
           width: 100%;
           max-width: 100%;
           min-width: 0;
+          flex: 1 1 auto;
         }
         .tp-app main .max-w-7xl,
         .tp-app main .max-w-6xl,
         .tp-app main .max-w-\[96rem\],
         .tp-app main .max-w-\[90rem\] {
-          max-width: none !important;
+          max-width: min(96rem, 100%) !important;
           width: 100%;
+        }
+
+        /* 3D 工作台：不依赖 Tailwind 任意值，避免栅格失效挤成窄条 */
+        .tp-3d-studio {
+          width: 100%;
+          max-width: 100%;
+          box-sizing: border-box;
+        }
+        .tp-3d-workbench {
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 0.75rem;
+          align-items: start;
+          width: 100%;
+        }
+        @media (min-width: 1024px) {
+          .tp-3d-workbench {
+            grid-template-columns: minmax(240px, 280px) minmax(0, 1fr) minmax(200px, 260px);
+          }
+        }
+        .tp-3d-workbench-stage {
+          min-width: 0;
+          width: 100%;
+        }
+        .tp-3d-workbench-side,
+        .tp-3d-workbench-library {
+          min-width: 0;
         }
 
         /* ——— Sphere dock：窄轨固定 + 侧挂子菜单，主区 padding 让位 ——— */

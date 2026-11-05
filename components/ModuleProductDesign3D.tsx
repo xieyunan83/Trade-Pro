@@ -1149,7 +1149,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
   }, [active?.id, active?.segmentTaskId, active?.modelUrl, active?.originalModelUrl]);
 
   return (
-    <div className="w-full max-w-none space-y-3 animate-fade-in px-0 sm:px-1">
+    <div className="tp-3d-studio w-full space-y-3 animate-fade-in px-0 sm:px-1">
       <div className="rounded-2xl border border-indigo-200/70 bg-gradient-to-br from-indigo-50/80 via-white to-slate-50 px-3 py-2.5 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-2 min-w-0">
@@ -1193,8 +1193,8 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
       </div>
 
       {/* 工作台：左侧工具轨 + 参数 | 中预览 | 右项目库 */}
-      <div className="grid grid-cols-1 xl:grid-cols-[minmax(260px,300px)_minmax(0,1fr)_minmax(220px,280px)] gap-3 items-start">
-        <div className="space-y-3 max-h-[min(78vh,52rem)] overflow-y-auto custom-scrollbar pr-0.5 min-w-0">
+      <div className="tp-3d-workbench">
+        <div className="tp-3d-workbench-side space-y-3 max-h-[min(78vh,52rem)] overflow-y-auto custom-scrollbar pr-0.5 min-w-0">
           {/* 制造流水线工具轨 */}
           <div
             ref={workbenchPanelRef}
@@ -1865,7 +1865,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
           )}
         </div>
 
-        <div className="min-w-0 rounded-2xl border border-slate-200 bg-slate-950 text-white overflow-hidden flex flex-col">
+        <div className="tp-3d-workbench-stage min-w-0 rounded-2xl border border-slate-200 bg-slate-950 text-white overflow-hidden flex flex-col">
           <div className="px-3 py-2 border-b border-white/10 flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-slate-300">
             <span>
               {active?.status === 'ready' && downloadUrl
@@ -2236,7 +2236,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
           )}
         </div>
 
-        <div className="min-w-0 rounded-2xl border border-slate-200 bg-white overflow-hidden flex flex-col max-h-[min(78vh,52rem)]">
+        <div className="tp-3d-workbench-library min-w-0 rounded-2xl border border-slate-200 bg-white overflow-hidden flex flex-col max-h-[min(78vh,52rem)]">
           <div className="px-3 py-2.5 border-b border-slate-100 text-xs font-black text-slate-700">
             项目库 ({jobs.length})
           </div>
