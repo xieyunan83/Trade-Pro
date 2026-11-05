@@ -351,12 +351,8 @@ const App: React.FC = () => {
       : sphereNavPhase === 'sections'
         ? 'w-[4.5rem]'
         : 'w-[4.25rem]';
-  const dockPadClass =
-    sphereNavPhase === 'submenu'
-      ? 'md:pl-[15.5rem]'
-      : sphereNavPhase === 'sections'
-        ? 'md:pl-[4.5rem]'
-        : 'md:pl-[4.25rem]';
+  /** 侧栏改为文档流 flex 子项后，主区不再需要 padding 让位 */
+  const dockPadClass = '';
   
   const [historyOpen, setHistoryOpen] = useState(false);
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -5600,7 +5596,7 @@ const App: React.FC = () => {
   return (
     <AccessGate user={currentUser} onLogout={handleLogout}>
     <div
-      className={`tp-app flex min-h-screen min-h-[100dvh] overflow-hidden ${
+      className={`tp-app flex min-h-screen min-h-[100dvh] w-full max-w-none overflow-hidden ${
         sphereNavExpanded ? 'is-nav-expanded' : ''
       } ${sphereNavPhase === 'submenu' ? 'is-nav-submenu' : ''}`}
     >
@@ -5608,11 +5604,13 @@ const App: React.FC = () => {
       {mobileMenuOpen && (
         <div className="fixed inset-0 bg-ink-950/50 backdrop-blur-sm z-30 md:hidden" onClick={() => setMobileMenuOpen(false)} />
       )}
-      {/* 固定贴边导航坞：滚动主区时始终跟随视口 */}
+      {/* 导航坞：与主区同一行弹性布局，贴着内容一起占满屏幕（不再 fixed 脱离主区） */}
       <aside
-        className={`tp-sidebar tp-sphere-rail fixed inset-y-0 left-0 z-40 h-[100dvh] ${
-          mobileMenuOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
-        } ${dockWidthClass} flex flex-col`}
+        className={`tp-sidebar tp-sphere-rail z-40 h-[100dvh] sticky top-0 shrink-0 flex-col ${
+          mobileMenuOpen
+            ? 'fixed inset-y-0 left-0 z-50 flex translate-x-0 md:relative md:z-40'
+            : 'hidden md:flex'
+        } ${dockWidthClass}`}
         aria-label="平台导航坞"
       >
         <div className="tp-dock-brand flex items-center justify-center py-2.5 border-b border-cyan-400/15 shrink-0">
@@ -5833,9 +5831,9 @@ const App: React.FC = () => {
           </div>
       )}
 
-      {/* 主区：用 padding 给固定坞让位，滚动时坞不跟着走丢 */}
-      <div className={`tp-workspace ${dockPadClass} transition-[padding] duration-300 ease-out w-full`}>
-      <main className="flex-1 flex flex-col overflow-hidden relative min-w-0">
+      {/* 主区：与侧栏并列，吃满剩余宽度 */}
+      <div className={`tp-workspace ${dockPadClass} flex-1 min-w-0 w-auto max-w-none flex flex-col overflow-hidden`}>
+      <main className="flex-1 flex flex-col overflow-hidden relative min-w-0 w-full">
         <header className="tp-header px-3 sm:px-6 lg:px-8 py-3 sm:py-4 flex flex-col gap-3 z-10">
           {activeModule === ModuleType.HOME ? (
             <div className="flex items-center gap-3">

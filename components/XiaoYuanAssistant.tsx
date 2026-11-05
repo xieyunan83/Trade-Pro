@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Loader2, Send, X } from 'lucide-react';
 import {
   askXiaoYuan,
@@ -63,9 +64,11 @@ const XiaoYuanFace: React.FC<{
 );
 
 const defaultPos = (): Pos => {
-  if (typeof window === 'undefined') return { x: 8, y: 360 };
-  const y = Math.max(window.innerHeight * 0.58, window.innerHeight - 200);
-  return { x: 8, y };
+  if (typeof window === 'undefined') return { x: 24, y: 360 };
+  // 默认右下角，避免被左侧导航挡住或旧坐标飞出视口
+  const x = Math.max(24, window.innerWidth - FAB_W - 28);
+  const y = Math.max(24, window.innerHeight - FAB_H - 28);
+  return { x, y };
 };
 
 const clampPos = (p: Pos): Pos => {
@@ -110,6 +113,8 @@ export const XiaoYuanAssistant: React.FC<Props> = ({ visible = true }) => {
 
   useEffect(() => {
     preloadXiaoYuanAvatar();
+    // 校正可能飞出屏幕的旧坐标
+    setPos((p) => clampPos(p));
   }, []);
 
   useEffect(() => {
@@ -208,11 +213,11 @@ export const XiaoYuanAssistant: React.FC<Props> = ({ visible = true }) => {
     if (panelTop < 8) panelTop = 8;
   }
 
-  return (
+  const ui = (
     <>
       <button
         type="button"
-        className="tp-xiaoyuan-fab fixed z-[70] group flex flex-col items-center gap-0.5 cursor-grab active:cursor-grabbing touch-none select-none"
+        className="tp-xiaoyuan-fab fixed z-[9999] group flex flex-col items-center gap-0.5 cursor-grab active:cursor-grabbing touch-none select-none"
         style={{ left: pos.x, top: pos.y }}
         aria-label={`打开${XIAOYUAN_NAME}助手（可拖动）`}
         title={`${XIAOYUAN_NAME} · 按住拖动，点击对话`}
@@ -255,7 +260,7 @@ export const XiaoYuanAssistant: React.FC<Props> = ({ visible = true }) => {
 
       {open && (
         <div
-          className="fixed z-[71] flex flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden"
+          className="fixed z-[10000] flex flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden"
           style={{ left: panelLeft, top: panelTop, width: panelW, height: panelH }}
           role="dialog"
           aria-label={`${XIAOYUAN_NAME}对话`}
@@ -355,6 +360,9 @@ export const XiaoYuanAssistant: React.FC<Props> = ({ visible = true }) => {
       )}
     </>
   );
+
+  if (typeof document === 'undefined') return ui;
+  return createPortal(ui, document.body);
 };
 
 export default XiaoYuanAssistant;
