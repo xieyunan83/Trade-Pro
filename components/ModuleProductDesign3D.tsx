@@ -1896,7 +1896,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
               </span>
             )}
           </div>
-          <div className="relative w-full aspect-square max-h-[min(72vh,40rem)] mx-auto flex items-stretch justify-center">
+          <div className="relative w-full flex-1 min-h-[min(52vh,28rem)] max-h-[min(78vh,48rem)] flex items-stretch justify-center">
             {active?.status === 'running' ? (
               <div className="flex-1 flex flex-col items-center justify-center space-y-3 p-6">
                 <Loader2 className="mx-auto animate-spin text-indigo-400" size={36} />

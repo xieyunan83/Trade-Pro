@@ -596,16 +596,23 @@
           animation: tpPulse 2.2s ease-in-out infinite;
         }
 
-        /* ——— 主区按视口铺满：侧栏+主区同一行，吃满剩余宽度 ——— */
+        /* ——— 主区按视口铺满（禁止 width:0，Electron 下会把主区算窄） ——— */
         html, body, #root {
           width: 100% !important;
           max-width: none !important;
           margin: 0 !important;
+          min-height: 100% !important;
+          min-height: 100dvh !important;
+        }
+        #root {
+          display: flex !important;
+          flex-direction: column !important;
         }
         .tp-app {
           display: flex !important;
           flex-direction: row !important;
           align-items: stretch !important;
+          flex: 1 1 auto !important;
           width: 100% !important;
           max-width: none !important;
           min-width: 0 !important;
@@ -615,9 +622,8 @@
           flex: 0 0 auto !important;
         }
         .tp-workspace {
-          /* width:0 + flex:1 = 经典「吃满剩余列宽」写法，避免内容撑不开 */
-          flex: 1 1 0% !important;
-          width: 0 !important;
+          flex: 1 1 auto !important;
+          width: auto !important;
           max-width: none !important;
           min-width: 0 !important;
           display: flex !important;
@@ -626,41 +632,55 @@
           box-sizing: border-box !important;
         }
         .tp-app main,
+        .tp-app-main,
         .tp-main-stage {
           width: 100% !important;
           max-width: none !important;
           min-width: 0 !important;
           box-sizing: border-box !important;
         }
-        .tp-app main {
+        .tp-app main,
+        .tp-app-main {
           flex: 1 1 auto !important;
         }
-        /* 取消各模块根上的 max-w-* + mx-auto，避免宽屏右侧大片留白 */
-        .tp-main-stage > *,
+        /* 模块面板：block 满宽，吃掉右侧留白 */
+        .tp-main-stage .tp-module-pane.is-active,
+        .tp-main-stage [data-module-pane][data-active="1"] {
+          display: block !important;
+          width: 100% !important;
+          max-width: none !important;
+          min-width: 0 !important;
+          box-sizing: border-box !important;
+        }
+        .tp-main-stage .tp-module-pane.is-active > *,
         .tp-main-stage [data-module-pane][data-active="1"] > * {
           width: 100% !important;
           max-width: none !important;
           margin-left: 0 !important;
           margin-right: 0 !important;
-          box-sizing: border-box;
+          box-sizing: border-box !important;
         }
         .tp-app main .max-w-7xl,
         .tp-app main .max-w-6xl,
         .tp-app main .max-w-5xl,
         .tp-app main .max-w-4xl,
         .tp-app main .max-w-\[96rem\],
-        .tp-app main .max-w-\[90rem\] {
+        .tp-app main .max-w-\[90rem\],
+        .tp-app main .max-w-\[80rem\],
+        .tp-app main .max-w-screen-2xl,
+        .tp-app main .max-w-screen-xl {
           max-width: none !important;
           width: 100% !important;
           margin-left: 0 !important;
           margin-right: 0 !important;
         }
 
-        /* 3D 工作台：侧栏 | 预览主区(弹性) | 项目库，铺满主区 */
-        .tp-3d-studio {
+        /* 3D 工作台：左工具 | 中预览(吃剩余) | 右项目库，三栏随屏变宽 */
+        .tp-3d-studio,
+        .tp-landing {
           width: 100% !important;
           max-width: none !important;
-          box-sizing: border-box;
+          box-sizing: border-box !important;
         }
         .tp-3d-workbench {
           display: grid !important;
@@ -668,19 +688,29 @@
           gap: 0.75rem;
           align-items: stretch;
           width: 100% !important;
+          max-width: none !important;
+          box-sizing: border-box !important;
         }
         @media (min-width: 1024px) {
           .tp-3d-workbench {
-            grid-template-columns: minmax(260px, 280px) minmax(0, 1fr) minmax(220px, 260px);
+            /* 侧栏可随超宽略增，中间 1fr 必须吃掉全部剩余，禁止右侧空白 */
+            grid-template-columns: minmax(260px, 300px) minmax(0, 1fr) minmax(240px, 320px) !important;
+          }
+        }
+        @media (min-width: 1600px) {
+          .tp-3d-workbench {
+            grid-template-columns: minmax(280px, 340px) minmax(0, 1fr) minmax(280px, 380px) !important;
           }
         }
         .tp-3d-workbench-stage {
-          min-width: 0;
-          width: 100%;
+          min-width: 0 !important;
+          width: 100% !important;
+          max-width: none !important;
         }
         .tp-3d-workbench-side,
         .tp-3d-workbench-library {
-          min-width: 0;
+          min-width: 0 !important;
+          width: 100% !important;
         }
 
         /* 平面设计等同理：≥1024 三栏铺满 */
@@ -692,12 +722,12 @@
           display: grid !important;
           grid-template-columns: 1fr;
           gap: 0.75rem;
-          width: 100%;
+          width: 100% !important;
           min-height: 36rem;
         }
         @media (min-width: 1024px) {
           .tp-2d-workbench {
-            grid-template-columns: minmax(220px, 20%) minmax(0, 1fr) minmax(260px, 24%);
+            grid-template-columns: minmax(220px, 20%) minmax(0, 1fr) minmax(260px, 24%) !important;
           }
         }
 

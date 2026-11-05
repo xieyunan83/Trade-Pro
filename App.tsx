@@ -5831,8 +5831,8 @@ const App: React.FC = () => {
       )}
 
       {/* 主区：与侧栏并列，吃满剩余宽度 */}
-      <div className={`tp-workspace ${dockPadClass} flex-1 min-w-0 w-0 max-w-none flex flex-col overflow-hidden`}>
-      <main className="flex-1 flex flex-col overflow-hidden relative min-w-0 w-full">
+      <div className={`tp-workspace ${dockPadClass} flex-1 min-w-0 w-full max-w-none flex flex-col overflow-hidden`}>
+      <main className="tp-app-main flex-1 flex flex-col overflow-hidden relative min-w-0 w-full max-w-none">
         <header className="tp-header px-3 sm:px-6 lg:px-8 py-3 sm:py-4 flex flex-col gap-3 z-10">
           {activeModule === ModuleType.HOME ? (
             <div className="flex items-center gap-3">
@@ -5892,7 +5892,7 @@ const App: React.FC = () => {
           )}
         </header>
 
-        <div className="tp-main-stage flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 lg:px-8 relative custom-scrollbar">
+        <div className="tp-main-stage flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-4 md:p-5 lg:p-6 relative custom-scrollbar w-full max-w-none min-w-0">
           {cooldownTime > 0 && (
               <div className="absolute inset-0 bg-mist-50/85 z-50 flex flex-col items-center justify-center backdrop-blur-md animate-fade-in cursor-wait">
                   <div className="relative"><Hourglass size={64} className="text-signal-500 animate-pulse" /><div className="absolute -top-2 -right-2 bg-rose-500 text-white w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs">{cooldownTime}</div></div>

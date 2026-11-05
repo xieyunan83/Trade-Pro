@@ -18,7 +18,7 @@ type Props = {
 
 /**
  * 模块切换保活：已访问过的面板用 display:none 隐藏，避免反复整页挂载卡顿。
- * 多面板共享同一 LRU（见 moduleKeepAlive）。
+ * 激活态必须用 block + w-full（不要用 display:contents，Electron/宽屏下会断掉宽度继承，右侧大片留白）。
  */
 export const ModulePane: React.FC<Props> = ({
   activeId,
@@ -39,8 +39,8 @@ export const ModulePane: React.FC<Props> = ({
 
   return (
     <div
-      className={isActive ? 'contents' : undefined}
-      style={isActive ? { display: 'contents' } : { display: 'none' }}
+      className={isActive ? 'tp-module-pane is-active w-full max-w-none min-w-0' : 'tp-module-pane'}
+      style={isActive ? { display: 'block', width: '100%' } : { display: 'none' }}
       aria-hidden={!isActive}
       data-module-pane={id}
       data-active={isActive ? '1' : '0'}

@@ -1,5 +1,55 @@
 @import "tailwindcss";
 
+/* 布局锁：跟在 Tailwind 之后，确保宽屏主区吃满，右侧不留白 */
+html,
+body,
+#root {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+}
+#root {
+  display: flex !important;
+  flex-direction: column !important;
+  min-height: 100dvh !important;
+}
+.tp-app {
+  display: flex !important;
+  flex-direction: row !important;
+  width: 100% !important;
+  max-width: none !important;
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+}
+.tp-workspace {
+  flex: 1 1 auto !important;
+  width: auto !important;
+  max-width: none !important;
+  min-width: 0 !important;
+}
+.tp-main-stage,
+.tp-app-main,
+.tp-module-pane.is-active,
+.tp-main-stage [data-module-pane][data-active="1"],
+.tp-3d-studio,
+.tp-3d-workbench,
+.tp-landing {
+  width: 100% !important;
+  max-width: none !important;
+  min-width: 0 !important;
+  box-sizing: border-box !important;
+}
+@media (min-width: 1024px) {
+  .tp-3d-workbench {
+    grid-template-columns: minmax(260px, 300px) minmax(0, 1fr) minmax(240px, 320px) !important;
+  }
+}
+@media (min-width: 1600px) {
+  .tp-3d-workbench {
+    grid-template-columns: minmax(280px, 340px) minmax(0, 1fr) minmax(280px, 380px) !important;
+  }
+}
+
 @theme {
   --color-ink-950: #06090f;
   --color-ink-900: #0c121c;
