@@ -83,6 +83,8 @@ import {
   mergeSilentIntelIntoAnalysis,
 } from './services/silentAcquisitionEngine';
 import {
+  pumpNightUpgrade,
+  setNightSilentUpgradeEnabled,
   startNightSilentUpgrade,
   stopNightSilentUpgrade,
 } from './services/nightSilentUpgrade';
@@ -110,6 +112,7 @@ import type { ProductDigCompletePayload } from './services/productDigQueue';
 import {
   enqueueDesignSignalBatch,
   hydrateDesignSignalQueue,
+  resumeDesignSignalQueue,
   setDesignSignalHistoryResolver,
   setDesignSignalOnComplete,
   type DesignSignalCompletePayload,
@@ -119,6 +122,7 @@ import {
   enqueueEnrichmentBatch,
   hydrateEnrichmentQueue,
   isEnrichmentQueueBusy,
+  resumeEnrichmentQueue,
   setEnrichmentHistoryResolver,
   setEnrichmentOnComplete,
   type EnrichmentCompletePayload,
@@ -5538,24 +5542,13 @@ const App: React.FC = () => {
     );
   }
 
-  if (currentUser.role === 'admin' && !adminInWorkspace) {
-    return (
-      <AdminDashboard 
-        onLogout={handleLogout} 
-        currentUser={currentUser} 
-        users={users}
-        setUsers={setUsers}
-        onEnterWorkspace={() => {
-          setAdminInWorkspace(true);
-          setActiveModule(ModuleType.HOME);
-          // 其它机器用 admin 进业务页：提示是否挂机执行
-          if (!hasAnsweredWorkerPromptThisSession()) {
-            setWorkerPromptOpen(true);
-          }
-        }}
-      />
-    );
-  }
+  /** 挂机确认 / 进业务页：续跑补全队列 + 重新打开静默补全泵 */
+  const kickWorkerTaskResume = () => {
+    setNightSilentUpgradeEnabled(true);
+    resumeEnrichmentQueue();
+    resumeDesignSignalQueue();
+    window.setTimeout(() => void pumpNightUpgrade(), 800);
+  };
 
   const handleWorkerConfirm = () => {
     markWorkerPromptAnswered();
@@ -5565,6 +5558,7 @@ const App: React.FC = () => {
     setSystemNotice(
       '已开启挂机执行：白天轻量补全；夜间 22:00–08:00 双 Key 并行背调。请保持本页打开、电脑不休眠。'
     );
+    kickWorkerTaskResume();
     // 若已在夜间窗，立刻拉起待处理背调
     window.setTimeout(() => {
       if (!shouldWorkerRunHeavyAnalysisNow()) return;
@@ -5583,6 +5577,27 @@ const App: React.FC = () => {
     stopNightSilentUpgrade();
     setSystemNotice('未开启挂机。本机仅作业务浏览；重任务请在专用挂机端确认执行。');
   };
+
+  if (currentUser.role === 'admin' && !adminInWorkspace) {
+    return (
+      <AdminDashboard 
+        onLogout={handleLogout} 
+        currentUser={currentUser} 
+        users={users}
+        setUsers={setUsers}
+        onEnterWorkspace={() => {
+          setAdminInWorkspace(true);
+          setActiveModule(ModuleType.HOME);
+          // 已挂机：续跑未完成补全；未挂机：弹确认（本会话已拒过则不再弹）
+          if (isWorkerModeActive()) {
+            window.setTimeout(() => kickWorkerTaskResume(), 400);
+          } else if (!hasAnsweredWorkerPromptThisSession()) {
+            setWorkerPromptOpen(true);
+          }
+        }}
+      />
+    );
+  }
 
   // 非 admin：短暂等待密钥探测；超时/未配齐也不整页封死（手机弱网常见），进工作台后按模块提示
   if (hasKey === null && currentUser.role !== 'admin') {
@@ -6597,10 +6612,10 @@ const App: React.FC = () => {
           </div>
       )}
 
-      {/* 后台任务条统一放左下，避免挡住 CRM 右下角翻页 */}
-      <div className={`fixed bottom-4 left-4 z-[60] flex flex-col-reverse gap-3 w-[min(100vw-2rem,22rem)] pointer-events-none [&>*]:pointer-events-auto ${
-        sphereNavPhase === 'submenu' ? 'md:left-[16.5rem]' : 'md:left-[5rem]'
-      }`}>
+      {/* 后台任务条统一放左下：避让侧栏宽度，避免挡住圆形菜单与 CRM 表格 */}
+      <div
+        className="fixed bottom-4 z-[60] flex flex-col-reverse gap-3 w-[min(100vw-2rem,22rem)] pointer-events-none [&>*]:pointer-events-auto left-4 md:left-[calc(var(--tp-sidebar-w)+1rem)]"
+      >
         {hasPermission(currentUser, 'feature.dm_email_search') && <DmEmailSearchPanel />}
         <SiteBuildPanel />
         <DesignSignalPanel />

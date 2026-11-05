@@ -21,8 +21,9 @@ export const EnrichmentPanel: React.FC = () => {
   const active = progress.active > 0;
   const recent = jobs.slice().reverse().slice(0, 8);
 
+  // 不写 fixed/left：由 App 左下任务栈统一避让侧栏，避免被圆形菜单挡住
   return (
-    <div className="fixed bottom-4 left-4 z-[60] w-[min(100vw-2rem,22rem)] shadow-2xl rounded-2xl border border-violet-200 bg-white/95 backdrop-blur overflow-hidden">
+    <div className="relative w-full shadow-2xl rounded-2xl border border-violet-200 bg-white/95 backdrop-blur overflow-hidden">
       <div className="bg-gradient-to-r from-violet-600 to-indigo-600 text-white px-3 py-2.5 flex items-center gap-2">
         <Sparkles size={14} />
         <div className="flex-1 min-w-0">
