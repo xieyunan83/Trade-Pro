@@ -1281,7 +1281,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       }
                       setSaveConfigMsg({ ok: true, text: '正在同步 CRM / 背调历史 / 产品画像 / 作业队列…' });
                       try {
-                        const r = await syncAllWorkspaceData();
+                        const r = await syncAllWorkspaceData({
+                          timeoutMs: 6 * 60_000,
+                          onProgress: (msg) => setSaveConfigMsg({ ok: true, text: msg }),
+                        });
                         setSaveConfigMsg({
                           ok: r.ok,
                           text: formatWorkspaceSyncReport(r).replace(/\n/g, ' · '),

@@ -1,6 +1,6 @@
 /**
  * 工作区全量云同步：CRM / 背调历史 / 产品画像 / 背调作业队列
- * 登录与「同步全部资料」时：先拉取合并写本机（尽快出界面），再推上云端。
+ * 登录与「同步全部资料」时：先拉取合并写本机（尽快出界面），再按需推上云端。
  */
 import type { Client, CustomerProductProfile, HistoryItem } from '../types';
 import { getHistory, saveHistoryBulk, saveProductProfilesBulk } from './db';
@@ -9,12 +9,13 @@ import {
   getCrmClients,
   getInvestigationHistory,
   getProductProfilesCloud,
+  getSupabaseClient,
   isSupabaseConfigured,
   saveCrmClientsBulk,
-  saveInvestigationHistory,
   saveProductProfileCloud,
   syncProductProfilesCloud,
 } from './supabase';
+import { getCloudWorkspaceId } from './workspaceId';
 import { loadAllCrmClients, saveAllCrmClients } from '../utils/workspaceScope';
 import { reconcileCrmTombstonesWithLiveClients } from '../utils/crmTombstones';
 import { pullMergePushAutomationQueue } from './automationQueueCloud';
@@ -32,6 +33,10 @@ export type WorkspaceSyncReport = {
 export type WorkspaceSyncOptions = {
   /** 默认 true。登录时可 false：只拉云端写本机，上传放到后台，避免界面卡在 0 */
   upload?: boolean;
+  /** 阶段进度（给按钮旁状态条用） */
+  onProgress?: (message: string) => void;
+  /** 整次同步硬超时（毫秒），超时返回部分结果并放行队列，默认 6 分钟 */
+  timeoutMs?: number;
 };
 
 const chunk = <T,>(arr: T[], size: number): T[][] => {
@@ -46,6 +51,9 @@ const clientStamp = (c: Client): number =>
     ...(c.activityEvents || []).map((e) => Number(e.at) || 0),
     0
   );
+
+const histStamp = (h: HistoryItem): number =>
+  Math.max(Number(h.timestamp) || 0, Number((h as any).updatedAt) || 0, 0);
 
 const isWeakProductType = (s?: string) =>
   !s ||
@@ -113,37 +121,66 @@ export const mergeProfilesById = (
 };
 
 /** 分块上传 CRM（避免单次 payload 过大） */
-export const uploadCrmChunked = async (clients: Client[]): Promise<number> => {
+export const uploadCrmChunked = async (
+  clients: Client[],
+  onProgress?: (done: number, total: number) => void
+): Promise<number> => {
   if (!clients.length) return 0;
   let n = 0;
   for (const part of chunk(clients, 100)) {
     const ok = await saveCrmClientsBulk(part);
     if (!ok) throw new Error('CRM 分块上传失败');
     n += part.length;
+    onProgress?.(n, clients.length);
   }
   return n;
 };
 
-/** 分块上传背调历史 */
-export const uploadHistoryChunked = async (items: HistoryItem[]): Promise<number> => {
+/** 分块批量上传背调历史（比逐条 upsert 快一个数量级） */
+export const uploadHistoryChunked = async (
+  items: HistoryItem[],
+  onProgress?: (done: number, total: number) => void
+): Promise<number> => {
+  if (!items.length) return 0;
+  if (!isSupabaseConfigured()) return 0;
+  const client = getSupabaseClient();
+  const uid = getCloudWorkspaceId();
   let n = 0;
-  for (const part of chunk(items, 40)) {
-    await Promise.all(
-      part.map(async (item) => {
-        const ok = await saveInvestigationHistory(item);
-        if (ok) n += 1;
-      })
-    );
+  for (const part of chunk(items, 20)) {
+    const rows = part.map((item) => ({
+      user_id: uid,
+      local_id: item.id,
+      domain: item.domain || '',
+      module_type: item.type,
+      report_data: item,
+    }));
+    const { error } = await client.from('investigation_history').upsert(rows, {
+      onConflict: 'user_id,local_id',
+    });
+    if (error) throw error;
+    n += part.length;
+    onProgress?.(n, items.length);
   }
   return n;
 };
 
 const emptyBucket = () => ({ local: 0, cloud: 0, merged: 0, uploaded: 0 });
 
+const emptyReport = (errors: string[]): WorkspaceSyncReport => ({
+  ok: false,
+  crm: emptyBucket(),
+  history: emptyBucket(),
+  profiles: emptyBucket(),
+  automation: emptyBucket(),
+  errors,
+});
+
 /** 同页串行队列，避免登录「先拉后推」与手动同步叠成写风暴；不丢任何一次 upload */
 let syncChain: Promise<unknown> = Promise.resolve();
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+const DEFAULT_SYNC_TIMEOUT_MS = 6 * 60 * 1000;
 
 /**
  * 全量同步：合并本机与云端，先写回本机，再按需推上云端。
@@ -154,12 +191,35 @@ export const syncAllWorkspaceData = async (
   opts?: WorkspaceSyncOptions
 ): Promise<WorkspaceSyncReport> => {
   const wantUpload = opts?.upload !== false;
-  const run = async () => {
+  const timeoutMs = opts?.timeoutMs ?? DEFAULT_SYNC_TIMEOUT_MS;
+  const onProgress = opts?.onProgress;
+
+  const run = async (): Promise<WorkspaceSyncReport> => {
     if (wantUpload) {
-      await sleep(200 + Math.floor(Math.random() * 1800));
+      // 轻微错峰即可，勿再随机等到近 2 秒（手动同步会像「没反应」）
+      await sleep(80 + Math.floor(Math.random() * 120));
     }
-    return runSyncAllWorkspaceData({ upload: wantUpload });
+    let aborted = false;
+    const timer = window.setTimeout(() => {
+      aborted = true;
+      onProgress?.(`同步超时（>${Math.round(timeoutMs / 1000)}s），已停止后续上传`);
+    }, timeoutMs);
+
+    try {
+      return await runSyncAllWorkspaceData({
+        upload: wantUpload,
+        onProgress,
+        shouldAbort: () => aborted,
+      });
+    } catch (e: any) {
+      const msg = e?.message || String(e);
+      onProgress?.(`同步中断：${msg}`);
+      return emptyReport([msg]);
+    } finally {
+      window.clearTimeout(timer);
+    }
   };
+
   const p = syncChain.then(run, run) as Promise<WorkspaceSyncReport>;
   syncChain = p.then(
     () => undefined,
@@ -169,9 +229,15 @@ export const syncAllWorkspaceData = async (
 };
 
 const runSyncAllWorkspaceData = async (
-  opts?: WorkspaceSyncOptions
+  opts?: WorkspaceSyncOptions & { shouldAbort?: () => boolean }
 ): Promise<WorkspaceSyncReport> => {
   const doUpload = opts?.upload !== false;
+  const onProgress = opts?.onProgress;
+  const check = () => {
+    if (opts?.shouldAbort?.()) {
+      throw new Error('同步超时或已取消');
+    }
+  };
   const errors: string[] = [];
   const report: WorkspaceSyncReport = {
     ok: true,
@@ -189,9 +255,9 @@ const runSyncAllWorkspaceData = async (
   }
 
   // —— CRM ——
-  // 硬规则：全量 union 合并（含云端全部行）；不按本机墓碑过滤云端；永不 delete。
-  // 合并后若云端/权威列表仍有该客户，清除误写墓碑，使 Mac/Windows 条数收敛。
   try {
+    check();
+    onProgress?.('同步中：拉取 CRM…');
     const localCrm = loadAllCrmClients();
     let cloudCrm: Client[] = [];
     let cloudOk = false;
@@ -201,8 +267,9 @@ const runSyncAllWorkspaceData = async (
     } catch (e: any) {
       errors.push(`CRM 云端拉取：${e?.message || String(e)}`);
     }
+    check();
+    onProgress?.(`同步中：合并 CRM（本机 ${localCrm.length} / 云 ${cloudCrm.length}）…`);
     let mergedCrm = mergeClientsById(localCrm, cloudCrm);
-    // 同域名多条（名称不同）合并为一家，避免 CRM/营销工具重复
     try {
       const { mergeCrmClientsByDomain } = await import('../utils/crmHistory');
       const domainMerged = mergeCrmClientsByDomain(mergedCrm);
@@ -217,13 +284,10 @@ const runSyncAllWorkspaceData = async (
         } catch {
           /* ignore */
         }
-        // 删掉被合并掉的云端行，防止下次同步又带回
         const loserIds = Object.keys(domainMerged.remaps);
         if (loserIds.length) {
           const { deleteCrmClient } = await import('./supabase');
-          await Promise.all(
-            loserIds.map((id) => deleteCrmClient(id).catch(() => false))
-          );
+          await Promise.all(loserIds.map((id) => deleteCrmClient(id).catch(() => false)));
         }
       }
     } catch (e) {
@@ -241,9 +305,22 @@ const runSyncAllWorkspaceData = async (
       errors.push('CRM：云端不可用且本机为空');
     }
     let uploaded = 0;
-    // 仅 upsert，本路径永不 delete。本机空时也只 upsert 合并结果（=云端数据），不会清空云端。
     if (doUpload && mergedCrm.length > 0) {
-      uploaded = await uploadCrmChunked(mergedCrm);
+      check();
+      // 仅上传相对云端更新过的，避免每次全量重传卡死
+      const cloudById = new Map(cloudCrm.map((c) => [c.id, c]));
+      const dirty = !cloudOk
+        ? mergedCrm
+        : mergedCrm.filter((c) => {
+            const prev = cloudById.get(c.id);
+            if (!prev) return true;
+            return clientStamp(c) > clientStamp(prev);
+          });
+      onProgress?.(`同步中：上传 CRM 0/${dirty.length}…`);
+      uploaded = await uploadCrmChunked(dirty, (done, total) => {
+        onProgress?.(`同步中：上传 CRM ${done}/${total}…`);
+        check();
+      });
     }
     report.crm = {
       local: localCrm.length,
@@ -257,13 +334,21 @@ const runSyncAllWorkspaceData = async (
 
   // —— 背调历史 ——
   try {
+    check();
+    onProgress?.('同步中：拉取背调历史…');
     const localHist = await getHistory();
     let cloudHist: HistoryItem[] = [];
+    let cloudHistOk = false;
     try {
       cloudHist = await getInvestigationHistory();
+      cloudHistOk = true;
     } catch (e: any) {
       errors.push(`背调历史云端拉取：${e?.message || String(e)}`);
     }
+    check();
+    onProgress?.(
+      `同步中：合并背调历史（本机 ${localHist.length} / 云 ${cloudHist.length}）…`
+    );
     const mergedHist = mergeHistoryById(localHist, cloudHist);
     if (mergedHist.length > 0) {
       await saveHistoryBulk(mergedHist);
@@ -272,7 +357,20 @@ const runSyncAllWorkspaceData = async (
     }
     let uploaded = 0;
     if (doUpload && mergedHist.length > 0) {
-      uploaded = await uploadHistoryChunked(mergedHist);
+      check();
+      const cloudById = new Map(cloudHist.map((h) => [h.id, h]));
+      const dirty = !cloudHistOk
+        ? mergedHist
+        : mergedHist.filter((h) => {
+            const prev = cloudById.get(h.id);
+            if (!prev) return true;
+            return histStamp(h) > histStamp(prev);
+          });
+      onProgress?.(`同步中：上传背调历史 0/${dirty.length}…`);
+      uploaded = await uploadHistoryChunked(dirty, (done, total) => {
+        onProgress?.(`同步中：上传背调历史 ${done}/${total}…`);
+        check();
+      });
     }
     report.history = {
       local: localHist.length,
@@ -286,6 +384,8 @@ const runSyncAllWorkspaceData = async (
 
   // —— 产品画像 ——
   try {
+    check();
+    onProgress?.('同步中：产品画像…');
     const localProfiles = await loadProductCatalog();
     let cloudProfiles: CustomerProductProfile[] = [];
     try {
@@ -297,9 +397,12 @@ const runSyncAllWorkspaceData = async (
     if (mergedProfiles.length) await saveProductProfilesBulk(mergedProfiles);
     let uploaded = 0;
     if (doUpload && mergedProfiles.length) {
+      check();
+      onProgress?.(`同步中：上传产品画像 ${mergedProfiles.length}…`);
       uploaded = await syncProductProfilesCloud(mergedProfiles);
       if (!uploaded) {
         for (const p of mergedProfiles) {
+          check();
           if (await saveProductProfileCloud(p)) uploaded += 1;
         }
       }
@@ -316,7 +419,15 @@ const runSyncAllWorkspaceData = async (
 
   // —— 背调作业队列 ——
   try {
-    const synced = await pullMergePushAutomationQueue({ upload: doUpload });
+    check();
+    onProgress?.('同步中：背调作业队列…');
+    const synced = await pullMergePushAutomationQueue({
+      upload: doUpload,
+      onProgress: (msg) => {
+        onProgress?.(msg);
+        check();
+      },
+    });
     report.automation = {
       local: synced.local,
       cloud: synced.cloud,
@@ -329,6 +440,11 @@ const runSyncAllWorkspaceData = async (
   }
 
   report.ok = errors.length === 0;
+  onProgress?.(
+    report.ok
+      ? `同步完成 · CRM ${report.crm.merged} · 作业 ${report.automation.merged}`
+      : `同步结束（有问题 ${errors.length}）· CRM ${report.crm.merged} · 作业 ${report.automation.merged}`
+  );
   return report;
 };
 

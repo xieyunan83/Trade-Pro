@@ -192,13 +192,14 @@ export const fetchAutomationQueueFromCloud = async (): Promise<AutomationResult[
 
 /** 分批上传本地队列到云端 */
 export const syncAutomationQueueToCloud = async (
-  tasks: AutomationResult[]
+  tasks: AutomationResult[],
+  onProgress?: (done: number, total: number) => void
 ): Promise<{ ok: boolean; uploaded: number; error?: string }> => {
   if (!isSupabaseConfigured()) return { ok: false, uploaded: 0, error: '云端未配置' };
   if (!tasks.length) return { ok: true, uploaded: 0 };
   const client = getSupabaseClient();
   const uid = cloudUid();
-  const chunkSize = 80;
+  const chunkSize = 100;
   let uploaded = 0;
   try {
     for (let i = 0; i < tasks.length; i += chunkSize) {
@@ -216,6 +217,7 @@ export const syncAutomationQueueToCloud = async (
       });
       if (error) throw error;
       uploaded += slice.length;
+      onProgress?.(uploaded, tasks.length);
     }
     return { ok: true, uploaded };
   } catch (e: any) {
@@ -230,6 +232,7 @@ export const syncAutomationQueueToCloud = async (
  */
 export const pullMergePushAutomationQueue = async (opts?: {
   upload?: boolean;
+  onProgress?: (message: string) => void;
 }): Promise<{
   tasks: AutomationResult[];
   local: number;
@@ -239,6 +242,8 @@ export const pullMergePushAutomationQueue = async (opts?: {
   error?: string;
 }> => {
   const doUpload = opts?.upload !== false;
+  const onProgress = opts?.onProgress;
+  onProgress?.('同步中：拉取背调作业…');
   const local = await getAutomationQueue();
   let cloud: AutomationResult[] = [];
   let cloudError: string | undefined;
@@ -248,6 +253,9 @@ export const pullMergePushAutomationQueue = async (opts?: {
     cloudError = e?.message || String(e);
     console.warn('[automation-cloud] fetch failed', e);
   }
+  onProgress?.(
+    `同步中：合并背调作业（本机 ${local.length} / 云 ${cloud.length}）…`
+  );
   const merged = mergeAutomationQueues(local, cloud);
 
   if (merged.length > 0) {
@@ -266,7 +274,19 @@ export const pullMergePushAutomationQueue = async (opts?: {
   let uploaded = 0;
   let pushError = cloudError;
   if (doUpload && merged.length > 0) {
-    const push = await syncAutomationQueueToCloud(merged);
+    const cloudById = new Map(cloud.map((t) => [t.id, t]));
+    // 云拉取成功时只上传新增/更新；失败则全量上传兜底
+    const dirty = cloudError
+      ? merged
+      : merged.filter((t) => {
+          const prev = cloudById.get(t.id);
+          if (!prev) return true;
+          return taskStamp(t) > taskStamp(prev) || automationStatusRank(t) > automationStatusRank(prev);
+        });
+    onProgress?.(`同步中：上传背调作业 0/${dirty.length}…`);
+    const push = await syncAutomationQueueToCloud(dirty, (done, total) => {
+      onProgress?.(`同步中：上传背调作业 ${done}/${total}…`);
+    });
     uploaded = push.uploaded;
     if (push.error) pushError = push.error;
   }

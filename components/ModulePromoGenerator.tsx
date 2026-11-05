@@ -78,6 +78,9 @@ interface ModulePromoGeneratorProps {
   onClearAll: () => void;
   /** 从本机 IndexedDB 重新加载并修复队列 */
   onReloadQueue?: () => void;
+  /** 「同步全部资料」进行中 */
+  queueSyncing?: boolean;
+  queueSyncStatus?: string | null;
   canDmMine?: boolean;
   canCrmImport?: boolean;
   canProductDig?: boolean;
@@ -152,6 +155,8 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   onClearCompleted,
   onClearAll,
   onReloadQueue,
+  queueSyncing = false,
+  queueSyncStatus = null,
   canDmMine = false,
   canCrmImport = false,
   canProductDig = false,
@@ -1049,12 +1054,25 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                 <button
                   type="button"
                   onClick={() => onReloadQueue()}
-                  disabled={isAutomating}
+                  disabled={isAutomating || queueSyncing}
                   className="inline-flex items-center gap-1.5 bg-teal-50 border border-teal-200 text-teal-800 px-4 py-2 rounded-xl text-xs font-bold hover:bg-teal-100 disabled:opacity-50"
-                  title="同步 CRM、背调历史、产品画像、作业队列到云端；资料最全的电脑先点，其它端再点"
+                  title={
+                    queueSyncStatus ||
+                    '同步 CRM、背调历史、产品画像、作业队列到云端；资料最全的电脑先点，其它端再点'
+                  }
                 >
-                  <RefreshCw size={14} /> 同步全部资料
+                  {queueSyncing ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <RefreshCw size={14} />
+                  )}
+                  {queueSyncing ? '同步中…' : '同步全部资料'}
                 </button>
+              )}
+              {queueSyncing && queueSyncStatus && (
+                <span className="text-[10px] font-bold text-teal-700 max-w-[14rem] truncate" title={queueSyncStatus}>
+                  {queueSyncStatus}
+                </span>
               )}
               <button
                 onClick={onRunPending}

@@ -988,7 +988,13 @@ const App: React.FC = () => {
             if (!cancelled) setWorkspaceSyncing(true);
             if (isSupabaseConfigured()) {
               try {
-                const ws = await syncAllWorkspaceData({ upload: false });
+                const ws = await syncAllWorkspaceData({
+                  upload: false,
+                  timeoutMs: 3 * 60_000,
+                  onProgress: (msg) => {
+                    if (!cancelled) setWorkspaceSyncStatus(msg);
+                  },
+                });
                 console.info('[workspace-sync pull]\n' + formatWorkspaceSyncReport(ws));
                 // 可选：合并云端「额度耗尽」指纹，避免多机抢同一把已尽 Key
                 try {
@@ -1024,7 +1030,13 @@ const App: React.FC = () => {
                 }
                 const qAfter = await getAutomationQueue();
                 if (qAfter.length) queueTasks = qAfter;
-                void syncAllWorkspaceData({ upload: true })
+                void syncAllWorkspaceData({
+                  upload: true,
+                  timeoutMs: 6 * 60_000,
+                  onProgress: (msg) => {
+                    if (!cancelled) setWorkspaceSyncStatus(msg);
+                  },
+                })
                   .then(async (up) => {
                     console.info('[workspace-sync upload]\n' + formatWorkspaceSyncReport(up));
                     if (cancelled) return;
@@ -4660,15 +4672,28 @@ const App: React.FC = () => {
 
   const handleReloadAutomationQueue = async () => {
     if (!currentUser) return;
+    if (workspaceSyncing) {
+      setSystemNotice('同步已在进行中，请看顶部状态，勿重复点击。');
+      return;
+    }
+    setWorkspaceSyncing(true);
+    setWorkspaceSyncStatus('同步中：准备…');
+    setSystemNotice('正在同步全部资料，请勿关闭页面…');
     try {
       const repaired = await loadAndRepairAutomationQueue(currentUser);
       let tasks = repaired.tasks;
       let cloudNote = '';
       if (isSupabaseConfigured()) {
-        const ws = await syncAllWorkspaceData();
+        const ws = await syncAllWorkspaceData({
+          upload: true,
+          timeoutMs: 6 * 60_000,
+          onProgress: (msg) => {
+            setWorkspaceSyncStatus(msg);
+            setSystemNotice(msg);
+          },
+        });
         cloudNote = '\n' + formatWorkspaceSyncReport(ws);
         tasks = await getAutomationQueue();
-        // 同步后刷新 CRM / 历史到界面
         const deptsNow = departments.length ? departments : loadDepartmentsFromStorage();
         setCrmClients(
           filterOwnedRecords(
@@ -4681,6 +4706,13 @@ const App: React.FC = () => {
         setHistory(
           filterOwnedRecords(currentUser, await getHistory(), users, deptsNow)
         );
+        setWorkspaceSyncStatus(
+          ws.ok
+            ? `同步完成 · CRM ${ws.crm.merged} · 作业 ${ws.automation.merged}`
+            : `同步结束（有问题）· 作业云端 ${ws.automation.cloud}`
+        );
+      } else {
+        setWorkspaceSyncStatus('本机模式（未配置云端）');
       }
       const scoped = filterOwnedRecords(
         currentUser,
@@ -4698,7 +4730,10 @@ const App: React.FC = () => {
           `\n\n建议：先在数据最全的那台点「同步全部资料」，再在另一台用 admin 同步一次。`
       );
     } catch (e: any) {
+      setWorkspaceSyncStatus(`同步失败：${e?.message || String(e)}`);
       alert(`同步失败：${e?.message || String(e)}`);
+    } finally {
+      setWorkspaceSyncing(false);
     }
   };
 
@@ -6234,6 +6269,8 @@ const App: React.FC = () => {
                         onClearCompleted={handleClearCompletedTasks}
                         onClearAll={handleClearAllTasks}
                         onReloadQueue={handleReloadAutomationQueue}
+                        queueSyncing={workspaceSyncing}
+                        queueSyncStatus={workspaceSyncStatus}
                         canViewEmails={canViewFullDecisionMakerEmails(currentUser)}
                     />
                 </ModulePane>
