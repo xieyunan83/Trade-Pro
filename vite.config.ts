@@ -1,6 +1,7 @@
 import type { Plugin } from 'vite'
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 import { aliyunDevProxyPlugin } from './vite.aliyunProxy'
 import { landingDevPlugin } from './vite.landingPlugin'
 
@@ -60,6 +61,7 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [
       react(),
+      tailwindcss(),
       htmlBootHardenPlugin(),
       landingDevPlugin(),
       aliyunDevProxyPlugin(fallbackOrigin, {
@@ -74,6 +76,22 @@ export default defineConfig(({ mode }) => {
     build: {
       sourcemap: false,
       minify: 'esbuild',
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return;
+            if (id.includes('@google/model-viewer') || id.includes('/three/')) return 'model-viewer';
+            if (id.includes('xlsx') || id.includes('file-saver')) return 'export-libs';
+            if (id.includes('@supabase')) return 'supabase';
+            if (id.includes('lucide-react')) return 'icons';
+            if (id.includes('react-dom') || id.includes('/react/') || id.includes('scheduler')) {
+              return 'react-vendor';
+            }
+            if (id.includes('@google/genai') || id.includes('@octokit')) return 'ai-sdk';
+            if (id.includes('quill') || id.includes('react-quill')) return 'editor';
+          },
+        },
+      },
     },
     optimizeDeps: {
       include: ['@google/model-viewer', 'three'],

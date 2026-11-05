@@ -1,0 +1,26 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink-950: #06090f;
+  --color-ink-900: #0c121c;
+  --color-ink-800: #151c2a;
+  --color-ink-700: #1e2838;
+
+  --color-signal-300: #5eead4;
+  --color-signal-400: #2dd4bf;
+  --color-signal-500: #14b8a6;
+  --color-signal-600: #0d9488;
+
+  --color-mist-50: #f3f6f9;
+  --color-mist-100: #e7edf3;
+  --color-mist-200: #d3dde8;
+
+  --font-display: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", sans-serif;
+  --font-sans: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --shadow-signal: 0 0 0 1px rgba(20, 184, 166, 0.2), 0 20px 44px -20px rgba(15, 23, 42, 0.4);
+  --shadow-panel: 0 1px 0 rgba(255, 255, 255, 0.72) inset, 0 14px 36px -18px rgba(15, 23, 42, 0.16);
+}

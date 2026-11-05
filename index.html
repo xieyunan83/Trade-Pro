@@ -95,54 +95,10 @@
     <meta name="description" content="外贸智慧协同：赋能澄海玩具产业升级——选品适市、客户背调、开发触达与协同成交。">
     <meta property="og:title" content="外贸智慧协同 · 赋能澄海玩具产业升级">
     <meta property="og:description" content="深度背调、决策人挖掘、竞品分析与团队协同，企业级外贸获客平台。">
-    <meta property="og:image" content="https://images.unsplash.com/photo-1557804506-669a67965ba0?q=80&w=1974&auto=format&fit=crop">
     <meta property="og:type" content="website">
-
-    <!-- 第三方脚本必须 defer：同步加载若 CDN 超时会堵死解析，主包永不执行 → 一直「正在加载」 -->
-    <script>
-      window.tailwind = window.tailwind || {};
-      window.tailwind.config = {
-        theme: {
-          extend: {
-            colors: {
-              ink: {
-                950: '#06090f',
-                900: '#0c121c',
-                800: '#151c2a',
-                700: '#1e2838',
-              },
-              signal: {
-                300: '#5eead4',
-                400: '#2dd4bf',
-                500: '#14b8a6',
-                600: '#0d9488',
-              },
-              mist: {
-                50: '#f3f6f9',
-                100: '#e7edf3',
-                200: '#d3dde8',
-              },
-            },
-            fontFamily: {
-              display: ['"Plus Jakarta Sans"', 'system-ui', 'sans-serif'],
-              sans: ['"Plus Jakarta Sans"', 'system-ui', 'sans-serif'],
-              mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
-            },
-            boxShadow: {
-              'signal': '0 0 0 1px rgba(20,184,166,0.2), 0 20px 44px -20px rgba(15,23,42,0.4)',
-              'panel': '0 1px 0 rgba(255,255,255,0.72) inset, 0 14px 36px -18px rgba(15,23,42,0.16)',
-            },
-          },
-        },
-      };
-    </script>
-    <script defer src="https://cdn.tailwindcss.com"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
-    <noscript><link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet"></noscript>
     <!--
-      导出类 CDN 改为首屏后按需注入，避免与主包抢连接导致 boot-timeout / 客户端假死。
+      样式由 Vite 打包进 /assets（无境外 CDN）。
+      导出类库仍按需注入，避免与主包抢连接。
       window.__TP_ENSURE_EXPORT_LIBS() 供导出流程调用。
     -->
     <script>
@@ -190,18 +146,7 @@
         );
         return window.__TP_EXPORT_LIBS_PROMISE;
       };
-      // 登录首屏后再预取导出库，避免与主包抢带宽
-      setTimeout(function () {
-        try {
-          if (typeof requestIdleCallback === 'function') {
-            requestIdleCallback(function () {
-              try { window.__TP_ENSURE_EXPORT_LIBS(); } catch (e) {}
-            }, { timeout: 20000 });
-          } else {
-            window.__TP_ENSURE_EXPORT_LIBS();
-          }
-        } catch (e) {}
-      }, 12000);
+      // 不再自动预取境外导出库；等业务真正导出时再拉，避免挤占登录首屏带宽
     </script>
     <style>
         :root {
