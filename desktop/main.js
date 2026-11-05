@@ -218,17 +218,6 @@ function armLoadWatchdog(ms = BOOT_LOAD_TIMEOUT_MS) {
   }, ms);
 }
 
-function showConnectingSplash(attempt = 1) {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  const connecting = path.join(__dirname, 'boot-connecting.html');
-  if (!fs.existsSync(connecting)) return;
-  void mainWindow
-    .loadFile(connecting, {
-      query: { origin: APP_ORIGIN, attempt: String(attempt) },
-    })
-    .catch(() => undefined);
-}
-
 function showBootError(reason, errMsg = '') {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   if (showingError) return;
@@ -274,6 +263,8 @@ function showBootError(reason, errMsg = '') {
 }
 
 /**
+ * 直接拉线上站点，不再插「正在打开登录界面」过渡页（该页反而拉长感知等待）。
+ * 窗口底色与登录页一致；HTML 到达后由站点内启动壳承接。
  * @param {{ retry?: boolean, forceBust?: boolean }} [opts]
  */
 function loadAppShell(opts = {}) {
@@ -284,27 +275,21 @@ function loadAppShell(opts = {}) {
   else bootAttempt = 1;
 
   const attempt = bootAttempt;
-  showConnectingSplash(attempt);
-
-  // 稍等本地「连接中」页绘出后再拉线上，避免用户只见深蓝空窗
-  const delay = opts.retry ? 600 : 120;
-  setTimeout(() => {
-    if (!mainWindow || mainWindow.isDestroyed() || bootOk || showingError) return;
-    armLoadWatchdog(BOOT_LOAD_TIMEOUT_MS);
-    const baseUa = mainWindow.webContents.getUserAgent().replace(/Electron\/\S+\s*/i, '');
-    const forceBust = !!opts.forceBust || attempt > 1;
-    mainWindow
-      .loadURL(startUrl(forceBust), {
-        userAgent: `${baseUa} TradeCollabClient/1.0 BabyWorldClient/1.0`,
-      })
-      .catch((e) => {
-        if (bootAttempt < MAX_BOOT_ATTEMPTS) {
-          void loadAppShell({ retry: true, forceBust: true });
-        } else {
-          showBootError('loadURL', e?.message || String(e));
-        }
-      });
-  }, delay);
+  armLoadWatchdog(BOOT_LOAD_TIMEOUT_MS);
+  const baseUa = mainWindow.webContents.getUserAgent().replace(/Electron\/\S+\s*/i, '');
+  // 仅明确要求或上次启动失败才 bust；自动重试尽量走磁盘缓存，国内弱网更快
+  const forceBust = !!opts.forceBust && attempt === 1;
+  mainWindow
+    .loadURL(startUrl(forceBust), {
+      userAgent: `${baseUa} TradeCollabClient/1.0 BabyWorldClient/1.0`,
+    })
+    .catch((e) => {
+      if (bootAttempt < MAX_BOOT_ATTEMPTS) {
+        void loadAppShell({ retry: true, forceBust: false });
+      } else {
+        showBootError('loadURL', e?.message || String(e));
+      }
+    });
 }
 
 function createWindow() {
@@ -348,9 +333,9 @@ function createWindow() {
     mainWindow.show();
     mainWindow.focus();
   };
-  // 尽快露出窗口（登录页）；过长延迟会让用户以为客户端卡死
+  // 尽快露窗：底色已对齐登录页，不再等过渡页
   mainWindow.once('ready-to-show', showSoon);
-  setTimeout(showSoon, 280);
+  setTimeout(showSoon, 80);
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isAppUrl(url)) return { action: 'allow' };
@@ -370,8 +355,7 @@ function createWindow() {
     if (!isMainFrame) return;
     // -3 = aborted（被新导航取消）
     if (code === -3) return;
-    if (showingError && url && (url.includes('boot-error') || url.includes('boot-connecting'))) return;
-    if (url && url.includes('boot-connecting')) return;
+    if (showingError && url && url.includes('boot-error')) return;
     // 弱网：自动重试，用尽次数再出错误页
     if (bootAttempt < MAX_BOOT_ATTEMPTS && !showingError) {
       console.warn('[boot] did-fail-load retry', code, desc);
@@ -384,7 +368,7 @@ function createWindow() {
 
   mainWindow.webContents.on('did-finish-load', () => {
     const url = mainWindow.webContents.getURL();
-    if (url.includes('boot-error') || url.includes('boot-connecting') || url.startsWith('data:')) {
+    if (url.includes('boot-error') || url.startsWith('data:') || url.startsWith('file:')) {
       return;
     }
     if (!isAppUrl(url)) return;
