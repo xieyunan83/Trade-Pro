@@ -4695,7 +4695,7 @@ const App: React.FC = () => {
             ? `\n队列修复：短ID ${repaired.repaired}，认领 ${repaired.claimed}`
             : '') +
           cloudNote +
-          `\n\n请先在「资料最全」的网页点一次，再在 Windows 客户端用 kevin 点一次。`
+          `\n\n建议：先在数据最全的那台点「同步全部资料」，再在另一台用 admin 同步一次。`
       );
     } catch (e: any) {
       alert(`同步失败：${e?.message || String(e)}`);
