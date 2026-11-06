@@ -4706,10 +4706,13 @@ const App: React.FC = () => {
         setHistory(
           filterOwnedRecords(currentUser, await getHistory(), users, deptsNow)
         );
+        const timedOut = ws.errors.some((e) => /超时/.test(e));
         setWorkspaceSyncStatus(
           ws.ok
             ? `同步完成 · CRM ${ws.crm.merged} · 作业 ${ws.automation.merged}`
-            : `同步结束（有问题）· 作业云端 ${ws.automation.cloud}`
+            : timedOut
+              ? `已超时停止 · 已传部分保留，可再点同步续传`
+              : `同步结束（有问题）· 作业云端 ${ws.automation.cloud}`
         );
       } else {
         setWorkspaceSyncStatus('本机模式（未配置云端）');
@@ -4721,13 +4724,16 @@ const App: React.FC = () => {
         departments.length ? departments : loadDepartmentsFromStorage()
       );
       setAutomationResults(scoped);
+      const timedOut = cloudNote.includes('超时');
       alert(
-        `已同步全部业务资料（CRM / 背调历史 / 产品画像 / 作业队列）` +
+        (timedOut
+          ? `同步已超时停止（不是失败清空）。\n已上传到云端的部分仍保留；请再点一次「同步全部资料」继续传剩余。`
+          : `已同步全部业务资料（CRM / 背调历史 / 产品画像 / 作业队列）`) +
           (repaired.repaired || repaired.claimed
             ? `\n队列修复：短ID ${repaired.repaired}，认领 ${repaired.claimed}`
             : '') +
           cloudNote +
-          `\n\n建议：先在数据最全的那台点「同步全部资料」，再在另一台用 admin 同步一次。`
+          `\n\n建议：数据最全的电脑多点几次直到不再超时，再在另一台用 admin 同步。`
       );
     } catch (e: any) {
       setWorkspaceSyncStatus(`同步失败：${e?.message || String(e)}`);

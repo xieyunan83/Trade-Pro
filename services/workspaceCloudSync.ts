@@ -200,24 +200,37 @@ export const syncAllWorkspaceData = async (
       await sleep(80 + Math.floor(Math.random() * 120));
     }
     let aborted = false;
-    const timer = window.setTimeout(() => {
-      aborted = true;
-      onProgress?.(`同步超时（>${Math.round(timeoutMs / 1000)}s），已停止后续上传`);
-    }, timeoutMs);
+    const secs = Math.round(timeoutMs / 1000);
+    const timeoutMsg = `同步已超时停止（>${secs}秒）。已上传的部分仍保留，再点一次可继续传剩余`;
 
-    try {
-      return await runSyncAllWorkspaceData({
-        upload: wantUpload,
-        onProgress,
-        shouldAbort: () => aborted,
-      });
-    } catch (e: any) {
-      const msg = e?.message || String(e);
-      onProgress?.(`同步中断：${msg}`);
-      return emptyReport([msg]);
-    } finally {
-      window.clearTimeout(timer);
-    }
+    // 必须用 race：网络卡在某一包时，仅靠 shouldAbort 解不开 await，界面会一直「同步中」
+    const work = (async (): Promise<WorkspaceSyncReport> => {
+      try {
+        return await runSyncAllWorkspaceData({
+          upload: wantUpload,
+          onProgress,
+          shouldAbort: () => aborted,
+        });
+      } catch (e: any) {
+        const msg = e?.message || String(e);
+        if (aborted || /超时|取消/.test(msg)) {
+          onProgress?.(timeoutMsg);
+          return emptyReport([timeoutMsg]);
+        }
+        onProgress?.(`同步中断：${msg}`);
+        return emptyReport([msg]);
+      }
+    })();
+
+    const timeoutGate = new Promise<WorkspaceSyncReport>((resolve) => {
+      window.setTimeout(() => {
+        aborted = true;
+        onProgress?.(timeoutMsg);
+        resolve(emptyReport([timeoutMsg]));
+      }, timeoutMs);
+    });
+
+    return Promise.race([work, timeoutGate]);
   };
 
   const p = syncChain.then(run, run) as Promise<WorkspaceSyncReport>;
