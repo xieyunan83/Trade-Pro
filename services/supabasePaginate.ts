@@ -12,20 +12,22 @@ type PageResult<T> = { data: T[] | null; error: { message?: string } | null };
  * @param fetchPage (from, to) => supabase query 结果（含 data/error）
  */
 export async function fetchAllSupabasePages<T>(
-  fetchPage: (from: number, to: number) => PromiseLike<PageResult<T>>
+  fetchPage: (from: number, to: number) => PromiseLike<PageResult<T>>,
+  pageSize: number = SUPABASE_PAGE_SIZE
 ): Promise<{ rows: T[]; error: string | null }> {
+  const size = Math.max(1, Math.min(pageSize, SUPABASE_PAGE_SIZE));
   const rows: T[] = [];
   let from = 0;
   for (;;) {
-    const to = from + SUPABASE_PAGE_SIZE - 1;
+    const to = from + size - 1;
     const { data, error } = await fetchPage(from, to);
     if (error) {
       return { rows, error: error.message || String(error) };
     }
     const batch = data || [];
     rows.push(...batch);
-    if (batch.length < SUPABASE_PAGE_SIZE) break;
-    from += SUPABASE_PAGE_SIZE;
+    if (batch.length < size) break;
+    from += size;
     // 安全上限：防止死循环
     if (from > 500_000) break;
   }
@@ -37,8 +39,15 @@ export async function selectAllRows<T = Record<string, unknown>>(
   client: SupabaseClient,
   table: string,
   columns: string,
-  opts?: { orderCol?: string; ascending?: boolean; eq?: Record<string, string> }
+  opts?: {
+    orderCol?: string;
+    ascending?: boolean;
+    eq?: Record<string, string>;
+    /** 大 JSON 行请用小分页，避免 Postgres statement timeout */
+    pageSize?: number;
+  }
 ): Promise<{ rows: T[]; error: string | null }> {
+  const pageSize = opts?.pageSize ?? SUPABASE_PAGE_SIZE;
   return fetchAllSupabasePages<T>(async (from, to) => {
     let q = client.from(table).select(columns);
     if (opts?.eq) {
@@ -50,5 +59,5 @@ export async function selectAllRows<T = Record<string, unknown>>(
       q = q.order(opts.orderCol, { ascending: opts.ascending ?? false });
     }
     return q.range(from, to) as PromiseLike<PageResult<T>>;
-  });
+  }, pageSize);
 }

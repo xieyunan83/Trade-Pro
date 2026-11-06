@@ -510,13 +510,42 @@ export const saveInvestigationHistory = async (item: HistoryItem): Promise<boole
   }
 }
 
+/**
+ * 轻量：只拉 local_id + 时间，用于增量同步判定。
+ * 全量 report_data 过大时 Postgres 易 statement timeout。
+ */
+export const listInvestigationHistoryCloudMeta = async (): Promise<
+  { id: string; stamp: number }[]
+> => {
+  if (!isSupabaseConfigured()) return []
+  const { rows, error } = await selectAllRows<{
+    local_id: string
+    created_at?: string
+  }>(getSupabaseClient(), 'investigation_history', 'local_id, created_at', {
+    orderCol: 'created_at',
+    ascending: false,
+    pageSize: 1000,
+  })
+  if (error) {
+    console.error('获取背调历史索引失败:', error)
+    throw new Error(error)
+  }
+  return rows
+    .map((row) => ({
+      id: (row.local_id || '').trim(),
+      stamp: row.created_at ? Date.parse(row.created_at) || 0 : 0,
+    }))
+    .filter((r) => r.id)
+}
+
 export const getInvestigationHistory = async (): Promise<HistoryItem[]> => {
   if (!isSupabaseConfigured()) return []
+  // report_data 体积大：小页拉取，避免单次查询被 statement timeout 掐断
   const { rows, error } = await selectAllRows<{ report_data: HistoryItem }>(
     getSupabaseClient(),
     'investigation_history',
     'report_data, created_at',
-    { orderCol: 'created_at', ascending: false }
+    { orderCol: 'created_at', ascending: false, pageSize: 40 }
   )
   if (error) {
     console.error('获取背调历史失败:', error)

@@ -11,10 +11,14 @@ import {
   getProductProfilesCloud,
   getSupabaseClient,
   isSupabaseConfigured,
+  listInvestigationHistoryCloudMeta,
   saveCrmClientsBulk,
   saveProductProfileCloud,
   syncProductProfilesCloud,
 } from './supabase';
+
+/** 单次同步最多上传背调历史条数，避免撑爆 6 分钟窗口；下次续传 */
+const HISTORY_UPLOAD_CAP_PER_SYNC = 120;
 import { getCloudWorkspaceId } from './workspaceId';
 import { loadAllCrmClients, saveAllCrmClients } from '../utils/workspaceScope';
 import { reconcileCrmTombstonesWithLiveClients } from '../utils/crmTombstones';
@@ -428,61 +432,34 @@ const runSyncAllWorkspaceData = async (
     errors.push(`CRM：${e?.message || String(e)}`);
   }
 
-  // —— 背调历史 ——
+  // —— 背调作业队列（优先：跨端共用最急）——
   try {
     check();
-    onProgress?.('同步中：读取本机背调历史…');
-    const localHist = await getHistory();
-    report.history = {
-      local: localHist.length,
+    onProgress?.('同步中：读取本机背调作业…');
+    const localAutoN = (await getAutomationQueue()).length;
+    report.automation = {
+      local: localAutoN,
       cloud: 0,
-      merged: localHist.length,
+      merged: localAutoN,
       uploaded: 0,
     };
-    onProgress?.(`同步中：拉取云端背调历史（本机已有 ${localHist.length}）…`);
-    let cloudHist: HistoryItem[] = [];
-    let cloudHistOk = false;
-    try {
-      cloudHist = await getInvestigationHistory();
-      cloudHistOk = true;
-    } catch (e: any) {
-      errors.push(`背调历史云端拉取：${e?.message || String(e)}`);
-    }
-    check();
-    onProgress?.(
-      `同步中：合并背调历史（本机 ${localHist.length} / 云 ${cloudHist.length}）…`
-    );
-    const mergedHist = mergeHistoryById(localHist, cloudHist);
-    if (mergedHist.length > 0) {
-      await saveHistoryBulk(mergedHist);
-    } else if (localHist.length > 0) {
-      errors.push('背调历史：合并结果为空，已保留本机数据');
-    }
-    let uploaded = 0;
-    if (doUpload && mergedHist.length > 0) {
-      check();
-      const cloudById = new Map(cloudHist.map((h) => [h.id, h]));
-      const dirty = !cloudHistOk
-        ? mergedHist
-        : mergedHist.filter((h) => {
-            const prev = cloudById.get(h.id);
-            if (!prev) return true;
-            return histStamp(h) > histStamp(prev);
-          });
-      onProgress?.(`同步中：上传背调历史 0/${dirty.length}…`);
-      uploaded = await uploadHistoryChunked(dirty, (done, total) => {
-        onProgress?.(`同步中：上传背调历史 ${done}/${total}…`);
+    onProgress?.(`同步中：合并/上传背调作业（本机已有 ${localAutoN}）…`);
+    const synced = await pullMergePushAutomationQueue({
+      upload: doUpload,
+      onProgress: (msg) => {
+        onProgress?.(msg);
         check();
-      });
-    }
-    report.history = {
-      local: localHist.length,
-      cloud: cloudHist.length,
-      merged: mergedHist.length || localHist.length,
-      uploaded,
+      },
+    });
+    report.automation = {
+      local: synced.local,
+      cloud: synced.cloud,
+      merged: synced.merged,
+      uploaded: synced.uploaded,
     };
+    if (synced.error) errors.push(`背调作业：${synced.error}`);
   } catch (e: any) {
-    errors.push(`背调历史：${e?.message || String(e)}`);
+    errors.push(`背调作业：${e?.message || String(e)}`);
   }
 
   // —— 产品画像 ——
@@ -527,34 +504,100 @@ const runSyncAllWorkspaceData = async (
     errors.push(`产品画像：${e?.message || String(e)}`);
   }
 
-  // —— 背调作业队列 ——
+  // —— 背调历史（最后：体积大，失败时绝不全量重传）——
   try {
     check();
-    onProgress?.('同步中：读取本机背调作业…');
-    const localAutoN = (await getAutomationQueue()).length;
-    report.automation = {
-      local: localAutoN,
+    onProgress?.('同步中：读取本机背调历史…');
+    const localHist = await getHistory();
+    report.history = {
+      local: localHist.length,
       cloud: 0,
-      merged: localAutoN,
+      merged: localHist.length,
       uploaded: 0,
     };
-    onProgress?.(`同步中：合并/上传背调作业（本机已有 ${localAutoN}）…`);
-    const synced = await pullMergePushAutomationQueue({
-      upload: doUpload,
-      onProgress: (msg) => {
-        onProgress?.(msg);
-        check();
-      },
-    });
-    report.automation = {
-      local: synced.local,
-      cloud: synced.cloud,
-      merged: synced.merged,
-      uploaded: synced.uploaded,
+
+    // 1) 先拉轻量索引（不易超时）
+    let cloudMeta: { id: string; stamp: number }[] = [];
+    let cloudMetaOk = false;
+    try {
+      onProgress?.(`同步中：拉取云端背调索引（本机 ${localHist.length}）…`);
+      cloudMeta = await listInvestigationHistoryCloudMeta();
+      cloudMetaOk = true;
+      report.history.cloud = cloudMeta.length;
+    } catch (e: any) {
+      errors.push(`背调历史云端索引：${e?.message || String(e)}`);
+    }
+
+    // 2) 再尝试正文（小页）；失败也不清空本机
+    let cloudHist: HistoryItem[] = [];
+    let cloudHistOk = false;
+    try {
+      check();
+      onProgress?.('同步中：拉取云端背调正文（分页）…');
+      cloudHist = await getInvestigationHistory();
+      cloudHistOk = true;
+      report.history.cloud = cloudHist.length;
+    } catch (e: any) {
+      errors.push(`背调历史云端拉取：${e?.message || String(e)}`);
+    }
+
+    check();
+    const mergedHist = cloudHistOk
+      ? mergeHistoryById(localHist, cloudHist)
+      : localHist;
+    if (cloudHistOk && mergedHist.length > 0) {
+      await saveHistoryBulk(mergedHist);
+    }
+    onProgress?.(
+      `同步中：合并背调历史（本机 ${localHist.length} / 云 ${report.history.cloud}）…`
+    );
+
+    let uploaded = 0;
+    if (doUpload && mergedHist.length > 0) {
+      check();
+      let dirty: HistoryItem[] = [];
+      if (cloudHistOk) {
+        const cloudById = new Map(cloudHist.map((h) => [h.id, h]));
+        dirty = mergedHist.filter((h) => {
+          const prev = cloudById.get(h.id);
+          if (!prev) return true;
+          return histStamp(h) > histStamp(prev);
+        });
+      } else if (cloudMetaOk) {
+        // 正文拉取失败：用索引判定缺哪些，只补缺的，禁止「失败就全量重传」
+        const cloudIds = new Set(cloudMeta.map((m) => m.id));
+        dirty = mergedHist.filter((h) => h.id && !cloudIds.has(h.id));
+        errors.push(
+          `背调历史正文拉取失败，本轮仅补传云端缺失的 ${dirty.length} 条（不全量重传）`
+        );
+      } else {
+        // 索引也失败：本轮跳过历史上传，留给作业/画像；下次再试
+        errors.push('背调历史云端不可用，本轮跳过历史上传，以免拖死作业同步');
+        dirty = [];
+      }
+
+      // 按时间新→旧，每轮限额，保证可续传
+      dirty = dirty
+        .slice()
+        .sort((a, b) => histStamp(b) - histStamp(a))
+        .slice(0, HISTORY_UPLOAD_CAP_PER_SYNC);
+
+      if (dirty.length) {
+        onProgress?.(`同步中：上传背调历史 0/${dirty.length}…`);
+        uploaded = await uploadHistoryChunked(dirty, (done, total) => {
+          onProgress?.(`同步中：上传背调历史 ${done}/${total}…`);
+          check();
+        });
+      }
+    }
+    report.history = {
+      local: localHist.length,
+      cloud: report.history.cloud,
+      merged: mergedHist.length || localHist.length,
+      uploaded,
     };
-    if (synced.error) errors.push(`背调作业：${synced.error}`);
   } catch (e: any) {
-    errors.push(`背调作业：${e?.message || String(e)}`);
+    errors.push(`背调历史：${e?.message || String(e)}`);
   }
 
   report.ok = errors.length === 0;
