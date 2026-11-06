@@ -3,7 +3,7 @@
  * 登录与「同步全部资料」时：先拉取合并写本机（尽快出界面），再按需推上云端。
  */
 import type { Client, CustomerProductProfile, HistoryItem } from '../types';
-import { getHistory, saveHistoryBulk, saveProductProfilesBulk } from './db';
+import { getAutomationQueue, getHistory, saveHistoryBulk, saveProductProfilesBulk } from './db';
 import { loadProductCatalog } from './productCatalog';
 import {
   getCrmClients,
@@ -175,6 +175,73 @@ const emptyReport = (errors: string[]): WorkspaceSyncReport => ({
   errors,
 });
 
+const cloneReport = (r: WorkspaceSyncReport): WorkspaceSyncReport => ({
+  ok: r.ok,
+  crm: { ...r.crm },
+  history: { ...r.history },
+  profiles: { ...r.profiles },
+  automation: { ...r.automation },
+  errors: [...r.errors],
+});
+
+/** 超时弹窗用：至少带上本机真实条数，避免全是 0 让人以为库空了 */
+const snapshotLocalCounts = async (): Promise<WorkspaceSyncReport> => {
+  let localCrm = 0;
+  let localHist = 0;
+  let localProfiles = 0;
+  let localAuto = 0;
+  try {
+    localCrm = loadAllCrmClients().length;
+  } catch {
+    /* ignore */
+  }
+  try {
+    localHist = (await getHistory()).length;
+  } catch {
+    /* ignore */
+  }
+  try {
+    localProfiles = (await loadProductCatalog()).length;
+  } catch {
+    /* ignore */
+  }
+  try {
+    localAuto = (await getAutomationQueue()).length;
+  } catch {
+    /* ignore */
+  }
+  return {
+    ok: false,
+    crm: { local: localCrm, cloud: 0, merged: localCrm, uploaded: 0 },
+    history: { local: localHist, cloud: 0, merged: localHist, uploaded: 0 },
+    profiles: { local: localProfiles, cloud: 0, merged: localProfiles, uploaded: 0 },
+    automation: { local: localAuto, cloud: 0, merged: localAuto, uploaded: 0 },
+    errors: [],
+  };
+};
+
+const mergeTimeoutReport = (
+  live: WorkspaceSyncReport,
+  localSnap: WorkspaceSyncReport,
+  timeoutMsg: string
+): WorkspaceSyncReport => {
+  const pick = (
+    a: WorkspaceSyncReport['crm'],
+    b: WorkspaceSyncReport['crm']
+  ): WorkspaceSyncReport['crm'] => {
+    if (a.local || a.cloud || a.merged || a.uploaded) return { ...a };
+    return { ...b };
+  };
+  return {
+    ok: false,
+    crm: pick(live.crm, localSnap.crm),
+    history: pick(live.history, localSnap.history),
+    profiles: pick(live.profiles, localSnap.profiles),
+    automation: pick(live.automation, localSnap.automation),
+    errors: [timeoutMsg, ...live.errors.filter((e) => e !== timeoutMsg)],
+  };
+};
+
 /** 同页串行队列，避免登录「先拉后推」与手动同步叠成写风暴；不丢任何一次 upload */
 let syncChain: Promise<unknown> = Promise.resolve();
 
@@ -202,6 +269,8 @@ export const syncAllWorkspaceData = async (
     let aborted = false;
     const secs = Math.round(timeoutMs / 1000);
     const timeoutMsg = `同步已超时停止（>${secs}秒）。已上传的部分仍保留，再点一次可继续传剩余`;
+    /** 各阶段实时写入；超时弹窗读这份，绝不能回传全 0 空报告 */
+    const live = emptyReport([]);
 
     // 必须用 race：网络卡在某一包时，仅靠 shouldAbort 解不开 await，界面会一直「同步中」
     const work = (async (): Promise<WorkspaceSyncReport> => {
@@ -210,15 +279,18 @@ export const syncAllWorkspaceData = async (
           upload: wantUpload,
           onProgress,
           shouldAbort: () => aborted,
+          liveReport: live,
         });
       } catch (e: any) {
         const msg = e?.message || String(e);
         if (aborted || /超时|取消/.test(msg)) {
           onProgress?.(timeoutMsg);
-          return emptyReport([timeoutMsg]);
+          const snap = await snapshotLocalCounts();
+          return mergeTimeoutReport(live, snap, timeoutMsg);
         }
         onProgress?.(`同步中断：${msg}`);
-        return emptyReport([msg]);
+        const snap = await snapshotLocalCounts();
+        return mergeTimeoutReport(live, snap, msg);
       }
     })();
 
@@ -226,7 +298,9 @@ export const syncAllWorkspaceData = async (
       window.setTimeout(() => {
         aborted = true;
         onProgress?.(timeoutMsg);
-        resolve(emptyReport([timeoutMsg]));
+        void snapshotLocalCounts().then((snap) => {
+          resolve(mergeTimeoutReport(cloneReport(live), snap, timeoutMsg));
+        });
       }, timeoutMs);
     });
 
@@ -242,7 +316,11 @@ export const syncAllWorkspaceData = async (
 };
 
 const runSyncAllWorkspaceData = async (
-  opts?: WorkspaceSyncOptions & { shouldAbort?: () => boolean }
+  opts?: WorkspaceSyncOptions & {
+    shouldAbort?: () => boolean;
+    /** 与外层共享，超时弹窗可读到已完成阶段的条数 */
+    liveReport?: WorkspaceSyncReport;
+  }
 ): Promise<WorkspaceSyncReport> => {
   const doUpload = opts?.upload !== false;
   const onProgress = opts?.onProgress;
@@ -252,7 +330,7 @@ const runSyncAllWorkspaceData = async (
     }
   };
   const errors: string[] = [];
-  const report: WorkspaceSyncReport = {
+  const report: WorkspaceSyncReport = opts?.liveReport || {
     ok: true,
     crm: emptyBucket(),
     history: emptyBucket(),
@@ -260,6 +338,8 @@ const runSyncAllWorkspaceData = async (
     automation: emptyBucket(),
     errors,
   };
+  report.ok = true;
+  report.errors = errors;
 
   if (!isSupabaseConfigured()) {
     errors.push('云端未配置（Supabase）');
@@ -270,8 +350,11 @@ const runSyncAllWorkspaceData = async (
   // —— CRM ——
   try {
     check();
-    onProgress?.('同步中：拉取 CRM…');
+    onProgress?.('同步中：读取本机 CRM…');
     const localCrm = loadAllCrmClients();
+    // 先记下本机条数，避免卡在云端拉取时超时弹窗全是 0
+    report.crm = { local: localCrm.length, cloud: 0, merged: localCrm.length, uploaded: 0 };
+    onProgress?.(`同步中：拉取云端 CRM（本机已有 ${localCrm.length}）…`);
     let cloudCrm: Client[] = [];
     let cloudOk = false;
     try {
@@ -348,8 +431,15 @@ const runSyncAllWorkspaceData = async (
   // —— 背调历史 ——
   try {
     check();
-    onProgress?.('同步中：拉取背调历史…');
+    onProgress?.('同步中：读取本机背调历史…');
     const localHist = await getHistory();
+    report.history = {
+      local: localHist.length,
+      cloud: 0,
+      merged: localHist.length,
+      uploaded: 0,
+    };
+    onProgress?.(`同步中：拉取云端背调历史（本机已有 ${localHist.length}）…`);
     let cloudHist: HistoryItem[] = [];
     let cloudHistOk = false;
     try {
@@ -398,8 +488,15 @@ const runSyncAllWorkspaceData = async (
   // —— 产品画像 ——
   try {
     check();
-    onProgress?.('同步中：产品画像…');
+    onProgress?.('同步中：读取本机产品画像…');
     const localProfiles = await loadProductCatalog();
+    report.profiles = {
+      local: localProfiles.length,
+      cloud: 0,
+      merged: localProfiles.length,
+      uploaded: 0,
+    };
+    onProgress?.(`同步中：拉取云端产品画像（本机已有 ${localProfiles.length}）…`);
     let cloudProfiles: CustomerProductProfile[] = [];
     try {
       cloudProfiles = await getProductProfilesCloud();
@@ -433,7 +530,15 @@ const runSyncAllWorkspaceData = async (
   // —— 背调作业队列 ——
   try {
     check();
-    onProgress?.('同步中：背调作业队列…');
+    onProgress?.('同步中：读取本机背调作业…');
+    const localAutoN = (await getAutomationQueue()).length;
+    report.automation = {
+      local: localAutoN,
+      cloud: 0,
+      merged: localAutoN,
+      uploaded: 0,
+    };
+    onProgress?.(`同步中：合并/上传背调作业（本机已有 ${localAutoN}）…`);
     const synced = await pullMergePushAutomationQueue({
       upload: doUpload,
       onProgress: (msg) => {

@@ -4725,6 +4725,9 @@ const App: React.FC = () => {
       );
       setAutomationResults(scoped);
       const timedOut = cloudNote.includes('超时');
+      const allZero =
+        /本机 0 \/ 云端 0 → 合并 0/.test(cloudNote) &&
+        (cloudNote.match(/本机 0 \/ 云端 0 → 合并 0/g) || []).length >= 3;
       alert(
         (timedOut
           ? `同步已超时停止（不是失败清空）。\n已上传到云端的部分仍保留；请再点一次「同步全部资料」继续传剩余。`
@@ -4733,6 +4736,9 @@ const App: React.FC = () => {
             ? `\n队列修复：短ID ${repaired.repaired}，认领 ${repaired.claimed}`
             : '') +
           cloudNote +
+          (allZero
+            ? `\n\n注意：若本机 CRM/作业列表其实有数据，却显示全 0，多半是卡在连云端；请检查网络后重试。数据不会因超时被清空。`
+            : '') +
           `\n\n建议：数据最全的电脑多点几次直到不再超时，再在另一台用 admin 同步。`
       );
     } catch (e: any) {
