@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Download,
   Upload,
@@ -74,6 +75,16 @@ export const BatchBackgroundExcelPanel: React.FC<Props> = ({
       draft.msg ||
         `已恢复上次导入草稿（${draft.stats.total} 行，${new Date(draft.savedAt).toLocaleString('zh-CN')}），可直接开始批量处理。`
     );
+  }, [open]);
+
+  // 打开时锁滚动，避免用户以为对话框「掉到页面下面」
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
   }, [open]);
 
   if (!open) return null;
@@ -170,15 +181,21 @@ export const BatchBackgroundExcelPanel: React.FC<Props> = ({
     return { text: '无效', tone: 'text-rose-700 bg-rose-50' };
   };
 
-  return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-slate-900/55 backdrop-blur-sm">
-      <div className="bg-white w-full max-w-3xl max-h-[90vh] rounded-3xl shadow-2xl flex flex-col animate-fade-in overflow-hidden">
+  // 挂到 body：保证相对视口正中居中，压过左下任务条；不改其它模块布局
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[130] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="excel-batch-title"
+    >
+      <div className="bg-white w-full max-w-3xl max-h-[min(90vh,880px)] rounded-3xl shadow-2xl flex flex-col animate-fade-in overflow-hidden">
         <div className="px-5 sm:px-6 py-4 border-b border-slate-100 flex items-start justify-between gap-3">
           <div>
             <div className="inline-flex items-center gap-2 text-cyan-700 font-black text-xs uppercase tracking-widest">
               <FileSpreadsheet size={14} /> Excel 批量背调
             </div>
-            <h3 className="text-lg sm:text-xl font-extrabold text-slate-900 mt-1">
+            <h3 id="excel-batch-title" className="text-lg sm:text-xl font-extrabold text-slate-900 mt-1">
               导入表格 · 批量背景调查与产品分析
             </h3>
             <p className="text-xs text-slate-500 font-medium mt-1 max-w-xl">
@@ -374,6 +391,7 @@ export const BatchBackgroundExcelPanel: React.FC<Props> = ({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
