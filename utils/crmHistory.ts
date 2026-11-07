@@ -1,5 +1,9 @@
 import { AnalysisResult, Client, ClientSearchResult, HistoryItem } from '../types';
 import { hasRichProductCatalog } from '../services/productCatalog';
+import {
+  assignCategoriesFromSignals,
+  idsFromAssignments,
+} from '../services/categoryTaxonomy';
 
 const isWeakProductType = (s?: string) =>
   !s ||
@@ -104,12 +108,6 @@ export const clientPatchFromAnalysis = (
   fallbackDomain?: string,
   checkedAt?: number
 ): Partial<Client> => {
-  // 延迟引入，避免 crmHistory ↔ productCatalog 环依赖
-  const {
-    assignCategoriesFromSignals,
-    idsFromAssignments,
-  } = require('../services/categoryTaxonomy') as typeof import('../services/categoryTaxonomy');
-
   const website = data?.companyInfo?.website || fallbackDomain || '';
   const kw = (data?.searchKeyword || '').trim();
   const tagKws = (data?.searchTags || [])

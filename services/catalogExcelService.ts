@@ -1,7 +1,7 @@
 /**
  * 产品库 · Excel 模板下载 / 导入（含嵌入产品图，压缩后入库供设计模块复用）
  */
-import type { CatalogSku, ProductSource } from './productCatalogTypes';
+import { ensureSkuTaxonomy, type CatalogSku, type ProductSource } from './productCatalogTypes';
 
 declare const XLSX: any;
 declare const JSZip: any;
@@ -411,7 +411,6 @@ export const mergeCatalogImports = (
   existing: CatalogSku[],
   incoming: CatalogSku[]
 ): CatalogSku[] => {
-  const { ensureSkuTaxonomy } = require('./productCatalogTypes') as typeof import('./productCatalogTypes');
   const map = new Map(existing.map((r) => [r.skuCode.toLowerCase(), r]));
   for (const s of incoming) {
     const next = ensureSkuTaxonomy(s);

@@ -43,6 +43,10 @@ import {
   applyCatalogMatchTagsToClient,
   buildCrmCatalogMatchReport,
 } from './services/crmCatalogMatch';
+import {
+  assignCategoriesFromSignals,
+  idsFromAssignments,
+} from './services/categoryTaxonomy';
 import { normalizeCountryZh } from './utils/countryNormalize';
 import { buildSearchTags, stampSearchResults } from './utils/searchTags';
 import { mergeDiscoveryResultsIntoCrm, mergeHistoryItemsIntoCrm, findCrmIdsForHistoryItem, findCrmIdsForDiscoveryResults, lookupBackgroundCheck, formatBackgroundCheckTime, findHistoryForClient, clientPatchFromAnalysis, reconcileCrmProductTypesFromHistory, CRM_JUNE_2026_CUTOFF_MS, isSearchResultInCrm, normalizeCrmHost, mergeCrmClientsByDomain, findCrmClientIndex } from './utils/crmHistory';
@@ -2520,7 +2524,6 @@ const App: React.FC = () => {
           return '进口商';
       };
       // 搜索线索入库时先挂靠官方品类（背调后再用官网/社交/电商证据精修）
-      const { assignCategoriesFromSignals, idsFromAssignments } = require('./services/categoryTaxonomy') as typeof import('./services/categoryTaxonomy');
       const seedSignals = [
         discoveryState.product,
         discoveryState.categoryL1,
