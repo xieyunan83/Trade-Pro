@@ -1,4 +1,7 @@
-/** 用户自定义关键词 / 国家分类（本地持久化） */
+/**
+ * 用户自定义「搜索关键词 / 国家」分组（本地持久化）。
+ * 不是产品品类树；官方品类见 data/productTaxonomy.ts，匹配入口见 services/categoryTaxonomy.ts。
+ */
 
 const KW_KEY = 'trade_scout_custom_keywords';
 const COUNTRY_KEY = 'trade_scout_custom_countries';

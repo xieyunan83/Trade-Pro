@@ -21,6 +21,8 @@ export type MatchProductSource = 'catalog' | 'upload' | 'design';
 export type MatchFormValues = {
   productName: string;
   category: string;
+  /** 官方品类 ID（选自产品库时自动带入） */
+  categoryIds?: string[];
   priceBand: string;
   skuCode: string;
   notes: string;
@@ -50,6 +52,9 @@ const priceLabel = (sku: CatalogSku): string => {
 const applySku = (sku: CatalogSku) => ({
   name: sku.name || sku.skuCode,
   category: sku.category || '',
+  categoryIds: sku.categoryIds?.length
+    ? sku.categoryIds
+    : ([sku.categoryL1Id, sku.categoryL2Id].filter(Boolean) as string[]),
   priceBand: priceLabel(sku),
   skuCode: sku.skuCode || '',
   notes: [sku.packing && `包装:${sku.packing}`, sku.colors && `配色:${sku.colors}`, sku.specs]
@@ -78,6 +83,7 @@ const MatchInputFormInner: React.FC<Props> = ({
   );
   const [name, setName] = useState(initial.productName);
   const [category, setCategory] = useState(initial.category);
+  const [categoryIds, setCategoryIds] = useState<string[]>(initial.categoryIds || []);
   const [priceBand, setPriceBand] = useState(initial.priceBand);
   const [skuCode, setSkuCode] = useState(initial.skuCode);
   const [notes, setNotes] = useState(initial.notes);
@@ -110,6 +116,7 @@ const MatchInputFormInner: React.FC<Props> = ({
     setSource(initial.source || (initial.imageUrls?.length ? 'design' : 'catalog'));
     setName(initial.productName || '');
     setCategory(initial.category || '');
+    setCategoryIds(initial.categoryIds || []);
     setPriceBand(initial.priceBand || '');
     setSkuCode(initial.skuCode || '');
     setNotes(initial.notes || '');
@@ -119,7 +126,13 @@ const MatchInputFormInner: React.FC<Props> = ({
     setConstraintKey('');
     if (initial.skuCode) {
       const hit = skus.find((s) => s.skuCode === initial.skuCode || s.id === initial.skuCode);
-      if (hit) setPickedSkuId(hit.id);
+      if (hit) {
+        setPickedSkuId(hit.id);
+        const ids = hit.categoryIds?.length
+          ? hit.categoryIds
+          : ([hit.categoryL1Id, hit.categoryL2Id].filter(Boolean) as string[]);
+        if (ids.length) setCategoryIds(ids);
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seedKey]);
@@ -129,6 +142,7 @@ const MatchInputFormInner: React.FC<Props> = ({
     setPickedSkuId(sku.id);
     setName(filled.name);
     setCategory(filled.category);
+    setCategoryIds(filled.categoryIds || []);
     setPriceBand(filled.priceBand);
     setSkuCode(filled.skuCode);
     setNotes(filled.notes);
@@ -192,9 +206,17 @@ const MatchInputFormInner: React.FC<Props> = ({
       return;
     }
     setLocalError(null);
+    const picked = pickedSkuId ? skus.find((s) => s.id === pickedSkuId) : undefined;
+    const ids =
+      categoryIds.length
+        ? categoryIds
+        : picked?.categoryIds?.length
+          ? picked.categoryIds
+          : ([picked?.categoryL1Id, picked?.categoryL2Id].filter(Boolean) as string[]);
     onSubmit({
       productName,
       category: category.trim(),
+      categoryIds: ids.length ? ids : undefined,
       priceBand: priceBand.trim(),
       skuCode: skuCode.trim(),
       notes: notes.trim(),

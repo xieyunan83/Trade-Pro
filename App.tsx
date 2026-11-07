@@ -533,8 +533,8 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!currentUser || currentUser.role !== 'admin' || !workerModeOn) {
       stopNightSilentUpgrade();
-      return;
-    }
+          return;
+      }
     startNightSilentUpgrade({
       getClients: () => crmClientsRef.current || [],
       getHistory: () => historyRef.current || [],
@@ -1144,7 +1144,7 @@ const App: React.FC = () => {
                 };
                 dirtyHistory.push(next);
                 fixedHistory.push(next);
-              } else {
+            } else {
                 fixedHistory.push(item);
               }
             }
@@ -1389,22 +1389,22 @@ const App: React.FC = () => {
                 
                 if (!isSupabaseConfigured()) {
                     if (!cancelled) setIsKBSyncing(true);
-                    try {
-                        const cloudFiles = await fetchDocumentsFromRepo();
-                        if (cloudFiles.length > 0) {
-                            for (const f of cloudFiles) { await saveFileToDB(f); }
-                            const allFiles = await getAllFilesFromDB();
+                try {
+                    const cloudFiles = await fetchDocumentsFromRepo();
+                    if (cloudFiles.length > 0) {
+                        for (const f of cloudFiles) { await saveFileToDB(f); }
+                        const allFiles = await getAllFilesFromDB();
                             if (!cancelled) setKbCount(allFiles.length);
-                        }
-                    } catch (e) {
-                        console.error("Auto KB Sync failed", e);
-                    } finally {
+                    }
+                } catch (e) {
+                    console.error("Auto KB Sync failed", e);
+                } finally {
                         if (!cancelled) setIsKBSyncing(false);
                     }
                 }
 
                 try {
-                  const cloudCRM = await fetchCRMFromCloud();
+                const cloudCRM = await fetchCRMFromCloud();
                   if (cloudCRM.length > 0) {
                     nextCrm = mergeClientsById(nextCrm, cloudCRM);
                     reconcileCrmTombstonesWithLiveClients(nextCrm);
@@ -1450,7 +1450,7 @@ const App: React.FC = () => {
                         }
                       });
                       const newItems = [...byId.values()].filter((i) => !existingIds.has(i.id));
-                      if (newItems.length > 0) {
+                    if (newItems.length > 0) {
                           const migratedNew = migrateLegacyOwnership(newItems, users, depts()).items;
                           for (const item of migratedNew) await persistHistoryItem(item);
                           if (!cancelled) {
@@ -1467,9 +1467,9 @@ const App: React.FC = () => {
                 }
                 
                 try {
-                  const apiKeys = await fetchApiConfigsFromCloud();
-                  if (apiKeys.length > 0) {
-                      localStorage.setItem('trade_scout_api_configs', JSON.stringify(apiKeys));
+                const apiKeys = await fetchApiConfigsFromCloud();
+                if (apiKeys.length > 0) {
+                    localStorage.setItem('trade_scout_api_configs', JSON.stringify(apiKeys));
                       if (!cancelled) setHasKey(hasApiKeyConfigured());
                   }
                 } catch (e) {
@@ -1692,7 +1692,7 @@ const App: React.FC = () => {
       if (users.length > 0) {
           // 保持本地缓存；不 bump 时间戳，避免覆盖云端较新账号
           saveUsersToStorage(users, getUsersUpdatedAt() || Date.now());
-      }
+          }
   }, [users]);
 
   const handleManualConnect = async () => {
@@ -2465,16 +2465,16 @@ const App: React.FC = () => {
   };
   
   const handleAddToCRM = () => { 
-      if (!analysisData) return;
+      if (!analysisData) return; 
       const website = analysisData.companyInfo.website;
       const patch: Partial<Client> = {
-          name: analysisData.companyInfo.name,
+          name: analysisData.companyInfo.name, 
           website,
-          country: analysisData.companyInfo.headquarters.split(',').pop()?.trim() || 'Global',
-          productType: analysisData.businessScope.coreProducts[0] || 'N/A',
+          country: analysisData.companyInfo.headquarters.split(',').pop()?.trim() || 'Global', 
+          productType: analysisData.businessScope.coreProducts[0] || 'N/A', 
           industry: analysisData.companyInfo.nature || 'N/A',
-          priceRange: analysisData.businessScope.priceSensitivity || 'Medium',
-          hasAnalyzed: true,
+          priceRange: analysisData.businessScope.priceSensitivity || 'Medium', 
+          hasAnalyzed: true, 
           hasBackgroundCheck: true,
           contacts: analysisData.decisionMakers || [],
       };
@@ -2497,11 +2497,11 @@ const App: React.FC = () => {
               type: '进口商',
               status: '新建/潜在',
               isSampleNeeded: false,
-              lastOrderDate: '',
-              lastContactSent: '',
-              lastContactReceived: '',
-              nextFollowUpDate: new Date().toISOString().split('T')[0],
-              activityLog: `Added from Deep Analysis. Rev: ${analysisData.financials.revenueEstimate}.`,
+          lastOrderDate: '', 
+          lastContactSent: '', 
+          lastContactReceived: '', 
+          nextFollowUpDate: new Date().toISOString().split('T')[0], 
+          activityLog: `Added from Deep Analysis. Rev: ${analysisData.financials.revenueEstimate}.`,
               ...patch,
           } as Client);
           return applyCrmDomainDedupe([newClient, ...prev]).clients;
@@ -2519,7 +2519,31 @@ const App: React.FC = () => {
           if (s.includes('distribut')) return '分销商';
           return '进口商';
       };
-      const newClients: Client[] = results.map(r => stampOwnership({
+      // 搜索线索入库时先挂靠官方品类（背调后再用官网/社交/电商证据精修）
+      const { assignCategoriesFromSignals, idsFromAssignments } = require('./services/categoryTaxonomy') as typeof import('./services/categoryTaxonomy');
+      const seedSignals = [
+        discoveryState.product,
+        discoveryState.categoryL1,
+        discoveryState.categoryL2,
+        discoveryState.industry,
+      ].filter(Boolean) as string[];
+      const seedIds = idsFromAssignments(
+        assignCategoriesFromSignals(seedSignals, { limit: 4, minScore: 18 })
+      );
+      const newClients: Client[] = results.map(r => {
+        const rowSignals = [
+          ...seedSignals,
+          r.mainProducts || '',
+          r.searchKeyword || '',
+          r.description || '',
+        ].filter(Boolean);
+        const rowIds = [
+          ...new Set([
+            ...seedIds,
+            ...idsFromAssignments(assignCategoriesFromSignals(rowSignals, { limit: 3, minScore: 20 })),
+          ]),
+        ].slice(0, 12);
+        return stampOwnership({
           id: Date.now() + Math.random().toString(36).substr(2, 9),
           name: r.name,
           website: r.website,
@@ -2538,8 +2562,13 @@ const App: React.FC = () => {
           activityLog: `Discovery 导入。匹配度:${r.fitScore ?? '-'}。标签:${(r.searchTags || []).join(' / ')}。${r.fitReason || r.description}`,
           contacts: [],
           searchKeyword: r.searchKeyword || discoveryState.product,
-          tags: r.searchTags || [],
-      }));
+          tags: [
+            ...(r.searchTags || []),
+            ...rowIds.slice(0, 4).map((id) => `类目ID:${id}`),
+          ],
+          sellCategoryIds: rowIds.length ? rowIds : undefined,
+      });
+      });
 
       setCrmClients(prev => {
           let next = [...prev];
@@ -2754,7 +2783,7 @@ const App: React.FC = () => {
         touched = {
           ...prev[idx],
           ...patch,
-          hasAnalyzed: true,
+                  hasAnalyzed: true, 
           hasBackgroundCheck: true,
           lastBackgroundCheckAt: now,
           ownerUsername: prev[idx].ownerUsername || currentUser?.username,
@@ -3231,7 +3260,7 @@ const App: React.FC = () => {
     }
 
     shouldStopRef.current = false;
-    setIsAutomating(true);
+      setIsAutomating(true);
     addCustomKeyword(kw);
     setDiscoveryState((prev) => ({
       ...prev,
@@ -3294,8 +3323,8 @@ const App: React.FC = () => {
           const newTasks: AutomationResult[] = qualified.map((res) =>
             stampOwnership({
               id: newAutomationTaskId(),
-              clientName: res.name,
-              website: res.website,
+                      clientName: res.name,
+                      website: res.website,
               // 任务国家固定为「本次搜索目标国」，避免模型乱填其它国家带偏背调
               country: country,
               status: 'pending' as const,
@@ -3517,20 +3546,20 @@ const App: React.FC = () => {
                 }
               : rawResult;
 
-            const completedTask: AutomationResult = {
-              ...task,
+              const completedTask: AutomationResult = { 
+                  ...task, 
               clientName: result.companyInfo?.name || task.clientName,
               website: result.companyInfo?.website || task.website,
               country: result.companyInfo?.headquarters?.split(',').pop()?.trim() || task.country,
-              status: 'completed',
+                  status: 'completed', 
               completedAt: Date.now(),
-              analysis: result,
+                  analysis: result, 
               mailGroup: undefined,
               keyword: kw || task.keyword || discoveryState.product,
               error: undefined,
               failedAt: undefined,
-            };
-
+              };
+              
             batchSeedByIdRef.current.set(task.id, completedTask);
             // 先更新 UI，再落盘：避免 IndexedDB 配额失败把已成功的背调标成 FAILED
             syncAutomationResults((prev) => prev.map((t) => (t.id === task.id ? completedTask : t)));
@@ -3647,7 +3676,7 @@ const App: React.FC = () => {
               void saveAutomationTask(paused).catch(() => undefined);
               return;
             }
-            console.error(`Task ${task.id} failed`, e);
+              console.error(`Task ${task.id} failed`, e);
             const failedTask: AutomationResult = {
               ...task,
               status: 'failed',
@@ -3719,8 +3748,8 @@ const App: React.FC = () => {
         if (stillPending && !shouldStopRef.current) {
           void processBatchQueue();
           return;
-        }
-        setIsAutomating(false);
+      }
+      setIsAutomating(false);
         refreshBatchProgressFromSession('');
         setBatchProgress((p) => ({ ...p, active: false, currentName: '' }));
         const sessionIds = batchSessionIdsRef.current;
@@ -5665,11 +5694,11 @@ const App: React.FC = () => {
 
   // 非 admin：短暂等待密钥探测；超时/未配齐也不整页封死（手机弱网常见），进工作台后按模块提示
   if (hasKey === null && currentUser.role !== 'admin') {
-    return (
+      return (
       <div className="h-screen flex items-center justify-center bg-slate-50">
         <Loader2 className="animate-spin text-blue-600" size={40} />
-      </div>
-    );
+          </div>
+      );
   }
 
   const alwaysActiveModules = ALWAYS_ACTIVE_MODULES;
@@ -5700,9 +5729,9 @@ const App: React.FC = () => {
         <div className="tp-dock-brand flex items-center justify-center py-2.5 border-b border-cyan-400/15 shrink-0">
           <div className="tp-brand-mark p-2 rounded-xl text-white" title={`外贸智慧协同 · ${currentUser.username}`}>
             <Zap size={16} />
-          </div>
+            </div>
         </div>
-
+        
         {(isAutomating || batchProgress.active || productDigProgress.active > 0) && sphereNavPhase === 'submenu' && (
             <div className="mx-1.5 mt-2 p-2 bg-slate-950/50 rounded-xl border border-cyan-400/20 text-slate-100 space-y-2 backdrop-blur-md">
                 {(isAutomating || batchProgress.active) && (
@@ -5711,7 +5740,7 @@ const App: React.FC = () => {
                         <span className="text-[9px] font-bold text-emerald-300 flex items-center gap-1">
                           <Loader2 className="animate-spin" size={9}/> 背调
                         </span>
-                    </div>
+            </div>
                     {(() => {
                       const done = batchProgress.done;
                       const failed = batchProgress.failed;
@@ -5720,17 +5749,17 @@ const App: React.FC = () => {
                       return (
                           <div className="h-1 rounded-full bg-slate-700 overflow-hidden">
                             <div className="h-full bg-emerald-400 transition-all" style={{ width: `${pct}%` }} />
-                          </div>
+                </div>
                       );
                     })()}
-                  </div>
-                )}
-                <button onClick={stopAutomation} className="w-full bg-rose-600/90 hover:bg-rose-600 text-white text-[9px] font-bold py-1.5 rounded-lg flex items-center justify-center gap-1">
-                    <StopCircle size={10} /> 停止
-                </button>
             </div>
         )}
-
+                <button onClick={stopAutomation} className="w-full bg-rose-600/90 hover:bg-rose-600 text-white text-[9px] font-bold py-1.5 rounded-lg flex items-center justify-center gap-1">
+                    <StopCircle size={10} /> 停止
+            </button>
+                </div>
+            )}
+            
         <div className="flex-1 min-h-0 flex flex-col">
           <SphereNav
             currentUser={currentUser}
@@ -5762,7 +5791,7 @@ const App: React.FC = () => {
                 className="w-full text-[9px] font-black text-cyan-200/90 bg-cyan-500/10 border border-cyan-400/20 rounded-lg py-1.5 hover:bg-cyan-500/20"
               >
                 返回管理后台
-              </button>
+            </button>
             </div>
           )}
         </div>
@@ -5935,14 +5964,14 @@ const App: React.FC = () => {
             <button onClick={() => setMobileMenuOpen(true)} className="md:hidden p-2 text-slate-500 flex-shrink-0 touch-manipulation" aria-label="打开菜单"><Menu size={24} /></button>
             <div className="flex-1 relative group min-w-0 sm:order-none">
               <Search className="absolute left-3 sm:left-4 top-3 sm:top-5 text-signal-500/70 pointer-events-none" size={20} />
-              <textarea 
+            <textarea 
                   className="tp-scan-input w-full pl-10 sm:pl-12 pr-3 sm:pr-4 py-3 sm:py-4 rounded-2xl text-slate-950 font-semibold text-sm sm:text-base focus:outline-none transition-all resize-none overflow-hidden min-h-[48px] sm:min-h-[56px] focus:min-h-[100px] sm:focus:min-h-[120px] z-20 relative placeholder:text-slate-500" 
                   placeholder="输入目标网址或公司名称..." 
-                  value={domainInput} 
-                  onChange={e => setDomainInput(e.target.value)} 
-                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAnalyzeInput(); } }}
-              />
-            </div>
+                value={domainInput} 
+                onChange={e => setDomainInput(e.target.value)} 
+                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAnalyzeInput(); } }}
+            />
+          </div>
           </div>
           <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto flex-shrink-0">
             {hasPermission(currentUser, 'feature.batch_analyze') && (
@@ -5956,8 +5985,8 @@ const App: React.FC = () => {
               </button>
             )}
             <button onClick={() => handleAnalyzeInput()} disabled={loading || !domainInput.trim()} className="tp-btn-primary text-white px-6 sm:px-8 py-3 rounded-2xl font-extrabold disabled:opacity-50 w-full sm:w-auto sm:min-w-[140px] flex justify-center items-center touch-manipulation">
-              {loading ? <Loader2 className="animate-spin" size={20} /> : '深度调查'}
-            </button>
+            {loading ? <Loader2 className="animate-spin" size={20} /> : '深度调查'}
+          </button>
           </div>
           </div>
           {(activeSectionMeta || activeNavItem) && (
@@ -6112,7 +6141,7 @@ const App: React.FC = () => {
                     <ModuleClientCRM 
                         clients={crmClients} 
                         setClients={setCrmClients} 
-                        onBatchAnalyze={handleBatchAnalyzeFromCRM}
+                        onBatchAnalyze={handleBatchAnalyzeFromCRM} 
                         onBatchDmSearch={handleBatchDmSearchFromCRM}
                         onBatchDelete={handleBatchDeleteClients}
                         onDeleteClient={handleDeleteClient}
@@ -6245,11 +6274,11 @@ const App: React.FC = () => {
                 ).includes(activeModule) && <ModuleComingSoon module={activeModule} />}
                 <ModulePane id={ModuleType.PROMO_GENERATOR} activeId={activeModule} maxAlive={10}>
                     <ModulePromoGenerator 
-                        onStartAutomation={handleStartQueueGeneration}
+                        onStartAutomation={handleStartQueueGeneration} 
                         onPlatformAcquisitionSearch={handlePlatformAcquisitionSearch}
                         initialPlaybookId={pendingPlaybookId}
                         onInitialPlaybookConsumed={() => setPendingPlaybookId(null)}
-                        automationResults={automationResults}
+                        automationResults={automationResults} 
                         crmClients={crmClients}
                         history={history}
                         isAutomating={isAutomating} 
@@ -6294,9 +6323,9 @@ const App: React.FC = () => {
                                   <span className="text-[9px] font-bold uppercase tracking-[0.16em] text-cyan-600 shrink-0">Strategy</span>
                                   <h2 className="text-sm sm:text-base font-extrabold text-slate-900 truncate">{analysisData.companyInfo?.name}</h2>
                                   <span className="text-[10px] text-slate-400 font-semibold shrink-0">深度调查</span>
-                                </div>
                             </div>
-                        )}
+                    </div>
+                )}
                         <ModuleStrategy
                           data={analysisData}
                           history={history}
@@ -6409,7 +6438,7 @@ const App: React.FC = () => {
                                   >
                                     后一个
                                   </button>
-                                </div>
+                        </div>
                               )}
                               <div className="mt-1 sm:mt-2 flex items-center gap-2 flex-shrink-0 relative z-10">
                                 <button
@@ -6438,8 +6467,8 @@ const App: React.FC = () => {
                                 >
                                   <Trash2 size={14} /> 删除
                                 </button>
-                              </div>
-                            </div>
+                    </div>
+                    </div>
                             <a href={websiteHref(analysisData.companyInfo?.website)} target="_blank" rel="noreferrer" className="text-cyan-600 font-semibold mt-2 hover:underline text-sm sm:text-base break-all">{analysisData.companyInfo?.website || '—'}</a>
                             {(() => {
                               const bgMeta = lookupBackgroundCheck(
@@ -6642,7 +6671,7 @@ const App: React.FC = () => {
         crmClients={crmClients}
         onStart={handleExcelBatchStart}
       />
-
+      
       {/* Batch Modal */}
       {batchModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
@@ -6697,7 +6726,7 @@ const App: React.FC = () => {
             setSystemNotice('已停止本机挂机执行。');
           }}
         />
-      </div>
+    </div>
 
       {currentUser.role === 'admin' && (
         <WorkerModePrompt

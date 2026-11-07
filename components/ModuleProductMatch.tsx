@@ -363,6 +363,7 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
           input: {
             productName: values.productName,
             category: values.category || undefined,
+            categoryIds: values.categoryIds,
             priceBand: values.priceBand || undefined,
             skuCode: values.skuCode || undefined,
             notes: [values.notes, imageNote].filter(Boolean).join('；') || undefined,

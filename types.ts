@@ -400,6 +400,15 @@ export interface Client {
   searchedKeywords?: string[];
   /** 管理标签 */
   tags?: string[];
+  /**
+   * 与产品库对齐的官方品类 ID（在售侧）
+   * 来自背调/品类深挖证据映射，禁止手填臆造
+   */
+  sellCategoryIds?: string[];
+  /** 与产品库对齐的官方品类 ID（采购/进口侧） */
+  procureCategoryIds?: string[];
+  /** 品类证据链（官网/社交/电商/海关） */
+  categoryRefs?: CategoryEvidenceRef[];
   ownerUsername?: string;
   departmentId?: string;
 }
@@ -469,6 +478,27 @@ export interface ProductAnalysis {
   role?: 'sell' | 'procure' | 'both';
   /** 匹配用短标签（材质/年龄段/渠道等），须来自证据 */
   tags?: string[];
+  /** 官方品类 L1 ID（与产品库呼应） */
+  taxonomyL1Id?: string;
+  /** 官方品类 L2 ID */
+  taxonomyL2Id?: string;
+  /** 证据 URL（官网/店铺/社交/海关页） */
+  evidenceUrl?: string;
+  /** 证据摘录 */
+  evidenceSnippet?: string;
+}
+
+/** 品类证据：客户侧与产品侧共用的结构化字段 */
+export interface CategoryEvidenceRef {
+  l1Id: string;
+  l2Id?: string;
+  /** 展示用标签 */
+  label: string;
+  side: 'sell' | 'procure' | 'both';
+  source: 'website' | 'shop' | 'social' | 'customs' | 'catalog' | 'other';
+  url?: string;
+  snippet?: string;
+  confidence?: number;
 }
 
 /** 客户产品库中的单条 SKU / 品类线索 */
@@ -477,6 +507,8 @@ export interface CustomerProductSku {
   name: string;
   category: string;
   categoryRaw?: string;
+  taxonomyL1Id?: string;
+  taxonomyL2Id?: string;
   priceMinCny?: number;
   priceMaxCny?: number;
   retailPrice?: string;
@@ -490,6 +522,8 @@ export interface CustomerProductSku {
   colors?: string;
   /** 包装方式（来自背调 SKU） */
   packaging?: string;
+  evidenceUrl?: string;
+  evidenceSnippet?: string;
 }
 
 /** 背调产品情报：在售 vs 采购（须有证据，禁止空编） */
@@ -525,6 +559,14 @@ export interface CustomerProductProfile {
   sellCategories?: string[];
   /** 对方采购/进口品类（海关/采购页/贸易证据） */
   procureCategories?: string[];
+  /** 官方品类 ID（在售）——与 CatalogSku.categoryIds 呼应 */
+  sellCategoryIds?: string[];
+  /** 官方品类 ID（采购）——与 CatalogSku.categoryIds 呼应 */
+  procureCategoryIds?: string[];
+  /** 全部官方品类 ID（sell ∪ procure） */
+  categoryIds?: string[];
+  /** 带证据的品类引用 */
+  categoryRefs?: CategoryEvidenceRef[];
   /** 匹配标签（真实入库，供新品匹配） */
   productTags?: string[];
   priceMinCny?: number;
@@ -569,6 +611,8 @@ export interface CustomerProductProfile {
 export interface OurProductMatchQuery {
   name: string;
   category?: string;
+  /** 官方品类 ID（优先于自由文本匹配） */
+  categoryIds?: string[];
   priceMinCny?: number;
   priceMaxCny?: number;
   countries?: string[];
@@ -598,6 +642,10 @@ export interface WebsiteCategory {
   priceMaxCNY?: number;
   /** 展示用价格带，如 ¥15–45 或 $4–12 CAD */
   priceBand?: string;
+  taxonomyL1Id?: string;
+  taxonomyL2Id?: string;
+  evidenceUrl?: string;
+  evidenceSnippet?: string;
 }
 
 /** 背调证据链条目（公开网页来源） */

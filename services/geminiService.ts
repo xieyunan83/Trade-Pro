@@ -84,6 +84,7 @@ import {
   summarizeEvidence,
 } from '../utils/evidenceChain';
 import { normalizeAnalysisResult } from './analysisNormalize';
+import { assignBestCategory, taxonomyPromptList } from './categoryTaxonomy';
 import {
   getCooldownRemainingSec,
   noteRateLimited,
@@ -610,17 +611,17 @@ const fetchHunterEmails = async (domain: string): Promise<{ people: DecisionMake
     });
     if (!res.ok) return { people: [], pattern: null };
     const data = res.data;
-    const pattern = data.data?.pattern || null;
+        const pattern = data.data?.pattern || null;
     if (data.data && Array.isArray(data.data.emails)) {
       const people: DecisionMaker[] = data.data.emails.map((e: any) => {
         const title = e.position || 'Employee';
         return {
-          name: `${e.first_name || ''} ${e.last_name || ''}`.trim() || 'Professional',
-          firstName: e.first_name,
-          lastName: e.last_name,
+                name: `${e.first_name || ''} ${e.last_name || ''}`.trim() || 'Professional',
+                firstName: e.first_name,
+                lastName: e.last_name,
           title,
-          emailGuess: e.value,
-          linkedin: e.linkedin,
+                emailGuess: e.value,
+                linkedin: e.linkedin,
           type: classifyDecisionMakerType(title),
           source: 'Hunter.io' as const,
           emailSource: 'Hunter.io' as const,
@@ -630,8 +631,8 @@ const fetchHunterEmails = async (domain: string): Promise<{ people: DecisionMake
           influenceScore: classifyDecisionMakerType(title) === 'Buyer' ? 5 : classifyDecisionMakerType(title) === 'CEO' ? 4 : 2,
         };
       });
-      return { people, pattern };
-    }
+            return { people, pattern };
+        }
     return { people: [], pattern: null };
 };
 
@@ -791,7 +792,7 @@ const anymailFetch = async (
   return fetchWithTimeout(
     url,
     {
-      method: 'POST',
+            method: 'POST',
       headers: buildAnymailFetchHeaders(apiKey, url),
       body: JSON.stringify(body),
     },
@@ -2091,7 +2092,7 @@ const callOpenAICompatible = async (
     // Construct URL robustly
     let baseUrl = config.baseUrl.trim();
     if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
-
+    
     // Vercel 单文件代理：把 /chat/completions 写入 __upstream，避免多段路径 404
     if (baseUrl.includes('__upstream=')) {
         try {
@@ -2106,7 +2107,7 @@ const callOpenAICompatible = async (
             /* keep */
         }
     } else if (!baseUrl.endsWith('/chat/completions') && !baseUrl.includes('generateContent')) {
-        // Auto-append chat/completions if not present (Standard OpenAI format)
+    // Auto-append chat/completions if not present (Standard OpenAI format)
         baseUrl += '/chat/completions';
     }
 
@@ -2131,7 +2132,7 @@ const callOpenAICompatible = async (
     // Helper to execute fetch
     const doFetch = async (proxyPrefix: string, targetUrl: string) => {
         const finalUrl = proxyPrefix ? `${proxyPrefix}${encodeURIComponent(targetUrl)}` : targetUrl;
-
+        
         const headers = buildAliyunFetchHeaders({
             targetUrl: finalUrl,
             apiKey: sanitizeApiKey(config.apiKey),
@@ -2177,7 +2178,7 @@ const callOpenAICompatible = async (
 
             if (!response.ok) {
                 const errText = await response.text();
-
+                
                 if (isWorkerLimit(response.status, errText)) {
                     throw new Error(
                       `云端代理超时或资源不足 (HTTP 546)。系统会自动降级重试。详情: ${errText.slice(0, 120)}`
@@ -2215,7 +2216,7 @@ const callOpenAICompatible = async (
                 if (response.status >= 500 || response.status === 403) {
                     console.warn(`Attempt failed with status ${response.status}. Trying next proxy...`);
                     lastError = new Error(`HTTP ${response.status}: ${errText}`);
-                    continue;
+                    continue; 
                 }
 
                 // Other errors
@@ -2225,10 +2226,10 @@ const callOpenAICompatible = async (
             }
 
             const data = await response.json();
-
+            
             // 兼容推理型号：content 可能为空，答案在 reasoning_content / 多段 parts
             const content = extractOpenAIChatContent(data);
-
+            
             if (!content) {
                 console.error("Empty Response Structure:", data);
                 const fr = data?.choices?.[0]?.finish_reason || data?.choices?.[0]?.finishReason || '';
@@ -2282,9 +2283,9 @@ const callOpenAICompatible = async (
 
 // --- 国内千问统一调用（联网搜索 + 多模态）---
 const buildQwenUserContent = (
-  prompt: string,
-  images: string[] = [],
-  attachments: KnowledgeFile[] = []
+    prompt: string, 
+    images: string[] = [],
+    attachments: KnowledgeFile[] = []
 ): string | Array<{ type: string; text?: string; image_url?: { url: string } }> => {
   if (images.length === 0 && attachments.length === 0) return prompt;
 
@@ -2349,17 +2350,17 @@ const tryGeminiFailover = async (
   needsWebSearch: boolean
 ): Promise<string | null> => {
   const allConfigs = getGeminiConfig();
-  const nativeConfig: ApiConfig | null = env.apiKey ? {
-    id: 'native_env_key',
-    apiKey: env.apiKey,
-    baseUrl: 'native',
-    priority: 0,
-    taskAssignment: 'default',
+    const nativeConfig: ApiConfig | null = env.apiKey ? {
+        id: 'native_env_key',
+        apiKey: env.apiKey,
+        baseUrl: 'native',
+        priority: 0,
+        taskAssignment: 'default',
     modelId: NATIVE_MODEL,
-  } : null;
+    } : null;
 
-  const candidates = [...allConfigs];
-  if (nativeConfig) candidates.push(nativeConfig);
+    const candidates = [...allConfigs];
+    if (nativeConfig) candidates.push(nativeConfig);
   const relevantCandidates = candidates.filter(
     c => c.taskAssignment === task || !c.taskAssignment || c.taskAssignment === 'default'
   );
@@ -3164,8 +3165,8 @@ GROUND-TRUTH EVIDENCE from AnySearch (MUST prefer this over draft / third-party 
 ${identityEvidence.trim()}
 `
     : '';
-
-  const prompt = `
+    
+    const prompt = `
 IDENTITY VERIFICATION (联网搜索，强制以官网为准)
 
 Canonical domain (唯一身份主键): ${canonicalDomain}
@@ -3280,12 +3281,12 @@ export const analyzeCompany = async (
     ? `
   PRODUCT INTEL (CRITICAL — SELL + PROCURE, evidence only, for matching DB):
   - User found this client via "${searchKeyword}", but you MUST inventory BOTH:
-    (A) SELL: what they retail/distribute (site nav + shop + marketplaces);
+    (A) SELL: what they retail/distribute (site nav + shop + marketplaces + social catalogs);
     (B) PROCURE: what they buy/import from factories (import pages, wholesale buyer notes, customs categories).
-  - Do NOT invent SKUs/prices/tags. Unknown → "公开信息未找到".
-  - websiteCategories: complete SELL nav tree (5–15). EACH with priceMinCNY, priceMaxCNY, priceBand.
-  - products[]: 8–12 real items; each MUST set role=sell|procure|both and tags[] (short, evidenced).
-  - Fill productIntel { sell, procure, matchTags, sourceNote } for DB indexing.
+  - Do NOT invent SKUs/prices/tags/categories. Unknown → "公开信息未找到". Every category MUST be evidenced on their own channels.
+  - websiteCategories: complete SELL nav tree (5–15). EACH with priceMinCNY, priceMaxCNY, priceBand, evidenceUrl OR evidenceSnippet, and taxonomyL1Id when mappable.
+  - products[]: 8–12 real items; each MUST set role=sell|procure|both, tags[], evidenceUrl/evidenceSnippet when possible, taxonomyL1Id/taxonomyL2Id from ALLOWED TAXONOMY below.
+  - Fill productIntel { sell, procure, matchTags, sourceNote } for DB indexing — labels must mirror real site/shop/social/ecommerce assortment.
   - CRITICAL OUTPUT ORDER: marketTrends + strategy.actionPlan + similarCompanies BEFORE long products[].
   - keywordMatch=true ONLY if related to "${searchKeyword}"; never drop non-matching lines.
   - businessScope.coreProducts = 在售主营; tradeIntelligence.importCategories = 采购/进口品类; hsCodes short.
@@ -3293,9 +3294,9 @@ export const analyzeCompany = async (
 `
     : `
   PRODUCT INTEL (CRITICAL — SELL + PROCURE for exporter matching DB):
-  - Inventory SELL assortment (site/shop) AND PROCURE/import needs (trade/buyer evidence). No hallucination.
-  - websiteCategories: 5–15 sell-side categories with prices; products[] with role + tags.
-  - productIntel required; importCategories for procure side.
+  - Inventory SELL assortment (site/shop/social/ecommerce) AND PROCURE/import needs (trade/buyer evidence). No hallucination.
+  - websiteCategories: 5–15 sell-side categories with prices + evidenceUrl/evidenceSnippet; map taxonomyL1Id when possible.
+  - products[] with role + tags + taxonomy ids from ALLOWED TAXONOMY; productIntel required; importCategories for procure side.
   - Always include marketTrends, strategy.actionPlan (≥5), similarCompanies (12–15) BEFORE products[].
   - Set keywordMatch=false when no search keyword.
 `;
@@ -3618,7 +3619,7 @@ ${productFocusBlock}
               ? ('both' as const)
               : ('sell' as const);
         return applyEstimatedFobFromRetail({
-          ...p,
+        ...p,
           category: p.category || '',
           role,
           tags: Array.isArray(p.tags) ? p.tags.map(String).filter(Boolean).slice(0, 8) : [],
@@ -3627,8 +3628,8 @@ ${productFocusBlock}
           estimatedFOBPriceCNY: Number(p.estimatedFOBPriceCNY) || 0,
           priceMinCNY: typeof p.priceMinCNY === 'number' ? p.priceMinCNY : undefined,
           priceMaxCNY: typeof p.priceMaxCNY === 'number' ? p.priceMaxCNY : undefined,
-          features: p.features || "N/A",
-          colors: p.colors || "N/A",
+        features: p.features || "N/A",
+        colors: p.colors || "N/A",
           packaging: p.packaging || "N/A",
           keywordMatch: !!p.keywordMatch,
         });
@@ -4454,7 +4455,7 @@ export const digProductIntelligence = async (
       // 控制体量：过大证据会把 /api/qwen 请求打到边缘，加重代理压力
       productEvidence = String(tavilyBundle.text || '').slice(0, 8_000);
       digEvidenceItems = tavilyBundle.items || [];
-    } catch (e) {
+      } catch (e) {
       console.warn('[digProductIntelligence] Tavily skipped', e);
     }
   }
@@ -4468,15 +4469,19 @@ ${searchCountry ? `Market: ${searchCountry}.` : ''}
 ${productEvidence ? `=== WEB PRODUCT EVIDENCE ===\n${productEvidence}\n=== END ===` : 'Use web search on official shop/catalog/product/import pages AND platforms (Amazon/Allegro/wholesale dirs if present).'}
 
 CRITICAL ANTI-HALLUCINATION:
-- Only record products/categories/tags supported by evidence (site/nav/shop/customs mentions).
-- If unknown → "公开信息未找到". NEVER invent SKUs, prices, HS codes, or tags.
+- Only record products/categories/tags supported by evidence (official site / social catalog / ecommerce listing / customs).
+- Categories must reflect what THIS client actually sells or buys — not our factory wishlist.
+- If unknown → "公开信息未找到". NEVER invent SKUs, prices, HS codes, tags, or taxonomy ids.
+
+ALLOWED TAXONOMY (map taxonomyL1Id / taxonomyL2Id when confident; else omit id and keep free-text categoryName):
+${taxonomyPromptList({ maxL2PerL1: 6 })}
 
 Requirements (简体中文描述字段):
-1. SELL side (对方在售/分销): full assortment from website nav + shop + marketplace listings.
+1. SELL side (对方在售/分销): full assortment from website nav + shop + marketplace + social product posts.
 2. PROCURE side (对方采购/进口需求): importCategories, buyer pages, wholesale sourcing, customs lines — what they BUY from factories.
-3. websiteCategories: 5–15 real sell-side nav categories with priceMinCNY/priceMaxCNY/priceBand.
-4. products[]: 8–15 concrete items. Each MUST set role = "sell" | "procure" | "both", plus tags[] (短标签：材质/年龄段/渠道等，须有据).
-5. productIntel: structured { sell, procure, matchTags, sourceNote } — both sides required when evidence exists.
+3. websiteCategories: 5–15 real sell-side nav categories with priceMinCNY/priceMaxCNY/priceBand + evidenceUrl or evidenceSnippet + taxonomyL1Id when mappable.
+4. products[]: 8–15 concrete items. Each MUST set role = "sell" | "procure" | "both", tags[], evidenceUrl/evidenceSnippet when possible, taxonomyL1Id/taxonomyL2Id from ALLOWED TAXONOMY.
+5. productIntel: structured { sell, procure, matchTags, sourceNote } — both sides required when evidence exists; category labels must mirror evidenced assortment.
 6. keywordMatch=true only if related to "${searchKeyword || ''}"; never drop non-matching SKUs.
 7. Do NOT overwrite strategy / similarCompanies / marketTrends / decisionMakers.
 8. businessScope.coreProducts = 在售主营；tradeIntelligence.importCategories = 采购/进口品类；hsCodes short.
@@ -4484,7 +4489,7 @@ Requirements (简体中文描述字段):
 
 Output JSON only:
 {
-  "websiteCategories": [{ "categoryName": "", "items": [], "priceMinCNY": 0, "priceMaxCNY": 0, "priceBand": "" }],
+  "websiteCategories": [{ "categoryName": "", "items": [], "priceMinCNY": 0, "priceMaxCNY": 0, "priceBand": "", "taxonomyL1Id": "", "taxonomyL2Id": "", "evidenceUrl": "", "evidenceSnippet": "" }],
   "businessScope": { "coreProducts": [], "relevantProducts": [], "brandPositioning": "", "consumerGroup": "", "productVariety": "Medium", "priceSensitivity": "", "websiteStructure": "" },
   "tradeIntelligence": { "hsCodes": [], "importCategories": [] },
   "productSummary": { "marketPreference": "", "recommendedProducts": "", "packagingAnalysis": "", "colorPreference": "", "featureAnalysis": "" },
@@ -4492,9 +4497,9 @@ Output JSON only:
     "sell": { "categories": [], "items": [], "tags": [], "notes": "" },
     "procure": { "categories": [], "items": [], "tags": [], "notes": "" },
     "matchTags": [],
-    "sourceNote": "基于官网/公开证据整理，未编造"
+    "sourceNote": "基于官网/社交/电商/海关公开证据整理，未编造"
   },
-  "products": [{ "name": "", "category": "", "role": "sell", "tags": [], "retailPrice": "", "retailPriceCNY": 0, "estimatedFOBPriceCNY": 0, "priceMinCNY": 0, "priceMaxCNY": 0, "pricingStrategy": "", "pitchPoint": "", "features": "", "colors": "", "packaging": "",       "keywordMatch": false }]
+  "products": [{ "name": "", "category": "", "role": "sell", "tags": [], "taxonomyL1Id": "", "taxonomyL2Id": "", "evidenceUrl": "", "evidenceSnippet": "", "retailPrice": "", "retailPriceCNY": 0, "estimatedFOBPriceCNY": 0, "priceMinCNY": 0, "priceMaxCNY": 0, "pricingStrategy": "", "pitchPoint": "", "features": "", "colors": "", "packaging": "", "keywordMatch": false }]
 }
 `;
 
@@ -4521,11 +4526,23 @@ Output JSON only:
     const tags = Array.isArray(p.tags)
       ? p.tags.map((t: unknown) => String(t || '').trim()).filter(Boolean).slice(0, 8)
       : [];
+    const catText = String(p.category || p.name || '').trim();
+    const tax =
+      p.taxonomyL1Id
+        ? { l1Id: String(p.taxonomyL1Id), l2Id: p.taxonomyL2Id ? String(p.taxonomyL2Id) : undefined }
+        : (() => {
+            const best = assignBestCategory(catText);
+            return best ? { l1Id: best.l1Id, l2Id: best.l2Id } : undefined;
+          })();
     return applyEstimatedFobFromRetail({
       name: String(p.name || '').trim(),
       category: String(p.category || '').trim(),
       role,
       tags,
+      taxonomyL1Id: tax?.l1Id,
+      taxonomyL2Id: tax?.l2Id,
+      evidenceUrl: String(p.evidenceUrl || '').trim() || undefined,
+      evidenceSnippet: String(p.evidenceSnippet || '').trim() || undefined,
       retailPrice: String(p.retailPrice || ''),
       retailPriceCNY: Number(p.retailPriceCNY) || 0,
       estimatedFOBPriceCNY: Number(p.estimatedFOBPriceCNY) || 0,
@@ -4625,8 +4642,19 @@ Output JSON only:
           const priceMaxCNY =
             typeof cat?.priceMaxCNY === 'number' && cat.priceMaxCNY > 0 ? cat.priceMaxCNY : undefined;
           const priceBand = String(cat?.priceBand || '').trim() || undefined;
+          const categoryName = String(cat?.categoryName || '未分类').trim();
+          const tax =
+            cat?.taxonomyL1Id
+              ? {
+                  l1Id: String(cat.taxonomyL1Id),
+                  l2Id: cat.taxonomyL2Id ? String(cat.taxonomyL2Id) : undefined,
+                }
+              : (() => {
+                  const best = assignBestCategory(categoryName);
+                  return best ? { l1Id: best.l1Id, l2Id: best.l2Id } : undefined;
+                })();
           return {
-            categoryName: String(cat?.categoryName || '未分类').trim(),
+            categoryName,
             items: Array.isArray(cat?.items) ? cat.items.map(String).filter(Boolean) : [],
             priceMinCNY,
             priceMaxCNY,
@@ -4635,6 +4663,10 @@ Output JSON only:
               (priceMinCNY != null || priceMaxCNY != null
                 ? `¥${priceMinCNY ?? '?'}–${priceMaxCNY ?? '?'}`
                 : undefined),
+            taxonomyL1Id: tax?.l1Id,
+            taxonomyL2Id: tax?.l2Id,
+            evidenceUrl: String(cat?.evidenceUrl || '').trim() || undefined,
+            evidenceSnippet: String(cat?.evidenceSnippet || '').trim() || undefined,
           };
         })
       : base.websiteCategories,
@@ -5579,7 +5611,7 @@ export const streamStrategyChat = async function* (
           .slice(0, 3)
           .map((c) => buildCompactClientBrief(c))
           .join('\n---\n');
-      } else {
+             } else {
         systemInstruction += `\n\n## 已选背调客户（${companies.length}）`;
         for (const c of companies.slice(0, 5)) {
           const info = c.companyInfo || ({} as AnalysisResult['companyInfo']);
@@ -5656,7 +5688,7 @@ export const streamStrategyChat = async function* (
     const searchExtra = qwenSearchPayload(true);
 
     let messages: Array<{ role: string; content: unknown }> = [
-        { role: 'system', content: systemInstruction },
+            { role: 'system', content: systemInstruction },
         ...historyMsgs,
         { role: 'user', content: buildQwenUserContent(newMessage || '（见附件）', [], slimAttachments) },
     ];
@@ -5922,31 +5954,31 @@ const callQwenNative = async (
   const url = `${apiRoot}/api/v1/services/aigc/text-generation/generation`;
 
   const response = await fetchWithTimeout(url, {
-    method: 'POST',
+        method: 'POST',
     headers: buildAliyunFetchHeaders({
       targetUrl: url,
       apiKey: config.apiKey,
       proxyOrigin: config.proxyOrigin,
     }),
-    body: JSON.stringify({
+        body: JSON.stringify({
       model: config.modelId,
-      input: {
-        messages: [
-          {
-            role: 'system',
+          input: {
+            messages: [
+              {
+                role: 'system',
             content: '你是外贸客户开发专家，擅长背景调查和开发信撰写。所有输出使用简体中文。',
           },
           { role: 'user', content: prompt },
         ],
-      },
-      parameters: {
+          },
+          parameters: {
         result_format: jsonMode ? 'message' : 'text',
         ...(qwenSearchPayload(enableSearch, forcedSearch) || {}),
       },
     }),
   }, timeoutMs);
-
-  if (!response.ok) {
+      
+      if (!response.ok) {
     const errorText = await response.text();
     throw new Error(`Qwen API 错误: ${response.status} ${errorText}`);
   }
@@ -5989,7 +6021,7 @@ export const callQwen = async (
         maxTokens: options.maxTokens,
       }
     );
-  } catch (error) {
+    } catch (error) {
     console.error('Qwen 调用失败:', error);
     throw error;
   }

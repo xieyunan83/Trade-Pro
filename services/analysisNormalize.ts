@@ -89,8 +89,9 @@ export const normalizeAnalysisResult = (raw: unknown): AnalysisResult => {
       const priceMaxCNY =
         typeof cat?.priceMaxCNY === 'number' && cat.priceMaxCNY > 0 ? cat.priceMaxCNY : undefined;
       const priceBand = asStr(cat?.priceBand, '') || undefined;
+      const categoryName = asStr(cat?.categoryName, '未分类');
       return {
-        categoryName: asStr(cat?.categoryName, '未分类'),
+        categoryName,
         items: asStringList(cat?.items),
         priceMinCNY,
         priceMaxCNY,
@@ -99,6 +100,10 @@ export const normalizeAnalysisResult = (raw: unknown): AnalysisResult => {
           (priceMinCNY != null || priceMaxCNY != null
             ? `¥${priceMinCNY ?? '?'}–${priceMaxCNY ?? '?'}`
             : undefined),
+        taxonomyL1Id: asStr(cat?.taxonomyL1Id, '') || undefined,
+        taxonomyL2Id: asStr(cat?.taxonomyL2Id, '') || undefined,
+        evidenceUrl: asStr(cat?.evidenceUrl, '') || undefined,
+        evidenceSnippet: asStr(cat?.evidenceSnippet, '') || undefined,
       };
     }),
     businessScope: {
@@ -186,6 +191,10 @@ export const normalizeAnalysisResult = (raw: unknown): AnalysisResult => {
         ...p,
         role,
         tags: asStringList(p?.tags).slice(0, 8),
+        taxonomyL1Id: asStr(p?.taxonomyL1Id, '') || undefined,
+        taxonomyL2Id: asStr(p?.taxonomyL2Id, '') || undefined,
+        evidenceUrl: asStr(p?.evidenceUrl, '') || undefined,
+        evidenceSnippet: asStr(p?.evidenceSnippet, '') || undefined,
       };
     }),
     marketTrends: asStr(ai.marketTrends, 'N/A'),

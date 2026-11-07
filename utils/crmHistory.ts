@@ -104,6 +104,12 @@ export const clientPatchFromAnalysis = (
   fallbackDomain?: string,
   checkedAt?: number
 ): Partial<Client> => {
+  // 延迟引入，避免 crmHistory ↔ productCatalog 环依赖
+  const {
+    assignCategoriesFromSignals,
+    idsFromAssignments,
+  } = require('../services/categoryTaxonomy') as typeof import('../services/categoryTaxonomy');
+
   const website = data?.companyInfo?.website || fallbackDomain || '';
   const kw = (data?.searchKeyword || '').trim();
   const tagKws = (data?.searchTags || [])
@@ -133,6 +139,47 @@ export const clientPatchFromAnalysis = (
     .filter(Boolean)
     .slice(0, 4)
     .map((c) => `采购:${c.slice(0, 28)}`);
+
+  const sellSignals = [
+    ...(data?.productIntel?.sell?.categories || []),
+    ...(data?.businessScope?.coreProducts || []),
+    ...(data?.websiteCategories || []).map((w) => w.categoryName),
+    ...(data?.products || [])
+      .filter((p) => p.role !== 'procure')
+      .map((p) => p.category || p.name || ''),
+  ].filter(Boolean) as string[];
+  const procureSignals = [
+    ...(data?.productIntel?.procure?.categories || []),
+    ...(data?.tradeIntelligence?.importCategories || []),
+    ...(data?.products || [])
+      .filter((p) => p.role === 'procure' || p.role === 'both')
+      .map((p) => p.category || p.name || ''),
+  ].filter(Boolean) as string[];
+
+  const sellIdsFromProducts = (data?.products || [])
+    .filter((p) => p.role !== 'procure')
+    .flatMap((p) => [p.taxonomyL1Id, p.taxonomyL2Id].filter(Boolean) as string[]);
+  const procureIdsFromProducts = (data?.products || [])
+    .filter((p) => p.role === 'procure' || p.role === 'both')
+    .flatMap((p) => [p.taxonomyL1Id, p.taxonomyL2Id].filter(Boolean) as string[]);
+  const sellIdsFromWc = (data?.websiteCategories || []).flatMap(
+    (w) => [w.taxonomyL1Id, w.taxonomyL2Id].filter(Boolean) as string[]
+  );
+
+  const sellCategoryIds = [
+    ...new Set([
+      ...sellIdsFromProducts,
+      ...sellIdsFromWc,
+      ...idsFromAssignments(assignCategoriesFromSignals(sellSignals, { limit: 8, minScore: 20 })),
+    ]),
+  ].slice(0, 24);
+  const procureCategoryIds = [
+    ...new Set([
+      ...procureIdsFromProducts,
+      ...idsFromAssignments(assignCategoriesFromSignals(procureSignals, { limit: 8, minScore: 20 })),
+    ]),
+  ].slice(0, 24);
+
   const productTags = [
     ...(data?.productIntel?.matchTags || []),
     ...(data?.productIntel?.sell?.tags || []),
@@ -145,6 +192,8 @@ export const clientPatchFromAnalysis = (
     ...procureFromProducts,
     ...packFromProducts,
     ...colorFromProducts,
+    ...sellCategoryIds.slice(0, 6).map((id) => `类目ID:${id}`),
+    ...procureCategoryIds.slice(0, 4).map((id) => `类目ID:${id}`),
     ...(data?.productSummary?.packagingAnalysis
       ? [`包装:${String(data.productSummary.packagingAnalysis).slice(0, 24)}`]
       : []),
@@ -192,6 +241,8 @@ export const clientPatchFromAnalysis = (
     searchKeyword: data?.searchKeyword,
     searchedKeywords: searchedKeywords.length ? searchedKeywords : undefined,
     tags: mergedTags.length ? mergedTags : data?.searchTags,
+    sellCategoryIds: sellCategoryIds.length ? sellCategoryIds : undefined,
+    procureCategoryIds: procureCategoryIds.length ? procureCategoryIds : undefined,
   };
 };
 

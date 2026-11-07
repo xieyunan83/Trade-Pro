@@ -33,10 +33,17 @@ import {
   toCnyApprox,
 } from './pricingAdvisor';
 import { loadTradeJourney } from './tradeJourney';
+import {
+  assignCategoriesFromSignals,
+  idsFromAssignments,
+  scoreCategoryIdOverlap,
+} from './categoryTaxonomy';
 
 export type GtmProductInput = {
   productName: string;
   category?: string;
+  /** 官方品类 ID（与 CRM / 产品库对齐） */
+  categoryIds?: string[];
   priceBand?: string;
   skuCode?: string;
   notes?: string;
@@ -298,17 +305,28 @@ export const matchCrmClientsForProduct = (
 ): GtmClientMatch[] => {
   const cat = norm(input.category || market.categories.join(' '));
   const name = norm(input.productName);
+  const queryIds =
+    input.categoryIds?.length
+      ? input.categoryIds
+      : idsFromAssignments(
+          assignCategoriesFromSignals(
+            [input.category || '', input.productName, ...(market.categories || [])].filter(Boolean),
+            { limit: 4, minScore: 18 }
+          )
+        );
   const countryPool = market.countries.map((c) => norm(c.name)).filter(Boolean);
 
   const scored: GtmClientMatch[] = [];
   for (const c of crmClients) {
     const tags = c.tags || [];
     const realTagBlob = tags
-      .filter((t) => /^(在售|采购|关键词):/i.test(t) || tags.length > 0)
+      .filter((t) => /^(在售|采购|关键词|类目ID):/i.test(t) || tags.length > 0)
       .join(' ');
     // 无背调产品标签且无产品类型 → 跳过（避免纯公司名瞎配）
     const hasRealProductSignal =
-      tags.some((t) => /^(在售|采购):/.test(t)) ||
+      tags.some((t) => /^(在售|采购|类目ID):/.test(t)) ||
+      (c.sellCategoryIds?.length || 0) > 0 ||
+      (c.procureCategoryIds?.length || 0) > 0 ||
       (!!c.productType && c.productType !== 'N/A' && (c.hasBackgroundCheck || c.hasAnalyzed));
     if (!hasRealProductSignal) continue;
 
@@ -318,20 +336,36 @@ export const matchCrmClientsForProduct = (
     const ovName = tokenOverlap(name, blob);
     const ovCat = cat ? tokenOverlap(cat, blob) : 0;
 
+    // 官方品类 ID 优先（与产品库字段呼应）
+    const procureIdHit = scoreCategoryIdOverlap(queryIds, c.procureCategoryIds);
+    if (procureIdHit.score > 0) {
+      score += Math.min(48, procureIdHit.score + 10);
+      reasons.push(`CRM 采购品类 ID：${procureIdHit.labels.slice(0, 2).join('、')}`);
+    }
+    const sellIdHit = scoreCategoryIdOverlap(queryIds, c.sellCategoryIds);
+    if (sellIdHit.score > 0) {
+      score += reasons.length ? Math.min(18, sellIdHit.score) : Math.min(42, sellIdHit.score + 8);
+      reasons.push(`CRM 在售品类 ID：${sellIdHit.labels.slice(0, 2).join('、')}`);
+    }
+
     const sellTags = tags.filter((t) => t.startsWith('在售:')).map((t) => t.slice(3));
     const procureTags = tags.filter((t) => t.startsWith('采购:')).map((t) => t.slice(3));
-    for (const t of procureTags) {
-      if (cat && (norm(t).includes(cat) || cat.includes(norm(t)) || tokenOverlap(name, t) > 0.2)) {
-        score += 40;
-        reasons.push(`CRM 背调标签·采购品类「${t}」`);
-        break;
+    if (!reasons.length) {
+      for (const t of procureTags) {
+        if (cat && (norm(t).includes(cat) || cat.includes(norm(t)) || tokenOverlap(name, t) > 0.2)) {
+          score += 40;
+          reasons.push(`CRM 背调标签·采购品类「${t}」`);
+          break;
+        }
       }
     }
-    for (const t of sellTags) {
-      if (cat && (norm(t).includes(cat) || cat.includes(norm(t)) || tokenOverlap(name, t) > 0.2)) {
-        score += reasons.some((r) => r.includes('采购')) ? 14 : 36;
-        reasons.push(`CRM 背调标签·在售品类「${t}」`);
-        break;
+    if (reasons.length < 2) {
+      for (const t of sellTags) {
+        if (cat && (norm(t).includes(cat) || cat.includes(norm(t)) || tokenOverlap(name, t) > 0.2)) {
+          score += reasons.some((r) => r.includes('采购') || r.includes('ID')) ? 14 : 36;
+          reasons.push(`CRM 背调标签·在售品类「${t}」`);
+          break;
+        }
       }
     }
 
@@ -448,7 +482,8 @@ export const runGtmLaunchPack = async (opts: RunGtmLaunchOpts): Promise<GtmLaunc
         ((p.skus || []).length > 0 ||
           (p.categories || []).length > 0 ||
           (p.sellCategories || []).length > 0 ||
-          (p.procureCategories || []).length > 0)
+          (p.procureCategories || []).length > 0 ||
+          (p.categoryIds || []).length > 0)
     )
     .sort((a, b) => (b.catalogQuality || 0) - (a.catalogQuality || 0))
     .slice(0, 700);
@@ -505,6 +540,11 @@ export const runGtmLaunchPack = async (opts: RunGtmLaunchOpts): Promise<GtmLaunc
     {
       name: input.productName,
       category: categoryForMatch,
+      categoryIds: input.categoryIds?.length
+        ? input.categoryIds
+        : sku?.categoryIds?.length
+          ? sku.categoryIds
+          : ([sku?.categoryL1Id, sku?.categoryL2Id].filter(Boolean) as string[]),
       countries: market.countries.slice(0, 5).map((c) => c.name),
       priceMinCny: cnyBand?.min,
       priceMaxCny: cnyBand?.max,
@@ -702,6 +742,9 @@ export const suggestGtmInputFromCreative = (): Partial<GtmProductInput> => {
       productName: handoff.skuName || sku?.name || handoff.skuCode,
       skuCode: handoff.skuCode,
       category: sku?.category,
+      categoryIds: sku?.categoryIds?.length
+        ? sku.categoryIds
+        : ([sku?.categoryL1Id, sku?.categoryL2Id].filter(Boolean) as string[]),
       notes: [handoff.note, pack && `包装:${pack}`, colors && `配色:${colors}`]
         .filter(Boolean)
         .join('；'),

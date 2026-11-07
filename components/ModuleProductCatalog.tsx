@@ -3,9 +3,18 @@ import { Plus, Trash2, Warehouse, Upload, Download, Loader2, Image as ImageIcon,
 import type { User } from '../types';
 import {
   type CatalogSku,
+  ensureSkuTaxonomy,
   loadCatalogSkus,
   saveCatalogSkus,
 } from '../services/productCatalogTypes';
+import {
+  assignBestCategory,
+  formatTaxonomyLabel,
+  listTaxonomyL1,
+  listTaxonomyRoots,
+  TOY_ROOT_ID,
+} from '../services/categoryTaxonomy';
+import { getTaxonomyChildren, TAXONOMY_STATS } from '../data/productTaxonomy';
 import {
   compressImageDataUrl,
   downloadCatalogExcelTemplate,
@@ -44,6 +53,9 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
     name: '',
     nameEn: '',
     category: '',
+    categoryRootId: TOY_ROOT_ID,
+    categoryL1Id: '',
+    categoryL2Id: '',
     factoryPrice: '',
     moq: '',
     currency: 'USD',
@@ -51,6 +63,15 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
     supplierName: '',
     imageDataUrl: '' as string,
   });
+  const taxonomyRoots = useMemo(() => listTaxonomyRoots(), []);
+  const taxonomyL1 = useMemo(
+    () => listTaxonomyL1(form.categoryRootId || TOY_ROOT_ID),
+    [form.categoryRootId]
+  );
+  const taxonomyL2 = useMemo(
+    () => (form.categoryL1Id ? getTaxonomyChildren(form.categoryL1Id) : []),
+    [form.categoryL1Id]
+  );
 
   const fitAdvice = useMemo(
     () =>
@@ -87,12 +108,28 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
       return;
     }
     const now = Date.now();
-    const sku: CatalogSku = {
+    const auto =
+      form.categoryL1Id
+        ? null
+        : assignBestCategory([form.category, form.name, form.nameEn].filter(Boolean).join(' · '), {
+            preferRootId: form.categoryRootId || TOY_ROOT_ID,
+          });
+    const l1 = form.categoryL1Id || auto?.l1Id || '';
+    const l2 = form.categoryL2Id || auto?.l2Id || '';
+    const root = form.categoryRootId || auto?.rootId || '';
+    const label =
+      form.category.trim() ||
+      (l1 ? formatTaxonomyLabel(l2 || l1) : '') ||
+      auto?.label;
+    const sku: CatalogSku = ensureSkuTaxonomy({
       id: newId(),
       skuCode: form.skuCode.trim(),
       name: form.name.trim(),
       nameEn: form.nameEn.trim() || undefined,
-      category: form.category.trim() || undefined,
+      category: label || undefined,
+      categoryL1Id: l1 || undefined,
+      categoryL2Id: l2 || undefined,
+      categoryIds: [root, l1, l2].filter(Boolean),
       images: form.imageDataUrl ? [form.imageDataUrl] : [],
       specs: form.specs.trim() || undefined,
       moq: form.moq ? Number(form.moq) : undefined,
@@ -104,13 +141,16 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
       departmentId: currentUser.departmentId,
       createdAt: now,
       updatedAt: now,
-    };
+    });
     persist(mergeCatalogImports(rows, [sku]));
     setForm({
       skuCode: '',
       name: '',
       nameEn: '',
       category: '',
+      categoryRootId: TOY_ROOT_ID,
+      categoryL1Id: '',
+      categoryL2Id: '',
       factoryPrice: '',
       moq: '',
       currency: 'USD',
@@ -118,7 +158,9 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
       supplierName: '',
       imageDataUrl: '',
     });
-    setMsg(`已添加 ${sku.skuCode}（图片可在设计模块选用）`);
+    setMsg(
+      `已添加 ${sku.skuCode}${sku.categoryL1Id ? ` · 已挂靠品类 ${formatTaxonomyLabel(sku.categoryL2Id || sku.categoryL1Id)}` : ''}（图片可在设计模块选用）`
+    );
   };
 
   const removeSku = (id: string) => {
@@ -372,7 +414,6 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
               ['skuCode', '货号 *'],
               ['name', '品名 *'],
               ['nameEn', '英文名'],
-              ['category', '品类'],
               ['factoryPrice', '出厂价'],
               ['moq', 'MOQ'],
               ['currency', '币种'],
@@ -391,6 +432,98 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
               />
             </div>
           ))}
+          <p className="text-[10px] text-slate-400 font-bold">
+            官方类目库：大类 {TAXONOMY_STATS.roots} · 一级 {TAXONOMY_STATS.l1} · 二级{' '}
+            {TAXONOMY_STATS.l2}
+          </p>
+          <div>
+            <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-0.5">
+              官方大类
+            </label>
+            <select
+              value={form.categoryRootId}
+              onChange={(e) =>
+                setForm((f) => ({
+                  ...f,
+                  categoryRootId: e.target.value,
+                  categoryL1Id: '',
+                  categoryL2Id: '',
+                }))
+              }
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm bg-white"
+            >
+              {taxonomyRoots.map((n) => (
+                <option key={n.id} value={n.id}>
+                  {n.nameZh} · {n.nameEn}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-0.5">
+              官方一级品类
+            </label>
+            <select
+              value={form.categoryL1Id}
+              onChange={(e) =>
+                setForm((f) => ({
+                  ...f,
+                  categoryL1Id: e.target.value,
+                  categoryL2Id: '',
+                  category: e.target.value
+                    ? formatTaxonomyLabel(e.target.value)
+                    : f.category,
+                }))
+              }
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm bg-white"
+            >
+              <option value="">自动识别（按品名）</option>
+              {taxonomyL1.map((n) => (
+                <option key={n.id} value={n.id}>
+                  {n.nameZh} · {n.nameEn}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-0.5">
+              官方二级品类
+            </label>
+            <select
+              value={form.categoryL2Id}
+              disabled={!form.categoryL1Id}
+              onChange={(e) =>
+                setForm((f) => ({
+                  ...f,
+                  categoryL2Id: e.target.value,
+                  category: e.target.value
+                    ? formatTaxonomyLabel(e.target.value)
+                    : f.categoryL1Id
+                      ? formatTaxonomyLabel(f.categoryL1Id)
+                      : f.category,
+                }))
+              }
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm bg-white disabled:opacity-50"
+            >
+              <option value="">可选 · 细分</option>
+              {taxonomyL2.map((n) => (
+                <option key={n.id} value={n.id}>
+                  {n.nameZh} · {n.nameEn}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-0.5">
+              品类备注（可选）
+            </label>
+            <input
+              value={form.category}
+              onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
+              placeholder="留空则用官方类目名"
+              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+            />
+          </div>
           <div>
             <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-0.5">
               产品图（可选）
@@ -507,7 +640,11 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
                         </span>
                       ) : null}
                     </td>
-                    <td className="px-3 py-2 text-slate-500 text-xs">{r.category || '—'}</td>
+                    <td className="px-3 py-2 text-slate-500 text-xs">
+                      {r.categoryL1Id
+                        ? formatTaxonomyLabel(r.categoryL2Id || r.categoryL1Id)
+                        : r.category || '—'}
+                    </td>
                     <td className="px-3 py-2 text-xs font-bold text-slate-700">
                       {r.factoryPrice != null ? `${r.currency || ''} ${r.factoryPrice}` : '—'}
                       {r.moq != null ? (

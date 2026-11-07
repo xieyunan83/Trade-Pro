@@ -411,20 +411,22 @@ export const mergeCatalogImports = (
   existing: CatalogSku[],
   incoming: CatalogSku[]
 ): CatalogSku[] => {
+  const { ensureSkuTaxonomy } = require('./productCatalogTypes') as typeof import('./productCatalogTypes');
   const map = new Map(existing.map((r) => [r.skuCode.toLowerCase(), r]));
   for (const s of incoming) {
-    const prev = map.get(s.skuCode.toLowerCase());
+    const next = ensureSkuTaxonomy(s);
+    const prev = map.get(next.skuCode.toLowerCase());
     if (prev) {
-      map.set(s.skuCode.toLowerCase(), {
+      map.set(next.skuCode.toLowerCase(), ensureSkuTaxonomy({
         ...prev,
-        ...s,
+        ...next,
         id: prev.id,
         createdAt: prev.createdAt,
-        images: s.images?.length ? s.images : prev.images,
+        images: next.images?.length ? next.images : prev.images,
         updatedAt: Date.now(),
-      });
+      }));
     } else {
-      map.set(s.skuCode.toLowerCase(), s);
+      map.set(next.skuCode.toLowerCase(), next);
     }
   }
   return [...map.values()].sort((a, b) => b.updatedAt - a.updatedAt);

@@ -44,7 +44,8 @@ import {
   loadIcpTemplates,
   upsertIcpTemplate,
 } from '../services/icpStore';
-import { listAlibabaToyL1, getAlibabaToyL2, isToyRelatedIndustry, suggestToyCategoriesFromKeyword } from '../services/toyCategoryMatch';
+import { listAlibabaToyL1, getAlibabaToyL2, suggestToyCategoriesFromKeyword } from '../services/toyCategoryMatch';
+import { formatTaxonomyLabel } from '../services/categoryTaxonomy';
 
 interface ClientFinderProps {
   state: DiscoveryState;
@@ -110,6 +111,10 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
   const countryPanelRef = useRef<HTMLDivElement>(null);
   const [icpTemplates, setIcpTemplates] = useState<IcpTemplate[]>(() => loadIcpTemplates(username));
   const [icpNameDraft, setIcpNameDraft] = useState('');
+  /** 用户是否手动改过类目；改过则关键词变化时不强行覆盖，除非清空产品重录 */
+  const categoryManualRef = useRef(false);
+  const lastAutoProductRef = useRef('');
+  const [autoCatHint, setAutoCatHint] = useState<string | null>(null);
 
   useEffect(() => {
     setIcpTemplates(loadIcpTemplates(username));
@@ -219,32 +224,65 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
   };
 
   const toyCats = useMemo(() => listAlibabaToyL1(), []);
-  const showToyCategories = isToyRelatedIndustry(state.industry);
   const l2Options = useMemo(
     () => (state.categoryL1 ? getAlibabaToyL2(state.categoryL1) : []),
     [state.categoryL1]
   );
 
-  // 行业为玩具/母婴时：关键词自动匹配一、二级类目
+  // 产品关键词录入后：自动匹配官方一级/二级品类（防抖）
   useEffect(() => {
-    if (!isToyRelatedIndustry(state.industry)) return;
     const kw = state.product.trim();
-    if (kw.length < 3) return;
-    const sug = suggestToyCategoriesFromKeyword(kw, 1)[0];
-    if (!sug) return;
-    if (state.categoryL1 === sug.l1 && (!state.categoryL2 || state.categoryL2 === sug.l2)) {
-      if (!state.categoryL2) patchState({ categoryL2: sug.l2 });
-      return;
-    }
-    // 已选手动一级且与建议不同：只补二级（若空）
-    if (state.categoryL1 && state.categoryL1 !== sug.l1) {
-      if (!state.categoryL2 && state.categoryL1 === sug.l1) {
-        patchState({ categoryL2: sug.l2 });
+    if (kw.length < 2) {
+      setAutoCatHint(null);
+      if (!kw) {
+        categoryManualRef.current = false;
+        lastAutoProductRef.current = '';
       }
       return;
     }
-    patchState({ categoryL1: sug.l1, categoryL2: sug.l2 });
-  }, [state.product, state.industry]);
+    // 用户刚手动改过类目，且关键词未实质变化 → 不覆盖
+    if (
+      categoryManualRef.current &&
+      lastAutoProductRef.current &&
+      kw.toLowerCase() === lastAutoProductRef.current.toLowerCase()
+    ) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      const sug = suggestToyCategoriesFromKeyword(kw, 3)[0];
+      if (!sug) {
+        setAutoCatHint('未匹配到官方品类，可手动选择一级/二级');
+        return;
+      }
+      const label =
+        sug.labelZh ||
+        (sug.l2Id || sug.l1Id
+          ? formatTaxonomyLabel(sug.l2Id || sug.l1Id)
+          : `${sug.l1}${sug.l2 && sug.l2 !== sug.l1 ? ` / ${sug.l2}` : ''}`);
+      setAutoCatHint(`已自动匹配：${label}`);
+      lastAutoProductRef.current = kw;
+      // 手动改过且关键词仅微调（同一词干）时，只在类目为空时补全
+      if (categoryManualRef.current && state.categoryL1 && state.categoryL1 !== sug.l1) {
+        if (!state.categoryL2) {
+          /* 保留用户一级，不强改 */
+        }
+        return;
+      }
+      categoryManualRef.current = false;
+      const patch: Partial<DiscoveryState> = {
+        categoryL1: sug.l1,
+        categoryL2: sug.l2 && sug.l2 !== sug.l1 ? sug.l2 : sug.l2 || '',
+      };
+      // 行业为空或默认时，用匹配到的一级英文作行业线索，便于检索
+      const ind = (state.industry || '').trim();
+      if (!ind || ind === DEFAULT_INDUSTRY_EN) {
+        patch.industry = sug.l1;
+      }
+      patchState(patch);
+    }, 320);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.product]);
 
   const handleSearch = async () => {
     const product = state.product.trim();
@@ -460,9 +498,16 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
               <input
                 type="text"
                 value={state.product}
-                onChange={(e) => patchState({ product: e.target.value })}
+                onChange={(e) => {
+                  // 关键词实质变化时允许重新自动匹配
+                  const next = e.target.value;
+                  if (next.trim().toLowerCase() !== lastAutoProductRef.current.toLowerCase()) {
+                    categoryManualRef.current = false;
+                  }
+                  patchState({ product: next });
+                }}
                 className="w-full pl-12 pr-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-cyan-500/30 font-bold"
-                placeholder="例如: Silicone Baby Bibs"
+                placeholder="例如: Silicone Baby Bibs / 合金车"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault();
@@ -471,6 +516,17 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
                 }}
               />
             </div>
+            {autoCatHint && (
+              <p
+                className={`mt-1.5 text-[11px] font-bold ${
+                  autoCatHint.startsWith('已自动')
+                    ? 'text-emerald-700'
+                    : 'text-amber-700'
+                }`}
+              >
+                {autoCatHint}
+              </p>
+            )}
           </div>
           <div className="relative z-[20]">
             <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
@@ -478,64 +534,74 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
             </label>
             <IndustryMultiSelect
               value={state.industry}
-              onChange={(v) =>
-                patchState({
-                  industry: v,
-                  ...(!isToyRelatedIndustry(v)
-                    ? { categoryL1: '', categoryL2: '' }
-                    : {}),
-                })
-              }
+              onChange={(v) => patchState({ industry: v })}
               placeholder="例如: Toys & Games / Baby Products"
             />
           </div>
 
-          {showToyCategories && (
-            <>
-              <div>
-                <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
-                  玩具一级类目（阿里国际站）
-                </label>
-                <select
-                  value={state.categoryL1 || ''}
-                  onChange={(e) =>
-                    patchState({ categoryL1: e.target.value, categoryL2: '' })
-                  }
-                  className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold text-sm bg-white focus:ring-2 focus:ring-cyan-500/30"
-                >
-                  <option value="">全部一级 / 不限</option>
-                  {toyCats.map((c) => (
-                    <option key={c.id} value={c.nameEn}>
-                      {c.nameEn}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
-                  玩具二级类目
-                </label>
-                <select
-                  value={state.categoryL2 || ''}
-                  onChange={(e) => patchState({ categoryL2: e.target.value })}
-                  disabled={!state.categoryL1}
-                  className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold text-sm bg-white focus:ring-2 focus:ring-cyan-500/30 disabled:bg-slate-50 disabled:text-slate-400"
-                >
-                  <option value="">
-                    {state.categoryL1 ? '全部二级 / 不限' : '请先选一级类目'}
-                  </option>
-                  {l2Options.map((name) => (
-                    <option key={name} value={name}>
-                      {name}
-                    </option>
-                  ))}
-                </select>
-                <p className="mt-1 text-[10px] font-bold text-slate-400">
-                  填写关键词后会自动匹配一二级；也可手动改选。
-                </p>
-              </div>
-            </>
-          )}
+          <div>
+            <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
+              一级品类（官方类目）
+            </label>
+            <select
+              value={state.categoryL1 || ''}
+              onChange={(e) => {
+                categoryManualRef.current = true;
+                patchState({ categoryL1: e.target.value, categoryL2: '' });
+                setAutoCatHint(
+                  e.target.value ? `已手动选择一级：${e.target.value}` : null
+                );
+              }}
+              className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold text-sm bg-white focus:ring-2 focus:ring-cyan-500/30"
+            >
+              <option value="">全部一级 / 不限</option>
+              {toyCats.map((c) => (
+                <option key={c.id} value={c.nameEn}>
+                  {c.nameEn}
+                </option>
+              ))}
+              {/* 自动匹配到列表外的一级时仍能显示选中值 */}
+              {state.categoryL1 &&
+                !toyCats.some((c) => c.nameEn === state.categoryL1) && (
+                  <option value={state.categoryL1}>{state.categoryL1}</option>
+                )}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
+              二级品类（官方类目）
+            </label>
+            <select
+              value={state.categoryL2 || ''}
+              onChange={(e) => {
+                categoryManualRef.current = true;
+                patchState({ categoryL2: e.target.value });
+                setAutoCatHint(
+                  e.target.value
+                    ? `已手动选择：${state.categoryL1 || ''} / ${e.target.value}`
+                    : autoCatHint
+                );
+              }}
+              disabled={!state.categoryL1}
+              className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold text-sm bg-white focus:ring-2 focus:ring-cyan-500/30 disabled:bg-slate-50 disabled:text-slate-400"
+            >
+              <option value="">
+                {state.categoryL1 ? '全部二级 / 不限' : '请先选一级类目'}
+              </option>
+              {l2Options.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+              {state.categoryL2 &&
+                !l2Options.includes(state.categoryL2) && (
+                  <option value={state.categoryL2}>{state.categoryL2}</option>
+                )}
+            </select>
+            <p className="mt-1 text-[10px] font-bold text-slate-400">
+              录入产品关键词后自动匹配；也可手动改选。检索时会带上已选品类。
+            </p>
+          </div>
 
           {/* 国家多选：一级大洲 / 二级国家 */}
           <div

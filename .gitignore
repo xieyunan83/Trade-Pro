@@ -15,6 +15,7 @@ tsconfig.tsbuildinfo
 backups/
 file_list.txt
 fetch_search.txt
+.tmp_pydeps/
 
 # Desktop client build artifacts (installers are large; keep source under desktop/)
 desktop/release/

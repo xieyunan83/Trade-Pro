@@ -48,6 +48,9 @@ export type CrmCatalogMatchReport = {
   keywordHits: string[];
   tags: string[];
   note: string;
+  /** 与产品库对齐的官方品类 ID */
+  sellCategoryIds: string[];
+  procureCategoryIds: string[];
 };
 
 const collectClientKeywords = (client: Client, analysis?: AnalysisResult | null): string[] => {
@@ -188,12 +191,28 @@ export const buildCrmCatalogMatchReport = (
     products.length ? `网站产品 ${products.length}` : '',
     topCats.length ? `品类 ${topCats.length}` : '',
     topBands.length ? `价格带 ${topBands.map(([b, n]) => `${b}×${n}`).join('/')}` : '',
-    alibabaHits.length ? `阿里类目 ${alibabaHits.length}` : '',
+    alibabaHits.length ? `官方类目 ${alibabaHits.length}` : '',
     skuHits.length ? `产品库命中 ${skuHits.length}` : '',
     keywordHits.length ? `关键词命中 ${keywordHits.length}` : '',
   ]
     .filter(Boolean)
     .join(' · ');
+
+  const sellCategoryIds = [
+    ...new Set(
+      [
+        ...(profile?.sellCategoryIds || []),
+        ...alibabaHits.flatMap((h) => [h.l1Id, h.l2Id].filter(Boolean) as string[]),
+      ].filter(Boolean)
+    ),
+  ].slice(0, 24);
+  const procureCategoryIds = [...new Set(profile?.procureCategoryIds || [])].slice(0, 24);
+
+  // 结构化 ID 也写入标签，便于旧版 GTM 文本匹配兜底
+  for (const h of alibabaHits.slice(0, 5)) {
+    if (h.l1Id) tags.push(`类目ID:${h.l1Id}`);
+    if (h.l2Id) tags.push(`类目ID:${h.l2Id}`);
+  }
 
   return {
     productCount: products.length,
@@ -204,8 +223,10 @@ export const buildCrmCatalogMatchReport = (
     alibabaHits,
     skuHits,
     keywordHits,
-    tags: [...new Set(tags)].slice(0, 28),
+    tags: [...new Set(tags)].slice(0, 36),
     note: note || '已扫描，信号较弱',
+    sellCategoryIds,
+    procureCategoryIds,
   };
 };
 
@@ -215,10 +236,34 @@ export const applyCatalogMatchTagsToClient = (
 ): Client => {
   const prevTags = (client.tags || []).filter(
     (t) =>
-      !/^(站内品类:|价格带:|价格区间:|网站产品:|类目:|匹配SKU:|产品匹配:|关键词匹配:)/.test(t)
+      !/^(站内品类:|价格带:|价格区间:|网站产品:|类目:|类目ID:|匹配SKU:|产品匹配:|关键词匹配:)/.test(
+        t
+      )
   );
+  const sellCategoryIds = [
+    ...new Set([...(client.sellCategoryIds || []), ...report.sellCategoryIds]),
+  ].slice(0, 24);
+  const procureCategoryIds = [
+    ...new Set([...(client.procureCategoryIds || []), ...report.procureCategoryIds]),
+  ].slice(0, 24);
+  const categoryRefs = report.alibabaHits.slice(0, 12).map((h) => ({
+    l1Id: h.l1Id || '',
+    l2Id: h.l2Id,
+    label: `${h.l1}/${h.l2}`,
+    side: 'sell' as const,
+    source: 'website' as const,
+    snippet: h.evidence,
+    confidence: Math.min(1, h.score / 100),
+  })).filter((r) => r.l1Id);
+
   return {
     ...client,
+    sellCategoryIds,
+    procureCategoryIds,
+    categoryRefs: [...(client.categoryRefs || []).filter((r) => r.side === 'procure'), ...categoryRefs].slice(
+      0,
+      40
+    ),
     tags: Array.from(new Set([...prevTags, ...report.tags])).slice(0, 80),
     activityLog:
       (client.activityLog || '') +

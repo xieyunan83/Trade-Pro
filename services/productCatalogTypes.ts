@@ -1,6 +1,9 @@
 /**
  * 产品库 · 类型与本地存根（小竹熊/霄鸟云同步在管理后台接通）
  */
+import { assignBestCategory, idsFromAssignments, assignCategories } from './categoryTaxonomy';
+import { TOY_ROOT_ID } from '../data/productTaxonomy';
+
 export type ProductSource = 'manual' | 'toysbear' | 'skybird' | 'ai_redesign' | 'import';
 
 export type CatalogSku = {
@@ -8,7 +11,14 @@ export type CatalogSku = {
   skuCode: string;
   name: string;
   nameEn?: string;
+  /** 自由文本品类（展示）；正式匹配请用 categoryIds */
   category?: string;
+  /** 官方 L1 品类 ID（与客户 sell/procureCategoryIds 呼应） */
+  categoryL1Id?: string;
+  /** 官方 L2 品类 ID */
+  categoryL2Id?: string;
+  /** 全部相关官方品类 ID */
+  categoryIds?: string[];
   /** dataURL / https，供设计·平面/3D/视频等模块二次创作 */
   images: string[];
   specs?: string;
@@ -33,6 +43,23 @@ export type CatalogSku = {
   updatedAt: number;
 };
 
+/** 根据品名/品类文本挂靠官方类目（录入、导入、同步后统一调用） */
+export const ensureSkuTaxonomy = (sku: CatalogSku): CatalogSku => {
+  if (sku.categoryL1Id && (sku.categoryIds?.length || 0) > 0) return sku;
+  const blob = [sku.category, sku.name, sku.nameEn, sku.specs].filter(Boolean).join(' · ');
+  const best = assignBestCategory(blob, { preferRootId: TOY_ROOT_ID });
+  if (!best || best.verified === false) return sku;
+  const more = assignCategories(blob, 3, { preferRootId: TOY_ROOT_ID });
+  const ids = idsFromAssignments(more.length ? more : [best]);
+  return {
+    ...sku,
+    category: sku.category || best.label,
+    categoryL1Id: best.l1Id,
+    categoryL2Id: best.l2Id,
+    categoryIds: ids,
+  };
+};
+
 const LS = 'trade_scout_product_catalog_v1';
 
 export const loadCatalogSkus = (): CatalogSku[] => {
@@ -40,14 +67,17 @@ export const loadCatalogSkus = (): CatalogSku[] => {
     const raw = localStorage.getItem(LS);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+    // 旧数据无官方 ID 时惰性回填
+    return parsed.map((r: CatalogSku) => ensureSkuTaxonomy(r));
   } catch {
     return [];
   }
 };
 
 export const saveCatalogSkus = (rows: CatalogSku[]) => {
-  localStorage.setItem(LS, JSON.stringify(rows));
+  const normalized = rows.map((r) => ensureSkuTaxonomy(r));
+  localStorage.setItem(LS, JSON.stringify(normalized));
 };
 
 /** 小竹熊 / 霄鸟云：配置检测 + 预留同步（接通官方 API 后在此拉取并 merge） */

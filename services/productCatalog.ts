@@ -21,6 +21,17 @@ import {
   syncProductProfilesCloud,
 } from './supabase';
 import type { CatalogSku } from './productCatalogTypes';
+import {
+  assignBestCategory,
+  assignCategoriesFromSignals,
+  evidenceSupportsLabel,
+  idsFromAssignments,
+  mapExternalCategoryToTaxonomy,
+  scoreCategoryIdOverlap,
+  toCategoryEvidenceRefs,
+} from './categoryTaxonomy';
+import { TAXONOMY_ALIAS_RULES, TOY_ROOT_ID } from '../data/productTaxonomy';
+import type { CategoryEvidenceRef } from '../types';
 
 const domainKey = (raw?: string) =>
   (raw || '')
@@ -29,21 +40,11 @@ const domainKey = (raw?: string) =>
     .split('/')[0]
     .trim();
 
-/** 常见玩具/消费品同义词 → 标准品类（中文标签） */
-const CATEGORY_ALIASES: Array<{ keys: string[]; label: string }> = [
-  { keys: ['diecast', '合金车', '合金小车', '金属车', 'toy car', 'car toy', 'pull back', '回力车'], label: '合金/回力车玩具' },
-  { keys: ['rc car', 'remote control', '遥控车', '遥控玩具'], label: '遥控玩具' },
-  { keys: ['plush', '软玩具', '毛绒', 'stuffed'], label: '毛绒玩具' },
-  { keys: ['educational toy', '益智', 'stem toy', 'learning toy'], label: '益智教育玩具' },
-  { keys: ['bubble', '泡泡'], label: '泡泡 / 派对玩具' },
-  { keys: ['party favor', '派对礼品', 'party supply'], label: '派对用品' },
-  { keys: ['outdoor play', '户外游乐', 'playground'], label: '户外游乐设施' },
-  { keys: ['baby', 'infant', '母婴', 'nursery', '喂养'], label: '母婴用品' },
-  { keys: ['stationery', '文具'], label: '文具办公用品' },
-  { keys: ['kitchen', '厨具', 'tableware', '餐具'], label: '厨具餐具' },
-  { keys: ['pet', '宠物'], label: '宠物用品' },
-  { keys: ['toy', '玩具', 'games'], label: '玩具与游戏' },
-];
+/** 展示用中文标签（底层匹配已切到官方 ID；此表仅兼容旧自由文本） */
+const CATEGORY_ALIASES: Array<{ keys: string[]; label: string }> = TAXONOMY_ALIAS_RULES.map((r) => ({
+  keys: r.keys,
+  label: r.labelZh,
+}));
 
 const normalizeText = (s: string) =>
   (s || '')
@@ -235,7 +236,64 @@ export const buildProductProfileFromAnalysis = (
 
   const sellCatSet = new Set<string>();
   const procureCatSet = new Set<string>();
+  const sellIdSet = new Set<string>();
+  const procureIdSet = new Set<string>();
+  const categoryRefs: CategoryEvidenceRef[] = [];
   const tagSet = new Set<string>();
+
+  const evidenceBlob = [
+    ...(analysis.evidenceChain || []).map((e) => `${e.title || ''} ${e.snippet || ''} ${e.url || ''}`),
+    analysis.evidenceSummary || '',
+    analysis.productIntel?.sourceNote || '',
+    ...(analysis.websiteCategories || []).map(
+      (w) => `${w.categoryName} ${w.evidenceSnippet || ''} ${w.evidenceUrl || ''}`
+    ),
+  ].join(' · ');
+
+  const attachTaxonomy = (
+    raw: string,
+    side: 'sell' | 'procure' | 'both',
+    meta?: { url?: string; snippet?: string; source?: CategoryEvidenceRef['source'] }
+  ): { label: string; l1Id?: string; l2Id?: string } => {
+    // 客户站内/社交/电商表达 → 官方树；有证据时强制校验，无证据仅高分精确命中
+    const mapped =
+      mapExternalCategoryToTaxonomy(raw, {
+        evidenceBlob: [evidenceBlob, meta?.snippet || ''].filter(Boolean).join(' · '),
+        evidenceUrl: meta?.url,
+        side,
+        preferRootId: TOY_ROOT_ID,
+      }) ||
+      assignBestCategory(raw, { evidenceBlob, preferRootId: TOY_ROOT_ID });
+    const label = normalizeCategoryLabel(raw) || mapped?.label || raw.trim();
+    if (!mapped || mapped.verified === false) {
+      // 未通过校验：保留展示文案，不写入官方 ID（避免偏差污染匹配）
+      return { label };
+    }
+    const supported =
+      evidenceSupportsLabel(raw, evidenceBlob) || evidenceSupportsLabel(mapped.label, evidenceBlob);
+    const conf =
+      mapped.confidence ??
+      (supported ? Math.min(1, mapped.score / 100) : Math.min(0.45, mapped.score / 140));
+    if (mapped.score >= 18) {
+      const refs = toCategoryEvidenceRefs([mapped], side, {
+        source: meta?.source || (side === 'procure' ? 'customs' : 'website'),
+        url: meta?.url,
+        snippet: meta?.snippet || mapped.reason,
+      }).map((r) => ({ ...r, confidence: conf }));
+      categoryRefs.push(...refs);
+      if (side === 'sell' || side === 'both') {
+        sellIdSet.add(mapped.l1Id);
+        if (mapped.l2Id) sellIdSet.add(mapped.l2Id);
+        if (mapped.rootId) sellIdSet.add(mapped.rootId);
+      }
+      if (side === 'procure' || side === 'both') {
+        procureIdSet.add(mapped.l1Id);
+        if (mapped.l2Id) procureIdSet.add(mapped.l2Id);
+        if (mapped.rootId) procureIdSet.add(mapped.rootId);
+      }
+    }
+    return { label, l1Id: mapped.l1Id, l2Id: mapped.l2Id };
+  };
 
   const addTags = (tags?: string[]) => {
     (tags || []).forEach((t) => {
@@ -257,9 +315,18 @@ export const buildProductProfileFromAnalysis = (
   (analysis.products || []).forEach((p, idx) => {
     const name = (p.name || '').trim();
     if (!name || /公开信息未找到/i.test(name)) return;
-    const cat = normalizeCategoryLabel(p.category) || normalizeCategoryLabel(name) || '未分类产品';
-    categorySet.add(cat);
     const role = p.role === 'procure' ? 'procure' : p.role === 'both' ? 'both' : 'sell';
+    const tax = attachTaxonomy(p.category || name, role, {
+      url: p.evidenceUrl,
+      snippet: p.evidenceSnippet,
+      source: role === 'procure' ? 'customs' : 'website',
+    });
+    const cat =
+      tax.label ||
+      normalizeCategoryLabel(p.category) ||
+      normalizeCategoryLabel(name) ||
+      '未分类产品';
+    categorySet.add(cat);
     if (role === 'sell' || role === 'both') sellCatSet.add(cat);
     if (role === 'procure' || role === 'both') procureCatSet.add(cat);
     addTags(p.tags);
@@ -280,6 +347,8 @@ export const buildProductProfileFromAnalysis = (
       name,
       category: cat,
       categoryRaw: p.category,
+      taxonomyL1Id: p.taxonomyL1Id || tax.l1Id,
+      taxonomyL2Id: p.taxonomyL2Id || tax.l2Id,
       priceMinCny: lo,
       priceMaxCny: hi,
       retailPrice: p.retailPrice,
@@ -291,48 +360,60 @@ export const buildProductProfileFromAnalysis = (
       tags: (p.tags || []).filter(Boolean).slice(0, 8),
       colors: colors && !EMPTY_SIGNAL.test(colors) ? colors : undefined,
       packaging: packaging && !EMPTY_SIGNAL.test(packaging) ? packaging : undefined,
+      evidenceUrl: p.evidenceUrl,
+      evidenceSnippet: p.evidenceSnippet,
     });
   });
 
   (analysis.businessScope?.coreProducts || []).forEach((c) => {
     pushCat(c, 'core');
-    const n = normalizeCategoryLabel(c);
-    if (n) sellCatSet.add(n);
+    const tax = attachTaxonomy(c, 'sell', { source: 'website' });
+    if (tax.label) sellCatSet.add(tax.label);
   });
   (analysis.businessScope?.relevantProducts || []).forEach((c) => {
     pushCat(c, 'core');
-    const n = normalizeCategoryLabel(c);
-    if (n) sellCatSet.add(n);
+    const tax = attachTaxonomy(c, 'sell', { source: 'website' });
+    if (tax.label) sellCatSet.add(tax.label);
   });
   (analysis.tradeIntelligence?.importCategories || []).forEach((c) => {
     pushCat(c, 'trade');
-    const n = normalizeCategoryLabel(c);
-    if (n) procureCatSet.add(n);
+    const tax = attachTaxonomy(c, 'procure', { source: 'customs' });
+    if (tax.label) procureCatSet.add(tax.label);
   });
   (analysis.websiteCategories || []).forEach((wc) => {
     const lo = parseMoney(wc.priceMinCNY);
     const hi = parseMoney(wc.priceMaxCNY);
     pushCat(wc.categoryName, 'website', { min: lo, max: hi });
-    const n = normalizeCategoryLabel(wc.categoryName);
-    if (n) sellCatSet.add(n);
-    (wc.items || []).slice(0, 8).forEach((item) => pushCat(item, 'website', { min: lo, max: hi }));
+    const tax = attachTaxonomy(wc.categoryName, 'sell', {
+      url: wc.evidenceUrl,
+      snippet: wc.evidenceSnippet,
+      source: 'website',
+    });
+    if (wc.taxonomyL1Id) sellIdSet.add(wc.taxonomyL1Id);
+    if (wc.taxonomyL2Id) sellIdSet.add(wc.taxonomyL2Id);
+    if (tax.label) sellCatSet.add(tax.label);
+    (wc.items || []).slice(0, 8).forEach((item) => {
+      pushCat(item, 'website', { min: lo, max: hi });
+      attachTaxonomy(item, 'sell', { url: wc.evidenceUrl, source: 'shop' });
+    });
   });
 
   const intel = analysis.productIntel;
   (intel?.sell?.categories || []).forEach((c) => {
     pushCat(c, 'website');
-    const n = normalizeCategoryLabel(c);
-    if (n) sellCatSet.add(n);
+    const tax = attachTaxonomy(c, 'sell', { source: 'website' });
+    if (tax.label) sellCatSet.add(tax.label);
   });
   (intel?.sell?.items || []).forEach((item) => pushCat(item, 'sku'));
   addTags(intel?.sell?.tags);
   (intel?.procure?.categories || []).forEach((c) => {
     pushCat(c, 'procure');
-    const n = normalizeCategoryLabel(c);
-    if (n) procureCatSet.add(n);
+    const tax = attachTaxonomy(c, 'procure', { source: 'customs' });
+    if (tax.label) procureCatSet.add(tax.label);
   });
   (intel?.procure?.items || []).forEach((item) => {
-    const cat = normalizeCategoryLabel(item) || item;
+    const tax = attachTaxonomy(item, 'procure', { source: 'customs' });
+    const cat = tax.label || normalizeCategoryLabel(item) || item;
     if (!cat) return;
     categorySet.add(cat);
     procureCatSet.add(cat);
@@ -340,6 +421,8 @@ export const buildProductProfileFromAnalysis = (
       id: skuId(id, item, skus.length),
       name: item,
       category: cat,
+      taxonomyL1Id: tax.l1Id,
+      taxonomyL2Id: tax.l2Id,
       source: 'procure',
       role: 'procure',
     });
@@ -367,6 +450,34 @@ export const buildProductProfileFromAnalysis = (
 
   const sellCategories = [...sellCatSet];
   const procureCategories = [...procureCatSet];
+  // 兜底：自由文本再扫一遍官方树，补齐 ID（避免旧报告无 taxonomy 字段）
+  if (!sellIdSet.size && sellCategories.length) {
+    for (const a of assignCategoriesFromSignals(sellCategories, {
+      limit: 8,
+      minScore: 22,
+      evidenceBlob,
+      preferRootId: TOY_ROOT_ID,
+    })) {
+      if (a.verified === false) continue;
+      sellIdSet.add(a.l1Id);
+      if (a.l2Id) sellIdSet.add(a.l2Id);
+    }
+  }
+  if (!procureIdSet.size && procureCategories.length) {
+    for (const a of assignCategoriesFromSignals(procureCategories, {
+      limit: 8,
+      minScore: 22,
+      evidenceBlob,
+      preferRootId: TOY_ROOT_ID,
+    })) {
+      if (a.verified === false) continue;
+      procureIdSet.add(a.l1Id);
+      if (a.l2Id) procureIdSet.add(a.l2Id);
+    }
+  }
+  const sellCategoryIds = [...sellIdSet];
+  const procureCategoryIds = [...procureIdSet];
+  const categoryIds = [...new Set([...sellCategoryIds, ...procureCategoryIds])];
 
   const packagingSummary = preferLongerText(
     undefined,
@@ -434,6 +545,10 @@ export const buildProductProfileFromAnalysis = (
     categories,
     sellCategories,
     procureCategories,
+    sellCategoryIds,
+    procureCategoryIds,
+    categoryIds,
+    categoryRefs: categoryRefs.slice(0, 40),
     productTags,
     priceMinCny: priceMin,
     priceMaxCny: priceMax,
@@ -517,6 +632,17 @@ export const mergeProductProfiles = (
   const sellCategories = unionStrings(prev.sellCategories, built.sellCategories);
   const procureCategories = unionStrings(prev.procureCategories, built.procureCategories);
   const categories = unionStrings(prev.categories, built.categories);
+  const sellCategoryIds = unionStrings(prev.sellCategoryIds, built.sellCategoryIds);
+  const procureCategoryIds = unionStrings(prev.procureCategoryIds, built.procureCategoryIds);
+  const categoryIds = unionStrings(prev.categoryIds, built.categoryIds, sellCategoryIds, procureCategoryIds);
+  const refKey = (r: CategoryEvidenceRef) =>
+    `${r.side}|${r.l1Id}|${r.l2Id || ''}|${r.label}|${r.url || ''}`;
+  const refMap = new Map<string, CategoryEvidenceRef>();
+  [...(prev.categoryRefs || []), ...(built.categoryRefs || [])].forEach((r) => {
+    const k = refKey(r);
+    const old = refMap.get(k);
+    if (!old || (r.confidence || 0) > (old.confidence || 0)) refMap.set(k, r);
+  });
   const catalogQuality = Math.max(prev.catalogQuality || 0, built.catalogQuality || 0);
   const designSignalQuality = Math.max(
     prev.designSignalQuality || 0,
@@ -534,6 +660,10 @@ export const mergeProductProfiles = (
     categories,
     sellCategories,
     procureCategories,
+    sellCategoryIds,
+    procureCategoryIds,
+    categoryIds,
+    categoryRefs: [...refMap.values()].slice(0, 48),
     productTags,
     priceMinCny: priceMin,
     priceMaxCny: priceMax,
@@ -826,13 +956,23 @@ const priceRangesOverlap = (
   return aLo - pad(aLo) <= bHi + pad(bHi) && bLo - pad(bLo) <= aHi + pad(aHi);
 };
 
-/** 仅用背调入库的真实品类/SKU/标签打分；理由必须可追溯到库字段 */
+/** 仅用背调入库的真实品类/SKU/标签打分；优先官方品类 ID 交集，理由必须可追溯到库字段 */
 export const matchOurProductToProfiles = (
   query: OurProductMatchQuery,
   profiles: CustomerProductProfile[]
 ): ProductMatchHit[] => {
   const name = (query.name || '').trim();
   const category = normalizeCategoryLabel(query.category) || normalizeCategoryLabel(name);
+  // 查询侧无 ID 时现场归类，与客户侧官方树对齐
+  const queryIds =
+    query.categoryIds?.length
+      ? query.categoryIds
+      : idsFromAssignments(
+          assignCategoriesFromSignals(
+            [query.category || '', name, query.notes || ''].filter(Boolean),
+            { limit: 4, minScore: 18 }
+          )
+        );
   const qTokens = [
     ...new Set([
       ...tokensOf(name),
@@ -855,7 +995,8 @@ export const matchOurProductToProfiles = (
       (profile.skus || []).length > 0 ||
       (profile.categories || []).length > 0 ||
       (profile.sellCategories || []).length > 0 ||
-      (profile.procureCategories || []).length > 0;
+      (profile.procureCategories || []).length > 0 ||
+      (profile.categoryIds || []).length > 0;
     if (!hasReal || quality < 8) continue;
 
     if (countries.length) {
@@ -875,27 +1016,56 @@ export const matchOurProductToProfiles = (
       ...(profile.importCategories || []),
     ];
 
-    // 采购侧命中（出口匹配优先：对方会买什么）
-    for (const cat of procureCats) {
-      const nCat = normalizeCategoryLabel(cat) || cat;
-      if (category && (nCat === category || nCat.includes(category) || category.includes(nCat))) {
-        score += 48;
-        matchedCategories.push(nCat);
-        reasons.push(`采购/进口品类命中（库内）：${nCat}`);
-        break;
+    // —— 主路径：官方品类 ID 交集（产品库 ↔ 客户画像字段呼应）——
+    const procureIdHit = scoreCategoryIdOverlap(queryIds, profile.procureCategoryIds);
+    if (procureIdHit.score > 0) {
+      score += Math.min(52, procureIdHit.score + 12);
+      matchedCategories.push(...procureIdHit.labels);
+      reasons.push(`采购品类 ID 命中：${procureIdHit.labels.slice(0, 2).join('、')}`);
+    }
+    const sellIdHit = scoreCategoryIdOverlap(queryIds, profile.sellCategoryIds);
+    if (sellIdHit.score > 0) {
+      const boost = matchedCategories.length ? Math.min(22, sellIdHit.score) : Math.min(44, sellIdHit.score + 8);
+      score += boost;
+      for (const lb of sellIdHit.labels) {
+        if (!matchedCategories.includes(lb)) matchedCategories.push(lb);
+      }
+      reasons.push(`在售品类 ID 命中：${sellIdHit.labels.slice(0, 2).join('、')}`);
+    }
+    if (!procureIdHit.score && !sellIdHit.score) {
+      const anyIdHit = scoreCategoryIdOverlap(queryIds, profile.categoryIds);
+      if (anyIdHit.score > 0) {
+        score += Math.min(36, anyIdHit.score);
+        matchedCategories.push(...anyIdHit.labels);
+        reasons.push(`品类 ID 命中：${anyIdHit.labels.slice(0, 2).join('、')}`);
       }
     }
 
-    // 在售侧命中
-    for (const cat of sellCats) {
-      const nCat = normalizeCategoryLabel(cat) || cat;
-      if (category && (nCat === category || nCat.includes(category) || category.includes(nCat))) {
-        if (!matchedCategories.includes(nCat)) {
-          score += matchedCategories.length ? 18 : 40;
+    // 采购侧自由文本（兼容旧画像）
+    if (!matchedCategories.length) {
+      for (const cat of procureCats) {
+        const nCat = normalizeCategoryLabel(cat) || cat;
+        if (category && (nCat === category || nCat.includes(category) || category.includes(nCat))) {
+          score += 48;
           matchedCategories.push(nCat);
-          reasons.push(`在售品类命中（库内）：${nCat}`);
+          reasons.push(`采购/进口品类命中（库内）：${nCat}`);
+          break;
         }
-        break;
+      }
+    }
+
+    // 在售侧自由文本
+    if (matchedCategories.length < 2) {
+      for (const cat of sellCats) {
+        const nCat = normalizeCategoryLabel(cat) || cat;
+        if (category && (nCat === category || nCat.includes(category) || category.includes(nCat))) {
+          if (!matchedCategories.includes(nCat)) {
+            score += matchedCategories.length ? 18 : 40;
+            matchedCategories.push(nCat);
+            reasons.push(`在售品类命中（库内）：${nCat}`);
+          }
+          break;
+        }
       }
     }
 
@@ -1062,6 +1232,9 @@ export const matchCatalogSkusToClientProfile = (
       {
         name: sku.name || sku.skuCode || '',
         category: sku.category,
+        categoryIds: sku.categoryIds?.length
+          ? sku.categoryIds
+          : [sku.categoryL1Id, sku.categoryL2Id].filter(Boolean) as string[],
         priceMinCny: factoryCny,
         priceMaxCny: factoryCny,
         packagingHints: packHints.length ? packHints : undefined,
