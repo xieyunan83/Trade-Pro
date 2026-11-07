@@ -289,6 +289,11 @@ import { RecordsPanel } from './components/RecordsPanel';
 import { Login } from './components/Login';
 import { AccessGate } from './components/AccessGate';
 import { loadUsersWithMigration, loadUsersFromStorage, saveUsersToStorage, getUsersUpdatedAt } from './services/auth';
+import {
+  clearSession,
+  restoreSessionUser,
+  saveSession,
+} from './services/sessionStore';
 import { AdminDashboard } from './components/AdminDashboard';
 import { 
   LayoutDashboard, PackageSearch, Users, PenTool, Network, Search, Loader2, Menu, Globe, Zap, FileSpreadsheet, History, Clock, ChevronRight, AlertTriangle, RefreshCw, LogOut, Briefcase, Ruler, CheckCircle2, Hourglass, StopCircle, PlayCircle, Layers, Mail, Cloud, Download, Info, Link2, X, Database, Image, Trash2, Ban, Target
@@ -856,6 +861,13 @@ const App: React.FC = () => {
       const local = loadUsersFromStorage();
       if (local.length) setUsers(local);
       setDepartments(loadDepartmentsFromStorage());
+      // 恢复上次登录会话，避免刷新/热重载突然掉回登录页
+      const restored = restoreSessionUser(local);
+      if (restored) {
+        setUsageScope(restored.username);
+        setCurrentUser(restored);
+        if (restored.role === 'admin') setHasKey(true);
+      }
     } catch (e) {
       console.warn('local users bootstrap failed', e);
     }
@@ -869,6 +881,25 @@ const App: React.FC = () => {
         ]);
         setUsers(loaded);
         setDepartments(loadDepartmentsFromStorage());
+        // 云端用户表到位后：无内存会话则按持久化会话恢复；已登录仅在「确认停用」时退出
+        // （列表缺人不踢，避免同步不全误回登录页）
+        setCurrentUser((prev) => {
+          if (!prev) return restoreSessionUser(loaded);
+          const fresh = loaded.find(
+            (u) => u.username.trim().toLowerCase() === prev.username.trim().toLowerCase()
+          );
+          if (!fresh) return prev;
+          if (fresh.disabled) {
+            clearSession();
+            return null;
+          }
+          return fresh;
+        });
+        const restored = restoreSessionUser(loaded);
+        if (restored) {
+          setUsageScope(restored.username);
+          if (restored.role === 'admin') setHasKey(true);
+        }
       } catch (e) {
         console.error('Failed to load users', e);
         const fallback = loadUsersFromStorage();
@@ -881,7 +912,8 @@ const App: React.FC = () => {
   useEffect(() => {
     const checkKey = async () => {
       if (!currentUser || currentUser.role === 'admin') return;
-      setHasKey(null);
+      // 已探测成功则不要清成 null，否则权限同步时整页闪回加载态，像被踢下线
+      setHasKey((prev) => (prev === true ? true : null));
       try {
         const ok = await Promise.race([
           checkApiKeyAvailability(),
@@ -895,7 +927,7 @@ const App: React.FC = () => {
       }
     };
     checkKey();
-  }, [currentUser]);
+  }, [currentUser?.username, currentUser?.role]);
 
   const lastWorkspaceUserRef = useRef<string | null>(null);
 
@@ -1633,7 +1665,15 @@ const App: React.FC = () => {
     const fresh = users.find(
       (u) => u.username.trim().toLowerCase() === currentUser.username.trim().toLowerCase()
     );
-    if (!fresh) return;
+    if (!fresh) {
+      // 用户表非空却找不到当前账号：可能是云端误覆盖，不立刻踢下线
+      return;
+    }
+    if (fresh.disabled) {
+      clearSession();
+      setCurrentUser(null);
+      return;
+    }
     // 仅在权限/设备相关字段变化时同步，避免与 currentUser 循环 setState 卡死
     const finger = (u: typeof fresh) =>
       [
@@ -4801,10 +4841,12 @@ const App: React.FC = () => {
   };
 
   const handleLogout = () => {
+    clearSession();
     resetWorkspaceForUserSwitch();
     lastWorkspaceUserRef.current = null;
     setUsageScope(null);
     setKeyResolutionContext({});
+    setHasKey(null);
     setCurrentUser(null);
   };
   const handleSyncToGitHub = async () => {
@@ -5631,8 +5673,10 @@ const App: React.FC = () => {
     return (
       <Login
         onLogin={(u) => {
+          saveSession(u.username);
           setUsageScope(u.username);
           prefetchCoreModules();
+          if (u.role === 'admin') setHasKey(true);
           startTransition(() => {
             setCurrentUser(u);
           });

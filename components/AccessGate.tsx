@@ -20,16 +20,45 @@ export const AccessGate: React.FC<AccessGateProps> = ({ user, onLogout, children
   const [status, setStatus] = useState<AccessCheckResult | null>(
     needsAccessControl(user) ? null : { ok: true, reason: 'ok', message: '' }
   );
+  /** 曾通过校验后，短暂失败不立刻整页封死（设备指纹异步抖动） */
+  const lastOkRef = React.useRef(false);
+  const failStreakRef = React.useRef(0);
 
   useEffect(() => {
     if (!needsAccessControl(user)) {
+      lastOkRef.current = true;
+      failStreakRef.current = 0;
       setStatus({ ok: true, reason: 'ok', message: '' });
       return;
     }
     let cancelled = false;
     const run = async () => {
-      const res = await evaluateEmployeeAccess(user);
-      if (!cancelled) setStatus(res);
+      try {
+        const res = await evaluateEmployeeAccess(user);
+        if (cancelled) return;
+        if (res.ok) {
+          lastOkRef.current = true;
+          failStreakRef.current = 0;
+          setStatus(res);
+          return;
+        }
+        failStreakRef.current += 1;
+        // 首次失败且此前已通过：再等下一轮确认，避免误踢回门禁/登录
+        if (lastOkRef.current && failStreakRef.current < 2) {
+          return;
+        }
+        setStatus(res);
+      } catch (e) {
+        console.warn('[AccessGate] evaluate failed', e);
+        // 异常不当成永久封禁：已通过则保持工作台
+        if (!lastOkRef.current && !cancelled) {
+          setStatus({
+            ok: false,
+            reason: 'device_mismatch',
+            message: '访问校验暂时失败，请稍后重试或退出后重新登录。',
+          });
+        }
+      }
     };
     void run();
     const timer = window.setInterval(() => {
@@ -39,11 +68,19 @@ export const AccessGate: React.FC<AccessGateProps> = ({ user, onLogout, children
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [user]);
+  }, [
+    user.username,
+    user.deviceBindRequired,
+    user.accessSchedule?.enabled,
+    user.accessSchedule?.timezone,
+    (user.boundDevices || []).map((d) => `${d.deviceId}:${d.macAddress || ''}`).join('|'),
+  ]);
 
   if (!needsAccessControl(user)) return <>{children}</>;
 
   if (!status) {
+    // 曾通过则继续展示业务页，避免周期性校验时整页闪回加载/登录感
+    if (lastOkRef.current) return <>{children}</>;
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
         <Loader2 className="animate-spin text-blue-600" size={36} />
