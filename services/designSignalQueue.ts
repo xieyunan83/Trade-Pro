@@ -259,8 +259,32 @@ export const enqueueDesignSignalBatch = (
   return { queued, skipped, reasons };
 };
 
+/** 仅暂停泵：已排队任务仍留在面板，刷新后仍可见 */
 export const stopDesignSignalQueue = () => {
   shouldStop = true;
+  notify();
+};
+
+/**
+ * 真正停掉：中止泵、取消排队、结束进行中任务，并清空本地持久化。
+ * 登录后反复看到「卡死又停不了」时用这个。
+ */
+export const abortAndClearDesignSignalQueue = () => {
+  shouldStop = true;
+  const now = Date.now();
+  for (const job of jobs) {
+    if (job.status === 'queued' || job.status === 'running') {
+      job.status = 'failed';
+      job.finishedAt = now;
+      job.error = '已手动停止';
+    }
+  }
+  jobs = [];
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.removeItem(LS_KEY);
+  } catch {
+    /* ignore */
+  }
   notify();
 };
 
@@ -269,11 +293,20 @@ export const resumeDesignSignalQueue = () => {
   void pump();
 };
 
+/** 可取消排队中 / 关闭已结束；进行中则标记失败并跳过 */
 export const dismissDesignSignalJob = (id: string) => {
   const idx = jobs.findIndex((j) => j.id === id);
   if (idx < 0) return;
   const job = jobs[idx];
-  if (job.status === 'running' || job.status === 'queued') return;
+  if (job.status === 'running') {
+    shouldStop = true;
+    job.status = 'failed';
+    job.finishedAt = Date.now();
+    job.error = '已取消';
+    notify();
+    // 泵结束后若仍有排队可被用户手动继续；此处不自动 resume
+    return;
+  }
   jobs.splice(idx, 1);
   notify();
 };
@@ -287,19 +320,56 @@ export const clearFinishedDesignSignalJobs = () => {
   notify();
 };
 
+const withJobTimeout = <T,>(p: Promise<T>, ms: number, label: string): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    const t = window.setTimeout(() => reject(new Error(label)), ms);
+    p.then(
+      (v) => {
+        window.clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        window.clearTimeout(t);
+        reject(e);
+      }
+    );
+  });
+
 const runOne = async (job: DesignSignalJob) => {
+  if (shouldStop) {
+    job.status = 'failed';
+    job.finishedAt = Date.now();
+    job.error = '已手动停止';
+    notify();
+    return;
+  }
   job.status = 'running';
   job.startedAt = Date.now();
   notify();
 
   try {
     const hist = resolveHistoryHandler?.(job.clientId);
-    const merged = await withRateLimitRetry(() =>
-      digDesignSignals(job.domain, hist?.data || null, {
-        searchKeyword: job.searchKeyword || hist?.data?.searchKeyword,
-        searchCountry: job.searchCountry || hist?.data?.searchCountry,
-      })
+    const merged = await withJobTimeout(
+      withRateLimitRetry(() =>
+        digDesignSignals(job.domain, hist?.data || null, {
+          searchKeyword: job.searchKeyword || hist?.data?.searchKeyword,
+          searchCountry: job.searchCountry || hist?.data?.searchCountry,
+        })
+      ),
+      JOB_STALE_MS,
+      '补全超时，可重新加入队列'
     );
+
+    // 已被「停止并清除」或取消：勿再写回 / 触发完成回调
+    if (!jobs.includes(job) || job.status !== 'running' || shouldStop) {
+      if (jobs.includes(job) && job.status === 'running') {
+        job.status = 'failed';
+        job.finishedAt = Date.now();
+        job.error = '已手动停止';
+        notify();
+      }
+      return;
+    }
 
     job.status = 'completed';
     job.finishedAt = Date.now();
@@ -318,6 +388,7 @@ const runOne = async (job: DesignSignalJob) => {
     }
   } catch (e: any) {
     console.error('[designSignalQueue] failed', job.domain, e);
+    if (!jobs.includes(job)) return;
     job.status = 'failed';
     job.finishedAt = Date.now();
     job.error = e?.message || String(e);

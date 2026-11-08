@@ -151,12 +151,30 @@ body {
   --color-mist-100: #e7edf3;
   --color-mist-200: #d3dde8;
 
-  --font-display: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
-    "Microsoft YaHei", sans-serif;
-  --font-sans: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
-    "Microsoft YaHei", sans-serif;
-  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-display: "Outfit", "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    sans-serif;
+  --font-sans: "Outfit", "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
-  --shadow-signal: 0 0 0 1px rgba(20, 184, 166, 0.2), 0 20px 44px -20px rgba(15, 23, 42, 0.4);
-  --shadow-panel: 0 1px 0 rgba(255, 255, 255, 0.72) inset, 0 14px 36px -18px rgba(15, 23, 42, 0.16);
+  /* 全站字号明显放大 */
+  --text-xs: 0.875rem;
+  --text-xs--line-height: 1.4;
+  --text-sm: 1rem;
+  --text-sm--line-height: 1.5;
+  --text-base: 1.125rem;
+  --text-base--line-height: 1.55;
+  --text-lg: 1.25rem;
+  --text-lg--line-height: 1.5;
+  --text-xl: 1.5rem;
+  --text-xl--line-height: 1.35;
+  --text-2xl: 1.75rem;
+  --text-2xl--line-height: 1.3;
+  --text-3xl: 2.15rem;
+  --text-3xl--line-height: 1.2;
+
+  --shadow-signal: 0 0 0 1px rgba(20, 184, 166, 0.22), 0 22px 48px -18px rgba(15, 23, 42, 0.42),
+    0 0 36px -16px rgba(45, 212, 191, 0.35);
+  --shadow-panel: 0 1px 0 rgba(255, 255, 255, 0.78) inset, 0 16px 40px -18px rgba(15, 23, 42, 0.2),
+    0 0 0 1px rgba(15, 23, 42, 0.04);
 }
