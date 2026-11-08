@@ -302,7 +302,9 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
       if (report) {
         setMsg(
           `已导入 ${incoming.length} 款。自动匹配 ${report.matchCount} 家客户：重点一对一 ${report.priorityCount} · 建议 EDM 测品 ${report.edmCount}${
-            skippedNoTaxonomy ? `（另有 ${skippedNoTaxonomy} 行因无官方类目未入库）` : ''
+            skippedNoTaxonomy
+              ? `（另有 ${skippedNoTaxonomy} 行因缺一级或二级小类未入库）`
+              : ''
           }。请到「产品匹配」查看分级与开发建议。`
         );
       }
