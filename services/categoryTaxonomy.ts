@@ -127,10 +127,13 @@ const ensureToyIndex = () => {
     window.setTimeout(step, 0);
   };
   if (typeof window !== 'undefined') {
-    if ('requestIdleCallback' in window) {
-      (window as Window & { requestIdleCallback: (cb: () => void) => void }).requestIdleCallback(expand);
+    const w = window as Window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout?: number }) => number;
+    };
+    if (typeof w.requestIdleCallback === 'function') {
+      w.requestIdleCallback(expand, { timeout: 2500 });
     } else {
-      window.setTimeout(expand, 1200);
+      globalThis.setTimeout(expand, 1200);
     }
   }
   return tokenIndex;
