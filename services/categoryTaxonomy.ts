@@ -79,6 +79,8 @@ const EMPTY = /^(n\/?a|未知|公开信息未找到|none|null|待补|暂无|-)?$
 /** 倒排：词元 → 节点 id 列表（懒建；先玩具子集，空闲再扩全站，避免主线程卡死） */
 let tokenIndex: Map<string, string[]> | null = null;
 let tokenIndexFull = false;
+/** 类目异步 hydrate 后节点数变化，需重建索引 */
+let indexedForCount = -1;
 
 const indexNodeInto = (map: Map<string, Set<string>>, node: TaxonomyNode) => {
   const bag = new Set<string>();
@@ -98,7 +100,13 @@ const finalizeIndex = (map: Map<string, Set<string>>) =>
 
 /** 仅母婴玩具大类 + 全部一级：找客自动匹配够用，节点量远小于全站 7k+ */
 const ensureToyIndex = () => {
-  if (tokenIndex) return tokenIndex;
+  const n = PRODUCT_TAXONOMY.length;
+  if (n === 0) {
+    tokenIndex = new Map();
+    indexedForCount = 0;
+    return tokenIndex;
+  }
+  if (tokenIndex && indexedForCount === n) return tokenIndex;
   const map = new Map<string, Set<string>>();
   for (const node of PRODUCT_TAXONOMY_ROOTS) indexNodeInto(map, node);
   for (const node of PRODUCT_TAXONOMY_L1) indexNodeInto(map, node);
@@ -106,6 +114,7 @@ const ensureToyIndex = () => {
     if (node.level === 2 && node.rootId === TOY_ROOT_ID) indexNodeInto(map, node);
   }
   tokenIndex = finalizeIndex(map);
+  indexedForCount = n;
   tokenIndexFull = false;
   // 空闲时再扩全站二级，不堵交互
   const expand = () => {

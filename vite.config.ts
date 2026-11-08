@@ -79,6 +79,10 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         output: {
           manualChunks(id) {
+            // 全站类目 ~2MB：必须独立 chunk，禁止打进进站主包
+            if (id.includes('alibabaFullTaxonomy.nodes.json') || id.includes('alibabaFullTaxonomy')) {
+              return 'taxonomy-data';
+            }
             if (!id.includes('node_modules')) return;
             if (id.includes('@google/model-viewer') || id.includes('/three/')) return 'model-viewer';
             if (id.includes('xlsx') || id.includes('file-saver')) return 'export-libs';

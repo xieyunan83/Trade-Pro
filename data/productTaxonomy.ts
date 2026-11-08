@@ -1,10 +1,10 @@
 /**
  * 官方产品品类树（稳定 ID）
- * 数据源：阿里巴巴国际站全站类目表（大类 / 一级 / 二级，约 38×554×6973）
- * 产品库与客户画像两侧均应对齐本树的 ID。
+ * 数据源：全站类目表（大类 / 一级 / 二级，约 38×554×6973）
+ *
+ * 重要：2.2MB JSON 禁止同步 import。进站先出界面，再异步 hydrate，
+ * 否则 Electron/弱机会在「正在进入工作台」主线程解析卡死。
  */
-import taxonomyPack from './alibabaFullTaxonomy.nodes.json';
-
 export type TaxonomySide = 'sell' | 'procure' | 'both';
 
 export type TaxonomyNode = {
@@ -36,8 +36,6 @@ type Pack = {
   legacyL1IdMap: Record<string, string>;
   toyRootId: string;
 };
-
-const pack = taxonomyPack as Pack;
 
 /** 常见表达偏差 → 官方树（中英同义词，匹配前归一） */
 export const TAXONOMY_ALIAS_RULES: Array<{
@@ -146,35 +144,89 @@ for (const rule of TAXONOMY_ALIAS_RULES) {
   aliasExtrasByL1.set(rule.l1Id, [...prev, ...rule.keys]);
 }
 
-export const PRODUCT_TAXONOMY: TaxonomyNode[] = pack.nodes.map((n) => {
-  const extras = n.level === 1 ? aliasExtrasByL1.get(n.id) || [] : [];
-  return {
-    id: n.id,
-    level: n.level,
-    nameEn: n.nameEn,
-    nameZh: n.nameZh,
-    parentId: n.parentId || undefined,
-    rootId: n.rootId,
-    url: n.url,
-    aliases: [...new Set([...(n.aliases || []), n.nameEn, n.nameZh, ...extras].filter(Boolean))],
-  };
-});
+/** 可变容器：hydrate 后原地填充，保持 import 引用有效 */
+export const PRODUCT_TAXONOMY: TaxonomyNode[] = [];
+export const PRODUCT_TAXONOMY_BY_ID: Record<string, TaxonomyNode> = {};
+export const PRODUCT_TAXONOMY_ROOTS: TaxonomyNode[] = [];
+export const PRODUCT_TAXONOMY_L1: TaxonomyNode[] = [];
+export const PRODUCT_TAXONOMY_L2: TaxonomyNode[] = [];
+export const LEGACY_L1_ID_MAP: Record<string, string> = {};
 
-export const PRODUCT_TAXONOMY_BY_ID: Record<string, TaxonomyNode> = Object.fromEntries(
-  PRODUCT_TAXONOMY.map((n) => [n.id, n])
-);
+export let TOY_ROOT_ID = 'root__parents_kids_and_toys';
+export let TAXONOMY_VERSION = '';
+export let TAXONOMY_STATS: { roots: number; l1: number; l2: number } = {
+  roots: 0,
+  l1: 0,
+  l2: 0,
+};
 
-/** 旧玩具一级平台 ID → 新树一级 slug id */
-export const LEGACY_L1_ID_MAP: Record<string, string> = pack.legacyL1IdMap || {};
+let hydratePromise: Promise<void> | null = null;
+let hydrated = false;
 
-export const TOY_ROOT_ID = pack.toyRootId || 'root__parents_kids_and_toys';
+const clearRecord = (obj: Record<string, unknown>) => {
+  for (const k of Object.keys(obj)) delete obj[k];
+};
 
-export const PRODUCT_TAXONOMY_ROOTS = PRODUCT_TAXONOMY.filter((n) => n.level === 0);
-export const PRODUCT_TAXONOMY_L1 = PRODUCT_TAXONOMY.filter((n) => n.level === 1);
-export const PRODUCT_TAXONOMY_L2 = PRODUCT_TAXONOMY.filter((n) => n.level === 2);
+const applyPack = (pack: Pack) => {
+  const nodes: TaxonomyNode[] = pack.nodes.map((n) => {
+    const extras = n.level === 1 ? aliasExtrasByL1.get(n.id) || [] : [];
+    return {
+      id: n.id,
+      level: n.level,
+      nameEn: n.nameEn,
+      nameZh: n.nameZh,
+      parentId: n.parentId || undefined,
+      rootId: n.rootId,
+      url: n.url,
+      aliases: [...new Set([...(n.aliases || []), n.nameEn, n.nameZh, ...extras].filter(Boolean))],
+    };
+  });
 
-export const TAXONOMY_VERSION = pack.version;
-export const TAXONOMY_STATS = pack.stats;
+  PRODUCT_TAXONOMY.length = 0;
+  PRODUCT_TAXONOMY.push(...nodes);
+
+  clearRecord(PRODUCT_TAXONOMY_BY_ID as Record<string, unknown>);
+  for (const n of nodes) PRODUCT_TAXONOMY_BY_ID[n.id] = n;
+
+  PRODUCT_TAXONOMY_ROOTS.length = 0;
+  PRODUCT_TAXONOMY_L1.length = 0;
+  PRODUCT_TAXONOMY_L2.length = 0;
+  for (const n of nodes) {
+    if (n.level === 0) PRODUCT_TAXONOMY_ROOTS.push(n);
+    else if (n.level === 1) PRODUCT_TAXONOMY_L1.push(n);
+    else if (n.level === 2) PRODUCT_TAXONOMY_L2.push(n);
+  }
+
+  clearRecord(LEGACY_L1_ID_MAP as Record<string, unknown>);
+  Object.assign(LEGACY_L1_ID_MAP, pack.legacyL1IdMap || {});
+
+  TOY_ROOT_ID = pack.toyRootId || 'root__parents_kids_and_toys';
+  TAXONOMY_VERSION = pack.version || '';
+  TAXONOMY_STATS = pack.stats || { roots: 0, l1: 0, l2: 0 };
+  hydrated = true;
+};
+
+/** 是否已加载全站类目（未加载时匹配能力降级为空） */
+export const isProductTaxonomyReady = () => hydrated;
+
+/**
+ * 异步加载 2.2MB 类目包。可重复调用，共用同一 Promise。
+ * 登录进站 / 产品库打开前应 await。
+ */
+export const hydrateProductTaxonomy = (): Promise<void> => {
+  if (hydrated) return Promise.resolve();
+  if (hydratePromise) return hydratePromise;
+  hydratePromise = import('./alibabaFullTaxonomy.nodes.json')
+    .then((mod) => {
+      applyPack((mod as { default: Pack }).default || (mod as unknown as Pack));
+    })
+    .catch((e) => {
+      hydratePromise = null;
+      console.error('[taxonomy] hydrate failed', e);
+      throw e;
+    });
+  return hydratePromise;
+};
 
 export const resolveLegacyCategoryId = (id?: string): string | undefined => {
   if (!id) return undefined;
@@ -210,7 +262,11 @@ export const formatTaxonomyLabel = (id?: string): string => {
 };
 
 /** 供模型约束：默认只塞母婴玩具大类，避免 prompt 爆长度；需要全站时再扩 */
-export const taxonomyPromptList = (opts?: { rootId?: string; maxL1?: number; maxL2PerL1?: number }): string => {
+export const taxonomyPromptList = (opts?: {
+  rootId?: string;
+  maxL1?: number;
+  maxL2PerL1?: number;
+}): string => {
   const rootId = opts?.rootId || TOY_ROOT_ID;
   const maxL1 = opts?.maxL1 ?? 22;
   const maxL2 = opts?.maxL2PerL1 ?? 6;
@@ -227,7 +283,12 @@ export const taxonomyPromptList = (opts?: { rootId?: string; maxL1?: number; max
 };
 
 /** 兼容旧 Discovery：玩具相关一级（英文名 + 子级英文名列表） */
-export const getToyAlibabaL1Compat = (): Array<{ id: string; nameEn: string; nameZh: string; children: string[] }> =>
+export const getToyAlibabaL1Compat = (): Array<{
+  id: string;
+  nameEn: string;
+  nameZh: string;
+  children: string[];
+}> =>
   getTaxonomyL1ByRoot(TOY_ROOT_ID).map((l1) => ({
     id: l1.id,
     nameEn: l1.nameEn,

@@ -1,6 +1,6 @@
 /**
- * 轻量启动门：先画登录页，再懒加载巨型 App 包。
- * 避免解析类目 JSON / 主包同步依赖把登录卡在空白或「进入工作台」转圈。
+ * 轻量启动门：先画登录页，再并行拉取主包 + 异步类目，最后挂载 App。
+ * 禁止把 2.2MB 类目同步打进进站路径，否则会卡死在「进入工作台」。
  */
 import React, {
   Suspense,
@@ -22,10 +22,9 @@ import {
   saveSession,
 } from './services/sessionStore';
 import { setUsageScope } from './services/limitService';
+import { hydrateProductTaxonomy } from './data/productTaxonomy';
 
-/** 预取主包；解析极重，务必在登录页可见后再触发 */
 const loadAppModule = () => import('./App');
-
 const AppLazy = lazy(loadAppModule);
 
 const BrandHead: React.FC = () => (
@@ -46,7 +45,7 @@ const LoadingCard: React.FC<{ tip?: string; onCancel?: () => void }> = ({
     <BrandHead />
     <div className="tp-login-card w-full max-w-md rounded-[1.35rem] px-8 py-10 flex flex-col items-center gap-3 bg-white">
       <Loader2 className="animate-spin text-teal-600" size={28} />
-      <p className="text-sm font-bold text-slate-600">{tip}</p>
+      <p className="text-sm font-bold text-slate-600 text-center">{tip}</p>
       {onCancel ? (
         <button
           type="button"
@@ -60,15 +59,19 @@ const LoadingCard: React.FC<{ tip?: string; onCancel?: () => void }> = ({
   </div>
 );
 
+type Phase = 'boot' | 'login' | 'warming' | 'ready' | 'failed';
+
 export const LoginBoot: React.FC = () => {
   const [bootUser, setBootUser] = useState<User | null>(null);
-  const [restoring, setRestoring] = useState(true);
+  const [phase, setPhase] = useState<Phase>('boot');
+  const [warmTip, setWarmTip] = useState('正在进入工作台…');
   const [enterStuck, setEnterStuck] = useState(false);
   const prefetchStarted = useRef(false);
+  const warmGen = useRef(0);
 
-  /** 登录页已出后空闲预取主包，避免点登录才开始下大包 */
+  /** 登录页可见后预取主包（不含类目大 JSON） */
   useEffect(() => {
-    if (bootUser || restoring) return;
+    if (phase !== 'login') return;
     if (prefetchStarted.current) return;
     prefetchStarted.current = true;
     const kick = () => {
@@ -80,23 +83,18 @@ export const LoginBoot: React.FC = () => {
     }
     const t = window.setTimeout(kick, 400);
     return () => window.clearTimeout(t);
-  }, [bootUser, restoring]);
+  }, [phase]);
 
   useEffect(() => {
     let cancelled = false;
-    // 下一帧再读会话，先让出一帧给启动壳/登录绘制
     const t = window.setTimeout(() => {
       try {
-        const local = loadUsersFromStorage();
-        const restored = restoreSessionUser(local);
-        // 有会话也不立刻挂载 App：先出登录页，避免「进入工作台」卡死无出口
-        if (!cancelled && restored) {
-          // 仅预填用途：不自动进入；会话仍保留，用户点登录或「继续」再进
-        }
+        // 有会话也不自动进站，避免卡在转圈无操作；仅探测是否可读
+        restoreSessionUser(loadUsersFromStorage());
       } catch (e) {
         console.warn('[LoginBoot] restore failed', e);
       } finally {
-        if (!cancelled) setRestoring(false);
+        if (!cancelled) setPhase('login');
       }
     }, 0);
     return () => {
@@ -105,25 +103,52 @@ export const LoginBoot: React.FC = () => {
     };
   }, []);
 
-  /** 进入工作台超过 25s 仍未就绪 → 允许回登录 */
+  const warmAndEnter = useCallback(async (u: User) => {
+    const gen = ++warmGen.current;
+    setBootUser(u);
+    setPhase('warming');
+    setEnterStuck(false);
+    setWarmTip('正在准备工作台…');
+    try {
+      setWarmTip('正在加载基础数据…');
+      const taxonomyP = hydrateProductTaxonomy().catch((e) => {
+        console.warn('[LoginBoot] taxonomy hydrate failed, continue', e);
+      });
+      setWarmTip('正在加载工作台…');
+      const appP = loadAppModule();
+      await Promise.all([taxonomyP, appP]);
+      if (warmGen.current !== gen) return;
+      setWarmTip('即将进入…');
+      startTransition(() => setPhase('ready'));
+    } catch (e) {
+      console.error('[LoginBoot] warm failed', e);
+      if (warmGen.current !== gen) return;
+      setPhase('failed');
+      setWarmTip('工作台加载失败，请返回登录后重试');
+    }
+  }, []);
+
   useEffect(() => {
-    if (!bootUser) {
+    if (phase !== 'warming' && phase !== 'ready') {
       setEnterStuck(false);
       return;
     }
-    setEnterStuck(false);
-    const t = window.setTimeout(() => setEnterStuck(true), 25_000);
+    const t = window.setTimeout(() => setEnterStuck(true), 35_000);
     return () => window.clearTimeout(t);
-  }, [bootUser]);
+  }, [phase]);
 
-  const handleLogin = useCallback((u: User) => {
-    saveSession(u.username);
-    armDesktopSession();
-    setUsageScope(u.username);
-    startTransition(() => setBootUser(u));
-  }, []);
+  const handleLogin = useCallback(
+    (u: User) => {
+      saveSession(u.username);
+      armDesktopSession();
+      setUsageScope(u.username);
+      void warmAndEnter(u);
+    },
+    [warmAndEnter]
+  );
 
   const backToLogin = useCallback(() => {
+    warmGen.current += 1;
     try {
       clearSession();
     } catch {
@@ -132,22 +157,32 @@ export const LoginBoot: React.FC = () => {
     setUsageScope(null);
     setBootUser(null);
     setEnterStuck(false);
+    setPhase('login');
     prefetchStarted.current = false;
   }, []);
 
-  if (restoring && !bootUser) {
+  if (phase === 'boot') {
     return <LoadingCard tip="正在准备登录…" />;
   }
 
-  if (!bootUser) {
+  if (phase === 'login' || !bootUser) {
     return <Login onLogin={handleLogin} />;
+  }
+
+  if (phase === 'warming' || phase === 'failed') {
+    return (
+      <LoadingCard
+        tip={warmTip}
+        onCancel={enterStuck || phase === 'failed' ? backToLogin : undefined}
+      />
+    );
   }
 
   return (
     <Suspense
       fallback={
         <LoadingCard
-          tip={enterStuck ? '加载较慢，可返回登录后重试' : '正在进入工作台…'}
+          tip={enterStuck ? '加载较慢，可返回登录后重试' : '正在打开工作台…'}
           onCancel={enterStuck ? backToLogin : undefined}
         />
       }
