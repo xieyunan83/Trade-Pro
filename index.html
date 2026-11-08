@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="build-stamp" content="type-login-20261108e">
+    <meta name="build-stamp" content="login-split-20261108f">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
     <meta http-equiv="Pragma" content="no-cache" />
     <title>外贸智慧协同</title>
@@ -400,8 +400,8 @@
           color: #020617 !important;
           -webkit-text-fill-color: #020617;
           font-weight: 600;
-          font-size: 1.0625rem !important;
-          border-radius: 1.1rem !important;
+          font-size: 1rem !important;
+          border-radius: 1rem !important;
         }
         .tp-scan-input:focus {
           background: #fff !important;
@@ -1132,7 +1132,11 @@
           <div style="font-size:clamp(2.2rem,5.2vw,3.4rem);font-weight:800;color:#fff;letter-spacing:-0.048em;line-height:1.1;">外贸智慧协同</div>
           <div style="margin-top:0.85rem;font-size:1.15rem;color:rgba(203,213,225,0.9);font-weight:500;">赋能澄海玩具产业升级</div>
         </div>
-        <div class="tp-login-card" style="width:100%;max-width:28rem;border-radius:1.35rem;padding:2rem 1.75rem;min-height:12rem;background:#fcfdfe;"></div>
+        <div class="tp-login-card" style="width:100%;max-width:28rem;border-radius:1.35rem;padding:2rem 1.75rem;min-height:10rem;background:#fcfdfe;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;box-sizing:border-box;">
+          <div style="width:28px;height:28px;border:3px solid #99f6e4;border-top-color:#0d9488;border-radius:50%;animation:tpBootSpin 0.8s linear infinite"></div>
+          <div style="font-size:14px;font-weight:700;color:#475569">正在打开登录…</div>
+        </div>
+        <style>@keyframes tpBootSpin{to{transform:rotate(360deg)}}</style>
       </div>
     </div>
     <script type="module" src="./index.tsx"></script>

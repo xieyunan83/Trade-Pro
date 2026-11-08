@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import App from './App';
+import { LoginBoot } from './LoginBoot';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import './styles.css';
 
@@ -57,7 +57,7 @@ const mountApp = () => {
     ReactDOM.createRoot(rootElement).render(
       <React.StrictMode>
         <ErrorBoundary label="应用">
-          <App />
+          <LoginBoot />
         </ErrorBoundary>
       </React.StrictMode>
     );

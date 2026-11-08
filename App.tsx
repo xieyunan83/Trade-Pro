@@ -323,10 +323,17 @@ declare global {
   }
 }
 
-const App: React.FC = () => {
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+type AppProps = {
+  /** 由 LoginBoot 传入：已登录用户，跳过登录页 */
+  bootUser?: User | null;
+};
+
+const App: React.FC<AppProps> = ({ bootUser = null }) => {
+  const [currentUser, setCurrentUser] = useState<User | null>(() => bootUser ?? null);
   const [users, setUsers] = useState<User[]>([]);
-  const [hasKey, setHasKey] = useState<boolean | null>(null);
+  const [hasKey, setHasKey] = useState<boolean | null>(() =>
+    bootUser?.role === 'admin' ? true : null
+  );
   
   const [domainInput, setDomainInput] = useState('');
   const [activeModule, setActiveModule] = useState<ModuleType>(ModuleType.HOME);
@@ -523,8 +530,19 @@ const App: React.FC = () => {
     setProductDigHistoryResolver(resolveHist);
     setDesignSignalHistoryResolver(resolveHist);
     setEnrichmentHistoryResolver(resolveHist);
-    hydrateDesignSignalQueue();
-    hydrateEnrichmentQueue();
+    const hydrateLater = () => {
+      try {
+        hydrateDesignSignalQueue();
+        hydrateEnrichmentQueue();
+      } catch (e) {
+        console.warn('[boot] hydrate queues failed', e);
+      }
+    };
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(hydrateLater, { timeout: 4000 });
+    } else {
+      window.setTimeout(hydrateLater, 800);
+    }
     return () => {
       setProductDigHistoryResolver(null);
       setDesignSignalHistoryResolver(null);
@@ -942,18 +960,25 @@ const App: React.FC = () => {
       return;
     }
 
-    // 每次登录默认安静：清掉粘性挂机/僵尸队列，禁止「什么都没点就开跑卡死」
+    // 每次登录默认安静：清掉粘性挂机/僵尸队列（延后到空闲，避免挡住首屏菜单）
     shouldStopRef.current = true;
     autoResumeBatchOnceRef.current = false;
-    try {
-      setWorkerModeActive(false);
-      setWorkerModeOn(false);
-      stopAllBackgroundWork();
-      if (typeof localStorage !== 'undefined') {
-        localStorage.setItem('trade_scout_auto_resume_batch', '0');
+    const quietStop = () => {
+      try {
+        setWorkerModeActive(false);
+        setWorkerModeOn(false);
+        stopAllBackgroundWork();
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem('trade_scout_auto_resume_batch', '0');
+        }
+      } catch (e) {
+        console.warn('[boot] quiet-stop failed', e);
       }
-    } catch (e) {
-      console.warn('[boot] quiet-stop failed', e);
+    };
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(quietStop, { timeout: 2500 });
+    } else {
+      window.setTimeout(quietStop, 400);
     }
 
     // 切换账号时清空工作区；同账号 StrictMode 二次挂载仍会重新拉取

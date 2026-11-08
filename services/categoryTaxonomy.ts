@@ -115,25 +115,27 @@ const ensureToyIndex = () => {
     let i = 0;
     const rest = PRODUCT_TAXONOMY.filter((n) => n.level === 2 && n.rootId !== TOY_ROOT_ID);
     const step = () => {
-      const end = Math.min(i + 400, rest.length);
+      const end = Math.min(i + 120, rest.length);
       for (; i < end; i++) indexNodeInto(map2, rest[i]);
       if (i < rest.length) {
-        window.setTimeout(step, 0);
+        // 拉长间隔，避免挤占侧栏点击
+        globalThis.setTimeout(step, 48);
         return;
       }
       tokenIndex = finalizeIndex(map2);
       tokenIndexFull = true;
     };
-    window.setTimeout(step, 0);
+    globalThis.setTimeout(step, 0);
   };
   if (typeof window !== 'undefined') {
     const w = window as Window & {
       requestIdleCallback?: (cb: () => void, opts?: { timeout?: number }) => number;
     };
+    // 登录/首屏后再慢慢扩，超时也拉长
     if (typeof w.requestIdleCallback === 'function') {
-      w.requestIdleCallback(expand, { timeout: 2500 });
+      w.requestIdleCallback(expand, { timeout: 12000 });
     } else {
-      globalThis.setTimeout(expand, 1200);
+      globalThis.setTimeout(expand, 5000);
     }
   }
   return tokenIndex;
