@@ -960,7 +960,7 @@ const App: React.FC<AppProps> = ({ bootUser = null }) => {
       return;
     }
 
-    // 每次登录默认安静：清掉粘性挂机/僵尸队列（延后到空闲，避免挡住首屏菜单）
+    // 每次登录默认安静：清掉粘性挂机/僵尸队列（延后很久，绝不能抢首屏点击）
     shouldStopRef.current = true;
     autoResumeBatchOnceRef.current = false;
     const quietStop = () => {
@@ -975,11 +975,7 @@ const App: React.FC<AppProps> = ({ bootUser = null }) => {
         console.warn('[boot] quiet-stop failed', e);
       }
     };
-    if (typeof requestIdleCallback === 'function') {
-      requestIdleCallback(quietStop, { timeout: 2500 });
-    } else {
-      window.setTimeout(quietStop, 400);
-    }
+    const quietStopTimer = window.setTimeout(quietStop, 5000);
 
     // 切换账号时清空工作区；同账号 StrictMode 二次挂载仍会重新拉取
     if (lastWorkspaceUserRef.current !== currentUser.username) {
@@ -988,6 +984,13 @@ const App: React.FC<AppProps> = ({ bootUser = null }) => {
     }
 
     let cancelled = false;
+    /** 让出主线程，保证侧栏点击先被处理 */
+    const yieldToUi = () =>
+      new Promise<void>((resolve) => {
+        window.requestAnimationFrame(() => {
+          window.setTimeout(resolve, 0);
+        });
+      });
 
     const depts = () => (departments.length ? departments : loadDepartmentsFromStorage());
     const scope = <T extends { ownerUsername?: string; departmentId?: string }>(items: T[]) =>
@@ -995,23 +998,26 @@ const App: React.FC<AppProps> = ({ bootUser = null }) => {
 
     const loadData = async () => {
         try {
+            // 首帧先让出：侧栏必须可点，再慢慢灌本机数据
+            await yieldToUi();
+            if (cancelled) return;
+
             // 1. 本机数据优先上屏（CRM / 历史），云同步放到后面，避免登录空白卡顿
             const h = await getHistory();
+            await yieldToUi();
             if (!cancelled) {
               try {
                 const earlyCrm = filterOutCrmTombstones(loadAllCrmClients());
+                await yieldToUi();
+                if (cancelled) return;
                 const migratedEarly = migrateLegacyCrmOwnership(earlyCrm, users, depts());
-                const dedupedEarly = applyCrmDomainDedupe(migratedEarly.clients);
-                if (dedupedEarly.removedCount > 0) {
-                  console.info(
-                    `[CRM] early domain dedupe: groups=${dedupedEarly.mergedGroups} removed=${dedupedEarly.removedCount}`
-                  );
-                  saveAllCrmClients(dedupedEarly.clients);
-                }
-                setCrmClients(scope(dedupedEarly.clients));
+                // 进站跳过重的域名去重写盘；仅展示，后台再整理
+                setCrmClients(scope(migratedEarly.clients));
               } catch (e) {
                 console.warn('[CRM] cache-first paint failed', e);
               }
+              await yieldToUi();
+              if (cancelled) return;
               try {
                 const restored = applyDmPersistToHistory(h);
                 const migratedHistQuick = migrateLegacyOwnership(restored, users, depts());
@@ -1020,6 +1026,8 @@ const App: React.FC<AppProps> = ({ bootUser = null }) => {
                 console.warn('[history] cache-first paint failed', e);
                 if (!cancelled) setHistory(scope(h));
               }
+              await yieldToUi();
+              if (cancelled) return;
               try {
                 const tombs = readDiscoveryTombstones();
                 const localDisc = await getDiscoveryArchives();
@@ -1048,17 +1056,22 @@ const App: React.FC<AppProps> = ({ bootUser = null }) => {
               setWorkspaceSyncStatus('本机资料已就绪，正在后台同步…');
             }
 
+            // 再让出一段时间，优先响应菜单
+            await new Promise<void>((r) => window.setTimeout(r, 1200));
+            if (cancelled) return;
+
             const repaired = await loadAndRepairAutomationQueue(currentUser);
             if (repaired.repaired || repaired.claimed) {
               console.info(
                 `[automation] repaired ids=${repaired.repaired}, claimed orphans=${repaired.claimed}, total=${repaired.tasks.length}`
               );
             }
-            // 登录即自动全量云同步（无需用户点「同步全部资料」）
+            // 登录后延后全量云同步，避免堵死侧栏
             let queueTasks = repaired.tasks;
             if (!cancelled) setWorkspaceSyncing(true);
             if (isSupabaseConfigured()) {
               try {
+                await yieldToUi();
                 const ws = await syncAllWorkspaceData({
                   upload: false,
                   timeoutMs: 3 * 60_000,
@@ -1408,44 +1421,49 @@ const App: React.FC<AppProps> = ({ bootUser = null }) => {
                 }
             }
 
-            // FOB≈零售×0.2 全库重算 + 产品画像补洞（勿阻塞登录首屏）
-            void (async () => {
-              try {
-                const histNow = await getHistory();
-                if (!histNow.length) return;
+            // FOB / 产品画像：登录后至少 8 秒再跑，避免堵菜单
+            window.setTimeout(() => {
+              if (cancelled) return;
+              void (async () => {
                 try {
-                  const { recomputeAllStoredFobPrices } = await import('./services/fobPriceRecompute');
-                  const mig = await recomputeAllStoredFobPrices({
-                    history: histNow,
-                    onHistoryUpdated: (items) => {
-                      if (!cancelled) setHistory(scope(items));
-                    },
-                  });
-                  if (mig.historyTouched > 0) {
-                    console.log(
-                      `[fob] recompute done: history=${mig.historyTouched}, products=${mig.productsTouched}`
-                    );
+                  const histNow = await getHistory();
+                  if (!histNow.length) return;
+                  try {
+                    const { recomputeAllStoredFobPrices } = await import('./services/fobPriceRecompute');
+                    const mig = await recomputeAllStoredFobPrices({
+                      history: histNow,
+                      onHistoryUpdated: (items) => {
+                        if (!cancelled) setHistory(scope(items));
+                      },
+                    });
+                    if (mig.historyTouched > 0) {
+                      console.log(
+                        `[fob] recompute done: history=${mig.historyTouched}, products=${mig.productsTouched}`
+                      );
+                    }
+                  } catch (e) {
+                    console.warn('FOB library recompute failed', e);
+                  }
+                  await yieldToUi();
+                  if (cancelled) return;
+                  const histAfter = await getHistory();
+                  const existingProfiles = await loadProductCatalog();
+                  if (existingProfiles.length === 0) {
+                    await rebuildProductCatalogFromHistory(histAfter, {
+                      ownerUsername: currentUser.username,
+                      departmentId: currentUser.departmentId,
+                    });
+                  } else {
+                    await backfillProductCatalogFromHistory(histAfter, {
+                      ownerUsername: currentUser.username,
+                      departmentId: currentUser.departmentId,
+                    });
                   }
                 } catch (e) {
-                  console.warn('FOB library recompute failed', e);
+                  console.warn('product catalog bootstrap failed', e);
                 }
-                const histAfter = await getHistory();
-                const existingProfiles = await loadProductCatalog();
-                if (existingProfiles.length === 0) {
-                  await rebuildProductCatalogFromHistory(histAfter, {
-                    ownerUsername: currentUser.username,
-                    departmentId: currentUser.departmentId,
-                  });
-                } else {
-                  await backfillProductCatalogFromHistory(histAfter, {
-                    ownerUsername: currentUser.username,
-                    departmentId: currentUser.departmentId,
-                  });
-                }
-              } catch (e) {
-                console.warn('product catalog bootstrap failed', e);
-              }
-            })();
+              })();
+            }, 8000);
 
             if (ghStatus.ok && currentUser) {
                 try {
@@ -1647,9 +1665,10 @@ const App: React.FC<AppProps> = ({ bootUser = null }) => {
         }
     };
 
-    loadData();
+    void loadData();
     return () => {
       cancelled = true;
+      window.clearTimeout(quietStopTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅账号切换时全量加载；users/depts 由下方重过滤
   }, [currentUser?.username]);
@@ -5785,15 +5804,7 @@ const App: React.FC<AppProps> = ({ bootUser = null }) => {
     );
   }
 
-  // 非 admin：短暂等待密钥探测；超时/未配齐也不整页封死（手机弱网常见），进工作台后按模块提示
-  if (hasKey === null && currentUser.role !== 'admin') {
-      return (
-      <div className="h-screen flex items-center justify-center bg-slate-50">
-        <Loader2 className="animate-spin text-blue-600" size={40} />
-          </div>
-      );
-  }
-
+  // 密钥探测在后台进行；禁止整页转圈挡住侧栏（否则菜单会出现但点不动）
   const alwaysActiveModules = ALWAYS_ACTIVE_MODULES;
   const activeSectionMeta = findSectionByModule(activeModule, sphereNavSectionId);
   const activeNavItem = findNavItem(activeModule, sphereNavSectionId);

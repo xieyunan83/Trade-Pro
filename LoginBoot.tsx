@@ -1,6 +1,6 @@
 /**
- * 轻量启动门：先画登录页，再并行拉取主包 + 异步类目，最后挂载 App。
- * 禁止把 2.2MB 类目同步打进进站路径，否则会卡死在「进入工作台」。
+ * 轻量启动门：先画登录页，主包就绪即进站。
+ * 类目 2MB 与进站并行，不阻塞挂载 App（否则「进入工作台」又卡死）。
  */
 import React, {
   Suspense,
@@ -69,13 +69,16 @@ export const LoginBoot: React.FC = () => {
   const prefetchStarted = useRef(false);
   const warmGen = useRef(0);
 
-  /** 登录页可见后预取主包（不含类目大 JSON） */
   useEffect(() => {
     if (phase !== 'login') return;
     if (prefetchStarted.current) return;
     prefetchStarted.current = true;
     const kick = () => {
       void loadAppModule().catch((e) => console.warn('[LoginBoot] prefetch App failed', e));
+      // 类目预热不挡登录/进站
+      void hydrateProductTaxonomy().catch((e) =>
+        console.warn('[LoginBoot] taxonomy prefetch failed', e)
+      );
     };
     if (typeof requestIdleCallback === 'function') {
       const id = requestIdleCallback(kick, { timeout: 2500 });
@@ -89,7 +92,6 @@ export const LoginBoot: React.FC = () => {
     let cancelled = false;
     const t = window.setTimeout(() => {
       try {
-        // 有会话也不自动进站，避免卡在转圈无操作；仅探测是否可读
         restoreSessionUser(loadUsersFromStorage());
       } catch (e) {
         console.warn('[LoginBoot] restore failed', e);
@@ -108,17 +110,12 @@ export const LoginBoot: React.FC = () => {
     setBootUser(u);
     setPhase('warming');
     setEnterStuck(false);
-    setWarmTip('正在准备工作台…');
+    setWarmTip('正在打开工作台…');
     try {
-      setWarmTip('正在加载基础数据…');
-      const taxonomyP = hydrateProductTaxonomy().catch((e) => {
-        console.warn('[LoginBoot] taxonomy hydrate failed, continue', e);
-      });
-      setWarmTip('正在加载工作台…');
-      const appP = loadAppModule();
-      await Promise.all([taxonomyP, appP]);
+      // 只等主包；类目并行，不阻塞挂载（挂载后侧栏才能点）
+      void hydrateProductTaxonomy().catch(() => undefined);
+      await loadAppModule();
       if (warmGen.current !== gen) return;
-      setWarmTip('即将进入…');
       startTransition(() => setPhase('ready'));
     } catch (e) {
       console.error('[LoginBoot] warm failed', e);

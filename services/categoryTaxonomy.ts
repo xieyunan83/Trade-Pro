@@ -116,36 +116,34 @@ const ensureToyIndex = () => {
   tokenIndex = finalizeIndex(map);
   indexedForCount = n;
   tokenIndexFull = false;
-  // 空闲时再扩全站二级，不堵交互
+  // 登录后至少 20s 再扩全站二级；禁止 idle timeout 强制插队抢点击
   const expand = () => {
     if (tokenIndexFull || !tokenIndex) return;
     const map2 = new Map<string, Set<string>>();
     for (const [k, ids] of tokenIndex) map2.set(k, new Set(ids));
     let i = 0;
     const rest = PRODUCT_TAXONOMY.filter((n) => n.level === 2 && n.rootId !== TOY_ROOT_ID);
-    const step = () => {
-      const end = Math.min(i + 120, rest.length);
+    const step = (deadline?: { timeRemaining: () => number; didTimeout: boolean }) => {
+      const end = Math.min(i + 40, rest.length);
       for (; i < end; i++) indexNodeInto(map2, rest[i]);
       if (i < rest.length) {
-        // 拉长间隔，避免挤占侧栏点击
-        globalThis.setTimeout(step, 48);
+        const w = globalThis as typeof globalThis & {
+          requestIdleCallback?: (cb: (d: { timeRemaining: () => number }) => void, opts?: { timeout?: number }) => number;
+        };
+        if (typeof w.requestIdleCallback === 'function' && !deadline?.didTimeout) {
+          w.requestIdleCallback(step, { timeout: 60_000 });
+        } else {
+          globalThis.setTimeout(() => step(), 120);
+        }
         return;
       }
       tokenIndex = finalizeIndex(map2);
       tokenIndexFull = true;
     };
-    globalThis.setTimeout(step, 0);
+    globalThis.setTimeout(() => step(), 0);
   };
   if (typeof window !== 'undefined') {
-    const w = window as Window & {
-      requestIdleCallback?: (cb: () => void, opts?: { timeout?: number }) => number;
-    };
-    // 登录/首屏后再慢慢扩，超时也拉长
-    if (typeof w.requestIdleCallback === 'function') {
-      w.requestIdleCallback(expand, { timeout: 12000 });
-    } else {
-      globalThis.setTimeout(expand, 5000);
-    }
+    globalThis.setTimeout(expand, 20_000);
   }
   return tokenIndex;
 };

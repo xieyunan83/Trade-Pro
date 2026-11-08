@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { AlertTriangle, Loader2, LogOut, ShieldOff } from 'lucide-react';
+import { AlertTriangle, LogOut, ShieldOff } from 'lucide-react';
 import type { User } from '../types';
 import {
   evaluateEmployeeAccess,
@@ -78,17 +78,8 @@ export const AccessGate: React.FC<AccessGateProps> = ({ user, onLogout, children
 
   if (!needsAccessControl(user)) return <>{children}</>;
 
-  if (!status) {
-    // 曾通过则继续展示业务页，避免周期性校验时整页闪回加载/登录感
-    if (lastOkRef.current) return <>{children}</>;
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50">
-        <Loader2 className="animate-spin text-blue-600" size={36} />
-      </div>
-    );
-  }
-
-  if (status.ok) return <>{children}</>;
+  // 校验中也先出工作台（含侧栏），禁止整页转圈导致「菜单点不动」
+  if (!status || status.ok) return <>{children}</>;
 
   return (
     <div className="min-h-screen min-h-[100dvh] flex flex-col items-center justify-center bg-slate-50 p-6 text-center">

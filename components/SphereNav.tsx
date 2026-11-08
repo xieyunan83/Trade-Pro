@@ -85,9 +85,16 @@ export const SphereNav: React.FC<Props> = ({
   };
 
   const pickSection = (sec: PlatformSection) => {
+    // 先改相位/展开，预取放到空闲，避免点击当帧被 chunk 加载堵死
     setSectionId(sec.id);
     setPhase('submenu');
-    sec.items.forEach((it) => prefetchModule(it.id));
+    const ids = sec.items.map((it) => it.id);
+    const warm = () => ids.forEach((id) => prefetchModule(id));
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(warm, { timeout: 4000 });
+    } else {
+      window.setTimeout(warm, 200);
+    }
     // 指挥舱仅一项：点板块直接进入今日看板
     if (sec.id === 'home' && sec.items[0]) {
       onSelectModule(sec.items[0].id);
@@ -100,8 +107,8 @@ export const SphereNav: React.FC<Props> = ({
       alert('请先完成客户搜索或背调，再进入该模块。');
       return;
     }
-    prefetchModule(mod);
     onSelectModule(mod);
+    window.setTimeout(() => prefetchModule(mod), 0);
   };
 
   const warmModule = (mod: ModuleType) => {
