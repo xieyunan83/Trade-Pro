@@ -37,12 +37,23 @@ const resolveAppOrigin = () => {
 
 const APP_ORIGIN = resolveAppOrigin();
 
-/** 稳定 URL 走 Chromium 磁盘缓存（冷启动快）；仅上次启动失败才 bust */
+/** 稳定 URL 走 Chromium 磁盘缓存（冷启动快）；失败或壳版本升级时 bust */
 const startUrl = (forceBust = false) => {
   if (forceBust) return `${APP_ORIGIN}/?_boot=${Date.now()}`;
   try {
     const failFlagPath = path.join(app.getPath('userData'), 'last-boot-failed');
     if (fs.existsSync(failFlagPath)) return `${APP_ORIGIN}/?_boot=${Date.now()}`;
+  } catch {
+    /* ignore */
+  }
+  try {
+    const verPath = path.join(app.getPath('userData'), 'shell-version');
+    const cur = app.getVersion();
+    const prev = fs.existsSync(verPath) ? fs.readFileSync(verPath, 'utf8').trim() : '';
+    if (prev !== cur) {
+      fs.writeFileSync(verPath, cur, 'utf8');
+      return `${APP_ORIGIN}/?_boot=${Date.now()}`;
+    }
   } catch {
     /* ignore */
   }
@@ -281,7 +292,7 @@ function loadAppShell(opts = {}) {
   const forceBust = !!opts.forceBust && attempt === 1;
   mainWindow
     .loadURL(startUrl(forceBust), {
-      userAgent: `${baseUa} TradeCollabClient/1.0 BabyWorldClient/1.0`,
+      userAgent: `${baseUa} TradeCollabClient/${app.getVersion()} BabyWorldClient/${app.getVersion()}`,
     })
     .catch((e) => {
       if (bootAttempt < MAX_BOOT_ATTEMPTS) {
@@ -601,7 +612,7 @@ app.whenReady().then(async () => {
         .replace(/\s*Electron\/\S+/gi, '')
         .replace(/\s*BabyWorldClient\/\S+/gi, '')
         .replace(/\s*TradeCollabClient\/\S+/gi, '');
-      ua = `${ua} TradeCollabClient/1.0 BabyWorldClient/1.0`;
+      ua = `${ua} TradeCollabClient/${app.getVersion()} BabyWorldClient/${app.getVersion()}`;
       headers['User-Agent'] = ua;
     }
     callback({ requestHeaders: headers });
