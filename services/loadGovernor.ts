@@ -178,13 +178,19 @@ export const collapseEngineUnderLoad = <T extends string>(
   return 'qwen';
 };
 
-/** 队列泵：若本机 AI 已满，稍等再跑（带抖动） */
+const LOCAL_AI_SLOT_MAX_WAIT_MS = 12 * 60 * 1000;
+
+/** 队列泵：若本机 AI 已满，稍等再跑（带抖动）；超时抛错避免整站假死 */
 export const waitForLocalAiSlot = async (
   shouldStop?: () => boolean,
   softCap = LOCAL_AI_SOFT_CAP
 ): Promise<void> => {
+  const started = Date.now();
   while (getHeavyJobCount('ai') >= softCap) {
     if (shouldStop?.()) return;
+    if (Date.now() - started > LOCAL_AI_SLOT_MAX_WAIT_MS) {
+      throw new Error('本机 AI 任务占用过久，已中止等待。可点「停止全部后台任务」后重试。');
+    }
     await new Promise((r) => setTimeout(r, 400 + Math.floor(Math.random() * 600)));
   }
   // 错峰

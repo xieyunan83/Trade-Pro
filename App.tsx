@@ -112,6 +112,7 @@ import {
   getProductDigProgress,
   isProductDigQueueBusy,
 } from './services/productDigQueue';
+import { stopAllBackgroundWork } from './services/stopAllBackgroundWork';
 import type { ProductDigCompletePayload } from './services/productDigQueue';
 import {
   enqueueDesignSignalBatch,
@@ -1870,6 +1871,7 @@ const App: React.FC = () => {
       console.warn('[batch] saveAutomationTask failed, runner will use in-memory seed', e);
     }
     refreshBatchProgressFromSession(target);
+    shouldStopRef.current = false;
     void processBatchQueue([task]);
   };
 
@@ -2981,6 +2983,7 @@ const App: React.FC = () => {
 
   const stopAutomation = () => {
     shouldStopRef.current = true;
+    stopAllBackgroundWork({ keepNightEnabled: true });
     stopProductDigQueue();
     setIsAutomating(false);
     setBatchProgress((p) => ({ ...p, active: false, currentName: '' }));
@@ -3460,9 +3463,15 @@ const App: React.FC = () => {
         return;
       }
 
+      // 已停止则绝不自动开跑；调用方若要重启须先把 shouldStopRef 置 false
+      if (shouldStopRef.current) {
+        batchRunnerActiveRef.current = false;
+        setIsAutomating(false);
+        setBatchProgress((p) => ({ ...p, active: false }));
+        return;
+      }
       batchRunnerActiveRef.current = true;
       setIsAutomating(true);
-      shouldStopRef.current = false;
       setBatchProgress((p) => ({ ...p, active: true }));
 
       const inSession = (t: AutomationResult) =>
@@ -4490,6 +4499,7 @@ const App: React.FC = () => {
       }
       // 夜间模式：仅在窗口内开泵；白天只入队，等 22:00 自动续跑
       if (!useNightWindow || isQwenNightPromoWindow()) {
+        shouldStopRef.current = false;
         void processBatchQueue(newTasks);
       }
     })();
@@ -4585,6 +4595,7 @@ const App: React.FC = () => {
       } 
       
       // 后台执行；夜间补全不停，共享 AI 槽错峰
+      shouldStopRef.current = false;
       void processBatchQueue(newTasks);
       if (skippedExisting > 0) {
         alert(
@@ -4611,12 +4622,14 @@ const App: React.FC = () => {
       for (const t of resetFailed) {
         if (t.status === 'pending') await saveAutomationTask({ ...t, status: 'pending' });
       }
+      shouldStopRef.current = false;
       void processBatchQueue(resetFailed.map((t) => ({ ...t, status: 'pending' as const })));
   };
   
   const handleRunSingle = async (id: string) => { 
       const task = automationResults.find((t) => t.id === id);
       if (!task) return;
+      shouldStopRef.current = false;
       if (task.status === 'failed' || task.status === 'completed') {
         const reset = { ...task, status: 'pending' as const, analysis: undefined };
         await saveAutomationTask(reset);
@@ -4652,6 +4665,7 @@ const App: React.FC = () => {
       await saveAutomationTask(reset);
       batchSeedByIdRef.current.set(reset.id, reset);
       syncAutomationResults((prev) => prev.map((t) => (t.id === id ? reset : t)));
+      shouldStopRef.current = false;
       void processBatchQueue([reset]);
   };
 
@@ -4837,6 +4851,10 @@ const App: React.FC = () => {
   };
 
   const handleLogout = () => {
+    shouldStopRef.current = true;
+    stopAllBackgroundWork();
+    setWorkerModeActive(false);
+    setWorkerModeOn(false);
     clearSession();
     resetWorkspaceForUserSwitch();
     lastWorkspaceUserRef.current = null;
@@ -5719,6 +5737,7 @@ const App: React.FC = () => {
 
   /** 挂机确认 / 进业务页：续跑补全队列 + 重新打开静默补全泵 */
   const kickWorkerTaskResume = () => {
+    shouldStopRef.current = false;
     setNightSilentUpgradeEnabled(true);
     resumeEnrichmentQueue();
     resumeDesignSignalQueue();
@@ -6799,9 +6818,9 @@ const App: React.FC = () => {
           onStop={() => {
             setWorkerModeActive(false);
             setWorkerModeOn(false);
-            stopNightSilentUpgrade();
             shouldStopRef.current = true;
-            setSystemNotice('已停止本机挂机执行。');
+            stopAllBackgroundWork();
+            setSystemNotice('已停止本机挂机及全部后台任务。');
           }}
         />
     </div>

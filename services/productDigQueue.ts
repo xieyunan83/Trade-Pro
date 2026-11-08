@@ -3,6 +3,7 @@
  */
 import { digProductIntelligence } from './geminiService';
 import { isRateLimitError, noteRateLimited, withRateLimitRetry } from './rateLimitGate';
+import { withJobTimeout } from './jobTimeout';
 import type { AnalysisResult, Client, HistoryItem } from '../types';
 
 export type ProductDigJobStatus = 'queued' | 'running' | 'completed' | 'failed';
@@ -194,14 +195,44 @@ export const enqueueProductDigBatch = (
 
 export const stopProductDigQueue = () => {
   shouldStop = true;
+  notify();
+};
+
+export const resumeProductDigQueue = () => {
+  shouldStop = false;
+  void pump();
+};
+
+export const abortAndClearProductDigQueue = () => {
+  shouldStop = true;
+  const now = Date.now();
+  for (const job of jobs) {
+    if (job.status === 'queued' || job.status === 'running') {
+      job.status = 'failed';
+      job.finishedAt = now;
+      job.error = '已手动停止';
+    }
+  }
+  jobs.splice(0, jobs.length);
+  onCompleteHandlers.clear();
+  notify();
 };
 
 export const dismissProductDigJob = (id: string) => {
   const idx = jobs.findIndex((j) => j.id === id);
   if (idx < 0) return;
   const job = jobs[idx];
-  if (job.status === 'running' || job.status === 'queued') return;
+  if (job.status === 'running') {
+    shouldStop = true;
+    job.status = 'failed';
+    job.finishedAt = Date.now();
+    job.error = '已取消';
+    onCompleteHandlers.delete(job.id);
+    notify();
+    return;
+  }
   jobs.splice(idx, 1);
+  onCompleteHandlers.delete(id);
   notify();
 };
 
@@ -215,20 +246,47 @@ export const clearFinishedProductDigJobs = () => {
 };
 
 const runOne = async (job: ProductDigJob) => {
+  if (shouldStop) {
+    job.status = 'failed';
+    job.finishedAt = Date.now();
+    job.error = '已手动停止';
+    notify();
+    return;
+  }
   job.status = 'running';
   job.startedAt = Date.now();
   notify();
 
   try {
     const hist = resolveHistoryHandler?.(job.clientId);
-    const merged = await withRateLimitRetry(
-      () =>
-        digProductIntelligence(job.domain, hist?.data || null, {
-          searchKeyword: job.searchKeyword || hist?.data?.searchKeyword,
-          searchCountry: job.searchCountry || hist?.data?.searchCountry,
-        }),
-      { retryTransient: true, maxAttempts: 3, baseWaitSec: 20 }
+    const merged = await withJobTimeout(
+      withRateLimitRetry(
+        () =>
+          digProductIntelligence(job.domain, hist?.data || null, {
+            searchKeyword: job.searchKeyword || hist?.data?.searchKeyword,
+            searchCountry: job.searchCountry || hist?.data?.searchCountry,
+          }),
+        {
+          retryTransient: true,
+          maxAttempts: 3,
+          baseWaitSec: 20,
+          shouldStop: () => shouldStop || !jobs.includes(job) || job.status !== 'running',
+        }
+      ),
+      JOB_STALE_MS,
+      '深挖超时，可重新加入队列重试'
     );
+
+    if (!jobs.includes(job) || job.status !== 'running' || shouldStop) {
+      if (jobs.includes(job) && job.status === 'running') {
+        job.status = 'failed';
+        job.finishedAt = Date.now();
+        job.error = '已手动停止';
+        notify();
+      }
+      onCompleteHandlers.delete(job.id);
+      return;
+    }
 
     job.status = 'completed';
     job.finishedAt = Date.now();
@@ -249,6 +307,10 @@ const runOne = async (job: ProductDigJob) => {
     }
   } catch (e: any) {
     console.error('[productDigQueue] failed', job.domain, e);
+    if (!jobs.includes(job)) {
+      onCompleteHandlers.delete(job.id);
+      return;
+    }
     job.status = 'failed';
     job.finishedAt = Date.now();
     job.error = e?.message || String(e);

@@ -52,6 +52,7 @@ const JOB_STALE_MS = 20 * 60 * 1000;
 const jobs: DmEmailSearchJob[] = [];
 const listeners = new Set<Listener>();
 let pumping = false;
+let shouldStop = false;
 
 const notify = () => {
   const snapshot = jobs.map((j) => ({ ...j }));
@@ -143,7 +144,8 @@ const pump = async () => {
   if (pumping) return;
   pumping = true;
   try {
-    while (true) {
+    while (!shouldStop) {
+      failStaleRunningJobs();
       const running = jobs.filter((j) => j.status === 'running').length;
       if (running >= maxConcurrentNow()) break;
       const next = jobs.find((j) => j.status === 'queued');
@@ -156,6 +158,13 @@ const pump = async () => {
       // 并行启动，不 await 在循环里串行
       void (async (job) => {
         try {
+          if (shouldStop) {
+            job.status = 'failed';
+            job.finishedAt = Date.now();
+            job.error = '已手动停止';
+            notify();
+            return;
+          }
           const keyStatus = await ensureEmailSearchKeysReady();
           if (!keyStatus.anymail && !keyStatus.hunter) {
             job.status = 'failed';
@@ -184,6 +193,16 @@ const pump = async () => {
             deepDig: !!job.deepDig,
           });
 
+          if (!jobs.includes(job) || shouldStop || job.status !== 'running') {
+            if (jobs.includes(job) && job.status === 'running') {
+              job.status = 'failed';
+              job.finishedAt = Date.now();
+              job.error = '已手动停止';
+              notify();
+            }
+            return;
+          }
+
           job.status = 'completed';
           job.finishedAt = Date.now();
           job.stats = research.stats;
@@ -210,6 +229,7 @@ const pump = async () => {
             }
           }
         } catch (e: any) {
+          if (!jobs.includes(job)) return;
           job.status = 'failed';
           job.finishedAt = Date.now();
           job.error = String(e?.message || e);
@@ -217,17 +237,15 @@ const pump = async () => {
         } finally {
           onCompleteHandlers.delete(job.id);
           resolveExistingHandlers.delete(job.id);
-          // 触发下一轮排队任务
-          void pump();
+          if (!shouldStop) void pump();
         }
       })(next);
     }
   } finally {
     pumping = false;
-    // 若仍有空位与排队，再泵一次（处理竞态）
     const running = jobs.filter((j) => j.status === 'running').length;
     const queued = jobs.some((j) => j.status === 'queued');
-    if (queued && running < maxConcurrentNow()) {
+    if (!shouldStop && queued && running < maxConcurrentNow()) {
       setTimeout(() => {
         void pump();
       }, 0);
@@ -300,16 +318,46 @@ export const enqueueDmEmailSearch = (
   if (input.onComplete) onCompleteHandlers.set(job.id, input.onComplete);
   if (input.resolveExisting) resolveExistingHandlers.set(job.id, input.resolveExisting);
 
+  shouldStop = false;
   notify();
   void pump();
   return { ok: true, job };
+};
+
+export const stopDmEmailSearchQueue = () => {
+  shouldStop = true;
+  notify();
+};
+
+export const abortAndClearDmEmailSearchQueue = () => {
+  shouldStop = true;
+  const now = Date.now();
+  for (const job of jobs) {
+    if (job.status === 'queued' || job.status === 'running') {
+      job.status = 'failed';
+      job.finishedAt = now;
+      job.error = '已手动停止';
+    }
+  }
+  jobs.splice(0, jobs.length);
+  onCompleteHandlers.clear();
+  resolveExistingHandlers.clear();
+  notify();
 };
 
 export const dismissDmEmailSearchJob = (id: string) => {
   const idx = jobs.findIndex((j) => j.id === id);
   if (idx < 0) return;
   const job = jobs[idx];
-  if (job.status === 'running' || job.status === 'queued') return;
+  if (job.status === 'running' || job.status === 'queued') {
+    job.status = 'failed';
+    job.finishedAt = Date.now();
+    job.error = '已取消';
+    onCompleteHandlers.delete(job.id);
+    resolveExistingHandlers.delete(job.id);
+    notify();
+    return;
+  }
   jobs.splice(idx, 1);
   notify();
 };

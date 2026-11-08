@@ -4,6 +4,7 @@
  */
 import { digDesignSignals } from './geminiService';
 import { isRateLimitError, noteRateLimited, withRateLimitRetry } from './rateLimitGate';
+import { withJobTimeout } from './jobTimeout';
 import type { AnalysisResult, Client, HistoryItem } from '../types';
 
 export type DesignSignalJobStatus = 'queued' | 'running' | 'completed' | 'failed';
@@ -320,21 +321,6 @@ export const clearFinishedDesignSignalJobs = () => {
   notify();
 };
 
-const withJobTimeout = <T,>(p: Promise<T>, ms: number, label: string): Promise<T> =>
-  new Promise<T>((resolve, reject) => {
-    const t = window.setTimeout(() => reject(new Error(label)), ms);
-    p.then(
-      (v) => {
-        window.clearTimeout(t);
-        resolve(v);
-      },
-      (e) => {
-        window.clearTimeout(t);
-        reject(e);
-      }
-    );
-  });
-
 const runOne = async (job: DesignSignalJob) => {
   if (shouldStop) {
     job.status = 'failed';
@@ -350,11 +336,15 @@ const runOne = async (job: DesignSignalJob) => {
   try {
     const hist = resolveHistoryHandler?.(job.clientId);
     const merged = await withJobTimeout(
-      withRateLimitRetry(() =>
-        digDesignSignals(job.domain, hist?.data || null, {
-          searchKeyword: job.searchKeyword || hist?.data?.searchKeyword,
-          searchCountry: job.searchCountry || hist?.data?.searchCountry,
-        })
+      withRateLimitRetry(
+        () =>
+          digDesignSignals(job.domain, hist?.data || null, {
+            searchKeyword: job.searchKeyword || hist?.data?.searchKeyword,
+            searchCountry: job.searchCountry || hist?.data?.searchCountry,
+          }),
+        {
+          shouldStop: () => shouldStop || !jobs.includes(job) || job.status !== 'running',
+        }
       ),
       JOB_STALE_MS,
       '补全超时，可重新加入队列'

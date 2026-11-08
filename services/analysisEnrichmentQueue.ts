@@ -9,6 +9,7 @@ import {
   localNeedsProductDig,
 } from './analysisDecisionEnrich';
 import { isRateLimitError, noteRateLimited, withRateLimitRetry } from './rateLimitGate';
+import { withJobTimeout } from './jobTimeout';
 import type { AnalysisResult, Client, HistoryItem } from '../types';
 
 export type EnrichmentJobStatus = 'queued' | 'running' | 'completed' | 'failed';
@@ -150,7 +151,23 @@ export const subscribeEnrichmentJobs = (listener: Listener): (() => void) => {
   return () => listeners.delete(listener);
 };
 
+const failStale = () => {
+  const now = Date.now();
+  let changed = false;
+  for (const job of jobs) {
+    if (job.status !== 'running') continue;
+    if (now - (job.startedAt || job.createdAt) > JOB_STALE_MS) {
+      job.status = 'failed';
+      job.finishedAt = now;
+      job.error = '补全超时，可重新加入队列';
+      changed = true;
+    }
+  }
+  if (changed) notify();
+};
+
 export const getEnrichmentProgress = () => {
+  failStale();
   const total = jobs.length;
   const completed = jobs.filter((j) => j.status === 'completed').length;
   const failed = jobs.filter((j) => j.status === 'failed').length;
@@ -178,10 +195,47 @@ export const setEnrichmentHistoryResolver = (fn: ResolveHistory | null) => {
 
 export const stopEnrichmentQueue = () => {
   shouldStop = true;
+  notify();
+};
+
+/** 停止泵并清空持久化队列（登录后卡死面板用） */
+export const abortAndClearEnrichmentQueue = () => {
+  shouldStop = true;
+  const now = Date.now();
+  for (const job of jobs) {
+    if (job.status === 'queued' || job.status === 'running') {
+      job.status = 'failed';
+      job.finishedAt = now;
+      job.error = '已手动停止';
+    }
+  }
+  jobs = [];
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.removeItem(LS_KEY);
+  } catch {
+    /* ignore */
+  }
+  notify();
 };
 
 export const clearFinishedEnrichmentJobs = () => {
   jobs = jobs.filter((j) => j.status === 'queued' || j.status === 'running');
+  notify();
+};
+
+export const dismissEnrichmentJob = (id: string) => {
+  const idx = jobs.findIndex((j) => j.id === id);
+  if (idx < 0) return;
+  const job = jobs[idx];
+  if (job.status === 'running') {
+    shouldStop = true;
+    job.status = 'failed';
+    job.finishedAt = Date.now();
+    job.error = '已取消';
+    notify();
+    return;
+  }
+  jobs.splice(idx, 1);
   notify();
 };
 
@@ -243,26 +297,25 @@ export const enqueueEnrichmentBatch = (
   return { queued, skipped, reasons };
 };
 
-const failStale = () => {
-  const now = Date.now();
-  let changed = false;
-  for (const job of jobs) {
-    if (job.status !== 'running') continue;
-    if (now - (job.startedAt || job.createdAt) > JOB_STALE_MS) {
-      job.status = 'failed';
-      job.finishedAt = now;
-      job.error = '补全超时，可重新加入队列';
-      changed = true;
-    }
-  }
-  if (changed) notify();
-};
-
 const runOne = async (job: EnrichmentJob) => {
+  if (shouldStop) {
+    job.status = 'failed';
+    job.finishedAt = Date.now();
+    job.error = '已手动停止';
+    notify();
+    return;
+  }
   job.status = 'running';
   job.startedAt = Date.now();
   job.steps = '准备';
   notify();
+
+  const retryOpts = {
+    retryTransient: true,
+    maxAttempts: 3,
+    baseWaitSec: 20,
+    shouldStop: () => shouldStop || !jobs.includes(job) || job.status !== 'running',
+  };
 
   try {
     const hist = resolveHistoryHandler?.(job.clientId);
@@ -270,47 +323,60 @@ const runOne = async (job: EnrichmentJob) => {
     const kw = job.searchKeyword || hist?.data?.searchKeyword;
     const country = job.searchCountry || hist?.data?.searchCountry;
 
-    if (!data) {
-      // 无历史：先轻量设计信号拉骨架，再决策（品类深挖需要已有分析时更稳）
-      job.steps = '公开信息补全';
-      notify();
-      data = await withRateLimitRetry(
-        () => digDesignSignals(job.domain, null, { searchKeyword: kw, searchCountry: country }),
-        { retryTransient: true, maxAttempts: 3, baseWaitSec: 20 }
-      );
-    } else {
-      if (localNeedsProductDig(data)) {
-        job.steps = '补采品类价带';
+    const work = async () => {
+      if (!data) {
+        job.steps = '公开信息补全';
         notify();
         data = await withRateLimitRetry(
-          () =>
-            digProductIntelligence(job.domain, data, {
-              searchKeyword: kw,
-              searchCountry: country,
-            }),
-          { retryTransient: true, maxAttempts: 3, baseWaitSec: 20 }
+          () => digDesignSignals(job.domain, null, { searchKeyword: kw, searchCountry: country }),
+          retryOpts
         );
+      } else {
+        if (localNeedsProductDig(data)) {
+          job.steps = '补采品类价带';
+          notify();
+          data = await withRateLimitRetry(
+            () =>
+              digProductIntelligence(job.domain, data, {
+                searchKeyword: kw,
+                searchCountry: country,
+              }),
+            retryOpts
+          );
+        }
+        if (localNeedsDesignFill(data)) {
+          job.steps = '补全设计信号';
+          notify();
+          data = await withRateLimitRetry(
+            () =>
+              digDesignSignals(job.domain, data, {
+                searchKeyword: kw,
+                searchCountry: country,
+              }),
+            retryOpts
+          );
+        }
       }
-      if (localNeedsDesignFill(data)) {
-        job.steps = '补全设计信号';
-        notify();
-        data = await withRateLimitRetry(
-          () =>
-            digDesignSignals(job.domain, data, {
-              searchKeyword: kw,
-              searchCountry: country,
-            }),
-          { retryTransient: true, maxAttempts: 3, baseWaitSec: 20 }
-        );
-      }
-    }
 
-    job.steps = '决策模型判定';
-    notify();
-    const { analysis } = await withRateLimitRetry(
-      () => enrichAnalysisWithDecision(data!),
-      { retryTransient: true, maxAttempts: 3, baseWaitSec: 15 }
-    );
+      job.steps = '决策模型判定';
+      notify();
+      return withRateLimitRetry(() => enrichAnalysisWithDecision(data!), {
+        ...retryOpts,
+        baseWaitSec: 15,
+      });
+    };
+
+    const { analysis } = await withJobTimeout(work(), JOB_STALE_MS, '补全超时，可重新加入队列');
+
+    if (!jobs.includes(job) || job.status !== 'running' || shouldStop) {
+      if (jobs.includes(job) && job.status === 'running') {
+        job.status = 'failed';
+        job.finishedAt = Date.now();
+        job.error = '已手动停止';
+        notify();
+      }
+      return;
+    }
 
     job.status = 'completed';
     job.finishedAt = Date.now();
@@ -330,6 +396,7 @@ const runOne = async (job: EnrichmentJob) => {
     }
   } catch (e: any) {
     console.error('[enrichmentQueue] failed', job.domain, e);
+    if (!jobs.includes(job)) return;
     job.status = 'failed';
     job.finishedAt = Date.now();
     job.error = e?.message || String(e);

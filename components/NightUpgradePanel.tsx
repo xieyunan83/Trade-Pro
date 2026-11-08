@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import { Moon, Loader2 } from 'lucide-react';
+import { Moon, Loader2, Square } from 'lucide-react';
 import {
+  abortAndClearNightUpgrade,
   getNightUpgradeStatus,
   setNightSilentUpgradeEnabled,
   subscribeNightUpgrade,
   type NightUpgradeStatus,
 } from '../services/nightSilentUpgrade';
+import { stopAllBackgroundWork } from '../services/stopAllBackgroundWork';
 
 /** 左下角弱提示：仅夜间有任务时显示，不打断操作 */
 export const NightUpgradePanel: React.FC = () => {
@@ -21,13 +23,13 @@ export const NightUpgradePanel: React.FC = () => {
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-slate-900/95 text-slate-100 shadow-xl overflow-hidden">
-      <div className="px-3 py-2 flex items-start gap-2">
-        <Moon size={14} className="text-indigo-300 mt-0.5 shrink-0" />
+      <div className="px-3 py-2.5 flex items-start gap-2">
+        <Moon size={16} className="text-indigo-300 mt-0.5 shrink-0" />
         <div className="min-w-0 flex-1">
-          <div className="text-[11px] font-black truncate">
+          <div className="text-sm font-black truncate">
             {status.inWindow ? '夜间静默补全中' : '昨夜静默补全'}
           </div>
-          <div className="text-[10px] font-semibold text-slate-400 mt-0.5 leading-snug">
+          <div className="text-xs font-semibold text-slate-400 mt-0.5 leading-snug">
             {status.inWindow
               ? `待补 ${status.queued} · 完成 ${status.completedTonight}${
                   status.failedTonight ? ` · 失败 ${status.failedTonight}` : ''
@@ -44,21 +46,35 @@ export const NightUpgradePanel: React.FC = () => {
               : ''}
           </div>
           {status.running > 0 && (
-            <div className="mt-1 inline-flex items-center gap-1 text-[10px] text-indigo-200 font-bold">
-              <Loader2 size={10} className="animate-spin" /> 后台补全中，可继续操作
+            <div className="mt-1 inline-flex items-center gap-1 text-xs text-indigo-200 font-bold">
+              <Loader2 size={12} className="animate-spin" /> 后台补全中，可继续操作
+            </div>
+          )}
+          {status.inWindow && (
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white px-2.5 py-1.5 text-xs font-extrabold"
+                onClick={() => {
+                  stopAllBackgroundWork();
+                  abortAndClearNightUpgrade();
+                }}
+                title="停止挂机补全及所有子任务"
+              >
+                <Square size={12} fill="currentColor" />
+                停止全部
+              </button>
+              <button
+                type="button"
+                className="rounded-lg border border-slate-600 text-slate-300 hover:text-white px-2.5 py-1.5 text-xs font-bold"
+                onClick={() => setNightSilentUpgradeEnabled(false)}
+                title="今晚暂停（不清空其它队列）"
+              >
+                仅暂停挂机
+              </button>
             </div>
           )}
         </div>
-        {status.inWindow && (
-          <button
-            type="button"
-            className="text-[9px] font-bold text-slate-400 hover:text-white shrink-0"
-            onClick={() => setNightSilentUpgradeEnabled(false)}
-            title="今晚暂停（下次登录可在设置中重新开启）"
-          >
-            暂停
-          </button>
-        )}
       </div>
     </div>
   );

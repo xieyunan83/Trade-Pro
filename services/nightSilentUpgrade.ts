@@ -674,6 +674,23 @@ export const stopNightSilentUpgrade = () => {
     tickTimer = null;
   }
   handlers = null;
+  const now = Date.now();
+  for (const job of state.jobs) {
+    if (job.status === 'queued' || job.status === 'running') {
+      job.status = 'failed';
+      job.finishedAt = now;
+      job.error = '已手动停止';
+    }
+  }
+  notify();
+};
+
+/** 停泵并清空夜间任务列表 */
+export const abortAndClearNightUpgrade = () => {
+  stopNightSilentUpgrade();
+  setNightSilentUpgradeEnabled(false);
+  state.jobs = [];
+  notify();
 };
 
 export const describeNightSilentUpgrade = (): string =>
