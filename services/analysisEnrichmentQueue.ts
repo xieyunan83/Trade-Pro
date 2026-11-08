@@ -123,12 +123,21 @@ const notify = () => {
   });
 };
 
-/** 仅恢复队列状态，不自动开跑（避免非挂机用户进站即背调补全卡死） */
+/**
+ * 启动丢弃未完成持久化任务，避免登录后僵尸排队复活卡死。
+ * 已完成/失败记录最多保留 20 条便于查看。
+ */
 export const hydrateEnrichmentQueue = () => {
   if (jobs.length) return;
-  jobs = loadJobs();
-  for (const j of jobs) {
-    if (j.status === 'running') j.status = 'queued';
+  const loaded = loadJobs();
+  jobs = loaded.filter((j) => j.status === 'completed' || j.status === 'failed').slice(0, 20);
+  try {
+    if (typeof localStorage !== 'undefined') {
+      if (!jobs.length) localStorage.removeItem(LS_KEY);
+      else localStorage.setItem(LS_KEY, JSON.stringify(persistable(jobs)));
+    }
+  } catch {
+    /* ignore */
   }
   notify();
 };

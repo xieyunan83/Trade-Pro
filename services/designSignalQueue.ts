@@ -133,12 +133,21 @@ const failStaleRunningJobs = () => {
   if (changed) notify();
 };
 
-/** 启动时仅恢复队列状态，不自动泵（需挂机或用户点「继续」） */
+/**
+ * 启动时丢弃未完成持久化任务（只保留已完成记录供面板查看后清掉）。
+ * 禁止「上次卡住的排队」登录后复活；需要时请用户重新入队或挂机确认后续跑。
+ */
 export const hydrateDesignSignalQueue = () => {
   if (jobs.length) return;
-  jobs = loadJobs();
-  for (const j of jobs) {
-    if (j.status === 'running') j.status = 'queued';
+  const loaded = loadJobs();
+  jobs = loaded.filter((j) => j.status === 'completed' || j.status === 'failed').slice(0, 20);
+  try {
+    if (typeof localStorage !== 'undefined') {
+      if (!jobs.length) localStorage.removeItem(LS_KEY);
+      else localStorage.setItem(LS_KEY, JSON.stringify(persistable(jobs)));
+    }
+  } catch {
+    /* ignore */
   }
   if (jobs.length) notify();
 };

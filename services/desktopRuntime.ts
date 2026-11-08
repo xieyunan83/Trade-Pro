@@ -14,22 +14,8 @@ export const isDesktopClient = (): boolean => {
 };
 
 /**
- * 是否自动续跑背调队列。
- * 仅：显式 LS=1，或已确认开启的挂机模式。
- * 个人账号 / 未开挂机默认 false，避免进营销工具就抢跑卡死。
+ * 是否允许「登录后隐式」自动续跑背调队列。
+ * 一律 false：禁止 LS 开关或粘性挂机导致进站即抢跑卡死。
+ * 挂机续跑只走 App 里用户点确认后的 kickWorkerTaskResume。
  */
-export const shouldAutoResumeBatch = (): boolean => {
-  try {
-    if (typeof localStorage === 'undefined') return false;
-    if (localStorage.getItem('trade_scout_auto_resume_batch') === '0') return false;
-    if (localStorage.getItem('trade_scout_auto_resume_batch') === '1') return true;
-    try {
-      const { isWorkerModeActive } = require('./workerMode') as typeof import('./workerMode');
-      return isWorkerModeActive();
-    } catch {
-      return false;
-    }
-  } catch {
-    return false;
-  }
-};
+export const shouldAutoResumeBatch = (): boolean => false;

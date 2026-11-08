@@ -93,7 +93,6 @@ import {
   stopNightSilentUpgrade,
 } from './services/nightSilentUpgrade';
 import {
-  hasAnsweredWorkerPromptThisSession,
   isWorkerModeActive,
   markWorkerPromptAnswered,
   resolveWorkerParallelSlots,
@@ -312,7 +311,6 @@ import {
   addExcludedCompany,
   hydrateExcludedCompaniesFromCloud,
 } from './services/excludedCompanies';
-import { shouldAutoResumeBatch } from './services/desktopRuntime';
 
 declare global {
   interface AIStudio {
@@ -427,6 +425,8 @@ const App: React.FC = () => {
   const [manualOwner, setManualOwner] = useState('');
   const [manualRepo, setManualRepo] = useState('');
   const shouldStopRef = useRef(false);
+  /** 禁止登录隐式续跑；仅挂机确认后由 kickWorker 拉起 */
+  const autoResumeBatchOnceRef = useRef(false);
   const batchRunnerActiveRef = useRef(false);
   const batchSessionIdsRef = useRef<Set<string>>(new Set());
   /** 刚入队、React state / IndexedDB 可能尚未同步的任务，供队列 runner 兜底捞取 */
@@ -941,10 +941,18 @@ const App: React.FC = () => {
       return;
     }
 
-    // 非 admin 登录：强制关闭挂机，避免继承本机 admin 挂机 LS 后自动背调卡死
-    if (currentUser.role !== 'admin' && isWorkerModeActive()) {
-      setWorkerModeActive(false);
-      stopNightSilentUpgrade();
+    // 每次登录默认安静：清掉粘性挂机/僵尸队列，禁止「什么都没点就开跑卡死」
+    shouldStopRef.current = true;
+    autoResumeBatchOnceRef.current = false;
+    setWorkerModeActive(false);
+    setWorkerModeOn(false);
+    stopAllBackgroundWork();
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('trade_scout_auto_resume_batch', '0');
+      }
+    } catch {
+      /* ignore */
     }
 
     // 切换账号时清空工作区；同账号 StrictMode 二次挂载仍会重新拉取
@@ -3863,46 +3871,6 @@ const App: React.FC = () => {
     };
   }, [currentUser?.username, workerModeOn]);
 
-  /** 仅挂机工作站：登录后自动续跑背调；业务员本机禁止隐式开跑 */
-  const autoResumeBatchOnceRef = useRef(false);
-  useEffect(() => {
-    if (!currentUser || !userDataReadyRef.current) return;
-    if (currentUser.role !== 'admin') return;
-    if (autoResumeBatchOnceRef.current) return;
-    if (!shouldAutoResumeBatch()) return;
-    if (isAutomating || batchRunnerActiveRef.current || shouldStopRef.current) return;
-    const inNight = isQwenNightPromoWindow();
-    const pending = automationResults.filter((t) =>
-      isAutomationTaskRunnableNow(t, inNight)
-    );
-    // 桌面端顺带续跑近期瞬时失败（超时/网络/坏 JSON），避免 Windows 工作站一失败就堆死
-    const retryFailed = automationResults
-      .filter(
-        (t) =>
-          t.status === 'failed' &&
-          (!t.failedAt || Date.now() - t.failedAt < 48 * 60 * 60 * 1000) &&
-          isTransientAnalysisError({ message: t.error || '' }) &&
-          (!t.nightWindowOnly || inNight)
-      )
-      .slice(0, 80)
-      .map((t) => ({ ...t, status: 'pending' as const, error: undefined }));
-    const toRun = [...pending, ...retryFailed];
-    if (toRun.length < 1) return;
-    autoResumeBatchOnceRef.current = true;
-    if (retryFailed.length) {
-      syncAutomationResults((prev) =>
-        prev.map((t) => {
-          const hit = retryFailed.find((r) => r.id === t.id);
-          return hit || t;
-        })
-      );
-    }
-    console.info(
-      `[batch] desktop auto-resume pending=${pending.length} retryFailed=${retryFailed.length}`
-    );
-    void processBatchQueue(toRun);
-  }, [currentUser, automationResults, isAutomating]);
-
   const handleBatchAnalyzeExisting = async (results: ClientSearchResult[]) => { 
       if (!results || results.length === 0) return;
       // 保留关键词标签到批量上下文
@@ -5768,7 +5736,8 @@ const App: React.FC = () => {
     setWorkerPromptOpen(false);
     setWorkerModeActive(false);
     setWorkerModeOn(false);
-    stopNightSilentUpgrade();
+    shouldStopRef.current = true;
+    stopAllBackgroundWork();
     setSystemNotice('未开启挂机。本机仅作业务浏览；重任务请在专用挂机端确认执行。');
   };
 

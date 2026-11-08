@@ -40,12 +40,12 @@ export const WorkerModePrompt: React.FC<Props> = ({ open, onConfirm, onDecline, 
           </div>
           <div className="min-w-0 flex-1">
             <h2 className="text-base font-black text-slate-900">
-              {status.active ? '继续本机挂机执行？' : '本机挂机执行任务？'}
+              {status.active ? '本机正在挂机，是否继续？' : '本机挂机执行任务？'}
             </h2>
             <p className="text-[12px] text-slate-600 mt-1.5 leading-relaxed font-medium">
               {status.active
-                ? '本机此前已开启挂机。确认后继续按日程跑队列；选「否」将停止本机自动作业。'
-                : '管理员进入业务工作台。确认后，本机会按日程自动跑队列（其它电脑可只浏览业务）。'}
+                ? '本次会话已开启挂机。选「否」会立刻停止全部后台任务，避免拖慢本机。'
+                : '默认不自动跑任务。仅在本机需要通宵/白天挂机时选「是」；日常办公请选「否」。'}
             </p>
           </div>
           <button

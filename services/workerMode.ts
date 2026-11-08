@@ -1,13 +1,16 @@
 /**
- * 挂机执行模式：专供 admin 在其它机器进业务页后确认开启。
- * - 夜间（22:00–08:00）：全量背调 + 重补全（联系人/品类深挖等），吃优惠 Token
- * - 白天：仅轻量补全（品类匹配、邮箱入队等）
- * 个人账号默认不开启，避免拖慢本机操作与测试。
+ * 挂机执行模式：专供 admin 在本机进入业务页后「本次会话」确认开启。
+ * - 夜间（22:00–08:00）：全量背调 + 重补全
+ * - 白天：仅轻量补全
+ *
+ * 重要：挂机状态只活在 sessionStorage。禁止用 localStorage 跨登录继承，
+ * 否则一进系统就自动开泵，用户「什么都没点」也会卡死。
  */
 import { getUsablePoolKeys, listPoolKeys } from './apiKeyPool';
 import { isQwenNightPromoWindow } from './qwenModelSchedule';
 
-const LS_WORKER = 'trade_scout_worker_mode';
+const LS_WORKER_LEGACY = 'trade_scout_worker_mode';
+const SS_WORKER = 'trade_scout_worker_mode_session';
 const SS_PROMPTED = 'trade_scout_worker_prompt_session';
 
 export type WorkerModeStatus = {
@@ -19,9 +22,21 @@ export type WorkerModeStatus = {
 
 const listeners = new Set<(s: WorkerModeStatus) => void>();
 
+/** 清掉历史「跨登录粘性挂机」，避免旧客户端一启动就跑队列 */
+const scrubLegacyStickyWorker = () => {
+  try {
+    if (typeof localStorage !== 'undefined' && localStorage.getItem(LS_WORKER_LEGACY) === '1') {
+      localStorage.setItem(LS_WORKER_LEGACY, '0');
+    }
+  } catch {
+    /* ignore */
+  }
+};
+
 const readActive = (): boolean => {
   try {
-    return typeof localStorage !== 'undefined' && localStorage.getItem(LS_WORKER) === '1';
+    scrubLegacyStickyWorker();
+    return typeof sessionStorage !== 'undefined' && sessionStorage.getItem(SS_WORKER) === '1';
   } catch {
     return false;
   }
@@ -65,8 +80,12 @@ export const isWorkerModeActive = (): boolean => readActive();
 
 export const setWorkerModeActive = (active: boolean) => {
   try {
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.setItem(SS_WORKER, active ? '1' : '0');
+    }
+    // 永久关掉旧粘性开关
     if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(LS_WORKER, active ? '1' : '0');
+      localStorage.setItem(LS_WORKER_LEGACY, '0');
     }
   } catch {
     /* ignore */
