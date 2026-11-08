@@ -290,6 +290,7 @@ import { Login } from './components/Login';
 import { AccessGate } from './components/AccessGate';
 import { loadUsersWithMigration, loadUsersFromStorage, saveUsersToStorage, getUsersUpdatedAt } from './services/auth';
 import {
+  armDesktopSession,
   clearSession,
   restoreSessionUser,
   saveSession,
@@ -5691,6 +5692,7 @@ const App: React.FC = () => {
       <Login
         onLogin={(u) => {
           saveSession(u.username);
+          armDesktopSession();
           setUsageScope(u.username);
           prefetchCoreModules();
           if (u.role === 'admin') setHasKey(true);

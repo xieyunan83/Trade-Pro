@@ -157,20 +157,20 @@ body {
     system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 
-  /* 全站字号明显放大 */
-  --text-xs: 0.875rem;
-  --text-xs--line-height: 1.4;
-  --text-sm: 1rem;
-  --text-sm--line-height: 1.5;
-  --text-base: 1.125rem;
-  --text-base--line-height: 1.55;
-  --text-lg: 1.25rem;
-  --text-lg--line-height: 1.5;
-  --text-xl: 1.5rem;
+  /* 字号略大于默认、明显小于上一版，兼顾可读与密度 */
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1.35;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: 1.45;
+  --text-base: 1rem;
+  --text-base--line-height: 1.5;
+  --text-lg: 1.125rem;
+  --text-lg--line-height: 1.45;
+  --text-xl: 1.25rem;
   --text-xl--line-height: 1.35;
-  --text-2xl: 1.75rem;
+  --text-2xl: 1.5rem;
   --text-2xl--line-height: 1.3;
-  --text-3xl: 2.15rem;
+  --text-3xl: 1.875rem;
   --text-3xl--line-height: 1.2;
 
   --shadow-signal: 0 0 0 1px rgba(20, 184, 166, 0.22), 0 22px 48px -18px rgba(15, 23, 42, 0.42),

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="build-stamp" content="taxonomy-nonblock-20261108d">
+    <meta name="build-stamp" content="type-login-20261108e">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
     <meta http-equiv="Pragma" content="no-cache" />
     <title>外贸智慧协同</title>
@@ -198,13 +198,13 @@
         }
 
         html {
-          font-size: 18px;
+          font-size: 16px;
         }
         @media (min-width: 1280px) {
-          html { font-size: 18.5px; }
+          html { font-size: 16.5px; }
         }
         @media (min-width: 1600px) {
-          html { font-size: 19px; }
+          html { font-size: 17px; }
         }
 
         html, body, #root {
@@ -216,13 +216,13 @@
         body {
           margin: 0;
           font-family: var(--tp-font);
-          font-size: 1.0625rem;
-          line-height: 1.55;
+          font-size: 1rem;
+          line-height: 1.5;
           background: var(--tp-canvas);
           color: var(--tp-text);
           -webkit-font-smoothing: antialiased;
           text-rendering: optimizeLegibility;
-          letter-spacing: -0.014em;
+          letter-spacing: -0.011em;
           overflow-x: hidden;
           overflow-y: auto;
         }
@@ -232,12 +232,18 @@
           color: #0c122c;
         }
 
-        /* 历史写死的超小字号：统一抬升，可读优先 */
-        .text-\[9px\] { font-size: 0.75rem !important; line-height: 1.35 !important; }
-        .text-\[10px\] { font-size: 0.8125rem !important; line-height: 1.35 !important; }
-        .text-\[11px\] { font-size: 0.875rem !important; line-height: 1.4 !important; }
-        .text-\[12px\] { font-size: 0.9375rem !important; line-height: 1.45 !important; }
+        /* 历史超小字号略抬，但不过度放大 */
+        .text-\[9px\] { font-size: 0.6875rem !important; line-height: 1.35 !important; }
+        .text-\[10px\] { font-size: 0.75rem !important; line-height: 1.35 !important; }
+        .text-\[11px\] { font-size: 0.8125rem !important; line-height: 1.4 !important; }
+        .text-\[12px\] { font-size: 0.875rem !important; line-height: 1.45 !important; }
         .font-mono { font-family: var(--tp-font-mono) !important; }
+
+        /* 列表/看板更紧凑，减少「字大一片空」 */
+        .tp-landing .tp-surface { padding-block: 0.85rem; }
+        .tp-app main h1 { letter-spacing: -0.03em; }
+        .tp-app main h2 { letter-spacing: -0.025em; }
+        .tp-nav-item { font-size: 0.875rem !important; font-weight: 600; }
 
         @media (prefers-reduced-motion: reduce) {
           .animate-fade-in,
