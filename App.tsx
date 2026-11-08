@@ -326,10 +326,13 @@ declare global {
 type AppProps = {
   /** 由 LoginBoot 传入：已登录用户，跳过登录页 */
   bootUser?: User | null;
+  /** 主动退出时通知 LoginBoot 卸掉 bootUser，避免又被会话拉回去 */
+  onBootLogout?: () => void;
 };
 
-const App: React.FC<AppProps> = ({ bootUser = null }) => {
+const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
   const [currentUser, setCurrentUser] = useState<User | null>(() => bootUser ?? null);
+  const intentionalLogoutRef = useRef(false);
   const [users, setUsers] = useState<User[]>([]);
   const [hasKey, setHasKey] = useState<boolean | null>(() =>
     bootUser?.role === 'admin' ? true : null
@@ -882,12 +885,17 @@ const App: React.FC<AppProps> = ({ bootUser = null }) => {
       const local = loadUsersFromStorage();
       if (local.length) setUsers(local);
       setDepartments(loadDepartmentsFromStorage());
-      // 恢复上次登录会话，避免刷新/热重载突然掉回登录页
-      const restored = restoreSessionUser(local);
-      if (restored) {
-        setUsageScope(restored.username);
-        setCurrentUser(restored);
-        if (restored.role === 'admin') setHasKey(true);
+      // 已有 bootUser / 内存会话时不要用 restore 覆盖；仅在空会话时恢复
+      if (!bootUser) {
+        const restored = restoreSessionUser(local);
+        if (restored) {
+          setUsageScope(restored.username);
+          setCurrentUser(restored);
+          if (restored.role === 'admin') setHasKey(true);
+        }
+      } else {
+        setUsageScope(bootUser.username);
+        if (bootUser.role === 'admin') setHasKey(true);
       }
     } catch (e) {
       console.warn('local users bootstrap failed', e);
@@ -905,22 +913,21 @@ const App: React.FC<AppProps> = ({ bootUser = null }) => {
         // 云端用户表到位后：无内存会话则按持久化会话恢复；已登录仅在「确认停用」时退出
         // （列表缺人不踢，避免同步不全误回登录页）
         setCurrentUser((prev) => {
-          if (!prev) return restoreSessionUser(loaded);
+          if (!prev) {
+            if (intentionalLogoutRef.current) return null;
+            return bootUser ?? restoreSessionUser(loaded);
+          }
           const fresh = loaded.find(
             (u) => u.username.trim().toLowerCase() === prev.username.trim().toLowerCase()
           );
           if (!fresh) return prev;
           if (fresh.disabled) {
             clearSession();
+            intentionalLogoutRef.current = true;
             return null;
           }
           return fresh;
         });
-        const restored = restoreSessionUser(loaded);
-        if (restored) {
-          setUsageScope(restored.username);
-          if (restored.role === 'admin') setHasKey(true);
-        }
       } catch (e) {
         console.error('Failed to load users', e);
         const fallback = loadUsersFromStorage();
@@ -928,7 +935,17 @@ const App: React.FC<AppProps> = ({ bootUser = null }) => {
       }
     };
     void loadUsers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅首屏引导一次
   }, []);
+
+  // bootUser 在而内存会话被误清空时，拉回工作台（主动退出除外）
+  useEffect(() => {
+    if (intentionalLogoutRef.current) return;
+    if (!currentUser && bootUser) {
+      setCurrentUser(bootUser);
+      setUsageScope(bootUser.username);
+    }
+  }, [currentUser, bootUser]);
 
   useEffect(() => {
     const checkKey = async () => {
@@ -1725,8 +1742,14 @@ const App: React.FC<AppProps> = ({ bootUser = null }) => {
       return;
     }
     if (fresh.disabled) {
+      intentionalLogoutRef.current = true;
       clearSession();
       setCurrentUser(null);
+      try {
+        onBootLogout?.();
+      } catch {
+        /* ignore */
+      }
       return;
     }
     // 仅在权限/设备相关字段变化时同步，避免与 currentUser 循环 setState 卡死
@@ -4865,6 +4888,7 @@ const App: React.FC<AppProps> = ({ bootUser = null }) => {
   };
 
   const handleLogout = () => {
+    intentionalLogoutRef.current = true;
     shouldStopRef.current = true;
     stopAllBackgroundWork();
     setWorkerModeActive(false);
@@ -4876,6 +4900,11 @@ const App: React.FC<AppProps> = ({ bootUser = null }) => {
     setKeyResolutionContext({});
     setHasKey(null);
     setCurrentUser(null);
+    try {
+      onBootLogout?.();
+    } catch {
+      /* ignore */
+    }
   };
   const handleSyncToGitHub = async () => {
     if (!currentUser) return;

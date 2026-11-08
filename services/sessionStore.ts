@@ -92,9 +92,9 @@ export const loadSession = (): PersistedSession | null => {
 
 /** 根据本机会员表恢复会话用户；账号已删/停用则清会话 */
 export const restoreSessionUser = (users?: User[]): User | null => {
-  // 桌面冷启动：强制走登录页（不沿用上次关应用前的 localStorage 会话）
+  // 桌面冷启动（未 arm）：只返回 null，**禁止 clearSession**。
+  // 否则同窗口内 chunk 刷新 / 热重载会把刚登录的会话清掉，表现为「突然又回登录页」。
   if (isDesktopClient() && !isDesktopSessionArmed()) {
-    clearSession();
     return null;
   }
   const sess = loadSession();
