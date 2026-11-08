@@ -79,9 +79,16 @@ export const applyExplicitSkuTaxonomy = (sku: CatalogSku): CatalogSku => {
   };
 };
 
-/** 是否已具备可匹配的官方类目（至少一级） */
-export const skuHasOfficialTaxonomy = (sku: Pick<CatalogSku, 'categoryL1Id' | 'categoryL2Id' | 'categoryIds'>): boolean =>
-  !!(sku.categoryL1Id || sku.categoryL2Id || (sku.categoryIds || []).some((id) => PRODUCT_TAXONOMY_BY_ID[id]));
+/** 是否已具备可精准匹配的官方类目（一级 + 二级小类均需） */
+export const skuHasOfficialTaxonomy = (
+  sku: Pick<CatalogSku, 'categoryL1Id' | 'categoryL2Id' | 'categoryIds'>
+): boolean => {
+  if (sku.categoryL2Id && PRODUCT_TAXONOMY_BY_ID[sku.categoryL2Id]?.level === 2) {
+    return true;
+  }
+  // categoryIds 中含二级节点亦可
+  return (sku.categoryIds || []).some((id) => PRODUCT_TAXONOMY_BY_ID[id]?.level === 2);
+};
 
 /** 根据品名/品类文本挂靠官方类目（录入、导入、同步后统一调用） */
 export const ensureSkuTaxonomy = (sku: CatalogSku): CatalogSku => {

@@ -122,15 +122,22 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
       return;
     }
     if (!form.categoryL1Id) {
-      setMsg('请选择官方一级品类（必选，用于自动匹配已背调客户）');
+      setMsg('请选择官方一级品类（必选）');
+      return;
+    }
+    if (!form.categoryL2Id) {
+      setMsg('请选择官方二级小类（必选，用于精准匹配已背调客户）');
+      return;
+    }
+    if (taxonomyL2.length > 0 && !taxonomyL2.some((n) => n.id === form.categoryL2Id)) {
+      setMsg('二级小类与一级不匹配，请重新选择');
       return;
     }
     const now = Date.now();
     const l1 = form.categoryL1Id;
-    const l2 = form.categoryL2Id || '';
+    const l2 = form.categoryL2Id;
     const root = form.categoryRootId || TOY_ROOT_ID;
-    const label =
-      form.category.trim() || (l1 ? formatTaxonomyLabel(l2 || l1) : '');
+    const label = form.category.trim() || formatTaxonomyLabel(l2 || l1);
     const sku: CatalogSku = ensureSkuTaxonomy({
       id: newId(),
       skuCode: form.skuCode.trim(),
@@ -138,8 +145,8 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
       nameEn: form.nameEn.trim() || undefined,
       category: label || undefined,
       categoryRootId: root || undefined,
-      categoryL1Id: l1 || undefined,
-      categoryL2Id: l2 || undefined,
+      categoryL1Id: l1,
+      categoryL2Id: l2,
       categoryIds: [root, l1, l2].filter(Boolean),
       images: form.imageDataUrl ? [form.imageDataUrl] : [],
       specs: form.specs.trim() || undefined,
@@ -316,7 +323,7 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
             </div>
             <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">产品库</h2>
             <p className="text-sm text-slate-500 font-medium mt-1 max-w-2xl">
-              管理本司 SKU：货号、品名、官方类目（必选）、规格与产品图。类目对齐全站类目树后，入库即可自动匹配已背调客户并分级（重点一对一 / EDM 测品）。
+              管理本司 SKU：货号、品名、官方一级+二级小类（均必选）、规格与产品图。类目挂齐后入库即可自动精准匹配已背调客户并分级（重点一对一 / EDM 测品）。
             </p>
           </div>
           <div className="text-right text-sm font-black text-slate-700">{rows.length} 款</div>
@@ -526,10 +533,11 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
           </div>
           <div>
             <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-0.5">
-              官方二级品类（建议必选）
+              官方二级小类（必选）
             </label>
             <select
               value={form.categoryL2Id}
+              required
               disabled={!form.categoryL1Id}
               onChange={(e) =>
                 setForm((f) => ({
@@ -542,9 +550,9 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
                       : f.category,
                 }))
               }
-              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm bg-white disabled:opacity-50"
+              className="w-full rounded-xl border border-violet-200 px-3 py-2 text-sm bg-white disabled:opacity-50"
             >
-              <option value="">请选择二级细分</option>
+              <option value="">请选择二级小类</option>
               {taxonomyL2.map((n) => (
                 <option key={n.id} value={n.id}>
                   {n.nameZh} · {n.nameEn}

@@ -1,6 +1,6 @@
 /**
  * 产品库 · Excel 模板下载 / 导入（含嵌入产品图，压缩后入库供设计模块复用）
- * 官方类目（阿里巴巴全站树）为必填：一级类目ID 必选，二级强烈建议。
+ * 官方类目（阿里巴巴全站树）为必填：一级类目ID + 二级类目ID（小类）均必选。
  */
 import {
   ensureSkuTaxonomy,
@@ -140,12 +140,12 @@ export const downloadCatalogExcelTemplate = () => {
 
   const guide = XLSX.utils.aoa_to_sheet([
     ['填写说明（官方类目必选）'],
-    ['1. 「货号」「品名」「一级类目ID」为必填；「二级类目ID」强烈建议填写（有细分时）。'],
-    ['2. 类目请从工作表「官方一级」「官方二级」复制「一级类目ID / 二级类目ID」列，或整格复制「下拉选项」（含 [id]）。'],
-    ['3. 未填官方类目的行将在导入时跳过，不会进入产品库。'],
-    ['4. 入库后系统会按类目自动匹配已完成背调/产品画像的客户并打分分级。'],
+    ['1. 「货号」「品名」「一级类目ID」「二级类目ID」均为必填（二级小类决定精准匹配）。'],
+    ['2. 类目请从「官方一级」「官方二级」复制对应 ID 列，或整格复制「下拉选项」（含 [id]）；二级的所属一级须与一级列一致。'],
+    ['3. 缺一级或二级官方类目的行将在导入时跳过，不会进入产品库。'],
+    ['4. 入库后系统按一级+二级类目自动匹配已背调客户并打分分级。'],
     ['5. 产品图片可插入对应货号行；价格默认出厂价（USD）。同货号再导入会覆盖更新。'],
-    ['6. 也支持旧版工厂表（仅品名/货号）；若无类目列，请先用新模板补全类目后再传。'],
+    ['6. 旧版工厂表若无类目列，请先用本模板补全一级与二级类目后再上传。'],
   ]);
   guide['!cols'] = [{ wch: 96 }];
 
@@ -159,6 +159,7 @@ export const downloadCatalogExcelTemplate = () => {
   // 尽力写入数据验证（部分 Excel 引擎会忽略；导入侧仍强制校验）
   try {
     const l1End = Math.max(2, PRODUCT_TAXONOMY_L1.length + 1);
+    const l2End = Math.max(2, PRODUCT_TAXONOMY_L2.length + 1);
     ws['!dataValidation'] = [
       {
         type: 'list',
@@ -167,6 +168,14 @@ export const downloadCatalogExcelTemplate = () => {
         error: '请从「官方一级」复制一级类目ID',
         sqref: 'C2:C2000',
         formulas: [`'官方一级'!$A$2:$A$${l1End}`],
+      },
+      {
+        type: 'list',
+        allowBlank: false,
+        showErrorMessage: true,
+        error: '请从「官方二级」复制二级类目ID（小类必选）',
+        sqref: 'D2:D2000',
+        formulas: [`'官方二级'!$A$2:$A$${l2End}`],
       },
     ];
   } catch {
@@ -483,19 +492,25 @@ export const parseCatalogExcelFile = async (file: File): Promise<CatalogExcelImp
       categoryL1Id = PRODUCT_TAXONOMY_BY_ID[categoryL2Id]?.parentId || undefined;
     }
     // 兼容旧表仅有「品类」自由文本：尝试解析为官方类目，失败则跳过
-    if (!categoryL1Id && !categoryL2Id && categoryNote) {
+    if ((!categoryL1Id || !categoryL2Id) && categoryNote) {
       const noteHit = resolveTaxonomyCell(categoryNote);
       if (noteHit.level === 2) {
-        categoryL2Id = noteHit.id;
-        categoryL1Id = noteHit.id ? PRODUCT_TAXONOMY_BY_ID[noteHit.id]?.parentId : undefined;
-      } else if (noteHit.level === 1) {
-        categoryL1Id = noteHit.id;
+        categoryL2Id = categoryL2Id || noteHit.id;
+        categoryL1Id =
+          categoryL1Id ||
+          (noteHit.id ? PRODUCT_TAXONOMY_BY_ID[noteHit.id]?.parentId : undefined);
       }
     }
-    if (!categoryL1Id && !categoryL2Id) {
+    // 一级 + 二级（小类）均必选，否则跳过
+    if (!categoryL1Id || !categoryL2Id) {
       skippedNoTaxonomy++;
       skipped++;
       continue;
+    }
+    // 校验二级归属一级
+    const l2Parent = PRODUCT_TAXONOMY_BY_ID[categoryL2Id]?.parentId;
+    if (l2Parent && categoryL1Id && l2Parent !== categoryL1Id) {
+      categoryL1Id = l2Parent;
     }
     const l1Node = categoryL1Id ? PRODUCT_TAXONOMY_BY_ID[categoryL1Id] : undefined;
     const categoryRootId =
@@ -556,7 +571,7 @@ export const parseCatalogExcelFile = async (file: File): Promise<CatalogExcelImp
   if (!skus.length) {
     if (skippedNoTaxonomy > 0) {
       throw new Error(
-        `未导入任何产品：有 ${skippedNoTaxonomy} 行缺少官方「一级类目ID」。请下载最新模板，从「官方一级」工作表复制类目后再上传。`
+        `未导入任何产品：有 ${skippedNoTaxonomy} 行缺少官方「一级类目ID」或「二级类目ID」。请下载最新模板，从「官方一级」「官方二级」复制后再上传（二级小类必填）。`
       );
     }
     throw new Error('未解析到有效货号行，请检查表格内容');
