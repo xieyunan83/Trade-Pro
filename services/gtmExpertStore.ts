@@ -31,6 +31,9 @@ export type GtmPmBrief = {
   competitiveDifferentiation: string[];
 };
 
+/** 匹配后开发通道：重点一对一 vs EDM 测品 */
+export type GtmOutreachChannel = 'priority_1to1' | 'edm_test';
+
 export type GtmClientMatch = {
   clientId?: string;
   companyName: string;
@@ -42,6 +45,10 @@ export type GtmClientMatch = {
   historyId?: string;
   productType?: string;
   mailGroup?: MailGroup;
+  /** 产品匹配分级：重点一对一 / EDM 测品 */
+  channel?: GtmOutreachChannel;
+  gradeReasons?: string[];
+  outreachAdvice?: string;
 };
 
 export type GtmLaunchPack = {

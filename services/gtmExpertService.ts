@@ -38,6 +38,7 @@ import {
   idsFromAssignments,
   scoreCategoryIdOverlap,
 } from './categoryTaxonomy';
+import { attachOutreachGrades } from './outreachGrade';
 
 export type GtmProductInput = {
   productName: string;
@@ -591,6 +592,15 @@ export const runGtmLaunchPack = async (opts: RunGtmLaunchOpts): Promise<GtmLaunc
       return m;
     })
     .sort((a, b) => b.score - a.score);
+
+  // 体量/匹配度分级：重点一对一 vs EDM 测品
+  matches = attachOutreachGrades(matches, {
+    profiles: usableProfiles,
+    crmClients,
+  }).sort((a, b) => {
+    if (a.channel !== b.channel) return a.channel === 'priority_1to1' ? -1 : 1;
+    return b.score - a.score;
+  });
 
   const offerBrief = buildCompactOurOfferBrief(
     '',

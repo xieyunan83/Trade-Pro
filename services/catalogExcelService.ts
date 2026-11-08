@@ -1,7 +1,23 @@
 /**
  * 产品库 · Excel 模板下载 / 导入（含嵌入产品图，压缩后入库供设计模块复用）
+ * 官方类目（阿里巴巴全站树）为必填：一级类目ID 必选，二级强烈建议。
  */
-import { ensureSkuTaxonomy, type CatalogSku, type ProductSource } from './productCatalogTypes';
+import {
+  ensureSkuTaxonomy,
+  type CatalogSku,
+  type ProductSource,
+} from './productCatalogTypes';
+import {
+  PRODUCT_TAXONOMY_BY_ID,
+  PRODUCT_TAXONOMY_L1,
+  PRODUCT_TAXONOMY_L2,
+  PRODUCT_TAXONOMY_ROOTS,
+  TOY_ROOT_ID,
+  formatTaxonomyLabel,
+  getTaxonomyL1ByRoot,
+  getTaxonomyChildren,
+  resolveLegacyCategoryId,
+} from '../data/productTaxonomy';
 
 declare const XLSX: any;
 declare const JSZip: any;
@@ -9,6 +25,8 @@ declare const JSZip: any;
 const TEMPLATE_HEADERS = [
   '品名',
   '货号',
+  '一级类目ID',
+  '二级类目ID',
   '装箱数',
   '内盒',
   '外箱规格',
@@ -17,17 +35,25 @@ const TEMPLATE_HEADERS = [
   '价格',
   '常规颜色',
   '产品测试报告',
-  '品类',
+  '品类备注',
   '英文名',
   'MOQ',
   '币种',
   '供应商',
 ] as const;
 
+const SAMPLE_L1 =
+  getTaxonomyL1ByRoot(TOY_ROOT_ID).find((n) => /bubble|泡泡|outdoor|户外/i.test(`${n.nameEn} ${n.nameZh}`)) ||
+  getTaxonomyL1ByRoot(TOY_ROOT_ID)[0] ||
+  PRODUCT_TAXONOMY_L1[0];
+const SAMPLE_L2 = SAMPLE_L1 ? getTaxonomyChildren(SAMPLE_L1.id)[0] : undefined;
+
 const SAMPLE = [
   {
     品名: '三角型多孔泡中泡西洋剑泡泡棒',
     货号: '889-102',
+    一级类目ID: SAMPLE_L1?.id || '',
+    二级类目ID: SAMPLE_L2?.id || '',
     装箱数: '6盒/72只',
     内盒: '0',
     外箱规格: '50*43*49',
@@ -36,7 +62,7 @@ const SAMPLE = [
     价格: '4.1',
     常规颜色: '蓝/绿/紫/红混装（含200ML泡泡水）',
     产品测试报告: 'EN71、ASTM、CE…',
-    品类: '泡泡棒',
+    品类备注: SAMPLE_L1 ? formatTaxonomyLabel(SAMPLE_L2?.id || SAMPLE_L1.id) : '泡泡棒',
     英文名: 'Bubble Sword Wand',
     MOQ: '72',
     币种: 'USD',
@@ -52,25 +78,101 @@ const ensureZip = () => {
   if (typeof JSZip === 'undefined') throw new Error('压缩库未加载，请刷新页面');
 };
 
-/** 下载可填写的产品资料模板（对齐工厂报价表字段） */
+const taxonomyOptionLabel = (id: string, zh: string, en: string) => `${zh} · ${en} [${id}]`;
+
+/** 解析单元格中的官方类目：支持纯 ID，或「中文 · 英文 [id]」 */
+export const resolveTaxonomyCell = (
+  raw: string
+): { id?: string; level?: 0 | 1 | 2 } => {
+  const s = String(raw || '').trim();
+  if (!s) return {};
+  const bracket = s.match(/\[([^\]]+)\]\s*$/);
+  const cand = (bracket?.[1] || s).trim();
+  const id = resolveLegacyCategoryId(cand) || cand;
+  const node = PRODUCT_TAXONOMY_BY_ID[id];
+  if (node) return { id: node.id, level: node.level };
+  const lower = s.toLowerCase();
+  const byName = Object.values(PRODUCT_TAXONOMY_BY_ID).find((n) => {
+    if (n.nameZh === s || n.nameEn.toLowerCase() === lower) return true;
+    return (n.aliases || []).some((a) => a.toLowerCase() === lower);
+  });
+  return byName ? { id: byName.id, level: byName.level } : {};
+};
+
+/** 下载可填写的产品资料模板（对齐工厂报价表 + 官方类目必选） */
 export const downloadCatalogExcelTemplate = () => {
   ensureXlsx();
   const ws = XLSX.utils.json_to_sheet(SAMPLE, { header: [...TEMPLATE_HEADERS] });
   ws['!cols'] = TEMPLATE_HEADERS.map((h) => ({
-    wch: Math.min(28, Math.max(10, h.length + 4)),
+    wch: Math.min(36, Math.max(12, h.length + 6)),
   }));
+
+  const rootRows = [
+    ['大类ID', '中文名', '英文名', '下拉选项'],
+    ...PRODUCT_TAXONOMY_ROOTS.map((n) => [
+      n.id,
+      n.nameZh,
+      n.nameEn,
+      taxonomyOptionLabel(n.id, n.nameZh, n.nameEn),
+    ]),
+  ];
+  const l1Rows = [
+    ['一级类目ID', '中文名', '英文名', '所属大类ID', '下拉选项'],
+    ...PRODUCT_TAXONOMY_L1.map((n) => [
+      n.id,
+      n.nameZh,
+      n.nameEn,
+      n.parentId || '',
+      taxonomyOptionLabel(n.id, n.nameZh, n.nameEn),
+    ]),
+  ];
+  // 二级全量过大时模板仍可用；默认附全站二级供复制 ID
+  const l2Rows = [
+    ['二级类目ID', '中文名', '英文名', '所属一级ID', '下拉选项'],
+    ...PRODUCT_TAXONOMY_L2.map((n) => [
+      n.id,
+      n.nameZh,
+      n.nameEn,
+      n.parentId || '',
+      taxonomyOptionLabel(n.id, n.nameZh, n.nameEn),
+    ]),
+  ];
+
   const guide = XLSX.utils.aoa_to_sheet([
-    ['填写说明'],
-    ['1. 在「产品资料」表按列填写；货号与品名为必填。'],
-    ['2. 产品图片：可在 Excel 中把图片插入到对应货号行（「图片」列区域），上传后会自动关联；也可导入后再在产品库补图。'],
-    ['3. 价格默认按出厂价（USD）；币种列可改 CNY 等。'],
-    ['4. 也支持工厂报价表原格式（含标题行 + 图片/品名/货号…），直接上传即可识别。'],
-    ['5. 同货号再次导入会覆盖更新（保留其它货号）。'],
+    ['填写说明（官方类目必选）'],
+    ['1. 「货号」「品名」「一级类目ID」为必填；「二级类目ID」强烈建议填写（有细分时）。'],
+    ['2. 类目请从工作表「官方一级」「官方二级」复制「一级类目ID / 二级类目ID」列，或整格复制「下拉选项」（含 [id]）。'],
+    ['3. 未填官方类目的行将在导入时跳过，不会进入产品库。'],
+    ['4. 入库后系统会按类目自动匹配已完成背调/产品画像的客户并打分分级。'],
+    ['5. 产品图片可插入对应货号行；价格默认出厂价（USD）。同货号再导入会覆盖更新。'],
+    ['6. 也支持旧版工厂表（仅品名/货号）；若无类目列，请先用新模板补全类目后再传。'],
   ]);
-  guide['!cols'] = [{ wch: 88 }];
+  guide['!cols'] = [{ wch: 96 }];
+
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, '产品资料');
   XLSX.utils.book_append_sheet(wb, guide, '填写说明');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rootRows), '官方大类');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(l1Rows), '官方一级');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(l2Rows), '官方二级');
+
+  // 尽力写入数据验证（部分 Excel 引擎会忽略；导入侧仍强制校验）
+  try {
+    const l1End = Math.max(2, PRODUCT_TAXONOMY_L1.length + 1);
+    ws['!dataValidation'] = [
+      {
+        type: 'list',
+        allowBlank: false,
+        showErrorMessage: true,
+        error: '请从「官方一级」复制一级类目ID',
+        sqref: 'C2:C2000',
+        formulas: [`'官方一级'!$A$2:$A$${l1End}`],
+      },
+    ];
+  } catch {
+    /* ignore */
+  }
+
   XLSX.writeFile(wb, `产品资料导入模板_${new Date().toISOString().slice(0, 10)}.xlsx`);
 };
 
@@ -92,6 +194,9 @@ type ColMap = {
   colors?: number;
   certs?: number;
   category?: number;
+  categoryL1?: number;
+  categoryL2?: number;
+  categoryRoot?: number;
   nameEn?: number;
   moq?: number;
   currency?: number;
@@ -107,6 +212,9 @@ const detectHeader = (aoa: unknown[][]): { rowIndex: number; map: ColMap } | nul
       if (!cell) return;
       if (/^(品名|产品名称|商品名|name)$/.test(cell) || cell === '产品名') map.name = i;
       else if (/^(货号|sku|skucode|型号|article)$/.test(cell)) map.sku = i;
+      else if (/一级类目id|类目l1id|l1id|官方一级/.test(cell)) map.categoryL1 = i;
+      else if (/二级类目id|类目l2id|l2id|官方二级/.test(cell)) map.categoryL2 = i;
+      else if (/大类id|类目root|rootid|官方大类/.test(cell)) map.categoryRoot = i;
       else if (/装箱/.test(cell)) map.cartonQty = i;
       else if (/内盒/.test(cell)) map.innerBox = i;
       else if (/外箱/.test(cell)) map.cartonSpec = i;
@@ -115,7 +223,7 @@ const detectHeader = (aoa: unknown[][]): { rowIndex: number; map: ColMap } | nul
       else if (/^(价格|单价|出厂价|price|fob)$/.test(cell)) map.price = i;
       else if (/颜色|colour|color/.test(cell)) map.colors = i;
       else if (/测试|认证|证书|证书报告|report/.test(cell)) map.certs = i;
-      else if (/品类|分类|category/.test(cell)) map.category = i;
+      else if (/品类备注|品类|分类|category/.test(cell)) map.category = i;
       else if (/英文/.test(cell) || cell === 'nameen') map.nameEn = i;
       else if (/^moq$|起订/.test(cell)) map.moq = i;
       else if (/币种|currency/.test(cell)) map.currency = i;
@@ -284,6 +392,8 @@ export type CatalogExcelImportResult = {
   skus: CatalogExcelSkuDraft[];
   imageCount: number;
   skipped: number;
+  /** 因缺少官方类目被跳过的行数 */
+  skippedNoTaxonomy: number;
 };
 
 /**
@@ -327,6 +437,7 @@ export const parseCatalogExcelFile = async (file: File): Promise<CatalogExcelImp
 
   const skus: CatalogExcelSkuDraft[] = [];
   let skipped = 0;
+  let skippedNoTaxonomy = 0;
   let imageCount = 0;
 
   for (let r = rowIndex + 1; r < aoa.length; r++) {
@@ -351,12 +462,48 @@ export const parseCatalogExcelFile = async (file: File): Promise<CatalogExcelImp
     const price = parsePrice(cell(row, map.price));
     const moq = parseMoq(cell(row, map.moq), cartonQty);
     const currency = cell(row, map.currency) || 'USD';
-    const category = cell(row, map.category) || undefined;
+    const categoryNote = cell(row, map.category) || undefined;
     const nameEn = cell(row, map.nameEn) || undefined;
     const supplier = cell(row, map.supplier) || undefined;
     const cartonSpec = cell(row, map.cartonSpec);
     const innerBox = cell(row, map.innerBox);
     const grossNet = cell(row, map.grossNet);
+
+    const l1Hit = resolveTaxonomyCell(cell(row, map.categoryL1));
+    const l2Hit = resolveTaxonomyCell(cell(row, map.categoryL2));
+    const rootHit = resolveTaxonomyCell(cell(row, map.categoryRoot));
+    let categoryL1Id = l1Hit.level === 1 ? l1Hit.id : l1Hit.level === 2 ? undefined : l1Hit.id;
+    let categoryL2Id = l2Hit.level === 2 ? l2Hit.id : l2Hit.level === 1 ? undefined : l2Hit.id;
+    if (l1Hit.level === 2) {
+      categoryL2Id = l1Hit.id;
+      categoryL1Id = PRODUCT_TAXONOMY_BY_ID[l1Hit.id!]?.parentId || categoryL1Id;
+    }
+    if (l2Hit.level === 1 && !categoryL1Id) categoryL1Id = l2Hit.id;
+    if (categoryL2Id && !categoryL1Id) {
+      categoryL1Id = PRODUCT_TAXONOMY_BY_ID[categoryL2Id]?.parentId || undefined;
+    }
+    // 兼容旧表仅有「品类」自由文本：尝试解析为官方类目，失败则跳过
+    if (!categoryL1Id && !categoryL2Id && categoryNote) {
+      const noteHit = resolveTaxonomyCell(categoryNote);
+      if (noteHit.level === 2) {
+        categoryL2Id = noteHit.id;
+        categoryL1Id = noteHit.id ? PRODUCT_TAXONOMY_BY_ID[noteHit.id]?.parentId : undefined;
+      } else if (noteHit.level === 1) {
+        categoryL1Id = noteHit.id;
+      }
+    }
+    if (!categoryL1Id && !categoryL2Id) {
+      skippedNoTaxonomy++;
+      skipped++;
+      continue;
+    }
+    const l1Node = categoryL1Id ? PRODUCT_TAXONOMY_BY_ID[categoryL1Id] : undefined;
+    const categoryRootId =
+      rootHit.id || l1Node?.parentId || l1Node?.rootId || undefined;
+    const category =
+      categoryNote ||
+      formatTaxonomyLabel(categoryL2Id || categoryL1Id) ||
+      undefined;
 
     const specsParts = [
       cartonQty && `装箱：${cartonQty}`,
@@ -378,6 +525,10 @@ export const parseCatalogExcelFile = async (file: File): Promise<CatalogExcelImp
       name,
       nameEn,
       category,
+      categoryRootId,
+      categoryL1Id,
+      categoryL2Id,
+      categoryIds: [categoryRootId, categoryL1Id, categoryL2Id].filter(Boolean) as string[],
       images,
       specs: specsParts.join('；') || undefined,
       moq,
@@ -402,8 +553,15 @@ export const parseCatalogExcelFile = async (file: File): Promise<CatalogExcelImp
     });
   }
 
-  if (!skus.length) throw new Error('未解析到有效货号行，请检查表格内容');
-  return { skus, imageCount, skipped };
+  if (!skus.length) {
+    if (skippedNoTaxonomy > 0) {
+      throw new Error(
+        `未导入任何产品：有 ${skippedNoTaxonomy} 行缺少官方「一级类目ID」。请下载最新模板，从「官方一级」工作表复制类目后再上传。`
+      );
+    }
+    throw new Error('未解析到有效货号行，请检查表格内容');
+  }
+  return { skus, imageCount, skipped, skippedNoTaxonomy };
 };
 
 /** 合并导入结果到现有库（按货号覆盖） */

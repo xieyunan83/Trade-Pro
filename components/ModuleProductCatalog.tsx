@@ -6,9 +6,9 @@ import {
   ensureSkuTaxonomy,
   loadCatalogSkus,
   saveCatalogSkus,
+  skuHasOfficialTaxonomy,
 } from '../services/productCatalogTypes';
 import {
-  assignBestCategory,
   formatTaxonomyLabel,
   listTaxonomyL1,
   listTaxonomyRoots,
@@ -21,6 +21,8 @@ import {
   mergeCatalogImports,
   parseCatalogExcelFile,
 } from '../services/catalogExcelService';
+import { runCatalogSkusAutoMatch } from '../services/catalogAutoMatch';
+import { loadAllCrmClients } from '../utils/workspaceScope';
 import { buildMarketFitAdvice, MARKET_PICK_OPTIONS } from '../services/marketFitAdvice';
 import { loadTradeJourney, patchTradeJourney, toggleJourneyStage } from '../services/tradeJourney';
 
@@ -102,31 +104,40 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
     );
   }, [rows, q]);
 
+  const runAutoMatchQuiet = async (skus: CatalogSku[]) => {
+    const eligible = skus.filter(skuHasOfficialTaxonomy);
+    if (!eligible.length) return null;
+    try {
+      const crm = loadAllCrmClients();
+      return await runCatalogSkusAutoMatch(eligible, crm);
+    } catch (e) {
+      console.warn('catalog auto match failed', e);
+      return null;
+    }
+  };
+
   const addSku = () => {
     if (!form.skuCode.trim() || !form.name.trim()) {
       setMsg('请填写货号与品名');
       return;
     }
+    if (!form.categoryL1Id) {
+      setMsg('请选择官方一级品类（必选，用于自动匹配已背调客户）');
+      return;
+    }
     const now = Date.now();
-    const auto =
-      form.categoryL1Id
-        ? null
-        : assignBestCategory([form.category, form.name, form.nameEn].filter(Boolean).join(' · '), {
-            preferRootId: form.categoryRootId || TOY_ROOT_ID,
-          });
-    const l1 = form.categoryL1Id || auto?.l1Id || '';
-    const l2 = form.categoryL2Id || auto?.l2Id || '';
-    const root = form.categoryRootId || auto?.rootId || '';
+    const l1 = form.categoryL1Id;
+    const l2 = form.categoryL2Id || '';
+    const root = form.categoryRootId || TOY_ROOT_ID;
     const label =
-      form.category.trim() ||
-      (l1 ? formatTaxonomyLabel(l2 || l1) : '') ||
-      auto?.label;
+      form.category.trim() || (l1 ? formatTaxonomyLabel(l2 || l1) : '');
     const sku: CatalogSku = ensureSkuTaxonomy({
       id: newId(),
       skuCode: form.skuCode.trim(),
       name: form.name.trim(),
       nameEn: form.nameEn.trim() || undefined,
       category: label || undefined,
+      categoryRootId: root || undefined,
       categoryL1Id: l1 || undefined,
       categoryL2Id: l2 || undefined,
       categoryIds: [root, l1, l2].filter(Boolean),
@@ -142,7 +153,8 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
       createdAt: now,
       updatedAt: now,
     });
-    persist(mergeCatalogImports(rows, [sku]));
+    const next = mergeCatalogImports(rows, [sku]);
+    persist(next);
     setForm({
       skuCode: '',
       name: '',
@@ -159,8 +171,17 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
       imageDataUrl: '',
     });
     setMsg(
-      `已添加 ${sku.skuCode}${sku.categoryL1Id ? ` · 已挂靠品类 ${formatTaxonomyLabel(sku.categoryL2Id || sku.categoryL1Id)}` : ''}（图片可在设计模块选用）`
+      `已添加 ${sku.skuCode} · ${formatTaxonomyLabel(sku.categoryL2Id || sku.categoryL1Id)}，正在按类目匹配客户…`
     );
+    void runAutoMatchQuiet([sku]).then((report) => {
+      if (!report) {
+        setMsg(`已添加 ${sku.skuCode} · 类目已挂靠（自动匹配暂无结果）`);
+        return;
+      }
+      setMsg(
+        `已添加 ${sku.skuCode}。自动匹配 ${report.matchCount} 家（重点一对一 ${report.priorityCount} · EDM 测品 ${report.edmCount}）。可到「产品匹配」查看分级。`
+      );
+    });
   };
 
   const removeSku = (id: string) => {
@@ -229,38 +250,55 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
     setBusy(true);
     setMsg('正在解析 Excel 与产品图…');
     try {
-      const { skus, imageCount, skipped } = await parseCatalogExcelFile(file);
+      const { skus, imageCount, skipped, skippedNoTaxonomy } = await parseCatalogExcelFile(file);
       const now = Date.now();
-      const incoming: CatalogSku[] = skus.map((raw, i) => ({
-        id: newId() + i,
-        skuCode: raw.skuCode,
-        name: raw.name,
-        nameEn: raw.nameEn,
-        category: raw.category,
-        images: raw.images || [],
-        specs: raw.specs,
-        moq: raw.moq,
-        currency: raw.currency || 'USD',
-        factoryPrice: raw.factoryPrice,
-        packing: raw.packing,
-        certificates: raw.certificates,
-        colors: raw.colors,
-        cartonQty: raw.cartonQty,
-        innerBox: raw.innerBox,
-        cartonSpec: raw.cartonSpec,
-        grossNetKg: raw.grossNetKg,
-        supplierName: raw.supplierName,
-        source: 'import',
-        externalId: raw.externalId,
-        ownerUsername: currentUser.username,
-        departmentId: currentUser.departmentId,
-        createdAt: now,
-        updatedAt: now,
-      }));
-      persist(mergeCatalogImports(rows, incoming));
-      setMsg(
-        `已导入/合并 ${incoming.length} 款（含图 ${imageCount} 张${skipped ? `，跳过空行 ${skipped}` : ''}）。可在设计模块选用产品图二次创作。`
+      const incoming: CatalogSku[] = skus.map((raw, i) =>
+        ensureSkuTaxonomy({
+          id: newId() + i,
+          skuCode: raw.skuCode,
+          name: raw.name,
+          nameEn: raw.nameEn,
+          category: raw.category,
+          categoryRootId: raw.categoryRootId,
+          categoryL1Id: raw.categoryL1Id,
+          categoryL2Id: raw.categoryL2Id,
+          categoryIds: raw.categoryIds,
+          images: raw.images || [],
+          specs: raw.specs,
+          moq: raw.moq,
+          currency: raw.currency || 'USD',
+          factoryPrice: raw.factoryPrice,
+          packing: raw.packing,
+          certificates: raw.certificates,
+          colors: raw.colors,
+          cartonQty: raw.cartonQty,
+          innerBox: raw.innerBox,
+          cartonSpec: raw.cartonSpec,
+          grossNetKg: raw.grossNetKg,
+          supplierName: raw.supplierName,
+          source: 'import',
+          externalId: raw.externalId,
+          ownerUsername: currentUser.username,
+          departmentId: currentUser.departmentId,
+          createdAt: now,
+          updatedAt: now,
+        })
       );
+      const next = mergeCatalogImports(rows, incoming);
+      persist(next);
+      setMsg(
+        `已导入/合并 ${incoming.length} 款（含图 ${imageCount} 张${skipped ? `，跳过 ${skipped}` : ''}${
+          skippedNoTaxonomy ? `，缺类目 ${skippedNoTaxonomy}` : ''
+        }）。正在按类目自动匹配已背调客户…`
+      );
+      const report = await runAutoMatchQuiet(incoming);
+      if (report) {
+        setMsg(
+          `已导入 ${incoming.length} 款。自动匹配 ${report.matchCount} 家客户：重点一对一 ${report.priorityCount} · 建议 EDM 测品 ${report.edmCount}${
+            skippedNoTaxonomy ? `（另有 ${skippedNoTaxonomy} 行因无官方类目未入库）` : ''
+          }。请到「产品匹配」查看分级与开发建议。`
+        );
+      }
     } catch (e: any) {
       setMsg(`导入失败：${e?.message || e}`);
     } finally {
@@ -278,7 +316,7 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
             </div>
             <h2 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">产品库</h2>
             <p className="text-sm text-slate-500 font-medium mt-1 max-w-2xl">
-              管理本司 SKU：货号、品名、规格、价格与产品图。先看适市建议，再导入/录入产品包，供报价与获客使用。
+              管理本司 SKU：货号、品名、官方类目（必选）、规格与产品图。类目对齐全站类目树后，入库即可自动匹配已背调客户并分级（重点一对一 / EDM 测品）。
             </p>
           </div>
           <div className="text-right text-sm font-black text-slate-700">{rows.length} 款</div>
@@ -374,7 +412,7 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
             }}
             className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white text-slate-800 text-xs font-black px-3 py-2.5"
           >
-            <Download size={14} /> 下载 Excel 模板
+            <Download size={14} /> 下载模板（含官方类目表）
           </button>
           <button
             type="button"
@@ -461,10 +499,11 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
           </div>
           <div>
             <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-0.5">
-              官方一级品类
+              官方一级品类（必选）
             </label>
             <select
               value={form.categoryL1Id}
+              required
               onChange={(e) =>
                 setForm((f) => ({
                   ...f,
@@ -475,9 +514,9 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
                     : f.category,
                 }))
               }
-              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm bg-white"
+              className="w-full rounded-xl border border-violet-200 px-3 py-2 text-sm bg-white"
             >
-              <option value="">自动识别（按品名）</option>
+              <option value="">请选择一级类目</option>
               {taxonomyL1.map((n) => (
                 <option key={n.id} value={n.id}>
                   {n.nameZh} · {n.nameEn}
@@ -487,7 +526,7 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
           </div>
           <div>
             <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-0.5">
-              官方二级品类
+              官方二级品类（建议必选）
             </label>
             <select
               value={form.categoryL2Id}
@@ -505,7 +544,7 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
               }
               className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm bg-white disabled:opacity-50"
             >
-              <option value="">可选 · 细分</option>
+              <option value="">请选择二级细分</option>
               {taxonomyL2.map((n) => (
                 <option key={n.id} value={n.id}>
                   {n.nameZh} · {n.nameEn}

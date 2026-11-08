@@ -12,6 +12,7 @@ import {
   type GtmClientMatch,
   type GtmLaunchPack,
 } from '../services/gtmExpertStore';
+import { loadCatalogAutoMatchReport } from '../services/catalogAutoMatch';
 import { publishGtmOutreachHandoff } from '../services/gtmOutreachBridge';
 import {
   loadProductCampaigns,
@@ -371,7 +372,7 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
           },
           crmClients,
           history,
-          mailTopN: 3,
+          mailTopN: 5,
           skipBatchMail: false,
           onProgress: (_pct, label) => setProgress(label),
           onPartial: (partial) => {
@@ -643,6 +644,22 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
         </section>
       )}
 
+      {(() => {
+        const auto = loadCatalogAutoMatchReport();
+        if (!auto || Date.now() - auto.at > 7 * 24 * 3600_000) return null;
+        return (
+          <div className="rounded-2xl border border-violet-200 bg-violet-50/50 px-4 py-3 text-sm">
+            <div className="font-black text-violet-900">产品库入库自动匹配（最近一次）</div>
+            <p className="text-xs text-violet-800/90 font-medium mt-1 leading-relaxed">
+              已扫 {auto.skuCount} 款有类目 SKU → 命中 {auto.matchCount} 家客户（重点一对一{' '}
+              {auto.priorityCount} · EDM 测品 {auto.edmCount}
+              {auto.skippedNoTaxonomy ? ` · 缺类目跳过 ${auto.skippedNoTaxonomy}` : ''}
+              ）。下方表单可对单款产品再跑完整市调与开发信。
+            </p>
+          </div>
+        );
+      })()}
+
       <MatchInputForm
         key={formSeed}
         seedKey={formSeed}
@@ -839,103 +856,165 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
                 匹配客户 {pack.matches.length ? `(${pack.matches.length})` : ''}
               </h3>
               <span className="text-[10px] font-bold text-slate-400">
-                含专业匹配理由 · 开发信已写入本机档案
+                已按体量/匹配度分级 · 重点一对一 / EDM 测品
               </span>
             </div>
             {!pack.matches.length ? (
               <div className="p-10 text-center text-slate-400 font-bold text-sm">
-                暂无足够匹配。可先在客户库补线索，或放宽品类后再跑。
+                暂无足够匹配。请确认产品已选官方类目，或先完成更多客户背调。
               </div>
             ) : (
-              <ul className="divide-y divide-slate-100">
-                {pack.matches.map((m) => (
-                  <li key={`${m.clientId || m.website || m.companyName}`} className="p-5">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-black text-slate-900">{m.companyName}</span>
-                          <span
-                            className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
-                              m.score >= 70
-                                ? 'bg-emerald-100 text-emerald-700'
-                                : m.score >= 40
-                                  ? 'bg-amber-100 text-amber-800'
-                                  : 'bg-slate-100 text-slate-600'
-                            }`}
-                          >
-                            匹配度 {m.score}
-                          </span>
-                          <span className="text-[10px] font-bold text-slate-400">
-                            {m.source === 'both'
-                              ? 'CRM+背调库'
-                              : m.source === 'crm'
-                                ? 'CRM'
-                                : '背调产品库'}
-                          </span>
+              <div className="divide-y divide-slate-100">
+                {([
+                  {
+                    key: 'priority_1to1' as const,
+                    title: '重点开发 · 建议一对一精准触达',
+                    hint: '匹配度高，且含体量/渠道/采购量等信号',
+                    tone: 'border-emerald-100 bg-emerald-50/40',
+                    badge: 'bg-emerald-600 text-white',
+                  },
+                  {
+                    key: 'edm_test' as const,
+                    title: '可先 EDM 邮件测品',
+                    hint: '类目匹配但优先级较低，适合统一模板群发后按回复升维',
+                    tone: 'border-amber-100 bg-amber-50/30',
+                    badge: 'bg-amber-600 text-white',
+                  },
+                ] as const).map((bucket) => {
+                  const list = pack.matches.filter((m) =>
+                    bucket.key === 'priority_1to1'
+                      ? m.channel === 'priority_1to1' || (!m.channel && m.score >= 70)
+                      : m.channel === 'edm_test' || (!m.channel && m.score < 70)
+                  );
+                  if (!list.length) return null;
+                  return (
+                    <div key={bucket.key} className={`border-t ${bucket.tone}`}>
+                      <div className="px-5 py-3 flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <div className="font-black text-slate-900 text-sm">{bucket.title}</div>
+                          <div className="text-[11px] text-slate-500 font-medium mt-0.5">{bucket.hint}</div>
                         </div>
-                        <div className="text-xs text-blue-600 font-bold mt-0.5 truncate">
-                          {m.website || '—'}
-                          {m.country ? ` · ${m.country}` : ''}
-                        </div>
-                        <ul className="mt-2 space-y-0.5">
-                          {m.reasons.map((r) => (
-                            <li key={r} className="text-xs text-slate-500 font-medium">
-                              · {r}
-                            </li>
-                          ))}
-                        </ul>
+                        <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${bucket.badge}`}>
+                          {list.length} 家
+                        </span>
                       </div>
-                      <div className="flex flex-col gap-2">
-                        {m.historyId && onOpenHistory && (
-                          <button
-                            type="button"
-                            onClick={() => openHistoryFor(m)}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 text-white text-xs font-bold"
-                          >
-                            <ExternalLink size={12} /> 打开背调
-                          </button>
-                        )}
-                        {m.mailGroup && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setExpandedMail((prev) =>
-                                prev === m.companyName ? null : m.companyName
-                              )
-                            }
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-indigo-200 text-indigo-700 text-xs font-bold"
-                          >
-                            <Mail size={12} />
-                            {expandedMail === m.companyName ? '收起开发信' : '查看开发信组'}
-                          </button>
-                        )}
-                        {m.mailGroup && onNavigateModule && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              publishGtmOutreachHandoff(pack, 'email_campaign', {
-                                campaignId: pack.campaignId || campaignId,
-                              });
-                              onNavigateModule(ModuleType.EMAIL_CAMPAIGN);
-                            }}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 text-white text-xs font-bold"
-                          >
-                            <Send size={12} /> 群发此信
-                          </button>
-                        )}
-                      </div>
+                      <ul className="divide-y divide-slate-100/80 bg-white/70">
+                        {list.map((m) => (
+                          <li key={`${bucket.key}-${m.clientId || m.website || m.companyName}`} className="p-5">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-black text-slate-900">{m.companyName}</span>
+                                  <span
+                                    className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
+                                      m.score >= 70
+                                        ? 'bg-emerald-100 text-emerald-700'
+                                        : m.score >= 40
+                                          ? 'bg-amber-100 text-amber-800'
+                                          : 'bg-slate-100 text-slate-600'
+                                    }`}
+                                  >
+                                    匹配度 {m.score}
+                                  </span>
+                                  <span className="text-[10px] font-bold text-slate-400">
+                                    {m.source === 'both'
+                                      ? 'CRM+背调库'
+                                      : m.source === 'crm'
+                                        ? 'CRM'
+                                        : '背调产品库'}
+                                  </span>
+                                </div>
+                                <div className="text-xs text-blue-600 font-bold mt-0.5 truncate">
+                                  {m.website || '—'}
+                                  {m.country ? ` · ${m.country}` : ''}
+                                </div>
+                                {m.outreachAdvice && (
+                                  <p className="mt-2 text-xs font-bold text-slate-700 leading-relaxed">
+                                    {m.outreachAdvice}
+                                  </p>
+                                )}
+                                <ul className="mt-2 space-y-0.5">
+                                  {(m.gradeReasons || []).map((r) => (
+                                    <li key={`g-${r}`} className="text-xs text-violet-700 font-medium">
+                                      · {r}
+                                    </li>
+                                  ))}
+                                  {m.reasons.map((r) => (
+                                    <li key={r} className="text-xs text-slate-500 font-medium">
+                                      · {r}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                              <div className="flex flex-col gap-2">
+                                {m.historyId && onOpenHistory && (
+                                  <button
+                                    type="button"
+                                    onClick={() => openHistoryFor(m)}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 text-white text-xs font-bold"
+                                  >
+                                    <ExternalLink size={12} /> 打开背调
+                                  </button>
+                                )}
+                                {bucket.key === 'priority_1to1' && m.mailGroup && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setExpandedMail((prev) =>
+                                        prev === m.companyName ? null : m.companyName
+                                      )
+                                    }
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-indigo-200 text-indigo-700 text-xs font-bold"
+                                  >
+                                    <Mail size={12} />
+                                    {expandedMail === m.companyName ? '收起开发信' : '查看开发信组'}
+                                  </button>
+                                )}
+                                {bucket.key === 'edm_test' && onNavigateModule && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      publishGtmOutreachHandoff(pack, 'email_campaign', {
+                                        campaignId: pack.campaignId || campaignId,
+                                      });
+                                      onNavigateModule(ModuleType.EMAIL_CAMPAIGN);
+                                    }}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-600 text-white text-xs font-bold"
+                                  >
+                                    <Send size={12} /> 去邮件测品
+                                  </button>
+                                )}
+                                {bucket.key === 'priority_1to1' && m.mailGroup && onNavigateModule && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      publishGtmOutreachHandoff(pack, 'email_campaign', {
+                                        campaignId: pack.campaignId || campaignId,
+                                      });
+                                      onNavigateModule(ModuleType.EMAIL_CAMPAIGN);
+                                    }}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 text-white text-xs font-bold"
+                                  >
+                                    <Send size={12} /> 发送专属信
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                            {expandedMail === m.companyName && m.mailGroup && (
+                              <div className="mt-3">
+                                <MailGroupCard
+                                  title={`${m.companyName} · 专属开发信组（已存档）`}
+                                  group={m.mailGroup}
+                                />
+                              </div>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
                     </div>
-                    {expandedMail === m.companyName && m.mailGroup && (
-                      <div className="mt-3">
-                        <MailGroupCard
-                          title={`${m.companyName} · 专属开发信组（已存档）`}
-                          group={m.mailGroup}
-                        />
-                      </div>
-                    )}
-                  </li>
-                ))}
-              </ul>
+                  );
+                })}
+              </div>
             )}
           </section>
         </>

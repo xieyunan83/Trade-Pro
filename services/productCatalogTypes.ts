@@ -2,7 +2,12 @@
  * 产品库 · 类型与本地存根（小竹熊/霄鸟云同步在管理后台接通）
  */
 import { assignBestCategory, idsFromAssignments, assignCategories } from './categoryTaxonomy';
-import { TOY_ROOT_ID } from '../data/productTaxonomy';
+import {
+  formatTaxonomyLabel,
+  PRODUCT_TAXONOMY_BY_ID,
+  resolveLegacyCategoryId,
+  TOY_ROOT_ID,
+} from '../data/productTaxonomy';
 
 export type ProductSource = 'manual' | 'toysbear' | 'skybird' | 'ai_redesign' | 'import';
 
@@ -13,6 +18,8 @@ export type CatalogSku = {
   nameEn?: string;
   /** 自由文本品类（展示）；正式匹配请用 categoryIds */
   category?: string;
+  /** 官方大类 ID */
+  categoryRootId?: string;
   /** 官方 L1 品类 ID（与客户 sell/procureCategoryIds 呼应） */
   categoryL1Id?: string;
   /** 官方 L2 品类 ID */
@@ -43,17 +50,51 @@ export type CatalogSku = {
   updatedAt: number;
 };
 
+/** 已显式选定官方一级/二级时，规范化 ID 链（信任人工/Excel 选择） */
+export const applyExplicitSkuTaxonomy = (sku: CatalogSku): CatalogSku => {
+  let l2Id = resolveLegacyCategoryId(sku.categoryL2Id) || sku.categoryL2Id;
+  let l1Id = resolveLegacyCategoryId(sku.categoryL1Id) || sku.categoryL1Id;
+  if (l2Id && PRODUCT_TAXONOMY_BY_ID[l2Id]) {
+    const l2 = PRODUCT_TAXONOMY_BY_ID[l2Id];
+    if (l2.level === 2) l1Id = l1Id || l2.parentId || undefined;
+  }
+  if (l1Id && !PRODUCT_TAXONOMY_BY_ID[l1Id]) l1Id = undefined;
+  if (l2Id && !PRODUCT_TAXONOMY_BY_ID[l2Id]) l2Id = undefined;
+  const l1Node = l1Id ? PRODUCT_TAXONOMY_BY_ID[l1Id] : undefined;
+  const rootId =
+    resolveLegacyCategoryId(sku.categoryRootId) ||
+    sku.categoryRootId ||
+    l1Node?.parentId ||
+    (l1Node?.rootId) ||
+    undefined;
+  if (!l1Id && !l2Id) return sku;
+  const ids = [...new Set([rootId, l1Id, l2Id, ...(sku.categoryIds || [])].filter(Boolean))] as string[];
+  return {
+    ...sku,
+    categoryRootId: rootId,
+    categoryL1Id: l1Id,
+    categoryL2Id: l2Id,
+    categoryIds: ids,
+    category: sku.category || formatTaxonomyLabel(l2Id || l1Id) || sku.category,
+  };
+};
+
+/** 是否已具备可匹配的官方类目（至少一级） */
+export const skuHasOfficialTaxonomy = (sku: Pick<CatalogSku, 'categoryL1Id' | 'categoryL2Id' | 'categoryIds'>): boolean =>
+  !!(sku.categoryL1Id || sku.categoryL2Id || (sku.categoryIds || []).some((id) => PRODUCT_TAXONOMY_BY_ID[id]));
+
 /** 根据品名/品类文本挂靠官方类目（录入、导入、同步后统一调用） */
 export const ensureSkuTaxonomy = (sku: CatalogSku): CatalogSku => {
-  if (sku.categoryL1Id && (sku.categoryIds?.length || 0) > 0) return sku;
+  if (sku.categoryL1Id || sku.categoryL2Id) return applyExplicitSkuTaxonomy(sku);
   const blob = [sku.category, sku.name, sku.nameEn, sku.specs].filter(Boolean).join(' · ');
-  const best = assignBestCategory(blob, { preferRootId: TOY_ROOT_ID });
+  const best = assignBestCategory(blob, { preferRootId: sku.categoryRootId || TOY_ROOT_ID });
   if (!best || best.verified === false) return sku;
-  const more = assignCategories(blob, 3, { preferRootId: TOY_ROOT_ID });
+  const more = assignCategories(blob, 3, { preferRootId: sku.categoryRootId || TOY_ROOT_ID });
   const ids = idsFromAssignments(more.length ? more : [best]);
   return {
     ...sku,
     category: sku.category || best.label,
+    categoryRootId: best.rootId || sku.categoryRootId,
     categoryL1Id: best.l1Id,
     categoryL2Id: best.l2Id,
     categoryIds: ids,
