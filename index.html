@@ -3,16 +3,33 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="build-stamp" content="ui-tech-type-20261108b">
+    <meta name="build-stamp" content="boot-nofontblock-20261108c">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
     <meta http-equiv="Pragma" content="no-cache" />
     <title>外贸智慧协同</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600&family=Noto+Sans+SC:wght@400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&display=swap"
-      rel="stylesheet"
-    />
+    <!-- 字体异步加载：禁止同步拉 Google Fonts，国内网络下会整页白屏卡死 -->
+    <script>
+      (function () {
+        try {
+          var href =
+            'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600&family=Noto+Sans+SC:wght@400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&display=swap';
+          var link = document.createElement('link');
+          link.rel = 'stylesheet';
+          link.href = href;
+          link.media = 'print';
+          link.onload = function () {
+            link.media = 'all';
+          };
+          link.onerror = function () {
+            /* 忽略：继续用系统中文字体 */
+          };
+          document.head.appendChild(link);
+          window.setTimeout(function () {
+            if (link.media === 'print') link.media = 'all';
+          }, 2500);
+        } catch (e) {}
+      })();
+    </script>
     
     <script>
         // Fix for "Uncaught TypeError: Cannot set property fetch of #<Window> which has only a getter"
@@ -170,9 +187,9 @@
           --tp-text: #0b1220;
           --tp-muted: #475569;
           --tp-radius: 1rem;
-          --tp-font: "Outfit", "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
-            sans-serif;
-          --tp-font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+          --tp-font: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", "Outfit",
+            system-ui, sans-serif;
+          --tp-font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
           --tp-shadow-panel:
             0 0 0 1px rgba(15, 23, 42, 0.05),
             0 1px 0 rgba(255, 255, 255, 0.95) inset,
@@ -1103,7 +1120,7 @@
 <body>
     <div id="root">
       <!-- 启动壳：视觉对齐登录页，无「正在加载 / 强制刷新」文案，缩短感知等待 -->
-      <div id="tp-boot" class="tp-login" style="min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;font-family:Outfit,Noto Sans SC,sans-serif;" aria-hidden="true">
+      <div id="tp-boot" class="tp-login" style="min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;font-family:PingFang SC,Hiragino Sans GB,Microsoft YaHei,system-ui,sans-serif;" aria-hidden="true">
         <div style="text-align:center;margin-bottom:2rem;">
           <div style="display:inline-block;padding:6px 16px;border-radius:999px;border:1px solid rgba(94,234,212,0.35);background:rgba(45,212,191,0.12);color:#ccfbf1;font-size:13px;font-weight:700;letter-spacing:0.2em;margin-bottom:1.15rem;">澄海 · 智造出海</div>
           <div style="font-size:clamp(2.2rem,5.2vw,3.4rem);font-weight:800;color:#fff;letter-spacing:-0.048em;line-height:1.1;">外贸智慧协同</div>

@@ -9,13 +9,20 @@ import { abortAndClearDmEmailSearchQueue } from './dmEmailSearchQueue';
 import { abortAndClearNightUpgrade, stopNightSilentUpgrade } from './nightSilentUpgrade';
 
 export const stopAllBackgroundWork = (opts?: { keepNightEnabled?: boolean }) => {
-  abortAndClearDesignSignalQueue();
-  abortAndClearEnrichmentQueue();
-  abortAndClearProductDigQueue();
-  abortAndClearDmEmailSearchQueue();
+  const run = (label: string, fn: () => void) => {
+    try {
+      fn();
+    } catch (e) {
+      console.warn(`[stopAll] ${label}`, e);
+    }
+  };
+  run('designSignal', abortAndClearDesignSignalQueue);
+  run('enrichment', abortAndClearEnrichmentQueue);
+  run('productDig', abortAndClearProductDigQueue);
+  run('dmEmail', abortAndClearDmEmailSearchQueue);
   if (opts?.keepNightEnabled) {
-    stopNightSilentUpgrade();
+    run('nightStop', stopNightSilentUpgrade);
   } else {
-    abortAndClearNightUpgrade();
+    run('nightAbort', abortAndClearNightUpgrade);
   }
 };

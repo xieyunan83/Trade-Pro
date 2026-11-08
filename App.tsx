@@ -944,15 +944,15 @@ const App: React.FC = () => {
     // 每次登录默认安静：清掉粘性挂机/僵尸队列，禁止「什么都没点就开跑卡死」
     shouldStopRef.current = true;
     autoResumeBatchOnceRef.current = false;
-    setWorkerModeActive(false);
-    setWorkerModeOn(false);
-    stopAllBackgroundWork();
     try {
+      setWorkerModeActive(false);
+      setWorkerModeOn(false);
+      stopAllBackgroundWork();
       if (typeof localStorage !== 'undefined') {
         localStorage.setItem('trade_scout_auto_resume_batch', '0');
       }
-    } catch {
-      /* ignore */
+    } catch (e) {
+      console.warn('[boot] quiet-stop failed', e);
     }
 
     // 切换账号时清空工作区；同账号 StrictMode 二次挂载仍会重新拉取
