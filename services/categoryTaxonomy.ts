@@ -76,27 +76,67 @@ const tokens = (s: string) =>
 
 const EMPTY = /^(n\/?a|未知|公开信息未找到|none|null|待补|暂无|-)?$/i;
 
-/** 倒排：词元 → 节点 id 列表（懒建） */
+/** 倒排：词元 → 节点 id 列表（懒建；先玩具子集，空闲再扩全站，避免主线程卡死） */
 let tokenIndex: Map<string, string[]> | null = null;
+let tokenIndexFull = false;
 
-const ensureIndex = () => {
+const indexNodeInto = (map: Map<string, Set<string>>, node: TaxonomyNode) => {
+  const bag = new Set<string>();
+  for (const raw of [node.nameEn, node.nameZh, ...node.aliases]) {
+    for (const t of tokens(raw)) bag.add(t);
+    const n = norm(raw);
+    if (n.length >= 2) bag.add(n);
+  }
+  for (const t of bag) {
+    if (!map.has(t)) map.set(t, new Set());
+    map.get(t)!.add(node.id);
+  }
+};
+
+const finalizeIndex = (map: Map<string, Set<string>>) =>
+  new Map([...map.entries()].map(([k, v]) => [k, [...v]]));
+
+/** 仅母婴玩具大类 + 全部一级：找客自动匹配够用，节点量远小于全站 7k+ */
+const ensureToyIndex = () => {
   if (tokenIndex) return tokenIndex;
   const map = new Map<string, Set<string>>();
+  for (const node of PRODUCT_TAXONOMY_ROOTS) indexNodeInto(map, node);
+  for (const node of PRODUCT_TAXONOMY_L1) indexNodeInto(map, node);
   for (const node of PRODUCT_TAXONOMY) {
-    const bag = new Set<string>();
-    for (const raw of [node.nameEn, node.nameZh, ...node.aliases]) {
-      for (const t of tokens(raw)) bag.add(t);
-      const n = norm(raw);
-      if (n.length >= 2) bag.add(n);
-    }
-    for (const t of bag) {
-      if (!map.has(t)) map.set(t, new Set());
-      map.get(t)!.add(node.id);
+    if (node.level === 2 && node.rootId === TOY_ROOT_ID) indexNodeInto(map, node);
+  }
+  tokenIndex = finalizeIndex(map);
+  tokenIndexFull = false;
+  // 空闲时再扩全站二级，不堵交互
+  const expand = () => {
+    if (tokenIndexFull || !tokenIndex) return;
+    const map2 = new Map<string, Set<string>>();
+    for (const [k, ids] of tokenIndex) map2.set(k, new Set(ids));
+    let i = 0;
+    const rest = PRODUCT_TAXONOMY.filter((n) => n.level === 2 && n.rootId !== TOY_ROOT_ID);
+    const step = () => {
+      const end = Math.min(i + 400, rest.length);
+      for (; i < end; i++) indexNodeInto(map2, rest[i]);
+      if (i < rest.length) {
+        window.setTimeout(step, 0);
+        return;
+      }
+      tokenIndex = finalizeIndex(map2);
+      tokenIndexFull = true;
+    };
+    window.setTimeout(step, 0);
+  };
+  if (typeof window !== 'undefined') {
+    if ('requestIdleCallback' in window) {
+      (window as Window & { requestIdleCallback: (cb: () => void) => void }).requestIdleCallback(expand);
+    } else {
+      window.setTimeout(expand, 1200);
     }
   }
-  tokenIndex = new Map([...map.entries()].map(([k, v]) => [k, [...v]]));
   return tokenIndex;
 };
+
+const ensureIndex = () => ensureToyIndex();
 
 const scoreNodeAgainstText = (node: TaxonomyNode, kw: string, kwTokens: string[]): number => {
   const names = [node.nameEn, node.nameZh, ...node.aliases].map(norm).filter(Boolean);
@@ -248,13 +288,14 @@ export const assignCategories = (
     const ids = idx.get(kw);
     if (ids) for (const id of ids.slice(0, 40)) candidateIds.add(id);
   }
-  // 优先 root 下节点加权
+  // 优先 root 下节点加权（只扫该大类，禁止全表 7k 扫描）
   if (candidateIds.size < 40 && opts?.preferRootId) {
-    for (const n of PRODUCT_TAXONOMY) {
-      if (n.level === 1 && n.parentId === opts.preferRootId) candidateIds.add(n.id);
-      if (n.level === 2 && n.rootId === opts.preferRootId && candidateIds.size < 200) {
-        // 仅当词元有交集才加
-        if (tokens(n.nameEn).some((t) => kwTokens.includes(t))) candidateIds.add(n.id);
+    for (const n of getTaxonomyL1ByRoot(opts.preferRootId)) {
+      candidateIds.add(n.id);
+      if (candidateIds.size >= 200) break;
+      for (const c of getTaxonomyChildren(n.id)) {
+        if (tokens(c.nameEn).some((t) => kwTokens.includes(t))) candidateIds.add(c.id);
+        if (candidateIds.size >= 200) break;
       }
     }
   }

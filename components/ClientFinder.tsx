@@ -249,7 +249,14 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
       return;
     }
     const timer = window.setTimeout(() => {
-      const sug = suggestToyCategoriesFromKeyword(kw, 3)[0];
+      let sug: ReturnType<typeof suggestToyCategoriesFromKeyword>[0] | undefined;
+      try {
+        sug = suggestToyCategoriesFromKeyword(kw, 3)[0];
+      } catch (e) {
+        console.warn('[ClientFinder] category suggest failed', e);
+        setAutoCatHint('类目匹配繁忙，请手动选择一级/二级');
+        return;
+      }
       if (!sug) {
         setAutoCatHint('未匹配到官方品类，可手动选择一级/二级');
         return;
@@ -279,7 +286,7 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
         patch.industry = sug.l1;
       }
       patchState(patch);
-    }, 320);
+    }, 550);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.product]);

@@ -164,19 +164,24 @@ export const clientPatchFromAnalysis = (
     (w) => [w.taxonomyL1Id, w.taxonomyL2Id].filter(Boolean) as string[]
   );
 
+  // 已有官方 ID 时跳过全站类目匹配，避免批量回写时主线程卡死
+  const sellMatched =
+    sellIdsFromProducts.length + sellIdsFromWc.length >= 2
+      ? []
+      : idsFromAssignments(assignCategoriesFromSignals(sellSignals.slice(0, 12), { limit: 4, minScore: 22 }));
+  const procureMatched =
+    procureIdsFromProducts.length >= 2
+      ? []
+      : idsFromAssignments(
+          assignCategoriesFromSignals(procureSignals.slice(0, 12), { limit: 4, minScore: 22 })
+        );
   const sellCategoryIds = [
-    ...new Set([
-      ...sellIdsFromProducts,
-      ...sellIdsFromWc,
-      ...idsFromAssignments(assignCategoriesFromSignals(sellSignals, { limit: 8, minScore: 20 })),
-    ]),
+    ...new Set([...sellIdsFromProducts, ...sellIdsFromWc, ...sellMatched]),
   ].slice(0, 24);
-  const procureCategoryIds = [
-    ...new Set([
-      ...procureIdsFromProducts,
-      ...idsFromAssignments(assignCategoriesFromSignals(procureSignals, { limit: 8, minScore: 20 })),
-    ]),
-  ].slice(0, 24);
+  const procureCategoryIds = [...new Set([...procureIdsFromProducts, ...procureMatched])].slice(
+    0,
+    24
+  );
 
   const productTags = [
     ...(data?.productIntel?.matchTags || []),
