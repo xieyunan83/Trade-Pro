@@ -8,6 +8,8 @@ import {
   ExternalLink,
   Radio,
   ArrowRight,
+  Target,
+  Mail,
 } from 'lucide-react';
 import type { User } from '../types';
 import { ModuleType } from '../types';
@@ -19,6 +21,10 @@ import {
   type LandingPayload,
 } from '../services/landingHub';
 import { withShowcaseProducts } from '../services/landingShowcase';
+import {
+  loadCatalogAutoMatchReport,
+  type CatalogAutoMatchReport,
+} from '../services/catalogAutoMatch';
 import { TradeJourneyPanel } from './TradeJourneyPanel';
 import type { JourneyProgressHint } from '../services/tradeJourney';
 
@@ -61,6 +67,9 @@ export const ModuleLandingHub: React.FC<Props> = ({
   const [data, setData] = useState<LandingPayload>(initialLanding);
   const [loading, setLoading] = useState(() => !loadLandingCache());
   const [err, setErr] = useState<string | null>(null);
+  const [matchReport, setMatchReport] = useState<CatalogAutoMatchReport | null>(() =>
+    loadCatalogAutoMatchReport()
+  );
   const dataRef = useRef(data);
   dataRef.current = data;
 
@@ -86,10 +95,21 @@ export const ModuleLandingHub: React.FC<Props> = ({
     void load(false);
   }, [load]);
 
+  useEffect(() => {
+    // 进入看板或刷新情报时同步产品库自动匹配结果
+    setMatchReport(loadCatalogAutoMatchReport());
+  }, [data?.fetchedAt, loading]);
+
   const fx = data?.fx?.quotes || [];
   const news = data?.news?.items || [];
   const products = withShowcaseProducts(data?.products?.items).slice(0, 6);
   const goCatalog = () => onNavigateModule?.(ModuleType.PRODUCT_CATALOG);
+  const goMatch = () => onNavigateModule?.(ModuleType.PRODUCT_MATCH);
+  const priorityHits = (matchReport?.hits || [])
+    .filter((h) => h.channel === 'priority_1to1')
+    .slice(0, 5);
+  const matchFresh =
+    !!matchReport && Date.now() - matchReport.at < 14 * 24 * 3600_000;
 
   const jp = journeyProgress || {
     skuCount: 0,
@@ -120,7 +140,10 @@ export const ModuleLandingHub: React.FC<Props> = ({
           <div className="flex flex-nowrap gap-1.5 shrink-0">
             <button
               type="button"
-              onClick={() => void load(true)}
+              onClick={() => {
+                setMatchReport(loadCatalogAutoMatchReport());
+                void load(true);
+              }}
               disabled={loading}
               className="inline-flex items-center gap-1 rounded-lg bg-white/10 hover:bg-white/15 border border-white/15 px-2 py-1 text-[10px] font-bold disabled:opacity-50"
             >
@@ -346,6 +369,112 @@ export const ModuleLandingHub: React.FC<Props> = ({
           </footer>
         </section>
       </div>
+
+      {/* 产品入库后的类目匹配客户（重点一对一 / EDM） */}
+      <section className="tp-surface overflow-hidden">
+        <header className="px-3 py-2 border-b border-slate-100/90 flex flex-wrap items-center justify-between gap-2 bg-gradient-to-r from-violet-50/50 to-teal-50/30">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="h-7 w-7 rounded-lg bg-slate-900 text-violet-200 flex items-center justify-center shrink-0">
+              <Target size={13} />
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-[13px] font-extrabold text-slate-900 leading-tight tracking-tight">
+                优选匹配客户
+              </h2>
+              <p className="text-[9px] text-slate-500 font-medium truncate">
+                产品库挂好一级+二级类目后自动匹配已背调客户 · 重点一对一 / 邮件测品
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-1.5 shrink-0">
+            {onNavigateModule ? (
+              <>
+                <button
+                  type="button"
+                  onClick={goCatalog}
+                  className="inline-flex items-center gap-1 text-[10px] font-extrabold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-lg"
+                >
+                  产品库
+                </button>
+                <button
+                  type="button"
+                  onClick={goMatch}
+                  className="inline-flex items-center gap-1 text-[10px] font-extrabold text-violet-900 bg-violet-50 hover:bg-violet-100 border border-violet-200/80 px-2.5 py-1 rounded-lg"
+                >
+                  产品匹配 <ArrowRight size={11} />
+                </button>
+              </>
+            ) : null}
+          </div>
+        </header>
+        <div className="p-3">
+          {!matchFresh || !matchReport ? (
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-xl border border-dashed border-slate-200 bg-slate-50/60 px-3 py-3">
+              <p className="text-[11px] text-slate-600 font-medium leading-relaxed">
+                尚无入库匹配结果。请到产品库为 SKU 选择官方一级与二级小类后导入/保存，系统会自动匹配并在此展示重点客户。
+              </p>
+              {onNavigateModule ? (
+                <button
+                  type="button"
+                  onClick={goCatalog}
+                  className="shrink-0 text-[11px] font-extrabold text-teal-800 bg-teal-50 border border-teal-200 px-3 py-1.5 rounded-lg"
+                >
+                  去挂类目
+                </button>
+              ) : null}
+            </div>
+          ) : (
+            <div className="space-y-2.5">
+              <div className="flex flex-wrap gap-2 text-[10px] font-bold">
+                <span className="rounded-full bg-emerald-100 text-emerald-800 px-2.5 py-0.5">
+                  重点一对一 {matchReport.priorityCount}
+                </span>
+                <span className="rounded-full bg-amber-100 text-amber-900 px-2.5 py-0.5 inline-flex items-center gap-1">
+                  <Mail size={10} /> EDM 测品 {matchReport.edmCount}
+                </span>
+                <span className="rounded-full bg-slate-100 text-slate-600 px-2.5 py-0.5">
+                  扫 SKU {matchReport.skuCount} · 命中 {matchReport.matchCount}
+                </span>
+                <span className="text-slate-400 font-medium ml-auto">
+                  {fmtTime(matchReport.at)}
+                </span>
+              </div>
+              {priorityHits.length === 0 ? (
+                <p className="text-[11px] text-slate-500 font-medium">
+                  暂无「重点一对一」客户，可到产品匹配查看 EDM 测品名单或补跑匹配。
+                </p>
+              ) : (
+                <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {priorityHits.map((h) => (
+                    <li
+                      key={`${h.clientId || h.website || h.companyName}`}
+                      className="rounded-xl border border-emerald-100 bg-emerald-50/40 px-2.5 py-2"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="text-[11px] font-extrabold text-slate-900 truncate">
+                            {h.companyName}
+                          </p>
+                          <p className="text-[9px] font-bold text-slate-500 truncate mt-0.5">
+                            {h.country || '—'}
+                            {h.website ? ` · ${h.website}` : ''}
+                          </p>
+                        </div>
+                        <span className="shrink-0 text-[9px] font-black text-emerald-800 bg-white border border-emerald-200 rounded-full px-1.5 py-0.5">
+                          {h.score}分
+                        </span>
+                      </div>
+                      <p className="text-[9px] text-slate-600 font-medium mt-1 line-clamp-2 leading-snug">
+                        {h.outreachAdvice || h.gradeReasons?.[0] || h.reasons[0] || '建议一对一精准开发'}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
+      </section>
 
       {/* 任务流置底 */}
       {onNavigateModule ? (
