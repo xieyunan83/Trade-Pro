@@ -385,7 +385,33 @@ function createWindow() {
   });
 
   mainWindow.webContents.on('render-process-gone', (_e, details) => {
-    showBootError('render-gone', details?.reason || '');
+    const reason = String(details?.reason || 'unknown');
+    console.error('[render-gone]', reason, details);
+    // 渲染进程被杀（OOM/卡死强制退出）时尽量自动恢复，避免整应用「意外退出」
+    if (!showingError && (reason === 'oom' || reason === 'crashed' || reason === 'killed')) {
+      showingError = false;
+      bootOk = false;
+      bootAttempt = 0;
+      clearLoadWatchdog();
+      try {
+        void loadAppShell({ forceBust: true });
+        return;
+      } catch (e) {
+        console.error('[render-gone] reload failed', e);
+      }
+    }
+    try {
+      showBootError('render-gone', reason);
+    } catch (e) {
+      console.error('[render-gone] showBootError failed', e);
+    }
+  });
+
+  mainWindow.webContents.on('unresponsive', () => {
+    console.warn('[renderer] unresponsive — 主线程可能被重计算卡住');
+  });
+  mainWindow.webContents.on('responsive', () => {
+    console.info('[renderer] responsive again');
   });
 
   // 拦截 F5（菜单已接管 Cmd/Ctrl+R）
@@ -419,10 +445,13 @@ function createWindow() {
     void injectSeedIntoPage(mainWindow.webContents).catch((err) =>
       console.error('[seed] inject failed', err)
     );
-    // 标记桌面工作站，供网页侧自动续跑背调等逻辑
+    // 仅标记桌面端；禁止再写 auto_resume=1（会导致登录即抢跑/卡死，甚至渲染进程被杀）
     void mainWindow.webContents
       .executeJavaScript(
-        `try{localStorage.setItem('trade_scout_desktop_client','1');localStorage.setItem('trade_scout_auto_resume_batch','1');}catch(e){}`,
+        `try{
+          localStorage.setItem('trade_scout_desktop_client','1');
+          localStorage.setItem('trade_scout_auto_resume_batch','0');
+        }catch(e){}`,
         true
       )
       .catch(() => undefined);
@@ -493,16 +522,23 @@ ipcMain.handle('bw-save-bytes', async (event, payload) => {
   }
 });
 
-// 启动/交互性能：GPU 光栅化 + 禁止后台节流（须在 ready 前）
+// 禁止后台节流（须在 ready 前）。不再强制 GPU raster/zero-copy：部分 Mac 上会直接整进程崩溃。
 try {
-  app.commandLine.appendSwitch('enable-gpu-rasterization');
-  app.commandLine.appendSwitch('enable-zero-copy');
   app.commandLine.appendSwitch('disable-renderer-backgrounding');
   app.commandLine.appendSwitch('disable-background-timer-throttling');
   app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+  // 给渲染进程更大堆，降低类目/CRM 大 JSON 触发 OOM 被杀的概率
+  app.commandLine.appendSwitch('js-flags', '--max-old-space-size=4096');
 } catch {
   /* ignore */
 }
+
+process.on('uncaughtException', (err) => {
+  console.error('[main] uncaughtException', err);
+});
+process.on('unhandledRejection', (err) => {
+  console.error('[main] unhandledRejection', err);
+});
 
 app.whenReady().then(async () => {
   // Windows 工作站休眠/锁屏时杀网络会导致批量背调大面积 FAILED
