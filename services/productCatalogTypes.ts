@@ -110,12 +110,14 @@ export const ensureSkuTaxonomy = (sku: CatalogSku): CatalogSku => {
 
 const LS = 'trade_scout_product_catalog_v1';
 
-export const loadCatalogSkus = (): CatalogSku[] => {
+export const loadCatalogSkus = (opts?: { ensureTaxonomy?: boolean }): CatalogSku[] => {
   try {
     const raw = localStorage.getItem(LS);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
+    // 报价等轻量场景可跳过全量类目重算，避免打开页面卡顿
+    if (opts?.ensureTaxonomy === false) return parsed as CatalogSku[];
     // 旧数据无官方 ID 时惰性回填
     return parsed.map((r: CatalogSku) => ensureSkuTaxonomy(r));
   } catch {

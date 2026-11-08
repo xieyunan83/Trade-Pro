@@ -339,10 +339,11 @@ const App: React.FC<AppProps> = ({ bootUser = null }) => {
   const [activeModule, setActiveModule] = useState<ModuleType>(ModuleType.HOME);
   /** 切换模块用 transition，避免整树同步卡死导航点击；并预热目标 chunk */
   const navigateModule = useCallback((m: ModuleType) => {
-    prefetchModule(m);
+    // 先切模块（侧栏立刻有反馈），预取放到下一宏任务，避免点击当帧被 chunk 解析堵住
     startTransition(() => {
       setActiveModule(m);
     });
+    window.setTimeout(() => prefetchModule(m), 0);
   }, []);
   const [workspaceSyncStatus, setWorkspaceSyncStatus] = useState<string | null>(null);
   const [workspaceSyncing, setWorkspaceSyncing] = useState(false);
@@ -1056,8 +1057,8 @@ const App: React.FC<AppProps> = ({ bootUser = null }) => {
               setWorkspaceSyncStatus('本机资料已就绪，正在后台同步…');
             }
 
-            // 再让出一段时间，优先响应菜单
-            await new Promise<void>((r) => window.setTimeout(r, 1200));
+            // 再让出一段时间，优先响应菜单（进站后前几秒几乎只服务点击）
+            await new Promise<void>((r) => window.setTimeout(r, 2800));
             if (cancelled) return;
 
             const repaired = await loadAndRepairAutomationQueue(currentUser);

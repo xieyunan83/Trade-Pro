@@ -41,23 +41,28 @@ export const prefetchModule = (mod: ModuleType): void => {
   });
 };
 
-/** 登录页 / 进入工作台后预热高频模块 */
+/** 进入工作台后很晚再预热；禁止进站前几秒抢主线程 */
 export const prefetchCoreModules = (): void => {
   const run = () => {
-    (
-      [
-        ModuleType.DISCOVERY,
-        ModuleType.CLIENT_CRM,
-        ModuleType.PROMO_GENERATOR,
-        ModuleType.PRODUCT_CATALOG,
-        ModuleType.PRODUCT_DESIGN_2D,
-        ModuleType.PRODUCT_MATCH,
-      ] as ModuleType[]
-    ).forEach(prefetchModule);
+    const mods: ModuleType[] = [
+      ModuleType.DISCOVERY,
+      ModuleType.CLIENT_CRM,
+      ModuleType.PROMO_GENERATOR,
+    ];
+    let i = 0;
+    const step = () => {
+      if (i >= mods.length) return;
+      prefetchModule(mods[i++]);
+      window.setTimeout(step, 800);
+    };
+    step();
   };
-  if (typeof requestIdleCallback === 'function') {
-    requestIdleCallback(() => run(), { timeout: 2500 });
-  } else {
-    setTimeout(run, 400);
-  }
+  // 进站至少 6 秒后再预热，把 CPU 留给菜单点击
+  window.setTimeout(() => {
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(() => run(), { timeout: 20_000 });
+    } else {
+      run();
+    }
+  }, 6000);
 };

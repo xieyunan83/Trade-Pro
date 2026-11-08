@@ -89,12 +89,16 @@ export const SphereNav: React.FC<Props> = ({
     setSectionId(sec.id);
     setPhase('submenu');
     const ids = sec.items.map((it) => it.id);
-    const warm = () => ids.forEach((id) => prefetchModule(id));
-    if (typeof requestIdleCallback === 'function') {
-      requestIdleCallback(warm, { timeout: 4000 });
-    } else {
-      window.setTimeout(warm, 200);
-    }
+    // 错峰预取，避免点开板块瞬间解析多个 chunk
+    window.setTimeout(() => {
+      let i = 0;
+      const step = () => {
+        if (i >= ids.length) return;
+        prefetchModule(ids[i++]);
+        window.setTimeout(step, 500);
+      };
+      step();
+    }, 400);
     // 指挥舱仅一项：点板块直接进入今日看板
     if (sec.id === 'home' && sec.items[0]) {
       onSelectModule(sec.items[0].id);
