@@ -2665,69 +2665,65 @@ const App: React.FC = () => {
     }
     if ((!historyItems || historyItems.length === 0) && (!archives || archives.length === 0)) return;
 
+    // 必须在 setState 外算合并结果：React 18 下 updater 内副作用变量读出来常仍是 0，会误报「没有可导入」
+    const prev = crmClientsRef.current || [];
+    let next = prev;
     let added = 0;
     let updated = 0;
     let skipped = 0;
-    let domainMerged = 0;
 
-    setCrmClients((prev) => {
-      let next = prev;
-      added = 0;
-      updated = 0;
-      skipped = 0;
-      domainMerged = 0;
+    if (historyItems.length > 0) {
+      const hist = mergeHistoryItemsIntoCrm(next, historyItems, stampOwnership);
+      next = hist.clients;
+      added += hist.stats.added;
+      updated += hist.stats.updated;
+      skipped += hist.stats.skipped;
+    }
+    for (const archive of archives) {
+      const results = archive.results || [];
+      if (!results.length) continue;
+      const disc = mergeDiscoveryResultsIntoCrm(next, results, stampOwnership, {
+        product: archive.product,
+        industry: archive.industry,
+      });
+      next = disc.clients;
+      added += disc.stats.added;
+      skipped += disc.stats.skipped;
+    }
+    clearCrmTombstonesForClients(next);
+    const deduped = applyCrmDomainDedupe(next, { deleteCloudLosers: false });
+    const domainMerged = deduped.removedCount;
+    next = deduped.clients;
 
-      if (historyItems.length > 0) {
-        const hist = mergeHistoryItemsIntoCrm(next, historyItems, stampOwnership);
-        next = hist.clients;
-        added += hist.stats.added;
-        updated += hist.stats.updated;
-        skipped += hist.stats.skipped;
+    crmClientsRef.current = next;
+    setCrmClients(next);
+    // 立即落盘全库，避免仅改 React state、随后被「可见列表」合并逻辑冲掉新建客户
+    try {
+      if (currentUser) {
+        mergeSaveCrmClients(currentUser, next, users, departments);
       }
-      for (const archive of archives) {
-        const results = archive.results || [];
-        if (!results.length) continue;
-        const disc = mergeDiscoveryResultsIntoCrm(next, results, stampOwnership, {
-          product: archive.product,
-          industry: archive.industry,
-        });
-        next = disc.clients;
-        added += disc.stats.added;
-        skipped += disc.stats.skipped;
-      }
-      clearCrmTombstonesForClients(next);
-      const deduped = applyCrmDomainDedupe(next);
-      domainMerged = deduped.removedCount;
-      return deduped.clients;
-    });
+    } catch (e) {
+      console.warn('CRM batch import persist failed', e);
+    }
 
     // 背调报告必须保留（CRM「查看报告」依赖 HistoryItem）；记录中心仅隐藏已入 CRM 项
     if (archives.length) {
       void pruneDiscoveryArchivesAlreadyInCrm(
         archives.map((a) => a.id),
-        // 用即将包含新导入客户的 CRM：下一拍 state 可能未刷新，合并计算
-        (() => {
-          let next = crmClientsRef.current;
-          if (historyItems.length) {
-            next = mergeHistoryItemsIntoCrm(next, historyItems, stampOwnership).clients;
-          }
-          for (const archive of archives) {
-            next = mergeDiscoveryResultsIntoCrm(next, archive.results || [], stampOwnership, {
-              product: archive.product,
-              industry: archive.industry,
-            }).clients;
-          }
-          return applyCrmDomainDedupe(next, { deleteCloudLosers: false }).clients;
-        })()
+        next
       );
     }
 
     const parts: string[] = [];
     if (added) parts.push(`新建 ${added}`);
-    if (updated) parts.push(`更新 ${updated}`);
-    if (skipped) parts.push(`跳过已存在 ${skipped}`);
+    if (updated) parts.push(`更新资料 ${updated}`);
+    if (skipped) parts.push(`跳过无效 ${skipped}`);
     if (domainMerged) parts.push(`同域名合并 ${domainMerged}`);
-    alert(parts.length ? `CRM 导入完成：${parts.join('，')}` : '没有可导入的客户');
+    alert(
+      parts.length
+        ? `CRM 导入完成：${parts.join('，')}`
+        : '没有可导入的客户（请确认勾选的是已完成背调且带官网/公司名的任务）'
+    );
   };
 
   /** 搜索归档：整份已入 CRM 则删；部分入 CRM 则剔除已入结果 */
@@ -5612,60 +5608,95 @@ const App: React.FC = () => {
       alert('你没有「客户管理 CRM」权限，请联系管理员或部门主管开通。');
       return;
     }
+    const crmNow = crmClientsRef.current || [];
     const historyItems: HistoryItem[] = [];
     const seenHosts = new Set<string>();
     const seenNames = new Set<string>();
+    let alreadyInCrm = 0;
+    let dupTasks = 0;
+    let noAnalysis = 0;
+
     for (const task of tasks) {
-      if (!task.analysis) continue;
-      const domainKey = normalizeCrmHost(
-        task.analysis.companyInfo?.website || task.website || ''
-      );
-      const nameKey = (task.analysis.companyInfo?.name || task.clientName || '')
-        .trim()
-        .toLowerCase();
-      if (domainKey && seenHosts.has(domainKey)) continue;
-      if (!domainKey && nameKey && seenNames.has(nameKey)) continue;
+      if (!task.analysis) {
+        noAnalysis += 1;
+        continue;
+      }
+      const website =
+        task.analysis.companyInfo?.website || task.website || '';
+      const companyName =
+        task.analysis.companyInfo?.name || task.clientName || '';
+      const domainKey = normalizeCrmHost(website);
+      const nameKey = companyName.trim().toLowerCase();
+
+      // 与列表「未入 CRM」同一套匹配：已在 CRM 的仍可带入做资料更新
+      const inCrmIdx = findCrmClientIndex(crmNow, website, companyName);
+      if (inCrmIdx >= 0) alreadyInCrm += 1;
+
+      if (domainKey && seenHosts.has(domainKey)) {
+        dupTasks += 1;
+        continue;
+      }
+      if (!domainKey && nameKey && seenNames.has(nameKey)) {
+        dupTasks += 1;
+        continue;
+      }
       if (domainKey) seenHosts.add(domainKey);
       if (nameKey) seenNames.add(nameKey);
 
+      // 始终以队列报告为准生成导入项（避免匹配到的历史记录缺 domain 导致整批被跳过）
       const matched = historyRef.current.find((h) => {
         const hHost = normalizeCrmHost(h.domain || h.data?.companyInfo?.website);
         const hName = (h.data?.companyInfo?.name || '').trim().toLowerCase();
         return (
-          (domainKey && hHost && domainKey === hHost) || (nameKey && hName && nameKey === hName)
+          (domainKey && hHost && domainKey === hHost) ||
+          (!domainKey && nameKey && hName && nameKey === hName)
         );
       });
-      if (matched) {
-        historyItems.push(matched);
-        continue;
-      }
+      const data = task.analysis || matched?.data;
+      if (!data) continue;
       historyItems.push(
         stampOwnership({
-          id: `promo_crm_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          id: matched?.id || `promo_crm_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
           type: ModuleType.BACKGROUND,
-          data: task.analysis,
-          timestamp: task.completedAt || Date.now(),
-          domain: task.analysis.companyInfo?.website || task.website || task.clientName || '',
-          keyword: task.keyword || task.analysis.searchKeyword,
+          data,
+          timestamp: matched?.timestamp || task.completedAt || Date.now(),
+          domain:
+            website ||
+            matched?.domain ||
+            data.companyInfo?.website ||
+            task.clientName ||
+            '',
+          keyword: task.keyword || data.searchKeyword || matched?.keyword,
           country: normalizeCountryZh(
             task.country ||
-              task.analysis.searchCountry ||
-              task.analysis.companyInfo?.headquarters ||
+              data.searchCountry ||
+              data.companyInfo?.headquarters ||
+              matched?.country ||
               ''
           ),
-          source: 'batch',
+          source: matched?.source || 'batch',
         })
       );
     }
     if (!historyItems.length) {
-      alert('没有可导入的报告数据（已按官网去重）');
+      alert(
+        noAnalysis
+          ? '所选任务没有背调报告，无法导入。请先完成背调。'
+          : '没有可导入的报告数据（已按官网去重）'
+      );
       return;
     }
-    const dupHint =
-      tasks.length > historyItems.length
-        ? `（已从 ${tasks.length} 条队列任务按官网去重）`
-        : '';
-    if (!confirm(`将把 ${historyItems.length} 家公司加入客户管理？${dupHint}`)) return;
+    const hints: string[] = [];
+    if (tasks.length > historyItems.length) {
+      hints.push(`队列 ${tasks.length} 条 → 公司 ${historyItems.length} 家（去重 ${dupTasks}）`);
+    }
+    if (alreadyInCrm > 0) {
+      hints.push(`其中约 ${Math.min(alreadyInCrm, historyItems.length)} 家已在 CRM，将更新资料`);
+    }
+    const willNew = Math.max(0, historyItems.length - Math.min(alreadyInCrm, historyItems.length));
+    if (willNew > 0) hints.push(`预计新建约 ${willNew} 家`);
+    const dupHint = hints.length ? `\n${hints.join('；')}` : '';
+    if (!confirm(`将把 ${historyItems.length} 家公司写入客户管理？${dupHint}`)) return;
     handleBatchImportRecordsToCrm(historyItems, []);
   };
 

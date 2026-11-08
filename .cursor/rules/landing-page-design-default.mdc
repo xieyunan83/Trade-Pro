@@ -1,0 +1,29 @@
+---
+description: 建站模板与对外落地页默认遵循 landing-page-design，并遵守本仓库 UI 规则
+globs: "**/siteBuild*.{ts,tsx},**/siteBrief*.{ts,tsx},**/siteBuilder*.{ts,tsx},**/siteReference*.{ts,tsx},**/Site*.{ts,tsx},**/ModuleSiteBuilder.tsx,**/ModuleLandingHub.tsx,**/landing*.{ts,tsx},**/Landing*.{ts,tsx},**/api/landing.ts,**/vite.landingPlugin.ts"
+alwaysApply: false
+---
+
+# 建站 / 对外页 · 默认设计口令
+
+凡改建站模板、一键建站管线、对外落地页、营销站、站点预览 HTML/CSS、宣发「网站设计开发」相关产物时，**默认视为用户已下达**：
+
+> 按 landing-page-design，且遵守本仓库 ui 规则
+
+**无需用户每次再打字。** 先读并遵循：
+
+1. 项目 Skill：`.cursor/skills/landing-page-design/SKILL.md`（同内容：`.agents/skills/landing-page-design/SKILL.md`）
+2. 本仓库始终生效：`.cursor/rules/ui-no-vendor-leak.mdc`
+3. 用户规则中的前端设计硬约束（品牌优先、少卡片、禁紫渐变/奶油衬线套路等）
+
+与 Skill 冲突时：**本仓库 ui 规则与用户硬约束优先**；Skill 负责结构、转化文案、字号/间距/动效等可落地部分。
+
+## 适用范围
+
+- 适用：客户站 / 展示站 / 落地页模板、`siteBuild*` / `SiteOneClick*` / `ModuleSiteBuilder`、对外营销页
+- 不适用：平台内部业务台（CRM、背调作业、指挥舱任务流等）日常改版
+
+## 执行要点
+
+- 新站：先 Part A（意图/受众/结构/文案），再 Part B（视觉系统）
+- 前台文案保持中性产品语言；不要展示 Skill 名称
