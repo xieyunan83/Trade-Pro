@@ -6314,41 +6314,53 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                     />
                 </ModulePane>
                 <ModulePane id={ModuleType.EMAIL_CAMPAIGN} activeId={activeModule} maxAlive={10}>
-                    <ModuleEmailCampaign
-                      crmClients={crmClients}
-                      onAddClients={handleAddClients}
-                      currentUser={currentUser}
-                      users={users}
-                      departments={departments}
-                      onEmailsSent={(rows) => {
-                        setCrmClients((prev) => {
-                          let next = prev;
-                          for (const row of rows) {
-                            next = next.map((c) => {
-                              if (row.clientId && c.id === row.clientId) {
-                                return markEmailSentOnClient(c, {
-                                  to: row.to,
-                                  subject: row.subject,
-                                  by: currentUser.username,
+                    {/* 独立 Suspense：避免加载邮件 chunk/编辑器时整页主区被共用 fallback 挡住 */}
+                    <Suspense
+                      fallback={
+                        <div className="flex items-center justify-center py-16 text-slate-400 gap-2">
+                          <Loader2 className="animate-spin text-cyan-600" size={20} />
+                          <span className="text-xs font-bold">邮件营销加载中…</span>
+                        </div>
+                      }
+                    >
+                      <ErrorBoundary label="邮件营销">
+                        <ModuleEmailCampaign
+                          crmClients={crmClients}
+                          onAddClients={handleAddClients}
+                          currentUser={currentUser}
+                          users={users}
+                          departments={departments}
+                          onEmailsSent={(rows) => {
+                            setCrmClients((prev) => {
+                              let next = prev;
+                              for (const row of rows) {
+                                next = next.map((c) => {
+                                  if (row.clientId && c.id === row.clientId) {
+                                    return markEmailSentOnClient(c, {
+                                      to: row.to,
+                                      subject: row.subject,
+                                      by: currentUser.username,
+                                    });
+                                  }
+                                  const nameHit =
+                                    row.companyName &&
+                                    (c.name || '').toLowerCase() === row.companyName.toLowerCase();
+                                  if (!row.clientId && nameHit) {
+                                    return markEmailSentOnClient(c, {
+                                      to: row.to,
+                                      subject: row.subject,
+                                      by: currentUser.username,
+                                    });
+                                  }
+                                  return c;
                                 });
                               }
-                              const nameHit =
-                                row.companyName &&
-                                (c.name || '').toLowerCase() === row.companyName.toLowerCase();
-                              if (!row.clientId && nameHit) {
-                                return markEmailSentOnClient(c, {
-                                  to: row.to,
-                                  subject: row.subject,
-                                  by: currentUser.username,
-                                });
-                              }
-                              return c;
+                              return next;
                             });
-                          }
-                          return next;
-                        });
-                      }}
-                    />
+                          }}
+                        />
+                      </ErrorBoundary>
+                    </Suspense>
                 </ModulePane>
                 <ModulePane id={ModuleType.IMAGE_GENERATOR} activeId={activeModule} maxAlive={10}>
                     <ModuleImageGenerator />

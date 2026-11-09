@@ -1,7 +1,18 @@
-import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import ReactQuill from 'react-quill';
-import 'react-quill/dist/quill.snow.css';
+import React, {
+  useState,
+  useRef,
+  useEffect,
+  useCallback,
+  useMemo,
+  Suspense,
+  lazy,
+} from 'react';
 import { Client, EmailTask, EmailTemplate, AliyunConfig, User, Department } from '../types';
+
+import 'react-quill/dist/quill.snow.css';
+
+/** 编辑器 JS 按需加载：打开邮件营销主界面不再等 quill 大包 */
+const ReactQuill = lazy(() => import('react-quill'));
 import {
   Mail,
   Send,
@@ -95,7 +106,7 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
     companyName: '',
     clientId: '',
   });
-  const quillRef = useRef<ReactQuill>(null);
+  const quillRef = useRef<{ getEditor: () => { getSelection: (b?: boolean) => { index: number }; insertText: (i: number, t: string) => void; insertEmbed: (i: number, t: string, v: string) => void } } | null>(null);
   /** 切换用户后跳过一次保存，避免用上一用户的 state 写穿 */
   const skipNextSaveRef = useRef(false);
 
@@ -929,14 +940,23 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
                     </button>
                   ))}
                 </div>
-                <ReactQuill
-                  ref={quillRef}
-                  theme="snow"
-                  modules={modules}
-                  value={newTemplate.body || ''}
-                  onChange={(body) => setNewTemplate({ ...newTemplate, body })}
-                  className="h-64 mb-12"
-                />
+                <Suspense
+                  fallback={
+                    <div className="h-64 mb-12 flex items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-500 gap-2">
+                      <Loader2 className="animate-spin text-blue-600" size={16} />
+                      编辑器加载中…
+                    </div>
+                  }
+                >
+                  <ReactQuill
+                    ref={quillRef as React.RefObject<any>}
+                    theme="snow"
+                    modules={modules}
+                    value={newTemplate.body || ''}
+                    onChange={(body: string) => setNewTemplate({ ...newTemplate, body })}
+                    className="h-64 mb-12"
+                  />
+                </Suspense>
               </div>
 
               <button
