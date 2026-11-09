@@ -1,8 +1,8 @@
 
-import { HistoryItem, AutomationResult, KnowledgeFile, DiscoveryArchiveItem, CustomerProductProfile } from '../types';
+import { HistoryItem, AutomationResult, KnowledgeFile, DiscoveryArchiveItem, CustomerProductProfile, Client } from '../types';
 
 const DB_NAME = 'TradeScoutDB';
-const DB_VERSION = 7;
+const DB_VERSION = 8;
 const DISCOVERY_LS_KEY = 'trade_scout_discovery_archives';
 
 export const initDB = (): Promise<IDBDatabase> => {
@@ -29,7 +29,50 @@ export const initDB = (): Promise<IDBDatabase> => {
       if (!db.objectStoreNames.contains('product_profiles')) {
         db.createObjectStore('product_profiles', { keyPath: 'id' });
       }
+      if (!db.objectStoreNames.contains('crm_clients')) {
+        db.createObjectStore('crm_clients', { keyPath: 'id' });
+      }
     };
+  });
+};
+
+/** CRM 全量读写走 IndexedDB，避免 localStorage 整表 JSON 卡死主线程 */
+export const getCrmClientsFromIdb = async (): Promise<Client[]> => {
+  try {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+      if (!db.objectStoreNames.contains('crm_clients')) {
+        resolve([]);
+        return;
+      }
+      const transaction = db.transaction('crm_clients', 'readonly');
+      const store = transaction.objectStore('crm_clients');
+      const request = store.getAll();
+      request.onsuccess = () => resolve((request.result as Client[]) || []);
+      request.onerror = () => reject(request.error);
+    });
+  } catch {
+    return [];
+  }
+};
+
+export const saveCrmClientsToIdb = async (clients: Client[]): Promise<void> => {
+  if (!Array.isArray(clients)) return;
+  const db = await initDB();
+  await new Promise<void>((resolve, reject) => {
+    if (!db.objectStoreNames.contains('crm_clients')) {
+      resolve();
+      return;
+    }
+    const transaction = db.transaction('crm_clients', 'readwrite');
+    const store = transaction.objectStore('crm_clients');
+    store.clear();
+    for (const c of clients) {
+      if (c?.id) store.put(c);
+    }
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error || new Error('crm_clients bulk aborted'));
   });
 };
 

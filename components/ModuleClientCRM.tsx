@@ -402,35 +402,43 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
 
   const historyIndex = useMemo(() => buildHistoryLookupIndex(history), [history]);
 
-  const enrichedClients = useMemo((): EnrichedClient[] => {
-    return clients.map((client) => {
+  /** 轻量情报索引：过滤用；完整 EnrichedClient 只给当前页，避免 2000+ 客户整表 enrichment 卡死 */
+  type ClientIntelLite = {
+    historyItem?: HistoryItem;
+    hasBg: boolean;
+    hasProduct: boolean;
+    hasDm: boolean;
+    dmStatus: DmDigStatus;
+    dmContactCount: number;
+    bgAt?: number;
+  };
+
+  const intelById = useMemo(() => {
+    const map = new Map<string, ClientIntelLite>();
+    for (const client of clients) {
       const intel = resolveCrmClientIntel(client, historyIndex);
-      const historyItem = intel.historyItem;
-      const bgAt = resolveBackgroundCheckAtIndexed(client, historyIndex);
-      return {
-        client,
-        historyItem,
+      map.set(client.id, {
+        historyItem: intel.historyItem,
         hasBg: intel.hasBg,
         hasProduct: intel.hasProduct,
         hasDm: intel.hasDm,
         dmStatus: intel.dmStatus,
         dmContactCount: intel.dmContactCount,
-        bgAt,
-        canOpenReport: !!historyItem || intel.hasBg,
-      };
-    });
+        bgAt: resolveBackgroundCheckAtIndexed(client, historyIndex),
+      });
+    }
+    return map;
   }, [clients, historyIndex]);
 
   const filterOptions = useMemo(() => {
     const countries = new Set<string>();
     const productTypes = new Set<string>();
     const owners = new Set<string>();
-    for (const row of enrichedClients) {
-      const c = row.client;
+    for (const c of clients) {
       if (c.country) countries.add(c.country);
       const pt = (c.productType || '').trim();
       if (pt && pt !== 'N/A') productTypes.add(pt);
-      const owner = resolveOwner(c, row.historyItem);
+      const owner = resolveOwner(c, intelById.get(c.id)?.historyItem);
       if (owner) owners.add(owner);
     }
     return {
@@ -438,16 +446,23 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
       productTypes: [...productTypes].sort((a, b) => a.localeCompare(b, 'zh-CN')),
       owners: [...owners].sort((a, b) => a.localeCompare(b, 'zh-CN')),
     };
-  }, [enrichedClients, resolveOwner]);
+  }, [clients, intelById, resolveOwner]);
 
   const dateFromMs = filterDateFrom ? new Date(filterDateFrom).getTime() : undefined;
   const dateToMs = filterDateTo
     ? new Date(filterDateTo).getTime() + 24 * 60 * 60 * 1000 - 1
     : undefined;
 
-  const filteredEnriched = useMemo(() => {
+  const filteredClients = useMemo(() => {
     const q = debouncedSearch.trim().toLowerCase();
-    return enrichedClients.filter(({ client, historyItem, hasBg, hasProduct, hasDm, dmStatus, bgAt }) => {
+    return clients.filter((client) => {
+      const row = intelById.get(client.id);
+      const historyItem = row?.historyItem;
+      const hasBg = !!row?.hasBg;
+      const hasProduct = !!row?.hasProduct;
+      const hasDm = !!row?.hasDm;
+      const dmStatus = row?.dmStatus;
+      const bgAt = row?.bgAt;
       if (q) {
         const owner = resolveOwner(client, historyItem).toLowerCase();
         const hit =
@@ -495,7 +510,8 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
       return true;
     });
   }, [
-    enrichedClients,
+    clients,
+    intelById,
     debouncedSearch,
     filterCountry,
     filterType,
@@ -513,18 +529,37 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
 
   useEffect(() => {
     if (!onNavOrderChange) return;
-    const order = filteredEnriched
-      .filter((e) => e.historyItem?.id)
-      .map((e) => ({ clientId: e.client.id, historyId: e.historyItem!.id }));
+    const order: { clientId: string; historyId: string }[] = [];
+    for (const client of filteredClients) {
+      const hid = intelById.get(client.id)?.historyItem?.id;
+      if (hid) order.push({ clientId: client.id, historyId: hid });
+    }
     onNavOrderChange(order);
-  }, [filteredEnriched, onNavOrderChange]);
+  }, [filteredClients, intelById, onNavOrderChange]);
 
-  const totalPages = Math.max(1, Math.ceil(filteredEnriched.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(filteredClients.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
-  const pagedEnriched = useMemo(() => {
+  const pagedEnriched = useMemo((): EnrichedClient[] => {
     const start = (safePage - 1) * PAGE_SIZE;
-    return filteredEnriched.slice(start, start + PAGE_SIZE);
-  }, [filteredEnriched, safePage]);
+    return filteredClients.slice(start, start + PAGE_SIZE).map((client) => {
+      const row = intelById.get(client.id);
+      const historyItem = row?.historyItem;
+      const hasBg = !!row?.hasBg;
+      return {
+        client,
+        historyItem,
+        hasBg,
+        hasProduct: !!row?.hasProduct,
+        hasDm: !!row?.hasDm,
+        dmStatus: row?.dmStatus || 'none',
+        dmContactCount: row?.dmContactCount || 0,
+        bgAt: row?.bgAt,
+        canOpenReport: !!historyItem || hasBg,
+      };
+    });
+  }, [filteredClients, safePage, intelById]);
+
+  const filteredEnrichedCount = filteredClients.length;
 
   useEffect(() => {
     setPage(1);
@@ -558,8 +593,8 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   const overdueCount = useMemo(() => clients.filter(isOverdueFollowUp).length, [clients]);
 
   const selectedClients = useMemo(
-    () => filteredEnriched.filter((e) => selectedClientIds.has(e.client.id)).map((e) => e.client),
-    [filteredEnriched, selectedClientIds]
+    () => filteredClients.filter((c) => selectedClientIds.has(c.id)),
+    [filteredClients, selectedClientIds]
   );
 
   const patchClient = useCallback(
@@ -671,10 +706,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
     filterStatus !== 'all';
 
   const handleExport = () => {
-    const list =
-      selectedClients.length > 0
-        ? selectedClients
-        : filteredEnriched.map((e) => e.client);
+    const list = selectedClients.length > 0 ? selectedClients : filteredClients;
     if (!list.length) {
       alert('没有可导出的客户');
       return;
@@ -693,8 +725,8 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
           <h3 className="text-xs font-black text-slate-800">正式客户 · 商机漏斗</h3>
           <div className="text-[10px] font-bold text-slate-400">
             {clients.length} 家
-            {filteredEnriched.length !== clients.length && (
-              <span className="text-blue-600 ml-1">· 筛选 {filteredEnriched.length}</span>
+            {filteredEnrichedCount !== clients.length && (
+              <span className="text-blue-600 ml-1">· 筛选 {filteredEnrichedCount}</span>
             )}
             {overdueCount > 0 ? (
               <button
@@ -1306,15 +1338,15 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
         </table>
       </div>
 
-      {filteredEnriched.length > 0 && (
+      {filteredEnrichedCount > 0 && (
         <PaginationBar
           page={safePage}
           totalPages={totalPages}
           onPageChange={setPage}
           summary={
             <>
-              第 {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filteredEnriched.length)} 条
-              / 共 {filteredEnriched.length} 条
+              第 {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filteredEnrichedCount)} 条
+              / 共 {filteredEnrichedCount} 条
               {selectedClientIds.size > 0 ? ` · 已选 ${selectedClientIds.size}` : ''}
             </>
           }

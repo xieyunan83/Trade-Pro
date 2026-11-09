@@ -153,6 +153,7 @@ import {
   archiveToDiscoveryState,
   emptyDiscoveryState,
   isDiscoverySessionArchiveId,
+  hydrateCrmClientsCache,
   loadAllCrmClients,
   mergeSaveCrmClients,
   migrateLegacyCrmOwnership,
@@ -1021,6 +1022,10 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
             if (cancelled) return;
 
             // 1. 本机数据优先上屏（CRM / 历史），云同步放到后面，避免登录空白卡顿
+            // CRM：先 hydrate IndexedDB，避免同步 JSON.parse 大库卡死
+            await hydrateCrmClientsCache();
+            await yieldToUi();
+            if (cancelled) return;
             const h = await getHistory();
             await yieldToUi();
             if (!cancelled) {
@@ -1636,31 +1641,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
             // 合并后清误墓碑；展示层再挡「用户明确删除」的复活（不删云端）
             reconcileCrmTombstonesWithLiveClients(nextCrm);
 
-            // 用背调历史回填 CRM 品类（跨端采完品类后，对端 CRM 仍显示「公开信息未找到」）
-            try {
-              const histForCrm = await getHistory();
-              const reconciled = reconcileCrmProductTypesFromHistory(nextCrm, histForCrm);
-              if (reconciled.changed > 0) {
-                nextCrm = reconciled.clients;
-                console.info(`[CRM] reconciled product types from history: ${reconciled.changed}`);
-              }
-            } catch (e) {
-              console.warn('[CRM] product type reconcile failed', e);
-            }
-
-            // 同域名客户合并（名称不同也合并），避免 CRM/营销工具重复
-            try {
-              const deduped = applyCrmDomainDedupe(nextCrm);
-              if (deduped.removedCount > 0) {
-                console.info(
-                  `[CRM] domain dedupe: groups=${deduped.mergedGroups} removed=${deduped.removedCount}`
-                );
-                nextCrm = deduped.clients;
-              }
-            } catch (e) {
-              console.warn('[CRM] domain dedupe failed', e);
-            }
-
+            // 进站不做整表品类回填 / 域名去重（两千+ 客户会卡死主线程）；延后空闲整理
             if (!cancelled) {
               // 旧 CRM 回填部门，便于本部门主管按规则看到历史客户
               const migrated = migrateLegacyCrmOwnership(nextCrm, users, depts());
@@ -1673,6 +1654,46 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
               setCrmClients(filteredCrm);
               crmPersistReadyRef.current = true;
               userDataReadyRef.current = true;
+
+              const snapshotForIdle = nextCrm;
+              window.setTimeout(() => {
+                if (cancelled) return;
+                void (async () => {
+                  try {
+                    await yieldToUi();
+                    const histForCrm = await getHistory();
+                    const reconciled = reconcileCrmProductTypesFromHistory(
+                      snapshotForIdle,
+                      histForCrm
+                    );
+                    let idleCrm = reconciled.changed > 0 ? reconciled.clients : snapshotForIdle;
+                    if (reconciled.changed > 0) {
+                      console.info(
+                        `[CRM] reconciled product types from history: ${reconciled.changed}`
+                      );
+                    }
+                    // 大库跳过自动域名去重；仅中小库空闲合并
+                    if (idleCrm.length <= 800) {
+                      const deduped = applyCrmDomainDedupe(idleCrm, {
+                        deleteCloudLosers: false,
+                      });
+                      if (deduped.removedCount > 0) {
+                        console.info(
+                          `[CRM] idle domain dedupe: groups=${deduped.mergedGroups} removed=${deduped.removedCount}`
+                        );
+                        idleCrm = deduped.clients;
+                      }
+                    }
+                    if (cancelled) return;
+                    if (idleCrm !== snapshotForIdle) {
+                      saveAllCrmClients(idleCrm);
+                      setCrmClients(scope(filterOutCrmTombstones(idleCrm)));
+                    }
+                  } catch (e) {
+                    console.warn('[CRM] idle reconcile/dedupe failed', e);
+                  }
+                })();
+              }, 18_000);
             }
         } catch (e) {
             console.error("Sync Error", e);
@@ -1786,21 +1807,24 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
 
   useEffect(() => {
       if (!currentUser || !userDataReadyRef.current || !crmPersistReadyRef.current) return;
-      // 仅把当前 React 可见列表合并写回本机。
-      // 云端：背调完成走「一条一推」；此处防抖整表 upsert 作兜底，避免批量时每条都整表上传。
+      // 仅把当前 React 可见列表合并写回本机（内存 + IndexedDB，大库不再整表 stringify LS）。
+      // 云端：背调完成走「一条一推」；此处防抖整表 upsert 作兜底。
       // 硬规则：此路径绝不写墓碑、绝不 delete 云端。
       const mergedAll = mergeSaveCrmClients(currentUser, crmClients, users, departments);
 
       const t = window.setTimeout(() => {
+        // 大库跳过整表云同步，避免登录后主线程/网络双卡；依赖单条推送
+        if (crmClients.length > 800) return;
         if (isSupabaseConfigured() && crmClients.length > 0) {
           syncCrmClients(crmClients).catch((e) => console.error('Supabase CRM sync failed', e));
         }
-        if (isGitHubConnected && mergedAll.length > 0) {
+        // GitHub crm.json 整表写对大库极重，仅中小库自动备份
+        if (isGitHubConnected && mergedAll.length > 0 && mergedAll.length <= 800) {
           saveCRMToCloud(mergedAll).catch((e) =>
             console.error('Auto CRM GitHub sync failed', e)
           );
         }
-      }, 12_000);
+      }, 16_000);
       return () => window.clearTimeout(t);
   }, [crmClients, isGitHubConnected, currentUser, users, departments]);
 

@@ -140,16 +140,142 @@ export const resolveDiscoveryStateOnLogin = (
 };
 
 const CRM_ALL_KEY = 'tradeScoutClients';
+/** 超过此体积不再同步 JSON.parse/stringify 到 localStorage（主线程会卡死） */
+const CRM_LS_SOFT_CHARS = 1_800_000;
+const CRM_LS_META_KEY = 'tradeScoutClients_meta';
 
-export const loadAllCrmClients = (): Client[] => {
+let crmMemoryCache: Client[] | null = null;
+let crmHydrated = false;
+let crmPersistTimer: ReturnType<typeof setTimeout> | null = null;
+
+const readCrmFromLocalStorageSync = (): Client[] => {
   try {
     const raw = localStorage.getItem(CRM_ALL_KEY);
     if (!raw) return [];
+    // 过大时跳过同步解析，交给 hydrateCrmClientsCache / IndexedDB
+    if (raw.length > CRM_LS_SOFT_CHARS) {
+      console.warn(
+        `[CRM] localStorage payload too large (${raw.length} chars); skip sync parse`
+      );
+      return [];
+    }
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
   }
+};
+
+const scheduleCrmPersist = (clients: Client[]) => {
+  if (crmPersistTimer) clearTimeout(crmPersistTimer);
+  crmPersistTimer = setTimeout(() => {
+    crmPersistTimer = null;
+    void (async () => {
+      try {
+        const { saveCrmClientsToIdb } = await import('../services/db');
+        await saveCrmClientsToIdb(clients);
+      } catch (e) {
+        console.warn('[CRM] IndexedDB persist failed', e);
+      }
+      // 小库才写 LS，大库只保留 meta，避免下次登录同步卡死
+      try {
+        const raw = JSON.stringify(clients);
+        if (raw.length <= CRM_LS_SOFT_CHARS) {
+          localStorage.setItem(CRM_ALL_KEY, raw);
+          localStorage.removeItem(CRM_LS_META_KEY);
+        } else {
+          localStorage.removeItem(CRM_ALL_KEY);
+          localStorage.setItem(
+            CRM_LS_META_KEY,
+            JSON.stringify({ storedInIdb: true, count: clients.length, at: Date.now() })
+          );
+        }
+      } catch {
+        try {
+          localStorage.removeItem(CRM_ALL_KEY);
+        } catch {
+          /* ignore */
+        }
+      }
+    })();
+  }, 400);
+};
+
+/** 登录首帧前调用：优先 IndexedDB，必要时从 LS 迁移 */
+export const hydrateCrmClientsCache = async (): Promise<Client[]> => {
+  if (crmHydrated && crmMemoryCache) return crmMemoryCache;
+  try {
+    const { getCrmClientsFromIdb, saveCrmClientsToIdb } = await import('../services/db');
+    const fromIdb = await getCrmClientsFromIdb();
+    if (fromIdb.length > 0) {
+      crmMemoryCache = fromIdb;
+      crmHydrated = true;
+      // 大库清掉 LS 整表，防止旧路径再同步 stringify
+      try {
+        const raw = localStorage.getItem(CRM_ALL_KEY);
+        if (raw && raw.length > CRM_LS_SOFT_CHARS) {
+          localStorage.removeItem(CRM_ALL_KEY);
+          localStorage.setItem(
+            CRM_LS_META_KEY,
+            JSON.stringify({ storedInIdb: true, count: fromIdb.length, at: Date.now() })
+          );
+        }
+      } catch {
+        /* ignore */
+      }
+      return fromIdb;
+    }
+    // IDB 空：尝试从 LS 全量迁移（可能较慢，但只发生一次）
+    let fromLs: Client[] = [];
+    let lsRawLen = 0;
+    try {
+      const raw = localStorage.getItem(CRM_ALL_KEY);
+      if (raw) {
+        lsRawLen = raw.length;
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) fromLs = parsed;
+      }
+    } catch {
+      fromLs = [];
+    }
+    if (fromLs.length > 0) {
+      crmMemoryCache = fromLs;
+      crmHydrated = true;
+      try {
+        await saveCrmClientsToIdb(fromLs);
+      } catch (e) {
+        console.warn('[CRM] migrate LS→IDB failed', e);
+      }
+      if (lsRawLen > CRM_LS_SOFT_CHARS) {
+        try {
+          localStorage.removeItem(CRM_ALL_KEY);
+          localStorage.setItem(
+            CRM_LS_META_KEY,
+            JSON.stringify({ storedInIdb: true, count: fromLs.length, at: Date.now() })
+          );
+        } catch {
+          /* ignore */
+        }
+      }
+      return fromLs;
+    }
+  } catch (e) {
+    console.warn('[CRM] hydrate failed', e);
+  }
+  const fallback = readCrmFromLocalStorageSync();
+  crmMemoryCache = fallback;
+  crmHydrated = true;
+  return fallback;
+};
+
+export const loadAllCrmClients = (): Client[] => {
+  if (crmMemoryCache) return crmMemoryCache;
+  const fromLs = readCrmFromLocalStorageSync();
+  if (fromLs.length) {
+    crmMemoryCache = fromLs;
+    return fromLs;
+  }
+  return [];
 };
 
 /**
@@ -208,11 +334,7 @@ export const migrateLegacyCrmOwnership = (
 ): { clients: Client[]; changed: boolean } => {
   const { items, changed } = migrateLegacyOwnership(clients, allUsers, departments);
   if (changed) {
-    try {
-      localStorage.setItem(CRM_ALL_KEY, JSON.stringify(items));
-    } catch {
-      /* ignore */
-    }
+    saveAllCrmClients(items);
   }
   return { clients: items, changed };
 };
@@ -236,21 +358,15 @@ export const mergeSaveCrmClients = (
   }
   const kept = existing.filter((c) => !canViewOwnedRecord(viewer, c, allUsers, departments));
   const merged = [...scopedClients, ...kept];
-  try {
-    localStorage.setItem(CRM_ALL_KEY, JSON.stringify(merged));
-  } catch {
-    /* ignore */
-  }
+  saveAllCrmClients(merged);
   return merged;
 };
 
 /** 写入全库 CRM（不过滤部门，用于清理后整库覆盖） */
 export const saveAllCrmClients = (clients: Client[]): void => {
-  try {
-    localStorage.setItem(CRM_ALL_KEY, JSON.stringify(clients));
-  } catch {
-    /* ignore */
-  }
+  crmMemoryCache = clients;
+  crmHydrated = true;
+  scheduleCrmPersist(clients);
 };
 
 /** 从全库 localStorage 删除早于 cutoff 的 CRM 客户（保守规则，返回被删 id 列表） */
