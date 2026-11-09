@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="build-stamp" content="login-split-20261108f">
+    <meta name="build-stamp" content="login-shell-20261109a">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
     <meta http-equiv="Pragma" content="no-cache" />
     <title>外贸智慧协同</title>
@@ -108,11 +108,24 @@
                 }
             } catch (e) {}
         };
+        // 12s 仍停在启动壳 → 自动重试；3s 先露出「重试」按钮，避免一直傻转
         window.__TP_BOOT_TIMER = setTimeout(function () {
             if (document.getElementById('tp-boot')) {
                 window.__TP_BOOT_FAIL('boot-timeout');
             }
-        }, 45000);
+        }, 12000);
+        window.setTimeout(function () {
+            try {
+                var tip = document.getElementById('tp-boot-tip');
+                var btn = document.getElementById('tp-boot-retry');
+                if (document.getElementById('tp-boot') && tip) {
+                    tip.textContent = '加载较慢，可点下方重试';
+                }
+                if (document.getElementById('tp-boot') && btn) {
+                    btn.style.display = 'inline-flex';
+                }
+            } catch (e) {}
+        }, 3000);
     </script>
 
     <meta name="description" content="外贸智慧协同：赋能澄海玩具产业升级——选品适市、客户背调、开发触达与协同成交。">
@@ -1125,18 +1138,20 @@
 </head>
 <body>
     <div id="root">
-      <!-- 启动壳：视觉对齐登录页，无「正在加载 / 强制刷新」文案，缩短感知等待 -->
-      <div id="tp-boot" class="tp-login" style="min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;font-family:PingFang SC,Hiragino Sans GB,Microsoft YaHei,system-ui,sans-serif;" aria-hidden="true">
+      <!-- 启动壳：直接画登录表单骨架，主 JS 未到也能先看见登录界面（字段暂不可用） -->
+      <div id="tp-boot" class="tp-login" style="min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;font-family:PingFang SC,Hiragino Sans GB,Microsoft YaHei,system-ui,sans-serif;">
         <div style="text-align:center;margin-bottom:2rem;">
           <div style="display:inline-block;padding:6px 16px;border-radius:999px;border:1px solid rgba(94,234,212,0.35);background:rgba(45,212,191,0.12);color:#ccfbf1;font-size:13px;font-weight:700;letter-spacing:0.2em;margin-bottom:1.15rem;">澄海 · 智造出海</div>
           <div style="font-size:clamp(2.2rem,5.2vw,3.4rem);font-weight:800;color:#fff;letter-spacing:-0.048em;line-height:1.1;">外贸智慧协同</div>
           <div style="margin-top:0.85rem;font-size:1.15rem;color:rgba(203,213,225,0.9);font-weight:500;">赋能澄海玩具产业升级</div>
         </div>
-        <div class="tp-login-card" style="width:100%;max-width:28rem;border-radius:1.35rem;padding:2rem 1.75rem;min-height:10rem;background:#fcfdfe;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;box-sizing:border-box;">
-          <div style="width:28px;height:28px;border:3px solid #99f6e4;border-top-color:#0d9488;border-radius:50%;animation:tpBootSpin 0.8s linear infinite"></div>
-          <div style="font-size:14px;font-weight:700;color:#475569">正在打开登录…</div>
+        <div class="tp-login-card" style="width:100%;max-width:28rem;border-radius:1.35rem;padding:1.75rem 1.5rem;background:#fcfdfe;box-sizing:border-box;display:flex;flex-direction:column;gap:12px;">
+          <div style="font-size:13px;font-weight:700;color:#64748b;text-align:center" id="tp-boot-tip">登录界面加载中…</div>
+          <input type="text" disabled placeholder="用户名" style="width:100%;box-sizing:border-box;padding:12px 14px;border-radius:12px;border:1px solid #e2e8f0;background:#f8fafc;color:#94a3b8;font-size:15px;font-weight:600;" />
+          <input type="password" disabled placeholder="密码" style="width:100%;box-sizing:border-box;padding:12px 14px;border-radius:12px;border:1px solid #e2e8f0;background:#f8fafc;color:#94a3b8;font-size:15px;font-weight:600;" />
+          <button type="button" disabled style="width:100%;padding:12px 14px;border:0;border-radius:12px;background:linear-gradient(135deg,#2dd4bf,#0e7490);color:#fff;font-size:16px;font-weight:800;opacity:0.55;">登录</button>
+          <button id="tp-boot-retry" type="button" onclick="location.href=location.pathname+'?_boot='+Date.now()+location.hash" style="display:none;margin:4px auto 0;padding:8px 16px;border:0;border-radius:10px;background:#0f172a;color:#e2e8f0;font-size:12px;font-weight:700;cursor:pointer;align-items:center;justify-content:center;">网络较慢 · 点此重试</button>
         </div>
-        <style>@keyframes tpBootSpin{to{transform:rotate(360deg)}}</style>
       </div>
     </div>
     <script type="module" src="./index.tsx"></script>

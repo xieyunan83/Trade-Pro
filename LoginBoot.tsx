@@ -1,7 +1,6 @@
 /**
- * 轻量启动门：登录页即出，主包背后预取；点登录直接进 App。
- * 同一次打开内的刷新/chunk 重载：有会话则静默回到工作台（不再整屏「打开工作台」）。
- * 桌面端冷启动（未 arm）：必须重新登录。
+ * 轻量启动门：一挂载就出真实登录表单（禁止再卡在空白/「打开登录」壳）。
+ * 主包与类目延后预取，避免和首屏抢带宽。
  */
 import React, {
   Suspense,
@@ -46,34 +45,38 @@ const isDesktopUa = () =>
 
 export const LoginBoot: React.FC = () => {
   const [bootUser, setBootUser] = useState<User | null>(null);
-  const [ready, setReady] = useState(false);
+  /** 先出登录，再异步恢复会话；禁止 ready=false 整页空白 */
   const intentionalLogout = useRef(false);
 
+  // 登录页画出来后再慢慢预取主包；类目等进站后再拉，别和首屏抢网
   useEffect(() => {
-    void loadAppModule().catch((e) => console.warn('[LoginBoot] prefetch App failed', e));
+    if (bootUser) return;
+    const t = window.setTimeout(() => {
+      void loadAppModule().catch((e) => console.warn('[LoginBoot] prefetch App failed', e));
+    }, 1500);
+    return () => window.clearTimeout(t);
+  }, [bootUser]);
+
+  useEffect(() => {
+    if (!bootUser) return;
     void hydrateProductTaxonomy().catch((e) =>
-      console.warn('[LoginBoot] taxonomy prefetch failed', e)
+      console.warn('[LoginBoot] taxonomy hydrate failed', e)
     );
-  }, []);
+  }, [bootUser]);
 
   useEffect(() => {
     let cancelled = false;
     const t = window.setTimeout(() => {
       try {
-        // 桌面冷启动：未 arm 则只出登录，且不清掉已存会话（避免误伤同会话内刷新）
-        if (isDesktopUa() && !isDesktopSessionArmed()) {
-          if (!cancelled) setReady(true);
-          return;
-        }
+        if (intentionalLogout.current) return;
+        if (isDesktopUa() && !isDesktopSessionArmed()) return;
         const restored = restoreSessionUser(loadUsersFromStorage());
-        if (!cancelled && restored && !intentionalLogout.current) {
+        if (!cancelled && restored) {
           setUsageScope(restored.username);
-          setBootUser(restored);
+          startTransition(() => setBootUser(restored));
         }
       } catch (e) {
         console.warn('[LoginBoot] restore failed', e);
-      } finally {
-        if (!cancelled) setReady(true);
       }
     }, 0);
     return () => {
@@ -100,10 +103,6 @@ export const LoginBoot: React.FC = () => {
     setUsageScope(null);
     setBootUser(null);
   }, []);
-
-  if (!ready) {
-    return <QuietShell />;
-  }
 
   if (!bootUser) {
     return <Login onLogin={handleLogin} />;

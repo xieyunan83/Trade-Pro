@@ -21,7 +21,7 @@ declare global {
   }
 }
 
-/** 主 JS 已执行：取消 boot-timeout；不改写启动壳文案 */
+/** 主 JS 已执行：立刻取消 boot-timeout */
 window.__TP_BOOT_MARK?.();
 
 const rootElement = document.getElementById('root');
@@ -29,7 +29,7 @@ if (!rootElement) {
   throw new Error("Could not find root element to mount to");
 }
 
-/** 桌面客户端：有种子则极短等待，绝不挡住登录首屏 */
+/** 桌面种子最多等 50ms，超时也立刻挂登录，绝不卡在启动壳 */
 const waitDesktopSeed = (): Promise<void> => {
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
   if (!/TradeCollabClient\/|BabyWorldClient\//i.test(ua)) return Promise.resolve();
@@ -42,11 +42,14 @@ const waitDesktopSeed = (): Promise<void> => {
       resolve();
     };
     window.addEventListener('bw-seed-done', done, { once: true });
-    window.setTimeout(done, 80);
+    window.setTimeout(done, 50);
   });
 };
 
+let mounted = false;
 const mountApp = () => {
+  if (mounted) return;
+  mounted = true;
   try {
     sessionStorage.removeItem('tp_boot_reload_v1');
   } catch {
@@ -67,9 +70,11 @@ const mountApp = () => {
       /* ignore */
     }
   } catch (e) {
+    mounted = false;
     console.error('[boot] mount failed', e);
     window.__TP_BOOT_FAIL?.('mount-failed');
   }
 };
 
+// 尽快挂载；种子最多短等，超时也进登录
 void waitDesktopSeed().then(mountApp).catch(() => mountApp());
