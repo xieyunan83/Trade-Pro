@@ -46,6 +46,8 @@ import {
 } from '../services/icpStore';
 import { listAlibabaToyL1, getAlibabaToyL2, suggestToyCategoriesFromKeyword } from '../services/toyCategoryMatch';
 import { formatTaxonomyLabel } from '../services/categoryTaxonomy';
+import { useCrmClients } from '../services/crmStoreHooks';
+import { useHistoryItems } from '../services/historyStoreHooks';
 
 interface ClientFinderProps {
   state: DiscoveryState;
@@ -54,9 +56,9 @@ interface ClientFinderProps {
   username?: string;
   /** 历史搜索归档：用于同公司关键词去重标签 */
   discoveryArchives?: DiscoveryArchiveItem[];
-  /** 背调历史：用于「已背调」标签 */
+  /** @deprecated 改订 historyStore */
   history?: HistoryItem[];
-  /** CRM 客户：补充已背调状态与关键词 */
+  /** @deprecated 改订 crmStore */
   crmClients?: Client[];
   /** 每次（按国）搜索完成时可靠归档 */
   onSearchArchived?: (archive: DiscoveryArchiveItem) => void;
@@ -91,8 +93,8 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
   onStateChange,
   username = 'default',
   discoveryArchives = [],
-  history = [],
-  crmClients = [],
+  history: _histProp,
+  crmClients: _crmProp,
   onSearchArchived,
   onSelect,
   onOpenExistingReport,
@@ -101,6 +103,8 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
   autoSearchNonce = 0,
   onAutoSearchConsumed,
 }) => {
+  const history = useHistoryItems();
+  const crmClients = useCrmClients();
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const lastAutoNonce = useRef(0);

@@ -47,6 +47,8 @@ import {
   applyPlaybook,
 } from '../services/acquisitionPlaybooks';
 import { loadTradeJourney, patchTradeJourney } from '../services/tradeJourney';
+import { useCrmClients } from '../services/crmStoreHooks';
+import { useHistoryItems } from '../services/historyStoreHooks';
 
 interface ModulePromoGeneratorProps {
   onStartAutomation: (config: AutomationPipelineConfig) => void;
@@ -136,8 +138,8 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   initialPlaybookId = null,
   onInitialPlaybookConsumed,
   automationResults: automationResultsProp,
-  crmClients = [],
-  history = [],
+  crmClients: _crmProp,
+  history: _histProp,
   isAutomating,
   onRunPending,
   onRunSingle,
@@ -165,6 +167,8 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   analysisEnrichmentBusy = false,
   canViewEmails = false,
 }) => {
+  const crmClients = useCrmClients();
+  const history = useHistoryItems();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [draft, setDraft] = useState<AutomationPipelineConfig>(emptyDraft);
   const [confirming, setConfirming] = useState(false);

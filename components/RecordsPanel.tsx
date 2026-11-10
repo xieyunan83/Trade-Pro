@@ -45,12 +45,15 @@ import { hasRichProductCatalog } from '../services/productCatalog';
 import { extractHistoryAnalysis } from '../services/analysisNormalize';
 import { ModuleBackground } from './ModuleBackground';
 import { DmStatusChip } from './DmStatusChip';
+import { useCrmClients } from '../services/crmStoreHooks';
+import { useHistoryItems } from '../services/historyStoreHooks';
 
 type RecordTab = 'search' | 'background' | 'all';
 type GroupBy = 'keyword' | 'country' | 'time' | 'dmMined';
 
 interface RecordsPanelProps {
-  history: HistoryItem[];
+  /** @deprecated 改订 historyStore */
+  history?: HistoryItem[];
   discoveryArchives: DiscoveryArchiveItem[];
   /** Used to show「已入CRM」status tags */
   crmClients?: Client[];
@@ -158,9 +161,9 @@ const StatusChip: React.FC<{ done: boolean; doneLabel: string; pendingLabel: str
 };
 
 export const RecordsPanel: React.FC<RecordsPanelProps> = ({
-  history,
+  history: _histProp,
   discoveryArchives,
-  crmClients = [],
+  crmClients: _crmProp,
   onClose,
   onOpenHistory,
   onDownloadHistory,
@@ -179,6 +182,8 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   showOwnerFilter = false,
   onPurgeNonToyJunk,
 }) => {
+  const history = useHistoryItems();
+  const crmClients = useCrmClients();
   const [tab, setTab] = useState<RecordTab>('background');
   const [groupBy, setGroupBy] = useState<GroupBy>('keyword');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());

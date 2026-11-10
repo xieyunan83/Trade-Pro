@@ -21,9 +21,11 @@ import {
   openChatDeepLink,
   digitsOnlyPhone,
 } from '../services/contactTools';
+import { useCrmClients } from '../services/crmStoreHooks';
 
 type Props = {
   currentUser: User;
+  /** @deprecated 改订 crmStore */
   crmClients?: Client[];
 };
 
@@ -31,7 +33,8 @@ type Props = {
  * 联系工具：打开 WhatsApp / Skype / 微信等官方网页端，由使用者扫码或账号真实登录。
  * 本平台不代持密码；官方站点通常禁止 iframe，故以独立窗口登录为主。
  */
-export const ModuleContactTools: React.FC<Props> = ({ currentUser, crmClients = [] }) => {
+export const ModuleContactTools: React.FC<Props> = ({ currentUser }) => {
+  const crmClients = useCrmClients();
   const [activeId, setActiveId] = useState<ContactToolId>(() => loadPreferredTool());
   const [target, setTarget] = useState('');
   const [message, setMessage] = useState('');

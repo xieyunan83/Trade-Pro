@@ -47,9 +47,11 @@ import {
   templatesFromGtmOutreach,
   type GtmOutreachHandoff,
 } from '../services/gtmOutreachBridge';
+import { useCrmClients } from '../services/crmStoreHooks';
 
 interface ModuleEmailCampaignProps {
-  crmClients: Client[];
+  /** @deprecated 改订 crmStore */
+  crmClients?: Client[];
   onAddClients: (newClients: Client[]) => void;
   /** 真实发送成功后回写 CRM lastContactSent + 活动日志 */
   onEmailsSent?: (payload: {
@@ -64,12 +66,13 @@ interface ModuleEmailCampaignProps {
 }
 
 export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
-  crmClients,
+  crmClients: _crmProp,
   onEmailsSent,
   currentUser,
   users,
   departments,
 }) => {
+  const crmClients = useCrmClients();
   // CRM 再过滤一层，防止上游漏传未隔离数据
   const visibleCrmClients = useMemo(
     () => filterOwnedRecords(currentUser, crmClients, users, departments),

@@ -27,12 +27,16 @@ import {
   loadExcelBatchDraft,
   saveExcelBatchDraft,
 } from '../services/excelBatchDraftStore';
+import { useCrmClients } from '../services/crmStoreHooks';
+import { useHistoryItems } from '../services/historyStoreHooks';
 
 type Props = {
   open: boolean;
   onClose: () => void;
-  history: HistoryItem[];
-  crmClients: Client[];
+  /** @deprecated 改订 store */
+  history?: HistoryItem[];
+  /** @deprecated 改订 store */
+  crmClients?: Client[];
   /** 用户确认开始：待背调 + 仅合并补充 + 历史补 CRM */
   onStart: (payload: {
     toAnalyze: ClassifiedBatchBgRow[];
@@ -49,10 +53,12 @@ type Props = {
 export const BatchBackgroundExcelPanel: React.FC<Props> = ({
   open,
   onClose,
-  history,
-  crmClients,
+  history: _histProp,
+  crmClients: _crmProp,
   onStart,
 }) => {
+  const history = useHistoryItems();
+  const crmClients = useCrmClients();
   const fileRef = useRef<HTMLInputElement>(null);
   const [rows, setRows] = useState<ClassifiedBatchBgRow[]>([]);
   const [stats, setStats] = useState<BatchBgClassifyStats | null>(null);

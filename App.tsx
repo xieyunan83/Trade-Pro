@@ -17,6 +17,22 @@ import {
   updateAutomationQueue,
   subscribeAutomationQueue,
 } from './services/automationQueueStore';
+import {
+  configureCrmStorePersist,
+  getCrmClientsSnapshot,
+  patchCrmClient,
+  replaceCrmClients,
+  subscribeCrmClients,
+  updateCrmClients,
+} from './services/crmStore';
+import {
+  getHistorySnapshot,
+  persistHistoryItemToDisk,
+  replaceHistory,
+  subscribeHistory,
+  updateHistory,
+  upsertHistoryItem,
+} from './services/historyStore';
 import { AppNavDock } from './components/AppNavDock';
 import { CooldownOverlay } from './components/CooldownOverlay';
 import { installForegroundGuard } from './services/foregroundGuard';
@@ -399,10 +415,8 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
         : 'w-[4.25rem]';
   
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [history, setHistory] = useState<HistoryItem[]>([]);
   const [departments, setDepartments] = useState<Department[]>(() => loadDepartmentsFromStorage());
   const [teamManageOpen, setTeamManageOpen] = useState(false);
-  const [crmClients, setCrmClients] = useState<Client[]>([]);
   const [kbCount, setKbCount] = useState(0); 
   const [systemNotice, setSystemNotice] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
@@ -461,9 +475,34 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
   const historyRef = useRef<HistoryItem[]>([]);
   const automationResultsRef = useRef<AutomationResult[]>([]);
   const crmClientsRef = useRef<Client[]>([]);
-  /** 夜间品类匹配等批量写 CRM：合并成一次 setState，避免整树狂刷卡死 */
-  const pendingCrmPatchesRef = useRef<Map<string, Client>>(new Map());
-  const crmPatchFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** 兼容旧 setState 写法：全部落到外置 store，不触发 App 重绘 */
+  const setCrmClients = useCallback(
+    (next: Client[] | ((prev: Client[]) => Client[])) => {
+      if (typeof next === 'function') {
+        const resolved = updateCrmClients(next);
+        crmClientsRef.current = resolved;
+        return;
+      }
+      replaceCrmClients(next);
+      crmClientsRef.current = next;
+    },
+    []
+  );
+  const setHistory = useCallback(
+    (next: HistoryItem[] | ((prev: HistoryItem[]) => HistoryItem[])) => {
+      if (typeof next === 'function') {
+        const resolved = updateHistory(next);
+        historyRef.current = resolved;
+        return;
+      }
+      replaceHistory(next);
+      historyRef.current = next;
+    },
+    []
+  );
+  /** 渲染/查找用：始终读 store 快照（App 本身不订阅，避免整树重绘） */
+  const crmClients = crmClientsRef.current;
+  const history = historyRef.current;
   const viewingHistoryIdRef = useRef<string | null>(null);
   const analysisDataRef = useRef<AnalysisResult | null>(null);
   const userDataReadyRef = useRef(false);
@@ -472,50 +511,10 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
   /** 登录云端 CRM 合并完成前禁止 persist 写回，避免首屏按墓碑过滤后把全库冲掉 */
   const crmPersistReadyRef = useRef(false);
 
-  const flushPendingCrmPatches = useCallback(() => {
-    if (crmPatchFlushTimerRef.current) {
-      clearTimeout(crmPatchFlushTimerRef.current);
-      crmPatchFlushTimerRef.current = null;
-    }
-    const patches = pendingCrmPatchesRef.current;
-    if (!patches.size) return;
-    pendingCrmPatchesRef.current = new Map();
-    setCrmClients((prev) => {
-      let changed = false;
-      const next = prev.map((c) => {
-        const p = patches.get(c.id);
-        if (!p) return c;
-        changed = true;
-        return p;
-      });
-      if (!changed) return prev;
-      crmClientsRef.current = next;
-      return next;
-    });
+  const scheduleCrmClientPatch = useCallback((client: Client) => {
+    patchCrmClient(client);
+    crmClientsRef.current = getCrmClientsSnapshot();
   }, []);
-
-  const scheduleCrmClientPatch = useCallback(
-    (client: Client) => {
-      pendingCrmPatchesRef.current.set(client.id, client);
-      // 同步更新 ref，后台任务立刻读到最新
-      const idx = crmClientsRef.current.findIndex((c) => c.id === client.id);
-      if (idx >= 0) {
-        const copy = crmClientsRef.current.slice();
-        copy[idx] = client;
-        crmClientsRef.current = copy;
-      }
-      if (crmPatchFlushTimerRef.current) return;
-      crmPatchFlushTimerRef.current = setTimeout(() => {
-        crmPatchFlushTimerRef.current = null;
-        flushPendingCrmPatches();
-      }, 900);
-    },
-    [flushPendingCrmPatches]
-  );
-
-  useEffect(() => {
-    historyRef.current = history;
-  }, [history]);
 
   // 外置 store → ref，供 runner / 事件处理读取；不触发 App setState
   useEffect(() => {
@@ -524,6 +523,30 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       automationResultsRef.current = getAutomationQueueSnapshot();
     });
   }, []);
+
+  useEffect(() => {
+    crmClientsRef.current = getCrmClientsSnapshot();
+    return subscribeCrmClients(() => {
+      crmClientsRef.current = getCrmClientsSnapshot();
+    });
+  }, []);
+
+  useEffect(() => {
+    historyRef.current = getHistorySnapshot();
+    return subscribeHistory(() => {
+      historyRef.current = getHistorySnapshot();
+    });
+  }, []);
+
+  useEffect(() => {
+    configureCrmStorePersist({
+      getViewer: () => currentUser,
+      getUsers: () => users,
+      getDepartments: () => departments,
+      isReady: () => !!(userDataReadyRef.current && crmPersistReadyRef.current && currentUser),
+      isGitHubConnected: () => isGitHubConnected,
+    });
+  }, [currentUser, users, departments, isGitHubConnected]);
 
   /** 大列表写入只更新 store，不 setState App（侧栏与主区解耦） */
   const setAutomationResultsDeferred = useCallback(
@@ -571,10 +594,6 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
           : analyzing?.clientName || analyzing?.website || '',
     });
   };
-  useEffect(() => {
-    crmClientsRef.current = crmClients;
-  }, [crmClients]);
-
   useEffect(() => {
     const resolveHist = (clientId: string) => {
       if (clientId.startsWith('hist_')) {
@@ -791,15 +810,9 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
   };
 
   const persistHistoryItem = async (item: HistoryItem) => {
-    await saveHistory(item);
-    // 必须 await 云端：品类/背调补全后若未上传完就换客户端，对端会仍显示「未采」
-    if (isSupabaseConfigured()) {
-      try {
-        await saveInvestigationHistory(item);
-      } catch (e) {
-        console.error('Supabase history save failed', e);
-      }
-    }
+    upsertHistoryItem(item);
+    historyRef.current = getHistorySnapshot();
+    await persistHistoryItemToDisk(item);
   };
 
   /** 给记录打上当前用户归属，用于部门权限隔离 */
@@ -1168,6 +1181,8 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
             }
             // 登录后延后全量云同步，避免堵死侧栏
             let queueTasks = repaired.tasks;
+            /** workspace 一次 pull 已合并 CRM/历史时，跳过后面二次全量拉取 */
+            let workspacePulledOk = false;
             if (!cancelled) setWorkspaceSyncing(true);
             if (isSupabaseConfigured()) {
               try {
@@ -1179,6 +1194,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                     if (!cancelled) setWorkspaceSyncStatus(msg);
                   },
                 });
+                workspacePulledOk = true;
                 console.info('[workspace-sync pull]\n' + formatWorkspaceSyncReport(ws));
                 // 可选：合并云端「额度耗尽」指纹，避免多机抢同一把已尽 Key
                 try {
@@ -1450,62 +1466,72 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                     if (!cancelled) setIsKBSyncing(false);
                 }
 
-                try {
-                    const cloudHistory = await getInvestigationHistory();
-                    if (cloudHistory.length > 0) {
-                        const localNow = await getHistory();
-                        const merged = migrateLegacyOwnership(
-                          applyDmPersistToHistory(
-                            mergeHistoryPreferDmRich(localNow, cloudHistory)
-                          ),
-                          users,
-                          depts()
-                        ).items;
-                        // 把合并后更完整的报告写回本地/云端（含品类深挖，不只决策人）
-                        const histRicher = (x?: HistoryItem | null, y?: HistoryItem | null) => {
-                          if (!x) return false;
-                          if (!y) return true;
-                          const dmBetter =
-                            (x.data?.decisionMakerEmailSearchAt || 0) >
-                              (y.data?.decisionMakerEmailSearchAt || 0) ||
-                            (x.data?.decisionMakers?.length || 0) >
-                              (y.data?.decisionMakers?.length || 0);
-                          const productBetter =
-                            hasRichProductCatalog(x.data) && !hasRichProductCatalog(y.data);
-                          const productMore =
-                            (x.data?.products?.length || 0) > (y.data?.products?.length || 0) ||
-                            (x.data?.websiteCategories?.length || 0) >
-                              (y.data?.websiteCategories?.length || 0);
-                          return dmBetter || productBetter || productMore;
-                        };
-                        for (const item of merged) {
-                          const local = localNow.find((x) => x.id === item.id);
-                          const cloud = cloudHistory.find((x) => x.id === item.id);
-                          if (histRicher(item, local)) {
-                            try {
-                              await saveHistory(item);
-                            } catch (e) {
-                              console.warn('[history] merge save local failed', e);
+                // workspace 已 pull 过则跳过二次全量历史/CRM，只做本机 ledger 重放
+                if (!workspacePulledOk) {
+                  try {
+                      const cloudHistory = await getInvestigationHistory();
+                      if (cloudHistory.length > 0) {
+                          const localNow = await getHistory();
+                          const merged = migrateLegacyOwnership(
+                            applyDmPersistToHistory(
+                              mergeHistoryPreferDmRich(localNow, cloudHistory)
+                            ),
+                            users,
+                            depts()
+                          ).items;
+                          const histRicher = (x?: HistoryItem | null, y?: HistoryItem | null) => {
+                            if (!x) return false;
+                            if (!y) return true;
+                            const dmBetter =
+                              (x.data?.decisionMakerEmailSearchAt || 0) >
+                                (y.data?.decisionMakerEmailSearchAt || 0) ||
+                              (x.data?.decisionMakers?.length || 0) >
+                                (y.data?.decisionMakers?.length || 0);
+                            const productBetter =
+                              hasRichProductCatalog(x.data) && !hasRichProductCatalog(y.data);
+                            const productMore =
+                              (x.data?.products?.length || 0) > (y.data?.products?.length || 0) ||
+                              (x.data?.websiteCategories?.length || 0) >
+                                (y.data?.websiteCategories?.length || 0);
+                            return dmBetter || productBetter || productMore;
+                          };
+                          for (const item of merged) {
+                            const local = localNow.find((x) => x.id === item.id);
+                            const cloud = cloudHistory.find((x) => x.id === item.id);
+                            if (histRicher(item, local)) {
+                              try {
+                                await saveHistory(item);
+                              } catch (e) {
+                                console.warn('[history] merge save local failed', e);
+                              }
+                            }
+                            if (cloud && histRicher(item, cloud) && isSupabaseConfigured()) {
+                              void saveInvestigationHistory(item).catch((e) =>
+                                console.warn('[history] merge save cloud failed', e)
+                              );
                             }
                           }
-                          if (cloud && histRicher(item, cloud) && isSupabaseConfigured()) {
-                            void saveInvestigationHistory(item).catch((e) =>
-                              console.warn('[history] merge save cloud failed', e)
-                            );
+                          if (!cancelled) {
+                            setHistory(scope(merged));
                           }
-                        }
+                      } else {
+                        const localNow = await getHistory();
                         if (!cancelled) {
-                          setHistory(scope(merged));
+                          setHistory(scope(applyDmPersistToHistory(localNow)));
                         }
-                    } else {
-                      // 无云端时也要重放 ledger
-                      const localNow = await getHistory();
-                      if (!cancelled) {
-                        setHistory(scope(applyDmPersistToHistory(localNow)));
                       }
+                  } catch (e) {
+                      console.error("Supabase history sync failed", e);
+                  }
+                } else {
+                  try {
+                    const localNow = await getHistory();
+                    if (!cancelled) {
+                      setHistory(scope(applyDmPersistToHistory(localNow)));
                     }
-                } catch (e) {
-                    console.error("Supabase history sync failed", e);
+                  } catch {
+                    /* ignore */
+                  }
                 }
 
                 try {
@@ -1519,15 +1545,16 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
 
                 // 注意：不再调用 getLatestDiscoverySearch()——那是全局最新一条，会造成跨用户串数据
 
-                try {
-                    const cloudCrm = await getCrmClients();
-                    if (cloudCrm.length > 0) {
-                      // 云端全量 union 合并（不因本机墓碑丢云端行）；展示时再 filter
-                      nextCrm = mergeClientsById(nextCrm, cloudCrm);
-                      reconcileCrmTombstonesWithLiveClients(nextCrm);
-                    }
-                } catch (e) {
-                    console.error("Supabase CRM sync failed", e);
+                if (!workspacePulledOk) {
+                  try {
+                      const cloudCrm = await getCrmClients();
+                      if (cloudCrm.length > 0) {
+                        nextCrm = mergeClientsById(nextCrm, cloudCrm);
+                        reconcileCrmTombstonesWithLiveClients(nextCrm);
+                      }
+                  } catch (e) {
+                      console.error("Supabase CRM sync failed", e);
+                  }
                 }
             }
 
@@ -1892,28 +1919,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
     }
   }, [currentUser?.username, currentUser?.role, currentUser?.departmentId]);
 
-  useEffect(() => {
-      if (!currentUser || !userDataReadyRef.current || !crmPersistReadyRef.current) return;
-      // 仅把当前 React 可见列表合并写回本机（内存 + IndexedDB，大库不再整表 stringify LS）。
-      // 云端：背调完成走「一条一推」；此处防抖整表 upsert 作兜底。
-      // 硬规则：此路径绝不写墓碑、绝不 delete 云端。
-      const mergedAll = mergeSaveCrmClients(currentUser, crmClients, users, departments);
-
-      const t = window.setTimeout(() => {
-        // 大库跳过整表云同步，避免登录后主线程/网络双卡；依赖单条推送
-        if (crmClients.length > 800) return;
-        if (isSupabaseConfigured() && crmClients.length > 0) {
-          syncCrmClients(crmClients).catch((e) => console.error('Supabase CRM sync failed', e));
-        }
-        // GitHub crm.json 整表写对大库极重，仅中小库自动备份
-        if (isGitHubConnected && mergedAll.length > 0 && mergedAll.length <= 800) {
-          saveCRMToCloud(mergedAll).catch((e) =>
-            console.error('Auto CRM GitHub sync failed', e)
-          );
-        }
-      }, 16_000);
-      return () => window.clearTimeout(t);
-  }, [crmClients, isGitHubConnected, currentUser, users, departments]);
+  // CRM 落盘 / 云同步已迁入 crmStore idle writer
 
   // 按用户隔离保存当前搜索界面，避免换账号串结果（须等水合完成，防旧归档冲掉新结果）
   useEffect(() => {
@@ -2284,7 +2290,12 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
   };
 
   const similarCompanyLookup = (company: SimilarCompany) => {
-    const lookup = lookupBackgroundCheck(company.website, company.name, history, crmClients);
+    const lookup = lookupBackgroundCheck(
+      company.website,
+      company.name,
+      getHistorySnapshot(),
+      getCrmClientsSnapshot()
+    );
     return {
       checked: lookup.checked,
       checkedAt: lookup.checkedAt,
@@ -4847,7 +4858,12 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       }
       const hist =
         (viewingHistoryId && history.find((h) => h.id === viewingHistoryId)) ||
-        lookupBackgroundCheck(domain, data.companyInfo?.name, history, crmClients).historyItem;
+        lookupBackgroundCheck(
+          domain,
+          data.companyInfo?.name,
+          getHistorySnapshot(),
+          getCrmClientsSnapshot()
+        ).historyItem;
       const timeLabel = formatBackgroundCheckTime(hist?.timestamp);
       const tip = timeLabel
         ? `该公司已于 ${timeLabel} 完成背调。是否再次背调以更新信息？`
@@ -4868,7 +4884,12 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
   };
 
   const handleOpenExistingFromSearch = (result: ClientSearchResult) => {
-      const lookup = lookupBackgroundCheck(result.website, result.name, history, crmClients);
+      const lookup = lookupBackgroundCheck(
+        result.website,
+        result.name,
+        getHistorySnapshot(),
+        getCrmClientsSnapshot()
+      );
       if (lookup.historyItem) {
         loadFromHistory(lookup.historyItem);
         setHistoryOpen(false);
@@ -5302,11 +5323,13 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
   useEffect(() => {
     if (!currentUser || !userDataReadyRef.current) return;
     if (hasAutoPurgedNonToyJunk()) return;
-    if (!history.length && !crmClients.length && !discoveryArchives.length) {
+    const hist = getHistorySnapshot();
+    const crm = getCrmClientsSnapshot();
+    if (!hist.length && !crm.length && !discoveryArchives.length) {
       markAutoPurgedNonToyJunk();
       return;
     }
-    const plan = buildJunkCleanupPlan(history, crmClients, discoveryArchives);
+    const plan = buildJunkCleanupPlan(hist, crm, discoveryArchives);
     if (junkCleanupPlanCount(plan) === 0) {
       markAutoPurgedNonToyJunk();
       return;
@@ -5320,27 +5343,28 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser?.username, history.length, crmClients.length, discoveryArchives.length]);
+  }, [currentUser?.username, discoveryArchives.length]);
 
   // 记录中心：仅清理已入 CRM 的搜索归档；背调 History 保留（CRM 打开报告需要）
   useEffect(() => {
     if (!currentUser || !userDataReadyRef.current) return;
-    if (!crmClients.length || !discoveryArchives.length) return;
+    const crmNow = getCrmClientsSnapshot();
+    if (!crmNow.length || !discoveryArchives.length) return;
     const hasFullyInDiscovery = discoveryArchives.some((d) => {
       const results = d.results || [];
       if (!results.length) return false;
-      return results.every((r) => isSearchResultInCrm(r, crmClients));
+      return results.every((r) => isSearchResultInCrm(r, crmNow));
     });
     const hasPartialDiscovery = discoveryArchives.some((d) => {
       const results = d.results || [];
       if (!results.length) return false;
-      const inCount = results.filter((r) => isSearchResultInCrm(r, crmClients)).length;
+      const inCount = results.filter((r) => isSearchResultInCrm(r, crmNow)).length;
       return inCount > 0 && inCount < results.length;
     });
     if (!hasFullyInDiscovery && !hasPartialDiscovery) return;
     void purgeRecordsAlreadyInCrm({ silent: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser?.username, crmClients.length, discoveryArchives.length]);
+  }, [currentUser?.username, discoveryArchives.length]);
 
   /** 手动清理 2026-06 前 CRM（本地 + 云端，保守日期规则） */
   const handlePurgeCrmBeforeJune2026 = async () => {

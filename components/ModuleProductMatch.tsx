@@ -52,10 +52,15 @@ import {
   History,
   PenLine,
 } from 'lucide-react';
+import { useCrmClients } from '../services/crmStoreHooks';
+import { useHistoryItems } from '../services/historyStoreHooks';
+import { replaceCrmClients } from '../services/crmStore';
 
 interface ModuleProductMatchProps {
-  history: HistoryItem[];
-  crmClients: Client[];
+  /** @deprecated 改订 historyStore */
+  history?: HistoryItem[];
+  /** @deprecated 改订 crmStore */
+  crmClients?: Client[];
   currentUser?: User;
   /** 当前打开的背调报告：有则进入「对该客户匹配我方产品」模式 */
   focusAnalysis?: AnalysisResult | null;
@@ -133,8 +138,8 @@ const MailGroupCard: React.FC<{ title: string; group: MailGroup }> = ({ title, g
  * 市调专家 + 产品经理 → 国家/客户匹配 → 专业开发信组
  */
 export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
-  history,
-  crmClients,
+  history: _histProp,
+  crmClients: _crmProp,
   currentUser,
   focusAnalysis = null,
   onCrmClientsChange,
@@ -144,6 +149,15 @@ export const ModuleProductMatch: React.FC<ModuleProductMatchProps> = ({
   onNavigateModule,
   onBackToReport,
 }) => {
+  const history = useHistoryItems();
+  const crmClients = useCrmClients();
+  const notifyCrmChange = useCallback(
+    (next: Client[]) => {
+      replaceCrmClients(next);
+      onCrmClientsChange?.(next);
+    },
+    [onCrmClientsChange]
+  );
   const focusCompany = (focusAnalysis?.companyInfo?.name || '').trim();
   const focusWebsite = (focusAnalysis?.companyInfo?.website || '').trim();
   const clientMode = !!(focusCompany || focusWebsite);

@@ -33,6 +33,7 @@ import {
   gtmOutreachStrategyBrief,
   publishMailGroupToEmailTemplates,
 } from '../services/gtmOutreachBridge';
+import { useHistoryItems } from '../services/historyStoreHooks';
 import { VaultImg } from './VaultMedia';
 import {
   Send,
@@ -79,11 +80,12 @@ const companyKey = (c: AnalysisResult) =>
 
 export const ModuleStrategy: React.FC<Props> = ({
   data,
-  history = [],
+  history: _histProp,
   discoveryArchives = [],
   onSaveGeneratedEmails,
   onNavigateModule,
 }) => {
+  const history = useHistoryItems();
   const [knowledgeBase, setKnowledgeBase] = useState<KnowledgeFile[]>([]);
   const [mailDraft, setMailDraft] = useState<StrategyMailDraft | null>(() => loadStrategyMailDraft());
   const [copyHint, setCopyHint] = useState('');

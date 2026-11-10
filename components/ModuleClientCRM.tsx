@@ -34,10 +34,14 @@ import {
   loadProductCatalog,
 } from '../services/productCatalog';
 import { isDesignSignalQueueBusy } from '../services/designSignalQueue';
+import { useCrmClients } from '../services/crmStoreHooks';
+import { useHistoryItems } from '../services/historyStoreHooks';
+import { replaceCrmClients, updateCrmClients } from '../services/crmStore';
 
 interface ModuleClientCRMProps {
-  clients: Client[];
-  setClients: React.Dispatch<React.SetStateAction<Client[]>>;
+  /** @deprecated 改订 crmStore；保留兼容 */
+  clients?: Client[];
+  setClients?: React.Dispatch<React.SetStateAction<Client[]>>;
   onBatchAnalyze: (clients: Client[]) => Promise<void>;
   onBatchDelete?: (clients: Client[]) => void | Promise<void>;
   /** 单条删除（带云端同步 + 墓碑，避免登录复活） */
@@ -57,7 +61,8 @@ interface ModuleClientCRMProps {
   /** 从 GitHub / Supabase / 背调历史恢复 CRM */
   onRecoverCrm?: () => void | Promise<void>;
   onReanalyze?: (client: Client) => void;
-  history: HistoryItem[];
+  /** @deprecated 改订 historyStore */
+  history?: HistoryItem[];
   onOpenHistory: (item: HistoryItem) => void;
   /** 无 HistoryItem 时按客户打开报告（自动化队列等兜底） */
   onOpenClientReport?: (client: Client) => void;
@@ -301,8 +306,8 @@ const IntelChips: React.FC<{
 );
 
 export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
-  clients,
-  setClients,
+  clients: _clientsProp,
+  setClients: setClientsProp,
   onBatchAnalyze,
   onBatchDelete,
   onDeleteClient: onDeleteClientProp,
@@ -315,13 +320,23 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   onPurgeNonToyJunk,
   onRecoverCrm,
   onReanalyze,
-  history,
+  history: _historyProp,
   onOpenHistory,
   onOpenClientReport,
   productDigBusy,
   designSignalBusy,
   onNavOrderChange,
 }) => {
+  const clients = useCrmClients();
+  const history = useHistoryItems();
+  const setClients = useCallback(
+    (next: React.SetStateAction<Client[]>) => {
+      if (typeof next === 'function') updateCrmClients(next);
+      else replaceCrmClients(next);
+      setClientsProp?.(next);
+    },
+    [setClientsProp]
+  );
   const [searchTerm, setSearchTerm] = useState('');
   const debouncedSearch = useDebouncedValue(searchTerm);
   const [blankDesignCount, setBlankDesignCount] = useState<number | null>(null);

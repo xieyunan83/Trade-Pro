@@ -186,7 +186,9 @@ const saveState = () => {
   }
 };
 
-const notify = () => {
+let notifyTimer: ReturnType<typeof setTimeout> | null = null;
+const flushNotify = () => {
+  notifyTimer = null;
   saveState();
   const snap = getNightUpgradeStatus();
   listeners.forEach((fn) => {
@@ -196,6 +198,11 @@ const notify = () => {
       console.error('[night-upgrade] listener', e);
     }
   });
+};
+/** 状态变更合并通知，避免每条 job 都整包 stringify LS */
+const notify = () => {
+  if (notifyTimer) return;
+  notifyTimer = setTimeout(flushNotify, 400);
 };
 
 export const subscribeNightUpgrade = (fn: (s: NightUpgradeStatus) => void): (() => void) => {
@@ -597,9 +604,13 @@ export const pumpNightUpgrade = async () => {
         .slice(0, CATALOG_MATCH_BURST);
     }
     if (catalogBurst.length) {
+      const { waitUntilWorkAllowed, yieldToUi } = await import('./backgroundWorkScheduler');
       for (const job of catalogBurst) {
         if (shouldStop) break;
+        const ok = await waitUntilWorkAllowed(() => shouldStop, 60_000);
+        if (!ok) break;
         await runOneJob(job);
+        await yieldToUi(0);
       }
     }
 
@@ -612,9 +623,15 @@ export const pumpNightUpgrade = async () => {
           allowed.has(j.kind)
       )
       .slice(0, LIGHT_BURST);
-    for (const job of lightJobs) {
-      if (shouldStop) break;
-      await runOneJob(job);
+    {
+      const { waitUntilWorkAllowed, yieldToUi } = await import('./backgroundWorkScheduler');
+      for (const job of lightJobs) {
+        if (shouldStop) break;
+        const ok = await waitUntilWorkAllowed(() => shouldStop, 30_000);
+        if (!ok) break;
+        await runOneJob(job);
+        await yieldToUi(0);
+      }
     }
 
     // 重补全仅夜间（或非挂机的夜间窗）
@@ -667,10 +684,16 @@ export const startNightSilentUpgrade = (h: Handlers) => {
   notify();
   if (tickTimer) clearInterval(tickTimer);
   tickTimer = setInterval(() => {
-    void pumpNightUpgrade();
+    void import('./backgroundWorkScheduler').then(({ enqueueBackgroundWork }) => {
+      enqueueBackgroundWork('night_upgrade', () => pumpNightUpgrade());
+    });
   }, TICK_MS);
   // 启动后若已在夜间窗口，稍延迟再扫，避免登录高峰抢资源
-  window.setTimeout(() => void pumpNightUpgrade(), 12_000);
+  window.setTimeout(() => {
+    void import('./backgroundWorkScheduler').then(({ enqueueBackgroundWork }) => {
+      enqueueBackgroundWork('night_upgrade', () => pumpNightUpgrade());
+    });
+  }, 12_000);
 };
 
 export const stopNightSilentUpgrade = () => {
