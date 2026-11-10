@@ -248,22 +248,42 @@ const pollTask = async (
   throw new Error('3D 生成超时，请稍后在控制台用 task_id 查询，或检查账户额度');
 };
 
+const collectPartNames = (out: any, first: any): string[] | undefined => {
+  const raw =
+    first?.part_names ||
+    first?.partNames ||
+    out?.part_names ||
+    out?.partNames ||
+    out?.usage?.part_names;
+  if (Array.isArray(raw) && raw.length) {
+    return raw.map((x: unknown) => String(x || '').trim()).filter(Boolean);
+  }
+  if (typeof raw === 'string' && raw.trim()) {
+    return raw
+      .split(/[,，;；|/]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  return undefined;
+};
+
 const pickUrls = (out: any, taskId: string): Model3dGenerateResult => {
   const results = Array.isArray(out.results) ? out.results : [];
   const first = results[0] || out;
+  // 分割任务：优先 seg_model_url（千问文档）；勿被未分割的 pbr/base 盖住
   const modelUrl =
     first.seg_model_url ||
-    first.pbr_model_url ||
+    out.seg_model_url ||
     first.model_url ||
+    out.model_url ||
+    first.pbr_model_url ||
     first.base_model_url ||
     first.fbx_url ||
     first.obj_url ||
     first.stl_url ||
     first.gltf_url ||
     first.usdz_url ||
-    out.seg_model_url ||
     out.pbr_model_url ||
-    out.model_url ||
     '';
   const previewImageUrl =
     first.rendered_image_url ||
@@ -279,6 +299,7 @@ const pickUrls = (out: any, taskId: string): Model3dGenerateResult => {
     previewImageUrl: previewImageUrl ? String(previewImageUrl) : undefined,
     pbrModelUrl: first.pbr_model_url ? String(first.pbr_model_url) : undefined,
     baseModelUrl: first.base_model_url ? String(first.base_model_url) : undefined,
+    partNames: collectPartNames(out, first),
     raw: out,
   };
 };
@@ -365,9 +386,11 @@ export const runQwenTripoPostProcess = async (opts: {
       parameters.face_limit = Math.round(opts.faceLimit);
     }
   } else if (kind === 'segment') {
+    // 千问文档：original_model_task_id 与 model_url 必须二选一，不能同时传
     if (taskIdIn) input = { original_model_task_id: taskIdIn };
     else if (urlIn && isPublicModelUrl(urlIn)) input = { model_url: urlIn };
     else throw new Error('部件拆分需要前序任务 ID，或公网可访问的模型地址');
+    // 对齐千问 Tripo-Segmentation：v2 语义+几何才吃 granularity / 连通域拆分
     const gran = opts.segmentGranularity || 'balanced';
     parameters = {
       model_version: 'v2.0-20260430',

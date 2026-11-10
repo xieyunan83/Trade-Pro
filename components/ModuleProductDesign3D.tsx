@@ -704,17 +704,16 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
 
       if (qwenEditReady) {
         if (kind === 'complete') {
+          // 补全必须挂在「拆分任务」上（千问文档）
           upstreamId = (active.segmentTaskId || '').trim();
-        } else if (
-          active.provider === 'qwen_tripo' ||
-          (active.providerTaskId && !active.officialTaskId)
-        ) {
+        } else if (kind === 'segment') {
+          // 拆分必须挂在「首次生成」task_id 上，禁止用上一次拆分/后处理 ID（否则常原样回传、仍是一整块）
           upstreamId = (
-            active.providerTaskId ||
             active.sourceTaskId ||
-            active.segmentTaskId ||
+            (active.provider === 'qwen_tripo' ? active.providerTaskId : '') ||
             ''
           ).trim();
+          // 若 providerTaskId 已被误写成拆分任务，仍以 source 为准；没有 source 再用公网 model_url
         } else {
           upstreamId = (
             active.providerTaskId ||
@@ -723,13 +722,18 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
             ''
           ).trim();
         }
-        const cand = [active.modelUrl, active.pbrModelUrl, active.baseModelUrl, modelUrl].find(
+        // 拆分时：优先传 task_id；仅无「原模」公网链作兜底，避免把已错误落库的分件链再喂回去
+        const candList =
+          kind === 'segment'
+            ? [active.originalModelUrl, active.baseModelUrl, active.modelUrl, active.pbrModelUrl, modelUrl]
+            : [active.modelUrl, active.pbrModelUrl, active.baseModelUrl, modelUrl];
+        const cand = candList.find(
           (u) => u && /^https?:\/\//i.test(u) && !/localhost|127\.0\.0\.1/i.test(u)
         );
         publicModelUrl = cand;
         if (!upstreamId && !publicModelUrl && !isTripoOfficialReady()) {
           throw new Error(
-            '当前模型没有云端任务 ID 或公网地址。请用主通道重新生成后再拆分，或导入后先用带 https 链的结果。'
+            '当前模型没有云端生成任务 ID 或公网地址。请用主通道重新生成后再拆分（勿只用本机 vault）。'
           );
         }
       } else {
@@ -769,11 +773,20 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         segmentGranularity,
         rigType,
         preferOfficial: !qwenEditReady,
-        onTaskCreated: (tid) =>
+        onTaskCreated: (tid) => {
+          // 拆分/后处理：绝不能用新 task 覆盖「生成」providerTaskId / sourceTaskId
+          if (kind === 'segment') {
+            patchJob(active.id, {
+              segmentTaskId: tid,
+              ...(qwenEditReady ? {} : { officialTaskId: tid }),
+            });
+            return;
+          }
           patchJob(active.id, {
             providerTaskId: tid,
             ...(qwenEditReady ? {} : { officialTaskId: tid }),
-          }),
+          });
+        },
         onProgress: (pct, status) => {
           patchJob(active.id, {
             status: 'running',
@@ -828,16 +841,25 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
           /* 原模备份失败不阻断拆分结果展示 */
         }
       }
+      // 生成根任务 ID 永不变；拆分只写 segmentTaskId
+      const rootSourceId = (
+        active.sourceTaskId ||
+        (kind === 'segment' ? upstreamId : '') ||
+        active.providerTaskId ||
+        ''
+      ).trim();
       const next: Partial<Model3dJob> = {
         status: 'ready',
         progress: 100,
         provider: result.provider || active.provider,
-        providerTaskId: result.taskId,
+        providerTaskId:
+          kind === 'segment'
+            ? active.providerTaskId || rootSourceId || result.taskId
+            : result.taskId,
         officialTaskId: qwenEditReady
           ? active.officialTaskId
           : result.taskId || active.officialTaskId,
-        sourceTaskId:
-          active.sourceTaskId || active.providerTaskId || upstreamId || result.taskId,
+        sourceTaskId: rootSourceId || active.sourceTaskId || result.taskId,
         segmentTaskId: kind === 'segment' ? result.taskId : active.segmentTaskId,
         modelUrl: kind === 'convert' ? active.modelUrl || result.modelUrl : result.modelUrl,
         pbrModelUrl: kind === 'convert' ? active.pbrModelUrl : result.pbrModelUrl || result.modelUrl,
@@ -857,7 +879,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         meshOps: [...(active.meshOps || []), op].slice(-20),
         previewHint:
           kind === 'segment'
-            ? '拆分完成 · 可看分件或切回原模'
+            ? '拆分完成 · 正在打开分件着色'
             : `${result.label}完成 · 可环视 / 导出制造格式`,
         error: undefined,
         updatedAt: Date.now(),
@@ -866,14 +888,17 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
       setBusy(false);
       setMsgTone('ok');
       if (kind === 'segment') {
-        // 拆分完成后仍默认看原模（有地址才 original，否则 current GLB）；要看拆分再点「分件着色」
-        setPreviewMode(
-          next.originalModelUrl || next.baseModelUrl || vaultedOriginal || keepOriginal
-            ? 'original'
-            : 'current'
-        );
+        if (result.partNames?.length) {
+          setPartNames(result.partNames);
+        }
+        // 拆分成功后直接看分件效果（否则用户以为失败）
+        setPreviewMode('parts');
         setWorkbenchTool('segment');
-        setMsg('部件拆分完成：仍显示原模。要点「分件着色」才看拆分效果');
+        setMsg(
+          result.partNames?.length
+            ? `部件拆分完成：API 返回 ${result.partNames.length} 个部件，已切换到分件着色 / 可炸开`
+            : '部件拆分完成：已切换到分件着色。若仍是 1 块，请点「重新拆分」并选「精细」'
+        );
       } else {
         setMsg(
           kind === 'convert'

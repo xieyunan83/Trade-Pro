@@ -60,6 +60,8 @@ export type Model3dGenerateResult = {
   previewImageUrl?: string;
   pbrModelUrl?: string;
   baseModelUrl?: string;
+  /** 网格分割返回的部件名（Tripo / 千问 Segmentation） */
+  partNames?: string[];
   provider?: 'tripo' | 'qwen_tripo' | 'hunyuan';
   modelVersion?: string;
   raw?: unknown;
@@ -814,6 +816,7 @@ const runOfficialTripoPostProcess = async (opts: {
       bake: true,
     };
   } else if (kind === 'segment') {
+    // 官方 tsk_ OpenAPI：几何拆分 v1（粒度参数在千问 MaaS v2 通道）
     body = {
       type: 'mesh_segmentation',
       original_model_task_id: original,

@@ -63,6 +63,134 @@ const tintMaterial = (mat: THREE.Material, color: THREE.Color): THREE.Material =
 };
 
 /**
+ * Tripo / 千问 Segmentation 的 GLB 常见形态：
+ * 1) 多个独立 Mesh / 节点
+ * 2) 单 Mesh + geometry.groups（多材质槽）
+ * 3) 单 Mesh + material[] 多材质
+ * 预览必须把 2/3 拆成可炸开单元，否则永远「已识别 1 个部件」。
+ */
+const splitMeshByMaterialGroups = (mesh: THREE.Mesh): THREE.Object3D[] => {
+  const geom = mesh.geometry as THREE.BufferGeometry | undefined;
+  if (!geom) return [mesh];
+  const groups =
+    Array.isArray(geom.groups) && geom.groups.length > 1
+      ? geom.groups.slice().sort((a, b) => a.start - b.start)
+      : null;
+  const mats = Array.isArray(mesh.material) ? mesh.material : null;
+
+  if (groups && groups.length > 1) {
+    const parent = mesh.parent || mesh;
+    const out: THREE.Object3D[] = [];
+    mesh.visible = false;
+    const srcIndex = geom.index;
+    groups.forEach((g, i) => {
+      if (!g || g.count <= 0) return;
+      const partGeom = geom.clone();
+      partGeom.clearGroups();
+      if (srcIndex) {
+        const arr = srcIndex.array as ArrayLike<number>;
+        const sliced = (ArrayBuffer.isView(arr)
+          ? (arr as Uint16Array | Uint32Array).slice(g.start, g.start + g.count)
+          : Array.from(arr).slice(g.start, g.start + g.count)) as Uint16Array | Uint32Array | number[];
+        partGeom.setIndex(
+          new THREE.BufferAttribute(
+            sliced instanceof Uint16Array || sliced instanceof Uint32Array
+              ? sliced
+              : new Uint32Array(sliced),
+            1
+          )
+        );
+        partGeom.addGroup(0, g.count, 0);
+      } else {
+        partGeom.setDrawRange(g.start, g.count);
+      }
+      const matSrc = mats
+        ? mats[Math.min(g.materialIndex ?? i, mats.length - 1)]
+        : (mesh.material as THREE.Material);
+      const part = new THREE.Mesh(partGeom, matSrc);
+      part.name = (mesh.name || 'part') + `_${i + 1}`;
+      part.position.copy(mesh.position);
+      part.quaternion.copy(mesh.quaternion);
+      part.scale.copy(mesh.scale);
+      parent.add(part);
+      out.push(part);
+    });
+    return out.length ? out : [mesh];
+  }
+
+  if (mats && mats.length > 1 && (!groups || groups.length <= 1)) {
+    // 多材质但无 groups：按材质克隆整网并只保留对应材质视觉区分（炸开仍可分色）
+    const parent = mesh.parent || mesh;
+    const out: THREE.Object3D[] = [];
+    mesh.visible = false;
+    mats.forEach((mat, i) => {
+      const part = new THREE.Mesh(geom.clone(), mat);
+      part.name = (mesh.name || 'part') + `_${i + 1}`;
+      part.position.copy(mesh.position);
+      part.quaternion.copy(mesh.quaternion);
+      part.scale.copy(mesh.scale);
+      parent.add(part);
+      out.push(part);
+    });
+    return out.length > 1 ? out : [mesh];
+  }
+
+  return [mesh];
+};
+
+const collectPartUnits = (root: THREE.Object3D): THREE.Object3D[] => {
+  const meshes: THREE.Mesh[] = [];
+  root.traverse((obj) => {
+    if ((obj as THREE.Mesh).isMesh) meshes.push(obj as THREE.Mesh);
+  });
+
+  // 优先：有名字的部件节点（Tripo 常标 Part / segment）
+  const namedKids = root.children.filter((c) => {
+    const n = (c.name || '').toLowerCase();
+    let has = false;
+    c.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh) has = true;
+    });
+    return has && (/part|seg|piece|component|部件/i.test(n) || n.length > 0);
+  });
+  if (namedKids.length > 1) {
+    return namedKids;
+  }
+
+  let units: THREE.Object3D[] = [];
+  for (const m of meshes) {
+    units.push(...splitMeshByMaterialGroups(m));
+  }
+  units = units.filter((u, i, arr) => arr.indexOf(u) === i);
+
+  if (units.length <= 1) {
+    const kids = root.children.filter((c) => {
+      let has = false;
+      c.traverse((o) => {
+        if ((o as THREE.Mesh).isMesh) has = true;
+      });
+      return has;
+    });
+    if (kids.length > 1) units = kids;
+  }
+
+  if (units.length > 80) {
+    const parents = new Map<string, THREE.Object3D>();
+    for (const m of meshes) {
+      const p = m.parent || m;
+      if (!parents.has(p.uuid)) parents.set(p.uuid, p);
+    }
+    if (parents.size > 1 && parents.size < units.length) {
+      units = Array.from(parents.values());
+    } else {
+      units = units.slice(0, 64);
+    }
+  }
+
+  return units.length ? units : meshes.length ? meshes : [root];
+};
+
+/**
  * 拆分结果预览：部件着色 + 可控炸开。
  * 炸开尺度按「加载时」包围盒固定，禁止每帧用已炸开包围盒累加（否则模型飞出视野）。
  */
@@ -204,35 +332,7 @@ export const Model3dPartsViewer: React.FC<Props> = ({
         root.position.sub(preCenter);
         root.updateMatrixWorld(true);
 
-        const meshes: THREE.Mesh[] = [];
-        root.traverse((obj) => {
-          if ((obj as THREE.Mesh).isMesh) meshes.push(obj as THREE.Mesh);
-        });
-
-        let units: THREE.Object3D[] = meshes;
-        if (meshes.length <= 1) {
-          const kids = root.children.filter((c) => {
-            let has = false;
-            c.traverse((o) => {
-              if ((o as THREE.Mesh).isMesh) has = true;
-            });
-            return has;
-          });
-          if (kids.length > 1) units = kids;
-        }
-
-        if (units.length > 80) {
-          const parents = new Map<string, THREE.Object3D>();
-          for (const m of meshes) {
-            const p = m.parent || m;
-            if (!parents.has(p.uuid)) parents.set(p.uuid, p);
-          }
-          if (parents.size > 1 && parents.size < units.length) {
-            units = Array.from(parents.values());
-          } else {
-            units = meshes.slice(0, 64);
-          }
-        }
+        const units = collectPartUnits(root);
 
         const whole = new THREE.Box3().setFromObject(root);
         const center = new THREE.Vector3();
