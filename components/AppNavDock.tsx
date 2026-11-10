@@ -4,6 +4,7 @@ import { Loader2, StopCircle, Zap } from 'lucide-react';
 import type { ModuleType, User } from '../types';
 import { SphereNav, type SphereNavPhase } from './SphereNav';
 import type { PlatformSectionId } from '../services/platformSections';
+import { preferNavInteraction } from '../services/foregroundGuard';
 
 type BatchProgress = {
   active: boolean;
@@ -63,11 +64,16 @@ export const AppNavDock = memo(function AppNavDock({
 }: Props) {
   const handleSelect = useCallback(
     (m: ModuleType) => {
+      preferNavInteraction(1600);
       onSelectModule(m);
       onCloseMobileMenu();
     },
     [onSelectModule, onCloseMobileMenu]
   );
+
+  const onNavPointerDown = useCallback(() => {
+    preferNavInteraction(1400);
+  }, []);
 
   const node = (
     <aside
@@ -76,6 +82,7 @@ export const AppNavDock = memo(function AppNavDock({
       } ${dockWidthClass}`}
       aria-label="平台导航坞"
       data-tp-nav-dock="1"
+      onPointerDownCapture={onNavPointerDown}
     >
       <div className="tp-dock-brand flex items-center justify-center py-2.5 border-b border-cyan-400/15 shrink-0">
         <div

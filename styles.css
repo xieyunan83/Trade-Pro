@@ -93,6 +93,15 @@ body {
   margin-right: 0 !important;
 }
 
+/* 主区允许整页纵向滚动，避免营销工具底部被裁切 */
+.tp-main-stage {
+  overflow-x: hidden !important;
+  overflow-y: visible !important;
+}
+.tp-module-pane.is-active {
+  overflow: visible !important;
+}
+
 .tp-main-stage .max-w-7xl,
 .tp-main-stage .max-w-6xl,
 .tp-main-stage .max-w-5xl,

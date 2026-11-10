@@ -1007,43 +1007,49 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                 >
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs font-black text-amber-900 inline-flex items-center gap-1">
-                      <BookTemplate size={12} /> 企业模板技能库
+                      <BookTemplate size={12} /> 企业模板
                     </span>
                     <span className="text-[9px] font-bold text-rose-600">新 · 点这里</span>
                   </div>
                   <p className="text-[10px] text-amber-800/80 font-medium mt-0.5 leading-snug">
-                    目录封面 / 网格内页 / 功能卖点文案 · 一键套用
+                    目录封面 / 网格内页 / 卖点文案 · 一键套用
                   </p>
                 </button>
-                {DESIGN_SKILLS.map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    onClick={() => {
-                      setSkillId(s.id);
-                      if (s.defaultPrompt) setPrompt(s.defaultPrompt);
-                      setNegativePrompt(s.negativePrompt || '');
-                      if (
-                        s.id === 'multi_product_poster' &&
-                        !packImpliesLayoutLastRef(activePack)
-                      ) {
-                        setLastRefIsLayout(false);
-                      }
-                    }}
-                    onDoubleClick={() => createProject(s.id)}
-                    className={`w-full text-left rounded-xl px-3 py-2.5 border ${
-                      skillId === s.id
-                        ? 'border-violet-300 bg-violet-50'
-                        : 'border-slate-100 hover:border-violet-200'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-black text-slate-800">{s.label}</span>
-                      <span className="text-[9px] font-bold text-violet-600 uppercase">{s.category}</span>
-                    </div>
-                    <p className="text-[10px] text-slate-500 font-medium mt-0.5 leading-snug">{s.hint}</p>
-                  </button>
-                ))}
+                <div className="grid grid-cols-2 gap-1.5">
+                  {DESIGN_SKILLS.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => {
+                        setSkillId(s.id);
+                        if (s.defaultPrompt) setPrompt(s.defaultPrompt);
+                        setNegativePrompt(s.negativePrompt || '');
+                        if (
+                          s.id === 'multi_product_poster' &&
+                          !packImpliesLayoutLastRef(activePack)
+                        ) {
+                          setLastRefIsLayout(false);
+                        }
+                      }}
+                      onDoubleClick={() => createProject(s.id)}
+                      className={`text-left rounded-xl px-2.5 py-2.5 border min-h-[4.75rem] flex flex-col ${
+                        skillId === s.id
+                          ? 'border-violet-300 bg-violet-50 shadow-sm shadow-violet-100'
+                          : 'border-slate-100 hover:border-violet-200 bg-white'
+                      }`}
+                    >
+                      <span className="text-[9px] font-bold text-violet-600 uppercase mb-0.5">
+                        {s.category}
+                      </span>
+                      <span className="text-[11px] font-black text-slate-800 leading-snug line-clamp-2">
+                        {s.label}
+                      </span>
+                      <p className="text-[9px] text-slate-500 font-medium mt-1 leading-snug line-clamp-2">
+                        {s.hint}
+                      </p>
+                    </button>
+                  ))}
+                </div>
               </>
             )}
             {leftTab === 'packs' && (

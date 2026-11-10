@@ -43,7 +43,9 @@ import {
 import {
   consumeGtmOutreachHandoff,
   emailTasksFromGtmOutreach,
+  GTM_OUTREACH_EVENT,
   templatesFromGtmOutreach,
+  type GtmOutreachHandoff,
 } from '../services/gtmOutreachBridge';
 
 interface ModuleEmailCampaignProps {
@@ -123,54 +125,79 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
     [currentUser.username, currentUser.departmentId]
   );
 
-  /** 从产品匹配导入：开发信模板 + 匹配客户收件人 */
-  useEffect(() => {
-    const handoff = consumeGtmOutreachHandoff('email_campaign');
-    if (!handoff) return;
-    const owner = { username: currentUser.username, departmentId: currentUser.departmentId };
-    const tpl = templatesFromGtmOutreach(handoff, owner).map(stampOwnership);
-    setTasks((prevTasks) => {
-      const existing = new Set(prevTasks.map((t) => t.recipientEmail.toLowerCase()));
-      const newTasks = emailTasksFromGtmOutreach(
-        handoff,
-        visibleCrmClients,
-        owner,
-        existing
-      ).map(stampOwnership);
-      if (newTasks.length) {
-        setActiveTab('tasks');
+  /** 从产品匹配 / 开发策略导入：开发信模板 + 可选收件人 */
+  const ingestGtmHandoff = useCallback(
+    (handoff: GtmOutreachHandoff) => {
+      const owner = { username: currentUser.username, departmentId: currentUser.departmentId };
+      const tpl = templatesFromGtmOutreach(handoff, owner).map(stampOwnership);
+      const fromStrategy = String(handoff.packId || '').startsWith('strategy_mail_');
+      setTasks((prevTasks) => {
+        const existing = new Set(prevTasks.map((t) => t.recipientEmail.toLowerCase()));
+        const newTasks = emailTasksFromGtmOutreach(
+          handoff,
+          visibleCrmClients,
+          owner,
+          existing
+        ).map(stampOwnership);
+        if (newTasks.length) {
+          if (!fromStrategy) setActiveTab('tasks');
+          setGtmImportHint(
+            [
+              fromStrategy
+                ? `已从开发策略导入「${handoff.productName}」`
+                : `已从「${handoff.productName}」匹配导入`,
+              tpl.length ? `${tpl.length} 套模板` : '',
+              `${newTasks.length} 位收件人`,
+            ]
+              .filter(Boolean)
+              .join(' · ')
+          );
+          return [...newTasks, ...prevTasks];
+        }
         setGtmImportHint(
           [
-            `已从「${handoff.productName}」匹配导入`,
-            tpl.length ? `${tpl.length} 套开发信模板` : '',
-            `${newTasks.length} 位收件人`,
+            fromStrategy
+              ? `已从开发策略导入「${handoff.productName}」`
+              : `已从「${handoff.productName}」匹配导入`,
+            tpl.length ? `${tpl.length} 套模板，可直接编辑` : '',
+            !fromStrategy && !tpl.length
+              ? '（匹配客户在 CRM 尚无邮箱时，请先补决策人邮箱或手动添加）'
+              : '',
           ]
             .filter(Boolean)
             .join(' · ')
         );
-        return [...newTasks, ...prevTasks];
-      }
-      setGtmImportHint(
-        [
-          `已从「${handoff.productName}」匹配导入`,
-          tpl.length ? `${tpl.length} 套开发信模板` : '',
-          '（匹配客户在 CRM 尚无邮箱时，请先补决策人邮箱或手动添加）',
-        ]
-          .filter(Boolean)
-          .join(' · ')
-      );
-      return prevTasks;
-    });
-    if (tpl.length) {
-      setTemplates((prev) => {
-        const names = new Set(prev.map((t) => t.name));
-        const add = tpl.filter((t) => !names.has(t.name));
-        return add.length ? [...add, ...prev] : prev;
+        return prevTasks;
       });
-      if (!handoff.matches.some((m) => m.clientId)) setActiveTab('templates');
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser.username, stampOwnership, visibleCrmClients]);
+      if (tpl.length) {
+        const [first, ...rest] = tpl;
+        setTemplates((prev) => {
+          const names = new Set(prev.map((t) => t.name));
+          const add = rest.filter((t) => !names.has(t.name));
+          return add.length ? [...add, ...prev] : prev;
+        });
+        setActiveTab('templates');
+        setNewTemplate(first);
+        setIsCreatingTemplate(true);
+        setSelectedTemplateId(first.id);
+      }
+    },
+    [currentUser.username, currentUser.departmentId, stampOwnership, visibleCrmClients]
+  );
+
+  useEffect(() => {
+    const handoff = consumeGtmOutreachHandoff('email_campaign');
+    if (handoff) ingestGtmHandoff(handoff);
+  }, [currentUser.username, ingestGtmHandoff]);
+
+  useEffect(() => {
+    const onHandoff = () => {
+      const handoff = consumeGtmOutreachHandoff('email_campaign');
+      if (handoff) ingestGtmHandoff(handoff);
+    };
+    window.addEventListener(GTM_OUTREACH_EVENT, onHandoff as EventListener);
+    return () => window.removeEventListener(GTM_OUTREACH_EVENT, onHandoff as EventListener);
+  }, [ingestGtmHandoff]);
 
   // 切换登录用户时重载可见数据
   useEffect(() => {
@@ -371,15 +398,17 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
   };
 
   const onSaveTemplate = () => {
-      setTemplates([
-        ...templates,
-        stampOwnership({
-          ...newTemplate,
-          id: Date.now().toString(),
-          lastUpdated: Date.now(),
-        }),
-      ]);
+      const saved = stampOwnership({
+        ...newTemplate,
+        id: (newTemplate.id || '').trim() || `tpl_${Date.now()}`,
+        lastUpdated: Date.now(),
+      });
+      setTemplates((prev) => {
+        const without = prev.filter((t) => t.id !== saved.id && t.name !== saved.name);
+        return [saved, ...without];
+      });
       setIsCreatingTemplate(false);
+      setSelectedTemplateId(saved.id);
       setNewTemplate({ id: '', name: '', subject: '', body: '', lastUpdated: Date.now() });
   };
   const onDeleteTemplate = (id: string) => setTemplates(templates.filter((t) => t.id !== id));

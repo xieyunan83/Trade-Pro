@@ -66,7 +66,7 @@ export const markAppBackground = () => {
 };
 
 export const markAppForeground = (opts?: { calmMs?: number }) => {
-  const calmMs = opts?.calmMs ?? 1800;
+  const calmMs = opts?.calmMs ?? 2200;
   foreground = true;
   calmUntil = Date.now() + calmMs;
   recoverNavPointer();
@@ -84,6 +84,13 @@ export const markAppForeground = (opts?: { calmMs?: number }) => {
     emit();
   }, calmMs);
   emit();
+};
+
+/** 用户点侧栏时立刻让路：暂停重任务泵一小段时间 */
+export const preferNavInteraction = (ms = 1200) => {
+  calmUntil = Math.max(calmUntil, Date.now() + ms);
+  recoverNavPointer();
+  if (foreground) emit();
 };
 
 /** 在 App / LoginBoot 挂一次即可 */

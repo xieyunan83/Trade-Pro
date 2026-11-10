@@ -47,15 +47,11 @@ import {
   applyPlaybook,
 } from '../services/acquisitionPlaybooks';
 import { loadTradeJourney, patchTradeJourney } from '../services/tradeJourney';
-import {
-  AcquisitionMethodsPanel,
-  type PlatformAcquisitionSearchRequest,
-} from './AcquisitionMethodsPanel';
 
 interface ModulePromoGeneratorProps {
   onStartAutomation: (config: AutomationPipelineConfig) => void;
-  /** 获客公式 → 平台客户搜索（不跳外网） */
-  onPlatformAcquisitionSearch?: (req: PlatformAcquisitionSearchRequest) => void;
+  /** @deprecated 获客公式已后台化，保留类型兼容 */
+  onPlatformAcquisitionSearch?: (req: unknown) => void;
   /** 指挥舱传入的剧本 id：打开后自动填入并弹配置窗 */
   initialPlaybookId?: string | null;
   onInitialPlaybookConsumed?: () => void;
@@ -137,7 +133,6 @@ const StatusMini: React.FC<{ done: boolean; yes: string; no: string; tone: 'emer
 
 export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   onStartAutomation,
-  onPlatformAcquisitionSearch,
   initialPlaybookId = null,
   onInitialPlaybookConsumed,
   automationResults: automationResultsProp,
@@ -593,7 +588,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   };
 
   return (
-    <div className="w-full space-y-4 sm:space-y-8 animate-fade-in">
+    <div className="w-full space-y-4 sm:space-y-6 animate-fade-in pb-24 sm:pb-28">
       <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm">
         <h2 className="text-xl sm:text-2xl font-black text-slate-800 mb-2 flex items-center gap-2">
           <Ruler className="text-blue-600" /> 自动化获客工作流
@@ -655,12 +650,6 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
           {isAutomating ? '自动化执行中…' : '自定义配置并启动'}
         </button>
       </div>
-
-      <AcquisitionMethodsPanel
-        productKeyword={draft.keyword}
-        countryHint={draft.countries[0] || ''}
-        onPlatformSearch={onPlatformAcquisitionSearch}
-      />
 
       {dialogOpen && (
         <div className="fixed inset-0 z-[80] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-900/50 backdrop-blur-sm">

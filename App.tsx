@@ -6492,6 +6492,7 @@ crmClients={crmClients}
                           data={analysisData}
                           history={history}
                           discoveryArchives={discoveryArchives}
+                          onNavigateModule={navigateModule}
                           onSaveGeneratedEmails={async (emails, forCompany) => {
                             const target = forCompany || analysisDataRef.current;
                             if (!target) return;

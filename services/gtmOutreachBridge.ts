@@ -160,6 +160,67 @@ const mailToTemplateParts = (g: MailGroup, productName: string, companyLabel: st
   }));
 };
 
+/** 开发策略单组开发信 → 邮件模板（可编辑） */
+export const templatesFromMailGroup = (
+  mailGroup: MailGroup,
+  meta: { productName?: string; companyName?: string },
+  owner: { username: string; departmentId?: string }
+): EmailTemplate[] => {
+  const productName = (meta.productName || meta.companyName || '开发信').trim() || '开发信';
+  const companyLabel = (meta.companyName || '客户').trim() || '客户';
+  const now = Date.now();
+  return mailToTemplateParts(mailGroup, productName, companyLabel).map((p, i) => ({
+    id: `strategy_tpl_${now}_${i}_${Math.random().toString(36).slice(2, 6)}`,
+    name: p.name,
+    subject: p.subject,
+    body: p.body,
+    lastUpdated: now,
+    ownerUsername: owner.username,
+    departmentId: owner.departmentId,
+  }));
+};
+
+/**
+ * 开发策略 → 邮件营销：发布交接，邮件模块会自动导入为可编辑模板。
+ */
+export const publishMailGroupToEmailTemplates = (
+  mailGroup: MailGroup,
+  meta: { productName?: string; companyName?: string; website?: string }
+): GtmOutreachHandoff => {
+  const companyName = (meta.companyName || '客户').trim() || '客户';
+  const productName = (meta.productName || companyName).trim() || companyName;
+  const handoff: GtmOutreachHandoff = {
+    packId: `strategy_mail_${Date.now()}`,
+    productName,
+    valueProps: [],
+    designMustHaves: [],
+    matches: [
+      {
+        companyName,
+        country: '',
+        website: meta.website,
+        score: 100,
+        reasons: ['开发策略导入'],
+        mailGroup,
+      },
+    ],
+    batchMailGroup: mailGroup,
+    intent: 'email_campaign',
+    at: Date.now(),
+  };
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify(handoff));
+  } catch {
+    /* quota */
+  }
+  try {
+    window.dispatchEvent(new CustomEvent(GTM_OUTREACH_EVENT, { detail: handoff }));
+  } catch {
+    /* ignore */
+  }
+  return handoff;
+};
+
 /** 把投放包里的开发信组变成邮件模板草稿 */
 export const templatesFromGtmOutreach = (
   handoff: GtmOutreachHandoff,

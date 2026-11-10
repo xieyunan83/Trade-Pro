@@ -141,7 +141,7 @@ export const EnterpriseDesignPackPanel: React.FC<Props> = ({
   };
 
   const onResetSamples = () => {
-    if (!confirm('重置为已学习的目录样本？自定义包会保留。')) return;
+    if (!confirm('重置为企业优选样本？自定义包会保留。')) return;
     setPacks(resetBuiltinEnterprisePacks());
     refresh();
   };
@@ -167,50 +167,54 @@ export const EnterpriseDesignPackPanel: React.FC<Props> = ({
         </button>
       </div>
       <p className={`text-slate-500 font-medium leading-snug ${compact ? 'text-[10px]' : 'text-[11px]'}`}>
-        已深度学习目录版式、色板与「功能利益」文案公式。选模板 → 一键套用 → 上传产品图即可生成。
+        选模板 → 一键套用 → 上传产品图即可生成。
       </p>
 
-      <div className={`space-y-1.5 overflow-y-auto ${compact ? 'max-h-36' : 'max-h-56'}`}>
-        {packs.map((p) => {
-          const selected = p.id === activeId;
-          return (
-            <div
-              key={p.id}
-              className={`rounded-lg border transition-colors ${
-                selected
-                  ? 'border-violet-300 bg-violet-50'
-                  : 'border-slate-100 bg-white hover:border-violet-200'
-              }`}
-            >
-              <button
-                type="button"
-                onClick={() => selectPack(p.id)}
-                className="w-full text-left px-2.5 pt-2 pb-1"
+      <div
+        className={`overflow-y-auto custom-scrollbar ${compact ? 'max-h-44' : 'max-h-64'}`}
+      >
+        <div className={`grid gap-2 ${compact ? 'grid-cols-2' : 'grid-cols-2 sm:grid-cols-3'}`}>
+          {packs.map((p) => {
+            const selected = p.id === activeId;
+            return (
+              <div
+                key={p.id}
+                className={`rounded-xl border transition-colors flex flex-col min-h-[5.5rem] ${
+                  selected
+                    ? 'border-violet-400 bg-violet-50 shadow-sm shadow-violet-100'
+                    : 'border-slate-200 bg-white hover:border-violet-200'
+                }`}
               >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-[11px] font-black text-slate-800 truncate">{p.name}</span>
-                  <span className="text-[9px] font-bold text-violet-600 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => selectPack(p.id)}
+                  className="flex-1 text-left px-2.5 pt-2.5 pb-1.5"
+                >
+                  <div className="text-[9px] font-bold text-violet-600 mb-1">
                     {KIND_LABELS[p.kind]}
-                  </span>
-                </div>
-                <div className="text-[9px] text-slate-400 font-semibold mt-0.5">
-                  L1 {p.layoutRefs.length} 页 · {p.builtin ? '已学习样本' : '自定义'}
-                </div>
-              </button>
-              {selected && (
-                <div className="px-2.5 pb-2">
-                  <button
-                    type="button"
-                    onClick={() => applyFoolproof(p)}
-                    className="w-full inline-flex items-center justify-center gap-1 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-[10px] font-black px-2.5 py-2"
-                  >
-                    <Wand2 size={12} /> 一键套用此模板
-                  </button>
-                </div>
-              )}
-            </div>
-          );
-        })}
+                  </div>
+                  <div className="text-[11px] font-black text-slate-800 leading-snug line-clamp-2">
+                    {p.name}
+                  </div>
+                  <div className="text-[9px] text-slate-400 font-semibold mt-1">
+                    {p.layoutRefs.length} 页 · {p.builtin ? '优选样本' : '自定义'}
+                  </div>
+                </button>
+                {selected && (
+                  <div className="px-2 pb-2 mt-auto">
+                    <button
+                      type="button"
+                      onClick={() => applyFoolproof(p)}
+                      className="w-full inline-flex items-center justify-center gap-1 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-[10px] font-black px-2 py-1.5"
+                    >
+                      <Wand2 size={11} /> 一键套用
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {active && (
@@ -293,11 +297,6 @@ export const EnterpriseDesignPackPanel: React.FC<Props> = ({
               </button>
             )}
           </div>
-          {active.styleCard?.copyFormula && (
-            <p className="text-[9px] text-slate-400 font-medium line-clamp-3 leading-snug">
-              文案：主题钩子 → 发展能力动词 → 配件 → 尺寸 → 货号/年龄/价
-            </p>
-          )}
         </div>
       )}
 

@@ -152,9 +152,9 @@ export const DESIGN_SKILLS: DesignSkillDef[] = [
     id: 'booth_cover',
     label: '展会画册封面',
     category: '品牌',
-    hint: '澄海展厅 / 画册封面气质',
+    hint: '展厅 / 画册封面气质',
     defaultPrompt:
-      'B2B trade-fair catalog cover composition, premium exhibition lighting on hero toy, spacious negative space for bilingual title lockup, Chenghai toy-export showroom professionalism, brochure cover hierarchy, cinematic but clean',
+      'B2B trade-fair catalog cover composition, premium exhibition lighting on hero toy, spacious negative space for bilingual title lockup, professional toy-export showroom look, brochure cover hierarchy, cinematic but clean',
     negativePrompt:
       'carnival chaos, low-end flea market vibe, watermark, fake awards seals',
     craftNotes:

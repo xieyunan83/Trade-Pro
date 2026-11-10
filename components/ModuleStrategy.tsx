@@ -7,6 +7,7 @@ import {
   HistoryItem,
   DiscoveryArchiveItem,
   StrategyChatContext,
+  ModuleType,
 } from '../types';
 import { streamStrategyChat, generateMailGroupStrategy } from '../services/geminiService';
 import { getAllFilesFromDB } from '../services/db';
@@ -30,6 +31,7 @@ import {
 import {
   consumeGtmOutreachHandoff,
   gtmOutreachStrategyBrief,
+  publishMailGroupToEmailTemplates,
 } from '../services/gtmOutreachBridge';
 import { VaultImg } from './VaultMedia';
 import {
@@ -54,6 +56,7 @@ import {
   Search,
   ImagePlus,
   Copy,
+  LayoutTemplate,
 } from 'lucide-react';
 
 interface Props {
@@ -65,6 +68,8 @@ interface Props {
     emails: MailGroup,
     forCompany?: AnalysisResult | null
   ) => void | Promise<void>;
+  /** 一键跳转邮件营销模板 */
+  onNavigateModule?: (m: ModuleType) => void;
 }
 
 type PickerKind = 'company' | 'keyword' | 'country' | 'offer' | null;
@@ -77,6 +82,7 @@ export const ModuleStrategy: React.FC<Props> = ({
   history = [],
   discoveryArchives = [],
   onSaveGeneratedEmails,
+  onNavigateModule,
 }) => {
   const [knowledgeBase, setKnowledgeBase] = useState<KnowledgeFile[]>([]);
   const [mailDraft, setMailDraft] = useState<StrategyMailDraft | null>(() => loadStrategyMailDraft());
@@ -85,9 +91,9 @@ export const ModuleStrategy: React.FC<Props> = ({
     {
       id: 'init',
       role: 'model',
-      text: data
-        ? `**Strategy Context Loaded** ✅\n\n已载入当前背调：**${data.companyInfo?.name || '该公司'}**。\n\n可引用平面产品图 / 包装图 / 发文素材，再叠加关键词与国家，由策略服务生成开发信组。`
-        : `**Strategy Assistant Ready** 🚀\n\n我是外贸策略顾问。请在输入框旁点「产品」选用平面/包装/发文素材，再选背调客户或关键词/国家。\n\n有背调客户时点顶部「生成开发信」，或直接说「写一组开发信」。`,
+        text: data
+        ? `**Strategy Assistant Ready**\n\n已载入当前客户：**${data.companyInfo?.name || '该公司'}**。可选用产品素材、关键词与国家，生成开发信组。`
+        : `**Strategy Assistant Ready**\n\n选用产品素材、背调客户或关键词/国家后，可生成开发信组，并一键导入邮件营销模板。`,
       timestamp: Date.now(),
     },
   ]);
@@ -149,7 +155,7 @@ export const ModuleStrategy: React.FC<Props> = ({
       {
         id: `gtm_${Date.now()}`,
         role: 'model',
-        text: `**已载入产品匹配档案** ✅\n\n${brief}\n\n可直接说「按这些客户写开发信组」或点顶部「生成开发信」。生成结果会自动存档，并可一键带到邮件群发。`,
+        text: `**已载入产品匹配档案**\n\n${brief}\n\n可点顶部「生成开发信」，生成后一键导入邮件营销模板继续编辑。`,
         timestamp: Date.now(),
       },
     ]);
@@ -616,8 +622,8 @@ export const ModuleStrategy: React.FC<Props> = ({
       setMailDraft(draft);
       setGenerateMsg(
         `开发信组已生成并保存${images.length ? '（已引用创作配图）' : ''}${
-          brief ? ' · 已并入产品/包装/发文线索' : ''
-        }。可点「复制」带到邮件营销模板；切换页面也不会丢。`
+          brief ? ' · 已并入产品卖点线索' : ''
+        }。可一键导入邮件营销模板继续编辑。`
       );
     } catch (e: unknown) {
       const raw = e instanceof Error ? e.message : String(e);
@@ -654,11 +660,23 @@ export const ModuleStrategy: React.FC<Props> = ({
     if (!text.trim()) return;
     try {
       await navigator.clipboard.writeText(text);
-      setCopyHint(`已复制「${label}」，可到邮件营销粘贴为模板`);
+      setCopyHint(`已复制「${label}」`);
       window.setTimeout(() => setCopyHint(''), 2500);
     } catch {
       setCopyHint('复制失败，请手动选中文字');
     }
+  };
+
+  const importMailGroupToEmailTemplates = () => {
+    if (!displayMailGroup) return;
+    publishMailGroupToEmailTemplates(displayMailGroup, {
+      companyName: primaryCompany?.companyInfo?.name || mailDraft?.companyName || '客户',
+      website: primaryCompany?.companyInfo?.website || mailDraft?.website,
+      productName: selectedKeywords[0] || mailDraft?.productName,
+    });
+    setCopyHint('已导入邮件营销模板，正在打开…');
+    window.setTimeout(() => setCopyHint(''), 2500);
+    onNavigateModule?.(ModuleType.EMAIL_CAMPAIGN);
   };
 
   return (
@@ -671,7 +689,7 @@ export const ModuleStrategy: React.FC<Props> = ({
                 开发信 · {primaryCompany.companyInfo?.name || '当前客户'}
               </div>
               <p className="text-[11px] text-slate-500 font-medium mt-0.5">
-                生成后会保存到背调报告，并保留草稿供邮件营销复制。
+                生成后保存到背调报告；可一键导入邮件营销并继续编辑模板。
                 {selectedOfferIds.length > 0 ? ` · 已选素材 ${selectedOfferIds.length}` : ''}
               </p>
               <div className="flex flex-wrap items-center gap-2 mt-1">
@@ -696,25 +714,47 @@ export const ModuleStrategy: React.FC<Props> = ({
                 {copyHint && <span className="text-[10px] font-bold text-indigo-700">{copyHint}</span>}
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => void handleGenerateAndSaveEmails()}
-              disabled={isGeneratingEmails || !onSaveGeneratedEmails || !llmStatus.ready}
-              className="inline-flex items-center justify-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-md shrink-0"
-            >
-              {isGeneratingEmails ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-              {isGeneratingEmails ? '生成中…' : '生成开发信'}
-            </button>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => void handleGenerateAndSaveEmails()}
+                disabled={isGeneratingEmails || !onSaveGeneratedEmails || !llmStatus.ready}
+                className="inline-flex items-center justify-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-md"
+              >
+                {isGeneratingEmails ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                {isGeneratingEmails ? '生成中…' : '生成开发信'}
+              </button>
+              {displayMailGroup && (
+                <button
+                  type="button"
+                  onClick={importMailGroupToEmailTemplates}
+                  className="inline-flex items-center justify-center gap-1.5 bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-md"
+                >
+                  <LayoutTemplate size={14} /> 导入邮件模板
+                </button>
+              )}
+            </div>
           </div>
 
           {displayMailGroup && (
             <div className="mt-2.5 pt-2.5 border-t border-slate-100 space-y-2">
-              {displayMailGroup.analysis && (
-                <p className="text-[11px] font-bold text-indigo-800 bg-indigo-50 px-2.5 py-1.5 rounded-lg line-clamp-2">
-                  {displayMailGroup.analysis}
-                  {displayMailGroup.sendTip ? ` · ${displayMailGroup.sendTip}` : ''}
-                </p>
-              )}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                {displayMailGroup.analysis ? (
+                  <p className="text-[11px] font-bold text-indigo-800 bg-indigo-50 px-2.5 py-1.5 rounded-lg line-clamp-2 flex-1 min-w-0">
+                    {displayMailGroup.analysis}
+                    {displayMailGroup.sendTip ? ` · ${displayMailGroup.sendTip}` : ''}
+                  </p>
+                ) : (
+                  <span className="text-[11px] font-bold text-slate-500">开发信组已就绪</span>
+                )}
+                <button
+                  type="button"
+                  onClick={importMailGroupToEmailTemplates}
+                  className="inline-flex items-center gap-1 rounded-lg bg-teal-50 border border-teal-200 text-teal-800 text-[10px] font-black px-2.5 py-1.5 shrink-0"
+                >
+                  <LayoutTemplate size={12} /> 一键导入邮件模板
+                </button>
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                 {[
                   {
@@ -1217,7 +1257,7 @@ export const ModuleStrategy: React.FC<Props> = ({
             </button>
           </div>
           <p className="mt-2 text-[10px] text-slate-400 font-bold px-1">
-            「产品」= 选用已有素材 · 回形针 = 临时上传 · 背调 / 关键词 / 国家可组合进开发信
+            「产品」选用素材 · 附件可临时上传 · 客户 / 关键词 / 国家可一并写入开发信
           </p>
         </div>
       </div>
