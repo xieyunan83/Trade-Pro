@@ -27,6 +27,8 @@ import {
 } from '../services/catalogAutoMatch';
 import { TradeJourneyPanel } from './TradeJourneyPanel';
 import type { JourneyProgressHint } from '../services/tradeJourney';
+import { useAutomationCounts } from '../services/automationQueueHooks';
+import { loadCatalogSkus } from '../services/productCatalogTypes';
 
 type Props = {
   currentUser: User;
@@ -111,12 +113,13 @@ export const ModuleLandingHub: React.FC<Props> = ({
   const matchFresh =
     !!matchReport && Date.now() - matchReport.at < 14 * 24 * 3600_000;
 
-  const jp = journeyProgress || {
-    skuCount: 0,
-    pendingTasks: 0,
-    failedTasks: 0,
-    completedBg: 0,
-    crmCount: 0,
+  const autoCounts = useAutomationCounts();
+  const jp: JourneyProgressHint = {
+    skuCount: journeyProgress?.skuCount ?? loadCatalogSkus().length,
+    pendingTasks: autoCounts.pending,
+    failedTasks: autoCounts.failed,
+    completedBg: autoCounts.completedWithAnalysis,
+    crmCount: journeyProgress?.crmCount ?? 0,
   };
 
   return (

@@ -6,6 +6,7 @@ import {
   CLIENT_TYPE_OPTIONS,
   HistoryItem,
 } from '../types';
+import { useAutomationQueueUi } from '../services/automationQueueHooks';
 import {
   Ruler,
   PlayCircle,
@@ -58,7 +59,8 @@ interface ModulePromoGeneratorProps {
   /** 指挥舱传入的剧本 id：打开后自动填入并弹配置窗 */
   initialPlaybookId?: string | null;
   onInitialPlaybookConsumed?: () => void;
-  automationResults: AutomationResult[];
+  /** @deprecated 队列改走 automationQueueStore；保留可选以兼容旧调用 */
+  automationResults?: AutomationResult[];
   /** 与客户管理同步：合并 CRM 客户并统一状态 */
   crmClients?: Client[];
   history?: HistoryItem[];
@@ -138,7 +140,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   onPlatformAcquisitionSearch,
   initialPlaybookId = null,
   onInitialPlaybookConsumed,
-  automationResults,
+  automationResults: automationResultsProp,
   crmClients = [],
   history = [],
   isAutomating,
@@ -216,6 +218,11 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   const [pageSize, setPageSize] = useState<10 | 20 | 50>(20);
   const [page, setPage] = useState(1);
 
+  const automationResultsFromStore = useAutomationQueueUi();
+  const automationResults =
+    automationResultsProp && automationResultsProp.length
+      ? automationResultsProp
+      : automationResultsFromStore;
   const deferredAutomation = useDeferredValue(automationResults);
   const deferredCrm = useDeferredValue(crmClients);
   const deferredHistory = useDeferredValue(history);

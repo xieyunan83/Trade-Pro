@@ -2,7 +2,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo, startTransition, Suspense } from 'react';
 import { analyzeCompany, hasApiKeyConfigured, checkApiKeyAvailability, hydrateApiConfigsFromCloud, searchPotentialClients, enableTavilyGeminiQwenCascade, enableGeminiQwenParallelMerge, synthesizeInsightsFallback } from './services/geminiService';
 import {
-  subscribeCooldown,
   withRateLimitRetry,
   isRateLimitError,
   isTransientAnalysisError,
@@ -11,7 +10,15 @@ import {
   getCooldownRemainingSec,
 } from './services/rateLimitGate';
 import { exportToPPT, exportAutomationReportToPPT, exportBatchAutomationReportsToPPT } from './services/exportService';
-import { saveHistory, saveHistoryBulk, getHistory, getAllFilesFromDB, saveAutomationTask, getAutomationQueue, deleteAutomationTask, saveFileToDB, saveDiscoveryArchive, getDiscoveryArchives, deleteDiscoveryArchive, deleteHistoryItem, slimAutomationQueueForUi } from './services/db';
+import { saveHistory, saveHistoryBulk, getHistory, getAllFilesFromDB, saveAutomationTask, getAutomationQueue, deleteAutomationTask, saveFileToDB, saveDiscoveryArchive, getDiscoveryArchives, deleteDiscoveryArchive, deleteHistoryItem } from './services/db';
+import {
+  getAutomationQueueSnapshot,
+  replaceAutomationQueue,
+  updateAutomationQueue,
+  subscribeAutomationQueue,
+} from './services/automationQueueStore';
+import { AppNavDock } from './components/AppNavDock';
+import { CooldownOverlay } from './components/CooldownOverlay';
 import {
   loadAndRepairAutomationQueue,
   mergeDecisionMakersIntoAutomationTasks,
@@ -177,7 +184,7 @@ import { ModulePane } from './components/ModulePane';
 import { loadCatalogSkus } from './services/productCatalogTypes';
 import { setPreferredAcquisitionCategories } from './services/acquisitionMethods';
 import type { PlatformAcquisitionSearchRequest } from './components/AcquisitionMethodsPanel';
-import { SphereNav, type SphereNavPhase } from './components/SphereNav';
+import type { SphereNavPhase } from './components/SphereNav';
 import { prefetchCoreModules, prefetchModule } from './services/modulePrefetch';
 import { lazyWithRetry } from './utils/lazyWithRetry';
 
@@ -349,6 +356,13 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
     setActiveModule(m);
     window.setTimeout(() => prefetchModule(m), 0);
   }, []);
+  const openRecordsPanel = useCallback(() => setHistoryOpen((v) => !v), []);
+  const closeMobileMenu = useCallback(() => setMobileMenuOpen(false), []);
+  const exitAdminWorkspace = useCallback(() => setAdminInWorkspace(false), []);
+  const openTeamManagePanel = useCallback(() => {
+    setTeamManageOpen(true);
+    setMobileMenuOpen(false);
+  }, []);
   const [workspaceSyncStatus, setWorkspaceSyncStatus] = useState<string | null>(null);
   const [workspaceSyncing, setWorkspaceSyncing] = useState(false);
   /** 管理员进入与业务员相同的工作台（含今日看板） */
@@ -399,9 +413,8 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
   /** 营销工具获客公式 → 客户搜索自动开跑 */
   const [discoveryAutoSearchNonce, setDiscoveryAutoSearchNonce] = useState(0);
 
-  const [automationResults, setAutomationResults] = useState<AutomationResult[]>([]);
+  /** 作业队列不进 App useState：见 automationQueueStore，避免 5k+ 条拖死侧栏 */
   const [isAutomating, setIsAutomating] = useState(false);
-  const [cooldownTime, setCooldownTime] = useState(0);
   
   const [batchModalOpen, setBatchModalOpen] = useState(false);
   const [pendingBatch, setPendingBatch] = useState<string[]>([]);
@@ -459,38 +472,32 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
     historyRef.current = history;
   }, [history]);
 
+  // 外置 store → ref，供 runner / 事件处理读取；不触发 App setState
   useEffect(() => {
-    // 大队列时 state 是瘦身副本；ref 以 runner/同步写入为准，勿被瘦身 state 回写冲掉
-    if (automationResults.length <= 400) {
-      automationResultsRef.current = automationResults;
-    }
-  }, [automationResults]);
+    automationResultsRef.current = getAutomationQueueSnapshot();
+    return subscribeAutomationQueue(() => {
+      automationResultsRef.current = getAutomationQueueSnapshot();
+    });
+  }, []);
 
-  /** 大列表写入走 transition，把主线程让给侧栏点击；ref 仍保留完整队列供 runner */
+  /** 大列表写入只更新 store，不 setState App（侧栏与主区解耦） */
   const setAutomationResultsDeferred = useCallback(
     (next: AutomationResult[] | ((prev: AutomationResult[]) => AutomationResult[])) => {
       const resolved =
-        typeof next === 'function' ? next(automationResultsRef.current) : next;
+        typeof next === 'function' ? next(getAutomationQueueSnapshot()) : next;
       automationResultsRef.current = resolved;
-      startTransition(() => {
-        setAutomationResults(slimAutomationQueueForUi(resolved));
-      });
+      // 只通知订阅方（营销工具/看板计数）；App 不订阅 → 侧栏不重渲染
+      replaceAutomationQueue(resolved);
     },
     []
   );
 
-  /** 同步写入内存队列（ref + state），避免入队后立刻跑 runner 时读到旧 ref */
+  /** 同步写入内存队列（ref + store），避免入队后立刻跑 runner 时读到旧 ref */
   const syncAutomationResults = (
     updater: (prev: AutomationResult[]) => AutomationResult[]
   ) => {
-    const next = updater(automationResultsRef.current);
+    const next = updateAutomationQueue(updater);
     automationResultsRef.current = next;
-    // 单条/小批量保持同步；超大队列写入降级，避免饿死侧栏
-    if (next.length > 400) {
-      startTransition(() => setAutomationResults(slimAutomationQueueForUi(next)));
-    } else {
-      setAutomationResults(next);
-    }
     return next;
   };
 
@@ -709,11 +716,10 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
     analysisDataRef.current = analysisData;
   }, [analysisData]);
 
-  // 启用 Tavily → Gemini → 千问 降级链；订阅全局限流冷却 UI
+  // 启用检索降级链；冷却 UI 由 CooldownOverlay 独立订阅，禁止在此 setState
   useEffect(() => {
     enableTavilyGeminiQwenCascade();
     enableGeminiQwenParallelMerge();
-    return subscribeCooldown((sec) => setCooldownTime(sec));
   }, []);
 
   const DISCOVERY_TOMBSTONE_KEY = 'trade_scout_discovery_deleted_ids';
@@ -782,7 +788,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
     setDiscoveryState(emptyDiscoveryState());
     setDiscoveryArchives([]);
     setHistory([]);
-    setAutomationResults([]);
+    replaceAutomationQueue([]);
     setCrmClients([]);
     setActiveModule(ModuleType.HOME);
     setWorkspaceSyncStatus(null);
@@ -1763,7 +1769,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
         depts
       )
     );
-    setAutomationResults((prev) => {
+    syncAutomationResults((prev) => {
       // 员工：无归属项打上本人以免被权限滤掉；admin/总管可看无归属，禁止改写成自己
       const stamped = canBrowseAllDepartments(currentUser)
         ? prev
@@ -2441,14 +2447,14 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
     }
 
     // 4) 同步写回营销工具任务队列
-    setAutomationResults((prev) => {
+    syncAutomationResults((prev) => {
       void mergeDecisionMakersIntoAutomationTasks(prev, {
         domain: domainKey || undefined,
         companyName: nameKey || undefined,
         decisionMakers: safePatch.decisionMakers,
         searchedAt: safePatch.decisionMakerEmailSearchAt,
         searchHistory: safePatch.decisionMakerEmailSearchHistory,
-      }).then((merged) => setAutomationResults(merged));
+      }).then((merged) => { automationResultsRef.current = merged; replaceAutomationQueue(merged); });
       return prev;
     });
   };
@@ -3126,7 +3132,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
           alert('你没有「下载 PPT 报告」权限，请联系管理员或部门主管开通。');
           return;
       }
-      const completed = automationResults.filter((t) => t.status === 'completed' && t.analysis);
+      const completed = getAutomationQueueSnapshot().filter((t) => t.status === 'completed' && t.analysis);
       if (completed.length === 0) {
           alert('暂无已完成的报告可下载');
           return;
@@ -3227,7 +3233,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       return;
     }
 
-    setAutomationResults((prev) =>
+    syncAutomationResults((prev) =>
       prev.map((t) => (t.id === task.id ? { ...t, status: 'analyzing' } : t))
     );
 
@@ -3285,7 +3291,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       } catch (saveErr) {
         console.error('流水线任务落盘失败（界面仍记为完成）', saveErr);
       }
-      setAutomationResults((prev) => prev.map((t) => (t.id === task.id ? completedTask : t)));
+      syncAutomationResults((prev) => prev.map((t) => (t.id === task.id ? completedTask : t)));
 
       let historyId: string | null = null;
       try {
@@ -3335,14 +3341,14 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                 await persistHistoryItem(nextHist).catch(() => undefined);
               }
             }
-            setAutomationResults((prev) => {
+            syncAutomationResults((prev) => {
               void mergeDecisionMakersIntoAutomationTasks(prev, {
                 taskId: task.id,
                 domain,
                 companyName,
                 decisionMakers: seededDecisionMakers,
                 searchedAt: Date.now(),
-              }).then((merged) => setAutomationResults(merged));
+              }).then((merged) => { automationResultsRef.current = merged; replaceAutomationQueue(merged); });
               return prev;
             });
             if (
@@ -3398,7 +3404,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
               { historyId: job.historyId, domain: job.domain, companyName: job.companyName }
             );
             // 明确按 taskId 写回队列并落盘（persistDecisionMakerResearch 也会按域名再合并一次）
-            setAutomationResults((prev) => {
+            syncAutomationResults((prev) => {
               void mergeDecisionMakersIntoAutomationTasks(prev, {
                 taskId: task.id,
                 domain: job.domain,
@@ -3406,7 +3412,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                 decisionMakers: job.resultDecisionMakers!,
                 searchedAt: job.searchedAt!,
                 searchHistory,
-              }).then((merged) => setAutomationResults(merged));
+              }).then((merged) => { automationResultsRef.current = merged; replaceAutomationQueue(merged); });
               return prev;
             });
             if (
@@ -3435,7 +3441,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       } catch {
         /* ignore */
       }
-      setAutomationResults((prev) => prev.map((t) => (t.id === task.id ? failedTask : t)));
+      syncAutomationResults((prev) => prev.map((t) => (t.id === task.id ? failedTask : t)));
       if (isRateLimitError(e)) {
         noteRateLimited(60);
       }
@@ -3536,7 +3542,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
             continue;
           }
           searchedCount += newTasks.length;
-          setAutomationResults((prev) => [...prev, ...newTasks]);
+          syncAutomationResults((prev) => [...prev, ...newTasks]);
           for (const task of newTasks) {
             await saveAutomationTask(task);
           }
@@ -3979,14 +3985,14 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       const busy =
         isAutomating ||
         batchProgress.active ||
-        automationResults.some((t) => t.status === 'pending' || t.status === 'analyzing');
+        automationResultsRef.current.some((t) => t.status === 'pending' || t.status === 'analyzing');
       if (!busy) return;
       e.preventDefault();
       e.returnValue = '';
     };
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [isAutomating, batchProgress.active, automationResults]);
+  }, [isAutomating, batchProgress.active]);
 
   /** admin 挂机端：每晚 22:00 进入窗口时自动续跑背调（含 Excel 夜间限定） */
   useEffect(() => {
@@ -4148,7 +4154,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
         })
       );
       // 同步更新自动化队列里同域名任务的 analysis（若有）
-      setAutomationResults((prev) =>
+      syncAutomationResults((prev) =>
         prev.map((t) => {
           if (t.status !== 'completed' || !t.analysis) return t;
           const same =
@@ -4718,7 +4724,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
   };
 
   const handleRunPending = async () => { 
-      const pending = automationResults.filter((t) => t.status === 'pending' || t.status === 'failed');
+      const pending = getAutomationQueueSnapshot().filter((t) => t.status === 'pending' || t.status === 'failed');
       if (!pending.length) return;
       const resetFailed = pending.map((t) =>
         t.status === 'failed' ? { ...t, status: 'pending' as const } : t
@@ -4740,7 +4746,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
   };
   
   const handleRunSingle = async (id: string) => { 
-      const task = automationResults.find((t) => t.id === id);
+      const task = getAutomationQueueSnapshot().find((t) => t.id === id);
       if (!task) return;
       shouldStopRef.current = false;
       if (task.status === 'failed' || task.status === 'completed') {
@@ -4757,7 +4763,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
 
   /** 已完成任务：重置后再次背调 */
   const handleRerunCompletedTask = async (id: string) => {
-      const task = automationResults.find((t) => t.id === id);
+      const task = getAutomationQueueSnapshot().find((t) => t.id === id);
       if (!task) return;
       if (!hasPermission(currentUser, 'feature.batch_analyze') && !hasPermission(currentUser, 'feature.analyze_company')) {
         alert('你没有背调权限，请联系管理员或部门主管开通。');
@@ -4861,7 +4867,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
   const handleDeleteTask = async (id: string) => { 
       if(confirm("Delete?")) { 
           await deleteAutomationTask(id); 
-          setAutomationResults(prev => prev.filter(t => t.id !== id)); 
+          syncAutomationResults((prev) => prev.filter(t => t.id !== id)); 
       } 
   };
 
@@ -4918,7 +4924,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
         users,
         departments.length ? departments : loadDepartmentsFromStorage()
       );
-      setAutomationResults(scoped);
+      setAutomationResultsDeferred(scoped);
       const timedOut = cloudNote.includes('超时');
       const allZero =
         /本机 0 \/ 云端 0 → 合并 0/.test(cloudNote) &&
@@ -4946,20 +4952,20 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
 
   const handleClearCompletedTasks = async () => {
       if (!confirm('清除所有已完成的任务？（背调历史仍会保留在记录中心）')) return;
-      const done = automationResults.filter((t) => t.status === 'completed');
+      const done = getAutomationQueueSnapshot().filter((t) => t.status === 'completed');
       for (const t of done) {
         await deleteAutomationTask(t.id);
       }
-      setAutomationResults((prev) => prev.filter((t) => t.status !== 'completed'));
+      syncAutomationResults((prev) => prev.filter((t) => t.status !== 'completed'));
       alert(`已清除 ${done.length} 条已完成任务`);
   };
 
   const handleClearAllTasks = async () => {
       if (!confirm('清空自己的任务队列？此操作不可恢复（背调历史仍保留在记录中心）。不会删除其他用户的任务。')) return;
-      for (const t of automationResults) {
+      for (const t of getAutomationQueueSnapshot()) {
         await deleteAutomationTask(t.id);
       }
-      setAutomationResults([]);
+      replaceAutomationQueue([]);
       alert('任务队列已清空');
   };
 
@@ -5128,7 +5134,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
           return nextResults ? { ...d, results: nextResults } : d;
         })
     );
-    setAutomationResults((prev) => {
+    syncAutomationResults((prev) => {
       const kept: typeof prev = [];
       for (const t of prev) {
         const blob = [
@@ -5914,24 +5920,6 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
   const alwaysActiveModules = ALWAYS_ACTIVE_MODULES;
   const activeSectionMeta = findSectionByModule(activeModule, sphereNavSectionId);
   const activeNavItem = findNavItem(activeModule, sphereNavSectionId);
-  /** 单次扫描计数，避免每次 render 对几千条作业 filter 三次 */
-  const journeyProgress = useMemo(() => {
-    let pendingTasks = 0;
-    let failedTasks = 0;
-    let completedBg = 0;
-    for (const t of automationResults) {
-      if (t.status === 'pending') pendingTasks += 1;
-      else if (t.status === 'failed') failedTasks += 1;
-      else if (t.status === 'completed' && t.analysis) completedBg += 1;
-    }
-    return {
-      skuCount: loadCatalogSkus().length,
-      pendingTasks,
-      failedTasks,
-      completedBg,
-      crmCount: crmClients.length,
-    };
-  }, [automationResults, crmClients.length]);
 
   return (
     <AccessGate user={currentUser} onLogout={handleLogout}>
@@ -5945,85 +5933,30 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       {mobileMenuOpen && (
         <div className="fixed inset-0 bg-ink-950/50 backdrop-blur-sm z-30 md:hidden" onClick={() => setMobileMenuOpen(false)} />
       )}
-      {/* 左侧圆形按钮：固定贴左边，内部可滚；主区用 calc 吃满剩余宽度 */}
-      <aside
-        className={`tp-sidebar tp-sphere-rail z-[80] flex-col ${
-          mobileMenuOpen
-            ? 'fixed inset-y-0 left-0 z-[90] flex translate-x-0'
-            : 'hidden md:flex'
-        } ${dockWidthClass}`}
-        aria-label="平台导航坞"
-      >
-        <div className="tp-dock-brand flex items-center justify-center py-2.5 border-b border-cyan-400/15 shrink-0">
-          <div className="tp-brand-mark p-2 rounded-xl text-white" title={`外贸智慧协同 · ${currentUser.username}`}>
-            <Zap size={16} />
-            </div>
-        </div>
-        
-        {(isAutomating || batchProgress.active || productDigProgress.active > 0) && sphereNavPhase === 'submenu' && (
-            <div className="mx-1.5 mt-2 p-2 bg-slate-950/50 rounded-xl border border-cyan-400/20 text-slate-100 space-y-2 backdrop-blur-md">
-                {(isAutomating || batchProgress.active) && (
-                  <div>
-                    <div className="flex justify-between items-center mb-1">
-                        <span className="text-[9px] font-bold text-emerald-300 flex items-center gap-1">
-                          <Loader2 className="animate-spin" size={9}/> 背调
-                        </span>
-            </div>
-                    {(() => {
-                      const done = batchProgress.done;
-                      const failed = batchProgress.failed;
-                      const total = batchProgress.total || Math.max(done + failed, 1);
-                      const pct = total ? Math.round(((done + failed) / total) * 100) : 0;
-                      return (
-                          <div className="h-1 rounded-full bg-slate-700 overflow-hidden">
-                            <div className="h-full bg-emerald-400 transition-all" style={{ width: `${pct}%` }} />
-                </div>
-                      );
-                    })()}
-            </div>
-        )}
-                <button onClick={stopAutomation} className="w-full bg-rose-600/90 hover:bg-rose-600 text-white text-[9px] font-bold py-1.5 rounded-lg flex items-center justify-center gap-1">
-                    <StopCircle size={10} /> 停止
-            </button>
-                </div>
-            )}
-            
-        <div className="flex-1 min-h-0 flex flex-col">
-          <SphereNav
-            currentUser={currentUser}
-            activeModule={activeModule}
-            analysisData={analysisData}
-            historyOpen={historyOpen}
-            onPhaseChange={setSphereNavPhase}
-            onSectionChange={setSphereNavSectionId}
-            onSelectModule={(m) => {
-              navigateModule(m);
-              setMobileMenuOpen(false);
-            }}
-            onOpenRecords={() => setHistoryOpen((v) => !v)}
-            onOpenTeamManage={
-              currentUser.role === 'manager'
-                ? () => {
-                    setTeamManageOpen(true);
-                    setMobileMenuOpen(false);
-                  }
-                : undefined
-            }
-            onLogout={handleLogout}
-          />
-          {currentUser.role === 'admin' && adminInWorkspace && (
-            <div className="px-1.5 pb-2">
-              <button
-                type="button"
-                onClick={() => setAdminInWorkspace(false)}
-                className="w-full text-[9px] font-black text-cyan-200/90 bg-cyan-500/10 border border-cyan-400/20 rounded-lg py-1.5 hover:bg-cyan-500/20"
-              >
-                返回管理后台
-            </button>
-            </div>
-          )}
-        </div>
-      </aside>
+      <AppNavDock
+        currentUser={currentUser}
+        activeModule={activeModule}
+        analysisData={analysisData}
+        historyOpen={historyOpen}
+        sphereNavPhase={sphereNavPhase}
+        dockWidthClass={dockWidthClass}
+        mobileMenuOpen={mobileMenuOpen}
+        adminInWorkspace={adminInWorkspace}
+        isAutomating={isAutomating}
+        batchProgress={batchProgress}
+        productDigActive={productDigProgress.active}
+        onPhaseChange={setSphereNavPhase}
+        onSectionChange={setSphereNavSectionId}
+        onSelectModule={navigateModule}
+        onOpenRecords={openRecordsPanel}
+        onOpenTeamManage={
+          currentUser.role === 'manager' ? openTeamManagePanel : undefined
+        }
+        onLogout={handleLogout}
+        onStopAutomation={stopAutomation}
+        onExitAdminWorkspace={exitAdminWorkspace}
+        onCloseMobileMenu={closeMobileMenu}
+      />
       
       {historyOpen && (
         <RecordsPanel
@@ -6235,13 +6168,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
         </header>
 
         <div className="tp-main-stage flex-1 overflow-x-hidden p-3 sm:p-4 md:p-5 relative w-full max-w-none min-w-0">
-          {cooldownTime > 0 && (
-              <div className="absolute inset-0 bg-mist-50/85 z-50 flex flex-col items-center justify-center backdrop-blur-md animate-fade-in cursor-wait">
-                  <div className="relative"><Hourglass size={64} className="text-signal-500 animate-pulse" /><div className="absolute -top-2 -right-2 bg-rose-500 text-white w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs">{cooldownTime}</div></div>
-                  <h3 className="text-2xl font-extrabold text-ink-900 mt-6 tracking-tight">API 冷却中</h3>
-                  <p className="text-slate-500 mt-2 font-medium max-w-md text-center">服务额度恢复中，倒计时结束后会自动继续当前任务（无需反复点击）。可点左侧 STOP 暂停。</p>
-              </div>
-          )}
+          <CooldownOverlay />
 
           {loading && (
             <div className="absolute inset-0 bg-mist-50/90 z-50 flex flex-col items-center justify-center backdrop-blur-md animate-fade-in">
@@ -6275,7 +6202,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
               }
             >
             <>
-                <ModulePane id={ModuleType.HOME} activeId={activeModule} maxAlive={10}>
+                <ModulePane id={ModuleType.HOME} activeId={activeModule} maxAlive={2}>
                   <ErrorBoundary label="今日看板">
                     <ModuleLandingHub
                       currentUser={currentUser}
@@ -6305,11 +6232,11 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                         setPendingPlaybookId(playbookId);
                         navigateModule(ModuleType.PROMO_GENERATOR);
                       }}
-                      journeyProgress={journeyProgress}
+                      journeyProgress={{ skuCount: loadCatalogSkus().length, pendingTasks: 0, failedTasks: 0, completedBg: 0, crmCount: crmClients.length }}
                     />
                   </ErrorBoundary>
                 </ModulePane>
-                <ModulePane id={ModuleType.DISCOVERY} activeId={activeModule} maxAlive={10}>
+                <ModulePane id={ModuleType.DISCOVERY} activeId={activeModule} maxAlive={2}>
                     <ClientFinder 
                         state={discoveryState} 
                         onStateChange={handleDiscoveryStateChange}
@@ -6357,7 +6284,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                         onAutoSearchConsumed={() => setDiscoveryAutoSearchNonce(0)}
                     />
                 </ModulePane>
-                <ModulePane id={ModuleType.CLIENT_CRM} activeId={activeModule} maxAlive={10}>
+                <ModulePane id={ModuleType.CLIENT_CRM} activeId={activeModule} maxAlive={2}>
                     <ModuleClientCRM 
                         clients={crmClients} 
                         setClients={setCrmClients} 
@@ -6385,7 +6312,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                         onNavOrderChange={setCrmNavOrder}
                     />
                 </ModulePane>
-                <ModulePane id={ModuleType.PRODUCT_MATCH} activeId={activeModule} maxAlive={10}>
+                <ModulePane id={ModuleType.PRODUCT_MATCH} activeId={activeModule} maxAlive={2}>
                     <ModuleProductMatch
                         history={history}
                         crmClients={crmClients}
@@ -6399,7 +6326,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                         onBackToReport={() => navigateModule(ModuleType.BACKGROUND)}
                     />
                 </ModulePane>
-                <ModulePane id={ModuleType.EMAIL_CAMPAIGN} activeId={activeModule} maxAlive={10}>
+                <ModulePane id={ModuleType.EMAIL_CAMPAIGN} activeId={activeModule} maxAlive={2}>
                     {/* 独立 Suspense：避免加载邮件 chunk/编辑器时整页主区被共用 fallback 挡住 */}
                     <Suspense
                       fallback={
@@ -6448,48 +6375,48 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                       </ErrorBoundary>
                     </Suspense>
                 </ModulePane>
-                <ModulePane id={ModuleType.IMAGE_GENERATOR} activeId={activeModule} maxAlive={10}>
+                <ModulePane id={ModuleType.IMAGE_GENERATOR} activeId={activeModule} maxAlive={2}>
                     <ModuleImageGenerator />
                 </ModulePane>
                 {currentUser && (
                   <>
-                    <ModulePane id={ModuleType.PRODUCT_CATALOG} activeId={activeModule} maxAlive={10}>
+                    <ModulePane id={ModuleType.PRODUCT_CATALOG} activeId={activeModule} maxAlive={2}>
                       <ModuleProductCatalog currentUser={currentUser} />
                     </ModulePane>
-                    <ModulePane id={ModuleType.PRODUCT_QUOTE} activeId={activeModule} maxAlive={10}>
+                    <ModulePane id={ModuleType.PRODUCT_QUOTE} activeId={activeModule} maxAlive={2}>
                       <ModuleProductQuote currentUser={currentUser} />
                     </ModulePane>
-                    <ModulePane id={ModuleType.PRODUCT_DESIGN_2D} activeId={activeModule} maxAlive={10}>
+                    <ModulePane id={ModuleType.PRODUCT_DESIGN_2D} activeId={activeModule} maxAlive={2}>
                       <ModuleProductDesign2D
                         currentUser={currentUser}
                         onNavigateModule={navigateModule}
                       />
                     </ModulePane>
-                    <ModulePane id={ModuleType.PRODUCT_DESIGN_3D} activeId={activeModule} maxAlive={10}>
+                    <ModulePane id={ModuleType.PRODUCT_DESIGN_3D} activeId={activeModule} maxAlive={2}>
                       <ModuleProductDesign3D
                         currentUser={currentUser}
                         onNavigateModule={navigateModule}
                       />
                     </ModulePane>
-                    <ModulePane id={ModuleType.PRODUCT_AI_VIDEO} activeId={activeModule} maxAlive={10}>
+                    <ModulePane id={ModuleType.PRODUCT_AI_VIDEO} activeId={activeModule} maxAlive={2}>
                       <ModuleProductAiVideo
                         currentUser={currentUser}
                         onNavigateModule={navigateModule}
                       />
                     </ModulePane>
-                    <ModulePane id={ModuleType.PRODUCT_PACKAGING} activeId={activeModule} maxAlive={10}>
+                    <ModulePane id={ModuleType.PRODUCT_PACKAGING} activeId={activeModule} maxAlive={2}>
                       <ModuleProductPackaging
                         currentUser={currentUser}
                         onNavigateModule={navigateModule}
                       />
                     </ModulePane>
-                    <ModulePane id={ModuleType.SITE_BUILDER} activeId={activeModule} maxAlive={10}>
+                    <ModulePane id={ModuleType.SITE_BUILDER} activeId={activeModule} maxAlive={2}>
                       <ModuleSiteBuilder currentUser={currentUser} />
                     </ModulePane>
-                    <ModulePane id={ModuleType.SOCIAL_CONTENT} activeId={activeModule} maxAlive={10}>
+                    <ModulePane id={ModuleType.SOCIAL_CONTENT} activeId={activeModule} maxAlive={2}>
                       <ModuleSocialContent currentUser={currentUser} />
                     </ModulePane>
-                    <ModulePane id={ModuleType.WHATSAPP} activeId={activeModule} maxAlive={10}>
+                    <ModulePane id={ModuleType.WHATSAPP} activeId={activeModule} maxAlive={2}>
                       <ModuleContactTools currentUser={currentUser} crmClients={crmClients} />
                     </ModulePane>
                   </>
@@ -6504,14 +6431,13 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                     ModuleType.ECO_DELIVERY,
                   ] as ModuleType[]
                 ).includes(activeModule) && <ModuleComingSoon module={activeModule} />}
-                <ModulePane id={ModuleType.PROMO_GENERATOR} activeId={activeModule} maxAlive={10}>
+                <ModulePane id={ModuleType.PROMO_GENERATOR} activeId={activeModule} maxAlive={2}>
                     <ModulePromoGenerator 
                         onStartAutomation={handleStartQueueGeneration} 
                         onPlatformAcquisitionSearch={handlePlatformAcquisitionSearch}
                         initialPlaybookId={pendingPlaybookId}
                         onInitialPlaybookConsumed={() => setPendingPlaybookId(null)}
-                        automationResults={automationResults} 
-                        crmClients={crmClients}
+crmClients={crmClients}
                         history={history}
                         isAutomating={isAutomating} 
                         onRunPending={handleRunPending}
@@ -6547,7 +6473,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                         canViewEmails={canViewFullDecisionMakerEmails(currentUser)}
                     />
                 </ModulePane>
-                <ModulePane id={ModuleType.STRATEGY} activeId={activeModule} maxAlive={10}>
+                <ModulePane id={ModuleType.STRATEGY} activeId={activeModule} maxAlive={2}>
                     <div className="animate-fade-in w-full pb-10">
                         {analysisData && (
                             <div className="mb-3 flex flex-wrap items-center justify-between gap-2 bg-white px-3 py-2 rounded-2xl border border-slate-200 shadow-sm">
