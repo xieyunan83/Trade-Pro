@@ -102,17 +102,22 @@ const scheduleIdlePersist = () => {
   if (cloudTimer) clearTimeout(cloudTimer);
   cloudTimer = setTimeout(() => {
     cloudTimer = null;
-    if (shouldDeferHeavyWork()) {
-      // 冷静期把整次落盘/云同步再往后推，避免和点击抢主线程
-      scheduleIdlePersist();
-      return;
-    }
-    if (!persistCtx?.isReady()) return;
-    if (clients.length > 800) return;
+    // 默认禁止自动云同步；仅挂机模式才允许
     void (async () => {
       try {
+        const { isAutoBackgroundAllowed } = await import('./autoBackgroundPolicy');
+        if (!isAutoBackgroundAllowed()) return;
+      } catch {
+        return;
+      }
+      if (shouldDeferHeavyWork()) {
+        scheduleIdlePersist();
+        return;
+      }
+      if (!persistCtx?.isReady()) return;
+      if (clients.length > 800) return;
+      try {
         const { isSupabaseConfigured, syncCrmClients } = await import('./supabase');
-        // 与旧逻辑一致：Supabase 按可见集 upsert（不删他人）
         if (isSupabaseConfigured() && clients.length > 0) {
           await syncCrmClients(clients);
         }
@@ -127,7 +132,6 @@ const scheduleIdlePersist = () => {
           forGh.length <= 800
         ) {
           const { saveCRMToCloud } = await import('./githubService');
-          // GitHub 必须写全库合并结果，避免把其它部门冲掉
           await saveCRMToCloud(forGh);
         }
       } catch (e) {

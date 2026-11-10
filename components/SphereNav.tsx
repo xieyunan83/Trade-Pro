@@ -9,7 +9,6 @@ import {
   findSectionByModule,
 } from '../services/platformSections';
 import { ALWAYS_ACTIVE_MODULES } from '../services/moduleNav';
-import { prefetchModule } from '../services/modulePrefetch';
 import { XiaoYuanAssistant } from './XiaoYuanAssistant';
 
 export type SphereNavPhase = 'start' | 'sections' | 'submenu';
@@ -85,19 +84,9 @@ export const SphereNav: React.FC<Props> = ({
   };
 
   const pickSection = (sec: PlatformSection) => {
-    // 同步切换相位（必须立刻反馈）；预取错峰，避免点开瞬间解析多个 chunk
+    // 同步切换相位（必须立刻反馈）；禁止后台预取其它模块
     setSectionId(sec.id);
     setPhase('submenu');
-    const ids = sec.items.map((it) => it.id);
-    window.setTimeout(() => {
-      let i = 0;
-      const step = () => {
-        if (i >= ids.length) return;
-        prefetchModule(ids[i++]);
-        window.setTimeout(step, 500);
-      };
-      step();
-    }, 400);
     // 指挥舱仅一项：点板块直接进入今日看板
     if (sec.id === 'home' && sec.items[0]) {
       onSelectModule(sec.items[0].id);
@@ -111,11 +100,10 @@ export const SphereNav: React.FC<Props> = ({
       return;
     }
     onSelectModule(mod);
-    window.setTimeout(() => prefetchModule(mod), 0);
   };
 
-  const warmModule = (mod: ModuleType) => {
-    prefetchModule(mod);
+  const warmModule = (_mod: ModuleType) => {
+    /* 禁止悬停预取 */
   };
 
   const backToSections = () => setPhase('sections');

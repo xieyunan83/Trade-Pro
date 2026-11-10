@@ -16,8 +16,6 @@ import {
   recordLoginFailure,
   sanitizeUsernameInput,
 } from '../services/appFirewall';
-import { prefetchCoreModules } from '../services/modulePrefetch';
-
 interface LoginProps {
   onLogin: (user: User) => void;
   onUsersChange?: (users: User[]) => void;
@@ -41,19 +39,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
     setForceChange(null);
     setNewPwd('');
     setNewPwd2('');
-    // 登录成功后再预热；用 idle 避免挡住首屏切换
-    const warm = () => {
-      try {
-        prefetchCoreModules();
-      } catch {
-        /* ignore */
-      }
-    };
-    if (typeof requestIdleCallback === 'function') {
-      requestIdleCallback(warm, { timeout: 4000 });
-    } else {
-      setTimeout(warm, 800);
-    }
+    // 禁止登录后预取模块 chunk（会抢 CPU/网，演示易卡）
     startTransition(() => {
       onLogin(user);
     });

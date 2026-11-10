@@ -36,6 +36,7 @@ import {
 import { AppNavDock } from './components/AppNavDock';
 import { CooldownOverlay } from './components/CooldownOverlay';
 import { installForegroundGuard, setHeavyWorkSuspended } from './services/foregroundGuard';
+import { isAutoBackgroundAllowed } from './services/autoBackgroundPolicy';
 import {
   loadAndRepairAutomationQueue,
   mergeDecisionMakersIntoAutomationTasks,
@@ -202,7 +203,6 @@ import { loadCatalogSkus } from './services/productCatalogTypes';
 import { setPreferredAcquisitionCategories } from './services/acquisitionMethods';
 import type { PlatformAcquisitionSearchRequest } from './components/AcquisitionMethodsPanel';
 import type { SphereNavPhase } from './components/SphereNav';
-import { prefetchCoreModules, prefetchModule } from './services/modulePrefetch';
 import { lazyWithRetry } from './utils/lazyWithRetry';
 
 /** 同域名客户合并：邮件任务 clientId 重映射 + 云端删除被合并行 */
@@ -371,7 +371,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
    */
   const navigateModule = useCallback((m: ModuleType) => {
     setActiveModule(m);
-    window.setTimeout(() => prefetchModule(m), 0);
+    // 禁止切换时预取其它模块 chunk（录屏/操作时抢网抢 CPU）
   }, []);
   const openRecordsPanel = useCallback(() => setHistoryOpen((v) => !v), []);
   const closeMobileMenu = useCallback(() => setMobileMenuOpen(false), []);
@@ -627,18 +627,17 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
     setProductDigHistoryResolver(resolveHist);
     setDesignSignalHistoryResolver(resolveHist);
     setEnrichmentHistoryResolver(resolveHist);
-    const hydrateLater = () => {
-      try {
-        hydrateDesignSignalQueue();
-        hydrateEnrichmentQueue();
-      } catch (e) {
-        console.warn('[boot] hydrate queues failed', e);
-      }
-    };
-    if (typeof requestIdleCallback === 'function') {
-      requestIdleCallback(hydrateLater, { timeout: 4000 });
-    } else {
-      window.setTimeout(hydrateLater, 800);
+    // 禁止进站自动预热补全队列（会复活后台泵）；仅挂机模式才 hydrate
+    if (isAutoBackgroundAllowed()) {
+      const hydrateLater = () => {
+        try {
+          hydrateDesignSignalQueue();
+          hydrateEnrichmentQueue();
+        } catch (e) {
+          console.warn('[boot] hydrate queues failed', e);
+        }
+      };
+      window.setTimeout(hydrateLater, 12_000);
     }
     return () => {
       setProductDigHistoryResolver(null);
@@ -658,20 +657,18 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
   // 最小化 / 切应用返回：先恢复侧栏可点，并冷静期让路，避免定时器回补饿死菜单
   useEffect(() => installForegroundGuard(), []);
 
-  /** 创作模块（录演示/操作）时硬挂起后台同步与队列，避免整页假死 */
+  /** 默认硬挂起一切自动后台；仅「挂机执行」才放开 */
   useEffect(() => {
-    const creative = new Set<ModuleType>([
-      ModuleType.PRODUCT_DESIGN_2D,
-      ModuleType.PRODUCT_DESIGN_3D,
-      ModuleType.PRODUCT_AI_VIDEO,
-      ModuleType.PRODUCT_PACKAGING,
-      ModuleType.SITE_BUILDER,
-      ModuleType.SOCIAL_CONTENT,
-      ModuleType.IMAGE_GENERATOR,
-    ]);
-    setHeavyWorkSuspended(creative.has(activeModule));
-    return () => setHeavyWorkSuspended(false);
-  }, [activeModule]);
+    setHeavyWorkSuspended(!workerModeOn);
+    if (!workerModeOn) {
+      try {
+        stopAllBackgroundWork();
+      } catch {
+        /* ignore */
+      }
+    }
+    return () => setHeavyWorkSuspended(true);
+  }, [workerModeOn]);
 
   /** 仅 admin 挂机端：静默补齐缺口（白天轻量 / 夜间重补全）；业务员本机绝不自动开跑 */
   useEffect(() => {
@@ -1078,14 +1075,16 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       return;
     }
 
-    // 每次登录默认安静：清掉粘性挂机/僵尸队列（延后很久，绝不能抢首屏点击）
+    // 每次登录立刻安静：禁止任何自动后台（同步/队列/补全），除非用户之后手动开挂机
     shouldStopRef.current = true;
     autoResumeBatchOnceRef.current = false;
+    setHeavyWorkSuspended(true);
     const quietStop = () => {
       try {
         setWorkerModeActive(false);
         setWorkerModeOn(false);
         stopAllBackgroundWork();
+        setHeavyWorkSuspended(true);
         if (typeof localStorage !== 'undefined') {
           localStorage.setItem('trade_scout_auto_resume_batch', '0');
         }
@@ -1093,7 +1092,8 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
         console.warn('[boot] quiet-stop failed', e);
       }
     };
-    const quietStopTimer = window.setTimeout(quietStop, 5000);
+    quietStop();
+    const quietStopTimer = window.setTimeout(quietStop, 0);
 
     // 切换账号时清空工作区；同账号 StrictMode 二次挂载仍会重新拉取
     if (lastWorkspaceUserRef.current !== currentUser.username) {
@@ -1200,9 +1200,27 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                 discoveryHydratedRef.current = true;
               }
               userDataReadyRef.current = true;
-              reportSyncStatus('本机资料已就绪，正在后台同步…', true);
+              crmPersistReadyRef.current = true;
+              reportSyncStatus('本机资料已就绪。云端同步请手动点「同步全部资料」。', true);
             }
 
+            // 默认禁止登录后自动云同步 / FOB / 空闲整理（会卡死演示与日常操作）
+            if (!isAutoBackgroundAllowed()) {
+              try {
+                const repairedLite = await loadAndRepairAutomationQueue(currentUser);
+                if (!cancelled) setAutomationResultsDeferred(scope(repairedLite.tasks));
+              } catch (e) {
+                console.warn('[boot] local queue load skipped sync', e);
+              }
+              if (!cancelled) {
+                setWorkspaceSyncing(false);
+                stopAllBackgroundWork();
+                setHeavyWorkSuspended(true);
+              }
+              return;
+            }
+
+            // —— 以下仅挂机模式才会跑 ——
             // 再让出一段时间，优先响应菜单（进站后前几秒几乎只服务点击）
             await new Promise<void>((r) => window.setTimeout(r, 4200));
             if (cancelled) return;
@@ -5981,7 +5999,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
           saveSession(u.username);
           armDesktopSession();
           setUsageScope(u.username);
-          prefetchCoreModules();
+          // 禁止登录预取模块；需要时点进模块再加载
           if (u.role === 'admin') setHasKey(true);
           startTransition(() => {
             setCurrentUser(u);
