@@ -25,7 +25,10 @@ export type VideoSkillId =
   | 'b2b_buyer'
   | 'free';
 
-export type VideoDurationSec = 4 | 5 | 6 | 8 | 10 | 12 | 15;
+/** 与 wan3.0-video 对齐：最高 30 秒 */
+export type VideoDurationSec = 5 | 8 | 10 | 12 | 15 | 20 | 25 | 30;
+
+export const VIDEO_DURATION_OPTIONS: VideoDurationSec[] = [5, 8, 10, 12, 15, 20, 25, 30];
 
 export type VideoSkillDef = {
   id: VideoSkillId;

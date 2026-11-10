@@ -37,12 +37,14 @@ import { consumeCreativeHandoff } from '../services/creativeAssetBridge';
 import { CreativePipelineBar, CreativeRefPicker } from './CreativeRefPicker';
 import {
   VIDEO_SKILLS,
+  VIDEO_DURATION_OPTIONS,
   assembleVideoSkillPayload,
   getVideoSkill,
   type VideoDurationSec,
   type VideoSkillId,
 } from '../services/creativeSkills/videoSkills';
 import { composeVideoGenerationPrompt } from '../services/creativeQualityKit';
+import { VIDEO_DURATION_MAX_SEC } from '../services/wanVideoService';
 
 type Props = {
   currentUser: User;
@@ -107,6 +109,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
       try {
         const raw = loadVideoJobs();
         setJobs(raw);
+        setActiveId((id) => (id && raw.some((j) => j.id === id) ? id : raw[0]?.id || null));
       } catch {
         setJobs([]);
       }
@@ -139,17 +142,32 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
           /* ignore */
         }
         if (cancelled) return;
+        // 关键读本机库：进站 8s 后的旧 raw 不能盖掉用户刚生成的样片
+        const latest = loadVideoJobs();
         const migrated: VideoJob[] = [];
-        for (let i = 0; i < raw.length; i++) {
+        for (let i = 0; i < latest.length; i++) {
           if (cancelled) return;
-          migrated.push(await persistVideoJob(raw[i]));
+          migrated.push(await persistVideoJob(latest[i]));
           if (i % 2 === 1) {
             await new Promise<void>((r) => window.setTimeout(r, 0));
           }
         }
         if (!cancelled) {
-          saveVideoJobs(migrated);
-          setJobs(migrated);
+          // 合并：以 updatedAt 较新为准，防止 remigrate 冲掉刚写入的 draftVideoUrl
+          const byId = new Map<string, VideoJob>();
+          for (const j of loadVideoJobs()) byId.set(j.id, j);
+          for (const j of migrated) {
+            const cur = byId.get(j.id);
+            if (!cur || (j.updatedAt || 0) >= (cur.updatedAt || 0)) byId.set(j.id, j);
+          }
+          const merged = Array.from(byId.values()).sort(
+            (a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)
+          );
+          saveVideoJobs(merged);
+          setJobs(merged);
+          setActiveId((id) =>
+            id && merged.some((j) => j.id === id) ? id : merged[0]?.id || null
+          );
         }
       } catch (e) {
         console.warn('video jobs migrate', e);
@@ -360,6 +378,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
           setMsg(`样片生成中 ${Math.round(pct)}%`);
         },
       });
+      const readyAt = Date.now();
       const vaulted = await persistVideoJob({
         ...job,
         status: 'draft',
@@ -368,17 +387,26 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
         draftVideoUrl: result.videoUrl,
         previewHint: '样片已就绪（已存本机）。确认后进入正片。',
         error: undefined,
-        updatedAt: Date.now(),
+        updatedAt: readyAt,
       });
-      patchJob(job.id, {
-        status: 'draft',
+      // 同时保留云端 https 与本机 vault，预览优先可播放地址
+      const playable =
+        (vaulted.draftVideoUrl || '').trim() ||
+        (result.videoUrl || '').trim();
+      const patch = {
+        status: 'draft' as const,
         progress: 100,
-        providerTaskId: vaulted.providerTaskId,
-        draftVideoUrl: vaulted.draftVideoUrl,
-        previewHint: vaulted.previewHint,
+        providerTaskId: vaulted.providerTaskId || result.taskId,
+        draftVideoUrl: playable,
+        previewHint: '样片已就绪 — 右侧可直接预览 / 下载',
         error: undefined,
-      });
-      setMsg('样片已完成并写入本机 — 确认后再出正片以控制成本');
+        updatedAt: readyAt,
+      };
+      // 防止 remigrate 用旧列表冲掉：直接合并进最新本机库
+      const merged = [ { ...job, ...patch }, ...loadVideoJobs().filter((j) => j.id !== job.id) ];
+      persist(merged);
+      setActiveId(job.id);
+      setMsg('样片已完成 — 请看右侧预览台播放；确认后再出正片以控制成本');
     } catch (e: any) {
       const errText = humanizeCreativeProviderError(e?.message || e);
       patchJob(job.id, {
@@ -489,7 +517,15 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
 
   const draftUrl = useVaultUrl(active?.draftVideoUrl);
   const fullUrl = useVaultUrl(active?.videoUrl);
-  const playUrl = fullUrl || draftUrl;
+  // https 可立即播；vault: 等 useVaultUrl 解出 blob。禁止只等 vault 导致「完成却空白」
+  const rawDraft = (active?.draftVideoUrl || '').trim();
+  const rawFull = (active?.videoUrl || '').trim();
+  const playUrl =
+    fullUrl ||
+    draftUrl ||
+    (/^https?:\/\//i.test(rawFull) ? rawFull : '') ||
+    (/^https?:\/\//i.test(rawDraft) ? rawDraft : '');
+  const hasVideoAsset = !!(rawFull || rawDraft);
 
   return (
     <div className="w-full space-y-4 animate-fade-in px-0 sm:px-1">
@@ -894,12 +930,15 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
                   }
                   className="mt-1 w-full rounded-xl border border-slate-200 px-2 py-2 text-sm font-bold"
                 >
-                  {([4, 5, 6, 8, 10, 12, 15] as VideoDurationSec[]).map((n) => (
+                  {VIDEO_DURATION_OPTIONS.map((n) => (
                     <option key={n} value={n}>
-                      {n} 秒
+                      {n} 秒{n === VIDEO_DURATION_MAX_SEC ? '（最长）' : ''}
                     </option>
                   ))}
                 </select>
+                <p className="text-[9px] text-slate-400 font-medium mt-1">
+                  当前通道最长 {VIDEO_DURATION_MAX_SEC} 秒
+                </p>
               </div>
               <div>
                 <label className="text-[10px] font-black text-slate-400 uppercase">画幅</label>
@@ -956,7 +995,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
               </span>
             )}
           </div>
-          <div className="flex-1 flex items-center justify-center p-6">
+          <div className="flex-1 flex items-center justify-center p-4 sm:p-6 min-h-[16rem]">
             {active?.status === 'rendering' ? (
               <div className="text-center space-y-3">
                 <Loader2 className="mx-auto animate-spin text-rose-400" size={36} />
@@ -969,19 +1008,34 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
                 </div>
               </div>
             ) : playUrl ? (
-              <video
-                key={playUrl}
-                src={playUrl}
-                controls
-                playsInline
-                className={`rounded-2xl bg-black max-h-72 ${
-                  active?.aspect === '9:16'
-                    ? 'w-40'
-                    : active?.aspect === '1:1'
-                      ? 'w-56'
-                      : 'w-full max-w-lg'
-                }`}
-              />
+              <div className="w-full flex flex-col items-center gap-2">
+                <video
+                  key={playUrl}
+                  src={playUrl}
+                  controls
+                  playsInline
+                  autoPlay
+                  muted
+                  className={`rounded-2xl bg-black max-h-[min(28rem,55vh)] ${
+                    active?.aspect === '9:16'
+                      ? 'w-44'
+                      : active?.aspect === '1:1'
+                        ? 'w-64'
+                        : 'w-full max-w-xl'
+                  }`}
+                />
+                <p className="text-[10px] font-bold text-slate-400">
+                  {active?.status === 'ready' ? '正片预览' : '样片预览'} · 可点下方下载
+                </p>
+              </div>
+            ) : hasVideoAsset ? (
+              <div className="text-center space-y-2 px-4">
+                <Loader2 className="mx-auto animate-spin text-rose-300" size={28} />
+                <p className="text-sm font-bold text-slate-300">正在加载本机样片…</p>
+                <p className="text-[10px] text-slate-500 font-medium max-w-xs mx-auto">
+                  {active?.title || '视频已生成'}，若长时间无画面请点「下载样片」或重新打开成片库条目
+                </p>
+              </div>
             ) : active ? (
               <div
                 className={`relative bg-gradient-to-br from-rose-600/30 to-amber-500/20 border border-white/10 rounded-2xl flex items-center justify-center ${
@@ -1002,12 +1056,12 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
                 <div className="relative z-10 text-center px-4">
                   <p className="text-xs font-black text-white">{active.title}</p>
                   <p className="text-[10px] text-slate-300 mt-2 max-w-xs mx-auto">
-                    {active.error || active.previewHint}
+                    {active.error || active.previewHint || '尚无视频文件'}
                   </p>
                 </div>
               </div>
             ) : (
-              <p className="text-sm text-slate-500">生成样片后在此预览</p>
+              <p className="text-sm text-slate-500">生成样片后在此预览；完成后也会出现在右侧成片库</p>
             )}
           </div>
           {active?.status === 'draft' && (

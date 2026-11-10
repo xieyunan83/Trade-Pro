@@ -95,7 +95,7 @@ export type VideoJob = {
   mode: VideoMode;
   prompt: string;
   storyboard?: string;
-  durationSec: 4 | 5 | 6 | 8 | 10 | 12 | 15;
+  durationSec: 5 | 8 | 10 | 12 | 15 | 20 | 25 | 30;
   /** 选用的视频 Skill */
   skillId?: string;
   sellingPoints?: string[];

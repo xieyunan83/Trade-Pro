@@ -25,7 +25,8 @@ export type VideoGenerateInput = {
   /** 首尾帧：尾帧（与 first_frame 同请求，勿与 reference_image 混用） */
   lastFrameImage?: string;
   referenceImages?: string[];
-  durationSec: 4 | 5 | 6 | 8 | 10 | 12 | 15;
+  /** wan3.0-video：无参考视频时 2–30 秒任意整数 */
+  durationSec: number;
   aspect: '16:9' | '9:16' | '1:1';
   resolution: '720P' | '1080P';
   tier: 'draft' | 'full';
@@ -152,8 +153,14 @@ const parseJson = async (res: Response): Promise<any> => {
   }
 };
 
-/** wan3.0：时长 2–15（样片短、正片可更长；超过 15 截断） */
-const mapDuration = (sec: number): number => Math.max(2, Math.min(15, Math.round(sec) || 5));
+/**
+ * wan3.0-video 官方：无参考视频时 duration ∈ [2, 30]；-1 为智能时长。
+ * 平台下拉最高 30，与模型对齐（旧注释误写成 15）。
+ */
+export const VIDEO_DURATION_MAX_SEC = 30;
+export const VIDEO_DURATION_MIN_SEC = 2;
+export const mapDuration = (sec: number): number =>
+  Math.max(VIDEO_DURATION_MIN_SEC, Math.min(VIDEO_DURATION_MAX_SEC, Math.round(sec) || 5));
 
 const aspectToRatio = (aspect: VideoGenerateInput['aspect']): string => {
   if (aspect === '9:16') return '9:16';
