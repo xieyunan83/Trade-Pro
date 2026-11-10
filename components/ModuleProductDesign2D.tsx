@@ -123,12 +123,20 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
   );
   const isCreateFromScratch = agentMode === 'create';
   const refInputRef = useRef<HTMLInputElement>(null);
-  const skus = useMemo(() => loadCatalogSkus(), []);
+  const skus = useMemo(() => loadCatalogSkus({ ensureTaxonomy: false }), []);
   const status = getDesignAgentConfigStatus();
 
   useEffect(() => {
-    ensureEnterprisePacksSeeded();
-    setActivePack(getActiveEnterprisePack());
+    let cancelled = false;
+    const t = window.setTimeout(() => {
+      if (cancelled) return;
+      ensureEnterprisePacksSeeded();
+      if (!cancelled) setActivePack(getActiveEnterprisePack());
+    }, 500);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(t);
+    };
   }, []);
 
   const resolveSkuForSecondary = () => {

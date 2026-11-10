@@ -11,6 +11,8 @@ let foreground = typeof document === 'undefined' ? true : document.visibilitySta
 let resumeTimer: ReturnType<typeof setTimeout> | null = null;
 /** 回前台 / 用户交互后额外冷静期，期间重任务应让路给点击 */
 let calmUntil = 0;
+/** 创作模块演示/操作时硬挂起：登录同步、队列泵一律让路 */
+let heavySuspended = false;
 const listeners = new Set<Listener>();
 
 const emit = () => {
@@ -71,12 +73,28 @@ const isInputPendingNow = (): boolean => {
   return false;
 };
 
-/** 重任务泵应在后台、冷静期、或浏览器已积压输入时让路 */
+/** 重任务泵应在后台、冷静期、创作挂起、或浏览器已积压输入时让路 */
 export const shouldDeferHeavyWork = (): boolean => {
+  if (heavySuspended) return true;
   if (!foreground) return true;
   if (Date.now() < calmUntil) return true;
   return isInputPendingNow();
 };
+
+/** 进入平面/3D/视频等创作页时打开；离开后关闭。演示录屏务必挂起。 */
+export const setHeavyWorkSuspended = (suspended: boolean) => {
+  if (heavySuspended === suspended) return;
+  heavySuspended = suspended;
+  if (suspended) {
+    calmUntil = Math.max(calmUntil, Date.now() + 60_000);
+    recoverNavPointer();
+  } else {
+    noteUserActivity(2_000);
+  }
+  emit();
+};
+
+export const isHeavyWorkSuspended = (): boolean => heavySuspended;
 
 /**
  * 用户正在操作时调用：只拉长冷静期，不立刻 emit（避免冲刷大列表）。

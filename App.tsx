@@ -35,7 +35,7 @@ import {
 } from './services/historyStore';
 import { AppNavDock } from './components/AppNavDock';
 import { CooldownOverlay } from './components/CooldownOverlay';
-import { installForegroundGuard } from './services/foregroundGuard';
+import { installForegroundGuard, setHeavyWorkSuspended } from './services/foregroundGuard';
 import {
   loadAndRepairAutomationQueue,
   mergeDecisionMakersIntoAutomationTasks,
@@ -657,6 +657,21 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
 
   // 最小化 / 切应用返回：先恢复侧栏可点，并冷静期让路，避免定时器回补饿死菜单
   useEffect(() => installForegroundGuard(), []);
+
+  /** 创作模块（录演示/操作）时硬挂起后台同步与队列，避免整页假死 */
+  useEffect(() => {
+    const creative = new Set<ModuleType>([
+      ModuleType.PRODUCT_DESIGN_2D,
+      ModuleType.PRODUCT_DESIGN_3D,
+      ModuleType.PRODUCT_AI_VIDEO,
+      ModuleType.PRODUCT_PACKAGING,
+      ModuleType.SITE_BUILDER,
+      ModuleType.SOCIAL_CONTENT,
+      ModuleType.IMAGE_GENERATOR,
+    ]);
+    setHeavyWorkSuspended(creative.has(activeModule));
+    return () => setHeavyWorkSuspended(false);
+  }, [activeModule]);
 
   /** 仅 admin 挂机端：静默补齐缺口（白天轻量 / 夜间重补全）；业务员本机绝不自动开跑 */
   useEffect(() => {
