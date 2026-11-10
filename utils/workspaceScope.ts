@@ -172,6 +172,16 @@ const scheduleCrmPersist = (clients: Client[]) => {
     crmPersistTimer = null;
     void (async () => {
       try {
+        const { shouldDeferHeavyWork } = await import('../services/foregroundGuard');
+        if (shouldDeferHeavyWork()) {
+          // 用户正在操作：stringify 大库会卡死主线程，稍后再写
+          scheduleCrmPersist(clients);
+          return;
+        }
+      } catch {
+        /* ignore */
+      }
+      try {
         const { saveCrmClientsToIdb } = await import('../services/db');
         await saveCrmClientsToIdb(clients);
       } catch (e) {
@@ -198,7 +208,7 @@ const scheduleCrmPersist = (clients: Client[]) => {
         }
       }
     })();
-  }, 400);
+  }, 700);
 };
 
 /** 登录首帧前调用：优先 IndexedDB，必要时从 LS 迁移 */

@@ -39,6 +39,8 @@ const APP_ORIGIN = resolveAppOrigin();
 
 /** 稳定 URL 走 Chromium 磁盘缓存（冷启动快）；失败或壳版本升级时 bust */
 const startUrl = (forceBust = false) => {
+  // 按小时换 HTML 入口，避免壳子一直啃旧 index（旧 HTML 指向已删除的 /assets/index-*.js → 假死）
+  const hourBucket = Math.floor(Date.now() / (60 * 60 * 1000));
   if (forceBust) return `${APP_ORIGIN}/?_boot=${Date.now()}`;
   try {
     const failFlagPath = path.join(app.getPath('userData'), 'last-boot-failed');
@@ -57,7 +59,7 @@ const startUrl = (forceBust = false) => {
   } catch {
     /* ignore */
   }
-  return `${APP_ORIGIN}/`;
+  return `${APP_ORIGIN}/?_v=${hourBucket}`;
 };
 
 const isAppUrl = (url) => {

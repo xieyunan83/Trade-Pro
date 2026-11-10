@@ -64,42 +64,69 @@ const isWeakProductType = (s?: string) =>
   !String(s).trim() ||
   /^(n\/?a|公开信息未找到|未知|待补充|global|-)$/i.test(String(s).trim());
 
+const mergeOneClientPair = (prev: Client | undefined, c: Client): Client => {
+  if (!prev) return c;
+  const preferLocal = clientStamp(c) >= clientStamp(prev);
+  const a = preferLocal ? c : prev;
+  const b = preferLocal ? prev : c;
+  // 品类字段：勿让「公开信息未找到」盖掉另一端已采到的品类
+  const productType =
+    !isWeakProductType(a.productType)
+      ? a.productType
+      : !isWeakProductType(b.productType)
+        ? b.productType
+        : a.productType || b.productType;
+  return {
+    ...b,
+    ...a,
+    productType,
+    // 归属：保留已有拥有人，避免后登录端把自己写成拥有人盖掉同事
+    ownerUsername: (a.ownerUsername || '').trim() || (b.ownerUsername || '').trim() || undefined,
+    departmentId: (a.departmentId || '').trim() || (b.departmentId || '').trim() || undefined,
+    contacts: (a.contacts?.length || 0) >= (b.contacts?.length || 0) ? a.contacts : b.contacts,
+    tags: Array.from(new Set([...(b.tags || []), ...(a.tags || [])])),
+    searchedKeywords: Array.from(
+      new Set([...(b.searchedKeywords || []), ...(a.searchedKeywords || [])])
+    ),
+    activityEvents: [...(b.activityEvents || []), ...(a.activityEvents || [])]
+      .filter((e, i, arr) => arr.findIndex((x) => x.id === e.id) === i)
+      .sort((x, y) => (y.at || 0) - (x.at || 0))
+      .slice(0, 200),
+  };
+};
+
 export const mergeClientsById = (local: Client[], cloud: Client[]): Client[] => {
   const map = new Map<string, Client>();
   for (const c of [...cloud, ...local]) {
     if (!c?.id) continue;
-    const prev = map.get(c.id);
-    if (!prev) {
-      map.set(c.id, c);
-      continue;
+    map.set(c.id, mergeOneClientPair(map.get(c.id), c));
+  }
+  return Array.from(map.values());
+};
+
+/** 大库合并分片让出主线程，避免登录同步时整页假死 */
+export const mergeClientsByIdAsync = async (
+  local: Client[],
+  cloud: Client[],
+  opts?: { shouldAbort?: () => boolean; onProgress?: (message: string) => void }
+): Promise<Client[]> => {
+  const all = [...cloud, ...local];
+  if (all.length <= 400) return mergeClientsById(local, cloud);
+  const map = new Map<string, Client>();
+  const slice = 250;
+  for (let i = 0; i < all.length; i += slice) {
+    if (opts?.shouldAbort?.()) throw new Error('同步超时或已取消');
+    await pauseIfUserBusy(opts?.shouldAbort);
+    const end = Math.min(i + slice, all.length);
+    for (let j = i; j < end; j++) {
+      const c = all[j];
+      if (!c?.id) continue;
+      map.set(c.id, mergeOneClientPair(map.get(c.id), c));
     }
-    const preferLocal = clientStamp(c) >= clientStamp(prev);
-    const a = preferLocal ? c : prev;
-    const b = preferLocal ? prev : c;
-    // 品类字段：勿让「公开信息未找到」盖掉另一端已采到的品类
-    const productType =
-      !isWeakProductType(a.productType)
-        ? a.productType
-        : !isWeakProductType(b.productType)
-          ? b.productType
-          : a.productType || b.productType;
-    map.set(c.id, {
-      ...b,
-      ...a,
-      productType,
-      // 归属：保留已有拥有人，避免后登录端把自己写成拥有人盖掉同事
-      ownerUsername: (a.ownerUsername || '').trim() || (b.ownerUsername || '').trim() || undefined,
-      departmentId: (a.departmentId || '').trim() || (b.departmentId || '').trim() || undefined,
-      contacts: (a.contacts?.length || 0) >= (b.contacts?.length || 0) ? a.contacts : b.contacts,
-      tags: Array.from(new Set([...(b.tags || []), ...(a.tags || [])])),
-      searchedKeywords: Array.from(
-        new Set([...(b.searchedKeywords || []), ...(a.searchedKeywords || [])])
-      ),
-      activityEvents: [...(b.activityEvents || []), ...(a.activityEvents || [])]
-        .filter((e, i, arr) => arr.findIndex((x) => x.id === e.id) === i)
-        .sort((x, y) => (y.at || 0) - (x.at || 0))
-        .slice(0, 200),
-    });
+    opts?.onProgress?.(
+      `同步中：合并 CRM ${Math.min(end, all.length)}/${all.length}…`
+    );
+    await yieldToUi();
   }
   return Array.from(map.values());
 };
@@ -127,7 +154,7 @@ export const mergeProfilesById = (
 /** 分块上传 CRM（避免单次 payload 过大） */
 export const uploadCrmChunked = async (
   clients: Client[],
-  onProgress?: (done: number, total: number) => void
+  onProgress?: (done: number, total: number) => void | Promise<void>
 ): Promise<number> => {
   if (!clients.length) return 0;
   let n = 0;
@@ -135,7 +162,7 @@ export const uploadCrmChunked = async (
     const ok = await saveCrmClientsBulk(part);
     if (!ok) throw new Error('CRM 分块上传失败');
     n += part.length;
-    onProgress?.(n, clients.length);
+    await onProgress?.(n, clients.length);
   }
   return n;
 };
@@ -143,7 +170,7 @@ export const uploadCrmChunked = async (
 /** 分块批量上传背调历史（比逐条 upsert 快一个数量级） */
 export const uploadHistoryChunked = async (
   items: HistoryItem[],
-  onProgress?: (done: number, total: number) => void
+  onProgress?: (done: number, total: number) => void | Promise<void>
 ): Promise<number> => {
   if (!items.length) return 0;
   if (!isSupabaseConfigured()) return 0;
@@ -163,7 +190,7 @@ export const uploadHistoryChunked = async (
     });
     if (error) throw error;
     n += part.length;
-    onProgress?.(n, items.length);
+    await onProgress?.(n, items.length);
   }
   return n;
 };
@@ -250,6 +277,32 @@ const mergeTimeoutReport = (
 let syncChain: Promise<unknown> = Promise.resolve();
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+const yieldToUi = () =>
+  new Promise<void>((resolve) => {
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => setTimeout(resolve, 0));
+      return;
+    }
+    setTimeout(resolve, 0);
+  });
+
+/** 用户正在点选/打字时，同步必须停住；否则合并大库会把整页饿死 */
+const pauseIfUserBusy = async (shouldAbort?: () => boolean) => {
+  try {
+    const { shouldDeferHeavyWork } = await import('./foregroundGuard');
+    let spins = 0;
+    while (shouldDeferHeavyWork()) {
+      if (shouldAbort?.()) throw new Error('同步超时或已取消');
+      await sleep(280);
+      spins += 1;
+      if (spins > 450) break;
+    }
+  } catch (e: any) {
+    if (/超时|取消/.test(String(e?.message || e))) throw e;
+  }
+  await yieldToUi();
+};
 
 const DEFAULT_SYNC_TIMEOUT_MS = 6 * 60 * 1000;
 
@@ -354,6 +407,7 @@ const runSyncAllWorkspaceData = async (
   // —— CRM ——
   try {
     check();
+    await pauseIfUserBusy(opts?.shouldAbort);
     onProgress?.('同步中：读取本机 CRM…');
     const localCrm = loadAllCrmClients();
     // 先记下本机条数，避免卡在云端拉取时超时弹窗全是 0
@@ -368,8 +422,12 @@ const runSyncAllWorkspaceData = async (
       errors.push(`CRM 云端拉取：${e?.message || String(e)}`);
     }
     check();
+    await pauseIfUserBusy(opts?.shouldAbort);
     onProgress?.(`同步中：合并 CRM（本机 ${localCrm.length} / 云 ${cloudCrm.length}）…`);
-    let mergedCrm = mergeClientsById(localCrm, cloudCrm);
+    let mergedCrm = await mergeClientsByIdAsync(localCrm, cloudCrm, {
+      shouldAbort: opts?.shouldAbort,
+      onProgress,
+    });
     try {
       const { mergeCrmClientsByDomain } = await import('../utils/crmHistory');
       const domainMerged = mergeCrmClientsByDomain(mergedCrm);
@@ -407,6 +465,7 @@ const runSyncAllWorkspaceData = async (
     let uploaded = 0;
     if (doUpload && mergedCrm.length > 0) {
       check();
+      await pauseIfUserBusy(opts?.shouldAbort);
       // 仅上传相对云端更新过的，避免每次全量重传卡死
       const cloudById = new Map(cloudCrm.map((c) => [c.id, c]));
       const dirty = !cloudOk
@@ -417,9 +476,10 @@ const runSyncAllWorkspaceData = async (
             return clientStamp(c) > clientStamp(prev);
           });
       onProgress?.(`同步中：上传 CRM 0/${dirty.length}…`);
-      uploaded = await uploadCrmChunked(dirty, (done, total) => {
+      uploaded = await uploadCrmChunked(dirty, async (done, total) => {
         onProgress?.(`同步中：上传 CRM ${done}/${total}…`);
         check();
+        await pauseIfUserBusy(opts?.shouldAbort);
       });
     }
     report.crm = {
@@ -435,6 +495,7 @@ const runSyncAllWorkspaceData = async (
   // —— 背调作业队列（优先：跨端共用最急）——
   try {
     check();
+    await pauseIfUserBusy(opts?.shouldAbort);
     onProgress?.('同步中：读取本机背调作业…');
     const localAutoN = (await getAutomationQueue()).length;
     report.automation = {
@@ -465,6 +526,7 @@ const runSyncAllWorkspaceData = async (
   // —— 产品画像 ——
   try {
     check();
+    await pauseIfUserBusy(opts?.shouldAbort);
     onProgress?.('同步中：读取本机产品画像…');
     const localProfiles = await loadProductCatalog();
     report.profiles = {
@@ -507,6 +569,7 @@ const runSyncAllWorkspaceData = async (
   // —— 背调历史（最后：体积大，失败时绝不全量重传）——
   try {
     check();
+    await pauseIfUserBusy(opts?.shouldAbort);
     onProgress?.('同步中：读取本机背调历史…');
     const localHist = await getHistory();
     report.history = {
@@ -542,10 +605,13 @@ const runSyncAllWorkspaceData = async (
     }
 
     check();
+    await pauseIfUserBusy(opts?.shouldAbort);
     const mergedHist = cloudHistOk
       ? mergeHistoryById(localHist, cloudHist)
       : localHist;
+    await yieldToUi();
     if (cloudHistOk && mergedHist.length > 0) {
+      await pauseIfUserBusy(opts?.shouldAbort);
       await saveHistoryBulk(mergedHist);
     }
     onProgress?.(
@@ -555,6 +621,7 @@ const runSyncAllWorkspaceData = async (
     let uploaded = 0;
     if (doUpload && mergedHist.length > 0) {
       check();
+      await pauseIfUserBusy(opts?.shouldAbort);
       let dirty: HistoryItem[] = [];
       if (cloudHistOk) {
         const cloudById = new Map(cloudHist.map((h) => [h.id, h]));
@@ -584,9 +651,10 @@ const runSyncAllWorkspaceData = async (
 
       if (dirty.length) {
         onProgress?.(`同步中：上传背调历史 0/${dirty.length}…`);
-        uploaded = await uploadHistoryChunked(dirty, (done, total) => {
+        uploaded = await uploadHistoryChunked(dirty, async (done, total) => {
           onProgress?.(`同步中：上传背调历史 ${done}/${total}…`);
           check();
+          await pauseIfUserBusy(opts?.shouldAbort);
         });
       }
     }
