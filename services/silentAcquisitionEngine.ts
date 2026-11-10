@@ -273,7 +273,7 @@ export const gatherSilentCompanyChannelIntel = async (opts: {
     console.warn('[silent-acq] contact locate skipped', e);
   }
 
-  // 1b) 对齐联系人后必挖 WhatsApp + 补职位（不挖邮箱；仅公开信息）
+  // 1b) 对齐联系人后必挖 WhatsApp + 补职位（公开信息）
   if (out.decisionMakers.length > 0) {
     try {
       const before = out.decisionMakers;
@@ -301,6 +301,32 @@ export const gatherSilentCompanyChannelIntel = async (opts: {
       }
     } catch (e) {
       console.warn('[silent-acq] title/whatsapp enrich skipped', e);
+    }
+  }
+
+  // 1c) 用本公司「已验证邮箱」规则，为领英对齐、尚无邮箱的职员猜验补邮箱（仅校验通过才写入）
+  if (domain && out.decisionMakers.some((d) => !d.emailGuess?.includes('@'))) {
+    const hasVerified = out.decisionMakers.some(
+      (d) =>
+        d.emailGuess?.includes('@') &&
+        (!!d.isVerified || String(d.emailStatus || '').toLowerCase() === 'valid')
+    );
+    if (hasVerified) {
+      try {
+        const { fillMissingEmailsByPatternGuess } = await import('./emailPatternGuess');
+        const filled = await fillMissingEmailsByPatternGuess(out.decisionMakers, {
+          domain,
+          companyName: name,
+          maxPeople: 6,
+          useQwen: false, // 有公司规则时优先规则+校验，少烧模型
+        });
+        if (filled.filled > 0) {
+          out.decisionMakers = filled.decisionMakers;
+          out.intelNotes.push(`emails+${filled.filled}`);
+        }
+      } catch (e) {
+        console.warn('[silent-acq] pattern email fill skipped', e);
+      }
     }
   }
 

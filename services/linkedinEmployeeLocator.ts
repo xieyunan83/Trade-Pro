@@ -5,7 +5,7 @@
  */
 import type { DecisionMaker } from '../types';
 import { buildCompanyLinkedInQueries } from './acquisitionMethods';
-import { mergeDecisionMakers } from './multiModelMerge';
+import { mergeDecisionMakers, preferString } from './multiModelMerge';
 import { tavilySearch, type TavilySearchResponse } from './tavilyService';
 
 export type LinkedInLocateStats = {
@@ -36,6 +36,104 @@ const cleanDomain = (d?: string) =>
     .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
     .split('/')[0]
     .toLowerCase();
+
+const WEAK_TITLE_RE =
+  /待补充|待确认|Company Contact|Domain Search|Employee|Professional|^Manager$|Staff|Unknown|N\/?A/i;
+
+const nameTokens = (dm: DecisionMaker): string[] => {
+  const raw = [dm.firstName, dm.lastName, dm.name]
+    .filter(Boolean)
+    .join(' ')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((t) => t.length >= 2);
+  return [...new Set(raw)];
+};
+
+const emailLocal = (dm: DecisionMaker): string =>
+  String(dm.emailGuess || '')
+    .split('@')[0]
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+
+/**
+ * 库内「有邮箱、待补职位」的联系人 ↔ 领英职员按姓名/邮箱本地部分对齐。
+ * 对齐后保留已验证邮箱，补上领英职位与主页。
+ */
+export const alignEmailContactsWithLinkedInProfiles = (
+  existing: DecisionMaker[],
+  linkedInHits: DecisionMaker[]
+): DecisionMaker[] => {
+  if (!existing?.length || !linkedInHits?.length) {
+    return mergeDecisionMakers(existing || [], linkedInHits || []);
+  }
+  const base = existing.map((e) => ({ ...e }));
+  const usedLi = new Set<number>();
+
+  const scorePair = (e: DecisionMaker, li: DecisionMaker): number => {
+    const eTok = nameTokens(e);
+    const liTok = nameTokens(li);
+    const local = emailLocal(e);
+    let s = 0;
+    if (local.length >= 3 && liTok.some((t) => t === local || t.includes(local) || local.includes(t))) {
+      s += 8;
+    }
+    for (const t of eTok) {
+      if (liTok.some((lt) => lt === t || (t.length >= 4 && (lt.includes(t) || t.includes(lt))))) s += 3;
+    }
+    // 单名邮箱人（Okoziorowska）对上全名领英人
+    if (eTok.length === 1 && liTok.length >= 2 && liTok.includes(eTok[0])) s += 5;
+    if (e.linkedin && li.linkedin && e.linkedin.toLowerCase() === li.linkedin.toLowerCase()) s += 20;
+    return s;
+  };
+
+  for (let i = 0; i < base.length; i++) {
+    const e = base[i];
+    const needsTitle = !e.title?.trim() || WEAK_TITLE_RE.test(e.title.trim());
+    const hasEmail = !!(e.emailGuess && e.emailGuess.includes('@'));
+    if (!hasEmail && !needsTitle) continue;
+
+    let bestJ = -1;
+    let bestS = 0;
+    for (let j = 0; j < linkedInHits.length; j++) {
+      if (usedLi.has(j)) continue;
+      const s = scorePair(e, linkedInHits[j]);
+      if (s > bestS) {
+        bestS = s;
+        bestJ = j;
+      }
+    }
+    if (bestJ < 0 || bestS < 5) continue;
+    usedLi.add(bestJ);
+    const li = linkedInHits[bestJ];
+    const liTitle = String(li.title || '').trim();
+    base[i] = {
+      ...e,
+      name: preferString(li.name, e.name) || e.name,
+      firstName: preferString(li.firstName, e.firstName) || e.firstName,
+      lastName: preferString(li.lastName, e.lastName) || e.lastName,
+      title:
+        needsTitle && liTitle && !WEAK_TITLE_RE.test(liTitle)
+          ? liTitle
+          : preferString(e.title, li.title) || e.title,
+      linkedin: preferString(li.linkedin, e.linkedin) || e.linkedin,
+      type: e.type && e.type !== 'Other' ? e.type : li.type || e.type,
+      influenceScore: Math.max(Number(e.influenceScore) || 0, Number(li.influenceScore) || 0) || e.influenceScore,
+      // 邮箱与验证状态以库内为准，绝不被领英空值冲掉
+      emailGuess: e.emailGuess,
+      emailSource: e.emailSource,
+      emailStatus: e.emailStatus,
+      isVerified: !!(e.isVerified || li.isVerified),
+      source: e.source || li.source,
+    };
+  }
+
+  const leftovers = linkedInHits.filter((_, j) => !usedLi.has(j));
+  return mergeDecisionMakers(base, leftovers);
+};
 
 const normalizeCompanyToken = (s: string) =>
   (s || '')
@@ -423,7 +521,9 @@ export const locateLinkedInEmployees = async (opts: {
   const beforeKeys = new Set(
     existing.map((d) => (d.linkedin || d.emailGuess || d.name || '').toLowerCase()).filter(Boolean)
   );
-  const merged = filterDecisionMakersForCompany(mergeDecisionMakers(existing, found), {
+  // 先按姓名/邮箱本地部分对齐「待补充职位」库内联系人，再并入新领英职员
+  const aligned = alignEmailContactsWithLinkedInProfiles(existing, found);
+  const merged = filterDecisionMakersForCompany(aligned, {
     companyName,
     domain,
   });

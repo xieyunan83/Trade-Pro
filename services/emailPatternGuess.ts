@@ -40,12 +40,97 @@ const splitPerson = (
   return { first: '', last: '' };
 };
 
-/** 规则候选：覆盖常见企业邮箱格式 */
+export type EmailLocalPattern =
+  | 'first.last'
+  | 'firstlast'
+  | 'flast'
+  | 'firstl'
+  | 'first_last'
+  | 'last.first'
+  | 'first'
+  | 'last';
+
+const applyLocalPattern = (
+  kind: EmailLocalPattern,
+  first: string,
+  last: string
+): string => {
+  const fi = first.charAt(0);
+  const li = last.charAt(0);
+  switch (kind) {
+    case 'first.last':
+      return last ? `${first}.${last}` : first;
+    case 'firstlast':
+      return last ? `${first}${last}` : first;
+    case 'flast':
+      return last ? `${fi}${last}` : first;
+    case 'firstl':
+      return last ? `${first}${li}` : first;
+    case 'first_last':
+      return last ? `${first}_${last}` : first;
+    case 'last.first':
+      return last ? `${last}.${first}` : first;
+    case 'first':
+      return first;
+    case 'last':
+      return last || first;
+    default:
+      return first;
+  }
+};
+
+/**
+ * 从「已验证」公司邮箱反推本地格式（如 okoziorowska@ / p+lastname@）。
+ * 再次背调对齐领英职员时，优先按此规则猜邮箱再校验。
+ */
+export const inferEmailPatternsFromVerified = (
+  people: DecisionMaker[],
+  domain: string
+): EmailLocalPattern[] => {
+  const host = cleanDomain(domain);
+  if (!host) return [];
+  const score = new Map<EmailLocalPattern, number>();
+  const kinds: EmailLocalPattern[] = [
+    'first.last',
+    'firstlast',
+    'flast',
+    'firstl',
+    'first_last',
+    'last.first',
+    'first',
+    'last',
+  ];
+  for (const p of people || []) {
+    const email = String(p.emailGuess || '').trim().toLowerCase();
+    if (!email.endsWith(`@${host}`)) continue;
+    const verified =
+      !!p.isVerified || String(p.emailStatus || '').toLowerCase() === 'valid';
+    if (!verified) continue;
+    const local = email.split('@')[0].replace(/[^a-z0-9._-]/g, '');
+    if (!local) continue;
+    const { first, last } = splitPerson(p.name || '', p.firstName, p.lastName);
+    // 单名邮箱联系人：把 name 同时当 first/last 试匹配
+    const firstAlt = first || normalizeToken(p.name || '');
+    const lastAlt = last || firstAlt;
+    for (const kind of kinds) {
+      const expected = applyLocalPattern(kind, firstAlt, lastAlt);
+      if (expected && expected === local) {
+        score.set(kind, (score.get(kind) || 0) + (verified ? 2 : 1));
+      }
+    }
+  }
+  return [...score.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([k]) => k);
+};
+
+/** 规则候选：覆盖常见企业邮箱格式；knownPatterns 优先排前 */
 export const buildHeuristicEmailCandidates = (
   name: string,
   domain: string,
   firstName?: string,
-  lastName?: string
+  lastName?: string,
+  knownPatterns?: EmailLocalPattern[]
 ): string[] => {
   const host = cleanDomain(domain);
   if (!host || !host.includes('.')) return [];
@@ -53,7 +138,12 @@ export const buildHeuristicEmailCandidates = (
   if (!first) return [];
   const fi = first.charAt(0);
   const li = last.charAt(0);
+  const prioritized = (knownPatterns || [])
+    .map((k) => applyLocalPattern(k, first, last || first))
+    .filter(Boolean)
+    .map((local) => `${local}@${host}`);
   const raw = [
+    ...prioritized,
     last ? `${first}.${last}@${host}` : '',
     last ? `${first}${last}@${host}` : '',
     last ? `${fi}${last}@${host}` : '',
@@ -63,7 +153,7 @@ export const buildHeuristicEmailCandidates = (
     `${first}@${host}`,
     last ? `${last}@${host}` : '',
   ];
-  return [...new Set(raw.filter(Boolean).map((e) => e.toLowerCase()))].slice(0, 8);
+  return [...new Set(raw.filter(Boolean).map((e) => e.toLowerCase()))].slice(0, 10);
 };
 
 const verifyEmailViaAnymail = async (
@@ -152,25 +242,32 @@ export const guessAndVerifyPersonEmail = async (opts: {
   title?: string;
   useQwen?: boolean;
   maxVerify?: number;
+  knownPatterns?: EmailLocalPattern[];
+  /** 已占用邮箱，避免重复猜到同一人 */
+  occupiedEmails?: Set<string> | string[];
 }): Promise<GuessVerifyResult | null> => {
   if (!getEmailSearchKeys().anymailFinder) return null;
   const host = cleanDomain(opts.domain);
   if (!host || !opts.name?.trim()) return null;
 
+  const occupied = new Set(
+    [...(opts.occupiedEmails || [])].map((e) => String(e || '').toLowerCase()).filter((e) => e.includes('@'))
+  );
   const heuristic = buildHeuristicEmailCandidates(
     opts.name,
     host,
     opts.firstName,
-    opts.lastName
+    opts.lastName,
+    opts.knownPatterns
   );
   let qwen: string[] = [];
   if (opts.useQwen !== false) {
     qwen = await askQwenEmailCandidates(opts);
   }
-  const candidates = [...new Set([...qwen, ...heuristic])].slice(
-    0,
-    Math.max(1, Math.min(opts.maxVerify ?? 6, 8))
-  );
+  // 公司已验证规则优先于模型瞎猜
+  const candidates = [...new Set([...heuristic, ...qwen])]
+    .filter((e) => !occupied.has(e))
+    .slice(0, Math.max(1, Math.min(opts.maxVerify ?? 6, 8)));
   if (!candidates.length) return null;
 
   for (let i = 0; i < candidates.length; i++) {
@@ -192,13 +289,29 @@ export const guessAndVerifyPersonEmail = async (opts: {
 /** 对缺邮箱的真实人名批量猜验（有上限，供夜间/深挖调用） */
 export const fillMissingEmailsByPatternGuess = async (
   people: DecisionMaker[],
-  opts: { domain: string; companyName?: string; maxPeople?: number; useQwen?: boolean }
+  opts: {
+    domain: string;
+    companyName?: string;
+    maxPeople?: number;
+    useQwen?: boolean;
+    /** 不传则从已验证联系人自动推断 */
+    knownPatterns?: EmailLocalPattern[];
+  }
 ): Promise<{ decisionMakers: DecisionMaker[]; filled: number; tried: number }> => {
   const domain = cleanDomain(opts.domain);
   let filled = 0;
   let tried = 0;
   const maxPeople = Math.max(1, Math.min(opts.maxPeople ?? 5, 8));
   const next = people.map((d) => ({ ...d }));
+  const knownPatterns =
+    opts.knownPatterns?.length
+      ? opts.knownPatterns
+      : inferEmailPatternsFromVerified(next, domain);
+  const occupied = new Set(
+    next
+      .map((d) => String(d.emailGuess || '').toLowerCase())
+      .filter((e) => e.includes('@'))
+  );
 
   const targets = next
     .map((d, i) => ({ d, i }))
@@ -221,9 +334,12 @@ export const fillMissingEmailsByPatternGuess = async (
       companyName: opts.companyName,
       title: d.title,
       useQwen: opts.useQwen,
-      maxVerify: 5,
+      maxVerify: knownPatterns.length ? 6 : 5,
+      knownPatterns,
+      occupiedEmails: occupied,
     });
     if (!hit) continue;
+    occupied.add(hit.email.toLowerCase());
     next[i] = {
       ...d,
       emailGuess: hit.email,
