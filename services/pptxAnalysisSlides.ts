@@ -153,7 +153,7 @@ const paintChrome = (pptx: any, slide: any, title: string, company = '', opts?: 
     fit: 'shrink',
   });
   // 页码徽章
-  slide.addShape(pptx.ShapeType.oval, {
+  slide.addShape(pptx.ShapeType.ellipse, {
     x: 9.28,
     y: 5.15,
     w: 0.36,
@@ -188,7 +188,7 @@ const paintChrome = (pptx: any, slide: any, title: string, company = '', opts?: 
 };
 
 const card = (pptx: any, slide: any, x: number, y: number, w: number, h: number, fill = C.card) => {
-  slide.addShape(pptx.ShapeType.roundRect, {
+  slide.addShape(pptx.ShapeType.rect, {
     x,
     y,
     w,
@@ -685,7 +685,7 @@ export const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
           margin: 0,
         });
         if (price) {
-          slide.addShape(pptx.ShapeType.roundRect, {
+          slide.addShape(pptx.ShapeType.rect, {
             x: x + 2.0,
             y: y + 0.16,
             w: 0.8,
@@ -863,7 +863,7 @@ export const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
           margin: 0,
         });
         // 分数徽章
-        slide.addShape(pptx.ShapeType.roundRect, {
+        slide.addShape(pptx.ShapeType.rect, {
           x: x + 0.2,
           y: TOP + 0.85,
           w: 0.9,
@@ -1066,7 +1066,7 @@ export const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
     actionPlan.slice(0, 6).forEach((step, idx) => {
       const y = TOP + idx * 0.65;
       if (y + 0.55 > BOTTOM) return;
-      slide.addShape(pptx.ShapeType.roundRect, {
+      slide.addShape(pptx.ShapeType.rect, {
         x: MX,
         y,
         w: 0.4,
