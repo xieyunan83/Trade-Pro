@@ -54,9 +54,11 @@ body {
   overflow-x: hidden !important;
   overflow-y: auto !important;
   -webkit-overflow-scrolling: touch;
-  z-index: 40 !important;
+  /* 高于主区 loading/冷却遮罩，避免「看得见菜单但点不到」 */
+  z-index: 80 !important;
   box-sizing: border-box !important;
   transform: none !important;
+  pointer-events: auto !important;
 }
 
 /* 主区：让开侧栏，吃满剩余 —— 这是满屏的唯一可靠算法 */

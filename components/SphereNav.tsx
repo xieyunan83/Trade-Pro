@@ -85,11 +85,10 @@ export const SphereNav: React.FC<Props> = ({
   };
 
   const pickSection = (sec: PlatformSection) => {
-    // 先改相位/展开，预取放到空闲，避免点击当帧被 chunk 加载堵死
+    // 同步切换相位（必须立刻反馈）；预取错峰，避免点开瞬间解析多个 chunk
     setSectionId(sec.id);
     setPhase('submenu');
     const ids = sec.items.map((it) => it.id);
-    // 错峰预取，避免点开板块瞬间解析多个 chunk
     window.setTimeout(() => {
       let i = 0;
       const step = () => {
@@ -180,7 +179,16 @@ export const SphereNav: React.FC<Props> = ({
                     <button
                       key={sec.id}
                       type="button"
-                      onClick={() => pickSection(sec)}
+                      onPointerDown={(e) => {
+                        // pointerdown 比 click 更早；主线程繁忙时也能先切板块
+                        if (e.button !== 0) return;
+                        e.preventDefault();
+                        pickSection(sec);
+                      }}
+                      onClick={(e) => {
+                        // 已由 pointerdown 处理，避免双触发
+                        e.preventDefault();
+                      }}
                       className={`tp-sphere tp-sphere-section ${isHot ? 'is-hot' : ''}`}
                       style={
                         {

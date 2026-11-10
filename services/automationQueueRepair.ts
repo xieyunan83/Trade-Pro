@@ -32,8 +32,12 @@ export const loadAndRepairAutomationQueue = async (
   let repaired = 0;
   let claimed = 0;
   const next: AutomationResult[] = [];
+  /** 登录时禁止逐条 await 写盘（几千条会卡死侧栏）；先改内存，空闲再落盘 */
+  const persistLater: AutomationResult[] = [];
+  const deleteLater: string[] = [];
 
-  for (const task of raw) {
+  for (let i = 0; i < raw.length; i++) {
+    const task = raw[i];
     let t: AutomationResult = { ...task };
     const id = (t.id || '').trim();
     const idTooWeak = !id || id.length < 12 || seen.has(id);
@@ -41,14 +45,8 @@ export const loadAndRepairAutomationQueue = async (
       const oldId = t.id;
       t = { ...t, id: newAutomationTaskId() };
       repaired += 1;
-      try {
-        await saveAutomationTask(t);
-        if (oldId && oldId !== t.id) {
-          await deleteAutomationTask(oldId).catch(() => undefined);
-        }
-      } catch (e) {
-        console.warn('[automation] repair id save failed', e);
-      }
+      persistLater.push(t);
+      if (oldId && oldId !== t.id) deleteLater.push(oldId);
     }
     seen.add(t.id);
 
@@ -65,28 +63,49 @@ export const loadAndRepairAutomationQueue = async (
         departmentId: currentUser.departmentId,
       };
       claimed += 1;
-      try {
-        await saveAutomationTask(t);
-      } catch (e) {
-        console.warn('[automation] claim ownership save failed', e);
-      }
+      persistLater.push(t);
     }
 
     // 页面刷新后残留的 analyzing 视为可继续执行
     if (t.status === 'analyzing') {
       t = { ...t, status: 'pending' };
       repaired += 1;
-      try {
-        await saveAutomationTask(t);
-      } catch (e) {
-        console.warn('[automation] reset analyzing save failed', e);
-      }
+      persistLater.push(t);
     }
 
     next.push(t);
+    // 每 400 条让出主线程，避免登录扫库时菜单点不动
+    if (i > 0 && i % 400 === 0) {
+      await new Promise<void>((r) => window.setTimeout(r, 0));
+    }
   }
 
   next.sort((a, b) => (b.completedAt || b.createdAt || 0) - (a.completedAt || a.createdAt || 0));
+
+  if (persistLater.length || deleteLater.length) {
+    window.setTimeout(() => {
+      void (async () => {
+        for (const id of deleteLater) {
+          try {
+            await deleteAutomationTask(id);
+          } catch {
+            /* ignore */
+          }
+        }
+        for (let i = 0; i < persistLater.length; i++) {
+          try {
+            await saveAutomationTask(persistLater[i], { skipCloud: true });
+          } catch (e) {
+            console.warn('[automation] deferred repair save failed', e);
+          }
+          if (i > 0 && i % 50 === 0) {
+            await new Promise<void>((r) => window.setTimeout(r, 0));
+          }
+        }
+      })();
+    }, 12_000);
+  }
+
   return { tasks: next, repaired, claimed };
 };
 

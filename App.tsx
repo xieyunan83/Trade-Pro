@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useRef, useCallback, startTransition, Suspense } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, startTransition, Suspense } from 'react';
 import { analyzeCompany, hasApiKeyConfigured, checkApiKeyAvailability, hydrateApiConfigsFromCloud, searchPotentialClients, enableTavilyGeminiQwenCascade, enableGeminiQwenParallelMerge, synthesizeInsightsFallback } from './services/geminiService';
 import {
   subscribeCooldown,
@@ -11,7 +11,7 @@ import {
   getCooldownRemainingSec,
 } from './services/rateLimitGate';
 import { exportToPPT, exportAutomationReportToPPT, exportBatchAutomationReportsToPPT } from './services/exportService';
-import { saveHistory, saveHistoryBulk, getHistory, getAllFilesFromDB, saveAutomationTask, getAutomationQueue, deleteAutomationTask, saveFileToDB, saveDiscoveryArchive, getDiscoveryArchives, deleteDiscoveryArchive, deleteHistoryItem } from './services/db';
+import { saveHistory, saveHistoryBulk, getHistory, getAllFilesFromDB, saveAutomationTask, getAutomationQueue, deleteAutomationTask, saveFileToDB, saveDiscoveryArchive, getDiscoveryArchives, deleteDiscoveryArchive, deleteHistoryItem, slimAutomationQueueForUi } from './services/db';
 import {
   loadAndRepairAutomationQueue,
   mergeDecisionMakersIntoAutomationTasks,
@@ -341,12 +341,12 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
   
   const [domainInput, setDomainInput] = useState('');
   const [activeModule, setActiveModule] = useState<ModuleType>(ModuleType.HOME);
-  /** 切换模块用 transition，避免整树同步卡死导航点击；并预热目标 chunk */
+  /**
+   * 侧栏切换必须是同步高优先级更新。
+   * 若用 startTransition，会被登录后灌入的 CRM/历史/几千条作业队列饿死，表现为「菜单点了没反应」。
+   */
   const navigateModule = useCallback((m: ModuleType) => {
-    // 先切模块（侧栏立刻有反馈），预取放到下一宏任务，避免点击当帧被 chunk 解析堵住
-    startTransition(() => {
-      setActiveModule(m);
-    });
+    setActiveModule(m);
     window.setTimeout(() => prefetchModule(m), 0);
   }, []);
   const [workspaceSyncStatus, setWorkspaceSyncStatus] = useState<string | null>(null);
@@ -460,8 +460,24 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
   }, [history]);
 
   useEffect(() => {
-    automationResultsRef.current = automationResults;
+    // 大队列时 state 是瘦身副本；ref 以 runner/同步写入为准，勿被瘦身 state 回写冲掉
+    if (automationResults.length <= 400) {
+      automationResultsRef.current = automationResults;
+    }
   }, [automationResults]);
+
+  /** 大列表写入走 transition，把主线程让给侧栏点击；ref 仍保留完整队列供 runner */
+  const setAutomationResultsDeferred = useCallback(
+    (next: AutomationResult[] | ((prev: AutomationResult[]) => AutomationResult[])) => {
+      const resolved =
+        typeof next === 'function' ? next(automationResultsRef.current) : next;
+      automationResultsRef.current = resolved;
+      startTransition(() => {
+        setAutomationResults(slimAutomationQueueForUi(resolved));
+      });
+    },
+    []
+  );
 
   /** 同步写入内存队列（ref + state），避免入队后立刻跑 runner 时读到旧 ref */
   const syncAutomationResults = (
@@ -469,7 +485,12 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
   ) => {
     const next = updater(automationResultsRef.current);
     automationResultsRef.current = next;
-    setAutomationResults(next);
+    // 单条/小批量保持同步；超大队列写入降级，避免饿死侧栏
+    if (next.length > 400) {
+      startTransition(() => setAutomationResults(slimAutomationQueueForUi(next)));
+    } else {
+      setAutomationResults(next);
+    }
     return next;
   };
 
@@ -1034,8 +1055,10 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                 await yieldToUi();
                 if (cancelled) return;
                 const migratedEarly = migrateLegacyCrmOwnership(earlyCrm, users, depts());
-                // 进站跳过重的域名去重写盘；仅展示，后台再整理
-                setCrmClients(scope(migratedEarly.clients));
+                // 进站跳过重的域名去重写盘；大列表降优先级，保证侧栏可点
+                startTransition(() => {
+                  setCrmClients(scope(migratedEarly.clients));
+                });
               } catch (e) {
                 console.warn('[CRM] cache-first paint failed', e);
               }
@@ -1044,10 +1067,14 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
               try {
                 const restored = applyDmPersistToHistory(h);
                 const migratedHistQuick = migrateLegacyOwnership(restored, users, depts());
-                setHistory(scope(migratedHistQuick.items));
+                startTransition(() => {
+                  setHistory(scope(migratedHistQuick.items));
+                });
               } catch (e) {
                 console.warn('[history] cache-first paint failed', e);
-                if (!cancelled) setHistory(scope(h));
+                if (!cancelled) {
+                  startTransition(() => setHistory(scope(h)));
+                }
               }
               await yieldToUi();
               if (cancelled) return;
@@ -1124,13 +1151,20 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                     reconcileCrmTombstonesWithLiveClients(afterSyncAll);
                     const afterSyncCrm = filterOutCrmTombstones(afterSyncAll);
                     const migratedAfter = migrateLegacyCrmOwnership(afterSyncCrm, users, depts());
-                    setCrmClients(scope(migratedAfter.clients));
+                    startTransition(() => {
+                      setCrmClients(scope(migratedAfter.clients));
+                    });
                   } catch {
                     /* ignore */
                   }
                   try {
                     const histAfter = applyDmPersistToHistory(await getHistory());
-                    setHistory(scope(migrateLegacyOwnership(histAfter, users, depts()).items));
+                    const histScoped = scope(
+                      migrateLegacyOwnership(histAfter, users, depts()).items
+                    );
+                    startTransition(() => {
+                      setHistory(histScoped);
+                    });
                   } catch {
                     /* ignore */
                   }
@@ -1152,15 +1186,17 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                     );
                     try {
                       const q = await getAutomationQueue();
-                      setAutomationResults(scope(q));
+                      setAutomationResultsDeferred(scope(q));
                     } catch {
                       /* ignore */
                     }
                     try {
                       const afterUp = filterOutCrmTombstones(loadAllCrmClients());
-                      setCrmClients(
-                        scope(migrateLegacyCrmOwnership(afterUp, users, depts()).clients)
-                      );
+                      startTransition(() => {
+                        setCrmClients(
+                          scope(migrateLegacyCrmOwnership(afterUp, users, depts()).clients)
+                        );
+                      });
                     } catch {
                       /* ignore */
                     }
@@ -1182,7 +1218,8 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
             }
             if (!cancelled) setWorkspaceSyncing(false);
             const scopedQueue = scope(queueTasks);
-            if (!cancelled) setAutomationResults(scopedQueue);
+            // 大队列必须瘦身+降优先级，否则侧栏点击会被 React 更新饿死
+            if (!cancelled) setAutomationResultsDeferred(scopedQueue);
             const files = await getAllFilesFromDB();
             if (!cancelled) setKbCount(files.length);
 
@@ -3024,21 +3061,36 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       return historyItem;
   };
 
-  const handleViewAutomationResult = (task: AutomationResult) => {
+  const handleViewAutomationResult = async (task: AutomationResult) => {
       if (!currentUser || !filterOwnedRecords(currentUser, [task], users, departments).length) {
         alert('无权查看该任务（不属于你或你的部门）。');
         return;
       }
-      if (!task.analysis) {
+      // 列表态可能是瘦身 analysis，打开报告时从本机队列取全文
+      let full = task;
+      const looksSlim =
+        !!task.analysis &&
+        !(task.analysis.products?.length) &&
+        !(task.analysis.similarCompanies?.length);
+      if (looksSlim || !task.analysis) {
+        try {
+          const q = await getAutomationQueue();
+          const hit = q.find((t) => t.id === task.id);
+          if (hit?.analysis) full = hit;
+        } catch {
+          /* ignore */
+        }
+      }
+      if (!full.analysis) {
           alert('该任务尚无完整分析数据，请重新运行。');
           return;
       }
-      setAnalysisData(normalizeAnalysisResult(task.analysis));
-      const domainKey = (task.analysis.companyInfo?.website || task.website || '')
+      setAnalysisData(normalizeAnalysisResult(full.analysis));
+      const domainKey = (full.analysis.companyInfo?.website || full.website || '')
         .toLowerCase()
         .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
         .split('/')[0];
-      const nameKey = (task.analysis.companyInfo?.name || task.clientName || '').trim().toLowerCase();
+      const nameKey = (full.analysis.companyInfo?.name || full.clientName || '').trim().toLowerCase();
       const matched = historyRef.current.find((h) => {
         const hHost = (h.domain || h.data?.companyInfo?.website || '')
           .toLowerCase()
@@ -3051,7 +3103,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
         );
       });
       setViewingHistoryId(matched?.id || null);
-      setDomainInput(task.analysis.companyInfo?.website || task.website || '');
+      setDomainInput(full.analysis.companyInfo?.website || full.website || '');
       setActiveModule(ModuleType.BACKGROUND);
       setErrorMsg(null);
       setMobileMenuOpen(false);
@@ -5862,6 +5914,24 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
   const alwaysActiveModules = ALWAYS_ACTIVE_MODULES;
   const activeSectionMeta = findSectionByModule(activeModule, sphereNavSectionId);
   const activeNavItem = findNavItem(activeModule, sphereNavSectionId);
+  /** 单次扫描计数，避免每次 render 对几千条作业 filter 三次 */
+  const journeyProgress = useMemo(() => {
+    let pendingTasks = 0;
+    let failedTasks = 0;
+    let completedBg = 0;
+    for (const t of automationResults) {
+      if (t.status === 'pending') pendingTasks += 1;
+      else if (t.status === 'failed') failedTasks += 1;
+      else if (t.status === 'completed' && t.analysis) completedBg += 1;
+    }
+    return {
+      skuCount: loadCatalogSkus().length,
+      pendingTasks,
+      failedTasks,
+      completedBg,
+      crmCount: crmClients.length,
+    };
+  }, [automationResults, crmClients.length]);
 
   return (
     <AccessGate user={currentUser} onLogout={handleLogout}>
@@ -5877,9 +5947,9 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       )}
       {/* 左侧圆形按钮：固定贴左边，内部可滚；主区用 calc 吃满剩余宽度 */}
       <aside
-        className={`tp-sidebar tp-sphere-rail z-40 flex-col ${
+        className={`tp-sidebar tp-sphere-rail z-[80] flex-col ${
           mobileMenuOpen
-            ? 'fixed inset-y-0 left-0 z-50 flex translate-x-0'
+            ? 'fixed inset-y-0 left-0 z-[90] flex translate-x-0'
             : 'hidden md:flex'
         } ${dockWidthClass}`}
         aria-label="平台导航坞"
@@ -6235,15 +6305,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                         setPendingPlaybookId(playbookId);
                         navigateModule(ModuleType.PROMO_GENERATOR);
                       }}
-                      journeyProgress={{
-                        skuCount: loadCatalogSkus().length,
-                        pendingTasks: automationResults.filter((t) => t.status === 'pending').length,
-                        failedTasks: automationResults.filter((t) => t.status === 'failed').length,
-                        completedBg: automationResults.filter(
-                          (t) => t.status === 'completed' && t.analysis
-                        ).length,
-                        crmCount: crmClients.length,
-                      }}
+                      journeyProgress={journeyProgress}
                     />
                   </ErrorBoundary>
                 </ModulePane>

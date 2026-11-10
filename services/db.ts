@@ -1,5 +1,5 @@
 
-import { HistoryItem, AutomationResult, KnowledgeFile, DiscoveryArchiveItem, CustomerProductProfile, Client } from '../types';
+import { HistoryItem, AutomationResult, AnalysisResult, KnowledgeFile, DiscoveryArchiveItem, CustomerProductProfile, Client } from '../types';
 
 const DB_NAME = 'TradeScoutDB';
 const DB_VERSION = 8;
@@ -155,6 +155,33 @@ const slimAutomationTaskForLocal = (task: AutomationResult): AutomationResult =>
     },
   };
 };
+
+/**
+ * React 状态用极瘦任务：几千条带完整 analysis 会卡死侧栏点击。
+ * 列表/计数只需公司摘要；打开报告时再从 IndexedDB 取全文。
+ */
+export const slimAutomationTaskForUi = (task: AutomationResult): AutomationResult => {
+  const a = task.analysis;
+  if (!a) {
+    return { ...task, productImages: undefined, mailGroup: undefined };
+  }
+  return {
+    ...task,
+    productImages: undefined,
+    mailGroup: undefined,
+    analysis: {
+      companyInfo: a.companyInfo,
+      decisionMakers: Array.isArray(a.decisionMakers) ? a.decisionMakers.slice(0, 2) : [],
+      decisionMakerEmailSearchAt: a.decisionMakerEmailSearchAt,
+      products: [],
+      similarCompanies: [],
+      websiteCategories: [],
+    } as AnalysisResult,
+  };
+};
+
+export const slimAutomationQueueForUi = (tasks: AutomationResult[]): AutomationResult[] =>
+  tasks.map(slimAutomationTaskForUi);
 
 const putAutomationTask = (db: IDBDatabase, task: AutomationResult): Promise<void> =>
   new Promise((resolve, reject) => {
