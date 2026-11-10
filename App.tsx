@@ -1094,6 +1094,25 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
           window.setTimeout(resolve, 0);
         });
       });
+    /** 用户正在点选/打字时，登录后重同步必须停住，否则一分钟内整页假死 */
+    const waitIfUserBusy = async (maxWaitMs = 120_000) => {
+      try {
+        const { waitUntilWorkAllowed } = await import('./services/backgroundWorkScheduler');
+        await waitUntilWorkAllowed(() => cancelled, maxWaitMs);
+      } catch {
+        /* ignore */
+      }
+      await yieldToUi();
+    };
+    let lastSyncStatusAt = 0;
+    const reportSyncStatus = (msg: string, force = false) => {
+      if (cancelled) return;
+      const now = Date.now();
+      // 同步进度刷 App setState 会拖死当前模块（含产品 AI 视频）；节流
+      if (!force && now - lastSyncStatusAt < 2800) return;
+      lastSyncStatusAt = now;
+      setWorkspaceSyncStatus(msg);
+    };
 
     const depts = () => (departments.length ? departments : loadDepartmentsFromStorage());
     const scope = <T extends { ownerUsername?: string; departmentId?: string }>(items: T[]) =>
@@ -1166,11 +1185,13 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                 discoveryHydratedRef.current = true;
               }
               userDataReadyRef.current = true;
-              setWorkspaceSyncStatus('本机资料已就绪，正在后台同步…');
+              reportSyncStatus('本机资料已就绪，正在后台同步…', true);
             }
 
             // 再让出一段时间，优先响应菜单（进站后前几秒几乎只服务点击）
-            await new Promise<void>((r) => window.setTimeout(r, 2800));
+            await new Promise<void>((r) => window.setTimeout(r, 4200));
+            if (cancelled) return;
+            await waitIfUserBusy();
             if (cancelled) return;
 
             const repaired = await loadAndRepairAutomationQueue(currentUser);
@@ -1186,12 +1207,13 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
             if (!cancelled) setWorkspaceSyncing(true);
             if (isSupabaseConfigured()) {
               try {
-                await yieldToUi();
+                await waitIfUserBusy();
+                if (cancelled) return;
                 const ws = await syncAllWorkspaceData({
                   upload: false,
                   timeoutMs: 3 * 60_000,
                   onProgress: (msg) => {
-                    if (!cancelled) setWorkspaceSyncStatus(msg);
+                    reportSyncStatus(msg);
                   },
                 });
                 // 仅当 CRM/历史都合并成功时跳过二次全量拉取；有错则走后面兜底
@@ -1211,9 +1233,12 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                   /* ignore */
                 }
                 if (!cancelled) {
-                  setWorkspaceSyncStatus(
-                    `已同步 CRM ${ws.crm.merged}（云 ${ws.crm.cloud}）· 作业 ${ws.automation.merged}（云 ${ws.automation.cloud}）· 历史 ${ws.history.merged}`
+                  reportSyncStatus(
+                    `已同步 CRM ${ws.crm.merged}（云 ${ws.crm.cloud}）· 作业 ${ws.automation.merged}（云 ${ws.automation.cloud}）· 历史 ${ws.history.merged}`,
+                    true
                   );
+                  await waitIfUserBusy();
+                  if (cancelled) return;
                   // 云同步写入本机后，刷新 CRM / 作业 / 历史到界面（全量合并后再按权限过滤）
                   try {
                     const afterSyncAll = loadAllCrmClients();
@@ -1244,15 +1269,18 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                   upload: true,
                   timeoutMs: 6 * 60_000,
                   onProgress: (msg) => {
-                    if (!cancelled) setWorkspaceSyncStatus(msg);
+                    reportSyncStatus(msg);
                   },
                 })
                   .then(async (up) => {
                     console.info('[workspace-sync upload]\n' + formatWorkspaceSyncReport(up));
                     if (cancelled) return;
-                    setWorkspaceSyncStatus(
-                      `资料已就绪 · CRM ${up.crm.merged} · 作业 ${up.automation.merged}（云端作业 ${up.automation.cloud}）`
+                    reportSyncStatus(
+                      `资料已就绪 · CRM ${up.crm.merged} · 作业 ${up.automation.merged}（云端作业 ${up.automation.cloud}）`,
+                      true
                     );
+                    await waitIfUserBusy();
+                    if (cancelled) return;
                     try {
                       const q = await getAutomationQueue();
                       setAutomationResultsDeferred(scope(q));
@@ -1276,16 +1304,18 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                 try {
                   const synced = await pullMergePushAutomationQueue({ upload: false });
                   queueTasks = synced.tasks;
-                  if (!cancelled) setWorkspaceSyncStatus(`作业队列已同步 ${synced.merged} 条`);
+                  reportSyncStatus(`作业队列已同步 ${synced.merged} 条`, true);
                 } catch (e2) {
                   console.warn('[automation-cloud] sync failed', e2);
-                  if (!cancelled) setWorkspaceSyncStatus('云端同步稍后重试');
+                  reportSyncStatus('云端同步稍后重试', true);
                 }
               }
             } else if (!cancelled) {
-              setWorkspaceSyncStatus('本机模式（未配置云端）');
+              reportSyncStatus('本机模式（未配置云端）', true);
             }
             if (!cancelled) setWorkspaceSyncing(false);
+            await waitIfUserBusy();
+            if (cancelled) return;
             const scopedQueue = scope(queueTasks);
             // 大队列必须瘦身+降优先级，否则侧栏点击会被 React 更新饿死
             if (!cancelled) setAutomationResultsDeferred(scopedQueue);
@@ -1295,6 +1325,8 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
             // 搜索归档：本地 + 云端合并（排除已删除墓碑）→ 再按归属过滤
             let ownedArchives: DiscoveryArchiveItem[] = [];
             try {
+              await waitIfUserBusy();
+              if (cancelled) return;
               const tombs = readDiscoveryTombstones();
               const localDisc = await getDiscoveryArchives();
               let cloudDisc: DiscoveryArchiveItem[] = [];
@@ -1326,6 +1358,8 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
             }
 
             // 背调归类修复：尽量从报告 searchKeyword 回填关键词；规范化国家为中文（不再强制 Car toy）
+            await waitIfUserBusy();
+            if (cancelled) return;
             addCustomCountry('波兰');
             addCustomCountry('荷兰');
             addCustomCountry('英国');
@@ -1373,6 +1407,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
             );
             const recovered: HistoryItem[] = [];
             // 只从「当前用户可见」的任务队列回收历史，避免把别人的背调盖上自己名字
+            let recoverYieldEvery = 0;
             for (const task of scopedQueue) {
               if (task.status !== 'completed' || !task.analysis) continue;
               const domain = (
@@ -1404,6 +1439,11 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                 knownDomains.add(domain);
               } catch (e) {
                 console.warn('Recover history failed', e);
+              }
+              recoverYieldEvery += 1;
+              if (recoverYieldEvery % 8 === 0) {
+                await waitIfUserBusy();
+                if (cancelled) return;
               }
             }
             const recoveredAll = [...recovered, ...historyForRecover];
@@ -1561,11 +1601,13 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                 }
             }
 
-            // FOB / 产品画像：登录后至少 8 秒再跑，避免堵菜单
+            // FOB / 产品画像：登录后至少 20 秒再跑，且必须等用户停手
             window.setTimeout(() => {
               if (cancelled) return;
               void (async () => {
                 try {
+                  await waitIfUserBusy();
+                  if (cancelled) return;
                   const histNow = await getHistory();
                   if (!histNow.length) return;
                   try {
@@ -1584,7 +1626,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                   } catch (e) {
                     console.warn('FOB library recompute failed', e);
                   }
-                  await yieldToUi();
+                  await waitIfUserBusy();
                   if (cancelled) return;
                   const histAfter = await getHistory();
                   const existingProfiles = await loadProductCatalog();
@@ -1603,7 +1645,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                   console.warn('product catalog bootstrap failed', e);
                 }
               })();
-            }, 8000);
+            }, 20_000);
 
             if (ghStatus.ok && currentUser) {
                 try {
@@ -1760,6 +1802,8 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
 
             // 进站不做整表品类回填 / 域名去重（两千+ 客户会卡死主线程）；延后空闲整理
             if (!cancelled) {
+              await waitIfUserBusy();
+              if (cancelled) return;
               // 旧 CRM 回填部门，便于本部门主管按规则看到历史客户
               const migrated = migrateLegacyCrmOwnership(nextCrm, users, depts());
               nextCrm = migrated.clients;
@@ -1777,7 +1821,8 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                 if (cancelled) return;
                 void (async () => {
                   try {
-                    await yieldToUi();
+                    await waitIfUserBusy();
+                    if (cancelled) return;
                     const histForCrm = await getHistory();
                     const reconciled = reconcileCrmProductTypesFromHistory(
                       snapshotForIdle,
@@ -1810,7 +1855,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                     console.warn('[CRM] idle reconcile/dedupe failed', e);
                   }
                 })();
-              }, 18_000);
+              }, 45_000);
             }
         } catch (e) {
             console.error("Sync Error", e);

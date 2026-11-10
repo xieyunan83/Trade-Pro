@@ -2,13 +2,14 @@
  * 前台交互守护：窗口最小化 / 切到别的 App 再回来时，
  * Chromium 会一口气补跑被节流的定时器与 React 更新，侧栏点击常被饿死。
  * 后台暂停重任务通知；回前台先让导航可点，再短暂延迟恢复泵。
+ * 用户正在点选/打字/滚动时同样拉长冷静期，避免登录同步与队列泵饿死操作。
  */
 
 type Listener = (foreground: boolean) => void;
 
 let foreground = typeof document === 'undefined' ? true : document.visibilityState !== 'hidden';
 let resumeTimer: ReturnType<typeof setTimeout> | null = null;
-/** 回前台后额外冷静期，期间重任务应让路给点击 */
+/** 回前台 / 用户交互后额外冷静期，期间重任务应让路给点击 */
 let calmUntil = 0;
 const listeners = new Set<Listener>();
 
@@ -36,12 +37,56 @@ const recoverNavPointer = () => {
   }
 };
 
+const scheduleCalmEnd = () => {
+  if (resumeTimer) clearTimeout(resumeTimer);
+  if (!Number.isFinite(calmUntil)) return;
+  const delay = Math.max(50, calmUntil - Date.now() + 40);
+  resumeTimer = setTimeout(() => {
+    resumeTimer = null;
+    if (Date.now() >= calmUntil) {
+      calmUntil = 0;
+      emit();
+    } else if (Number.isFinite(calmUntil)) {
+      // 期间又被更长冷静续期了，按剩余时间再挂一次
+      scheduleCalmEnd();
+    }
+  }, delay);
+};
+
 export const isAppForeground = (): boolean => foreground;
 
-/** 重任务泵应在后台或冷静期内让路 */
+const isInputPendingNow = (): boolean => {
+  try {
+    const sched = (
+      navigator as Navigator & {
+        scheduling?: { isInputPending?: (opts?: { includeContinuous?: boolean }) => boolean };
+      }
+    ).scheduling;
+    if (typeof sched?.isInputPending === 'function') {
+      return !!sched.isInputPending({ includeContinuous: true });
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
+};
+
+/** 重任务泵应在后台、冷静期、或浏览器已积压输入时让路 */
 export const shouldDeferHeavyWork = (): boolean => {
   if (!foreground) return true;
-  return Date.now() < calmUntil;
+  if (Date.now() < calmUntil) return true;
+  return isInputPendingNow();
+};
+
+/**
+ * 用户正在操作时调用：只拉长冷静期，不立刻 emit（避免冲刷大列表）。
+ * 连续点击会不断续期，直到停手后再恢复后台泵。
+ */
+export const noteUserActivity = (ms = 3600) => {
+  const until = Date.now() + ms;
+  calmUntil = Math.max(calmUntil, until);
+  recoverNavPointer();
+  scheduleCalmEnd();
 };
 
 export const subscribeForeground = (fn: Listener): (() => void) => {
@@ -77,29 +122,13 @@ export const markAppForeground = (opts?: { calmMs?: number }) => {
       requestAnimationFrame(recoverNavPointer);
     });
   }
-  if (resumeTimer) clearTimeout(resumeTimer);
-  resumeTimer = setTimeout(() => {
-    resumeTimer = null;
-    calmUntil = 0;
-    emit();
-  }, calmMs);
+  scheduleCalmEnd();
   emit();
 };
 
 /** 用户点侧栏时立刻让路：只拉长冷静期，禁止立刻 emit（否则会冲刷积压的大列表） */
 export const preferNavInteraction = (ms = 1200) => {
-  const until = Date.now() + ms;
-  calmUntil = Math.max(calmUntil, until);
-  recoverNavPointer();
-  // 冷静结束后再通知订阅方冲刷积压；不要在 pointerdown 当下 emit
-  if (resumeTimer) clearTimeout(resumeTimer);
-  resumeTimer = setTimeout(() => {
-    resumeTimer = null;
-    if (Date.now() >= calmUntil) {
-      calmUntil = 0;
-      emit();
-    }
-  }, ms + 50);
+  noteUserActivity(ms);
 };
 
 /** 在 App / LoginBoot 挂一次即可 */
@@ -119,12 +148,15 @@ export const installForegroundGuard = (): (() => void) => {
     if (document.visibilityState === 'hidden') markAppBackground();
     else {
       // 失焦但仍可见：短冷静，避免切窗瞬间被泵抢走
-      calmUntil = Math.max(calmUntil, Date.now() + 800);
+      noteUserActivity(800);
     }
   };
   const onFocus = () => markAppForeground({ calmMs: 1600 });
   const onDesktopFocus = () => markAppForeground({ calmMs: 2000 });
   const onDesktopBlur = () => markAppBackground();
+
+  const onActivity = () => noteUserActivity(3600);
+  const activityOpts: AddEventListenerOptions = { capture: true, passive: true };
 
   document.addEventListener('visibilitychange', onVisibility);
   window.addEventListener('pagehide', onPageHide);
@@ -133,10 +165,18 @@ export const installForegroundGuard = (): (() => void) => {
   window.addEventListener('focus', onFocus);
   window.addEventListener('tp-desktop-focus', onDesktopFocus as EventListener);
   window.addEventListener('tp-desktop-blur', onDesktopBlur as EventListener);
+  // 任意操作都让路：登录后一分钟内的云同步 / 队列泵最容易饿死点击
+  document.addEventListener('pointerdown', onActivity, activityOpts);
+  document.addEventListener('keydown', onActivity, activityOpts);
+  document.addEventListener('wheel', onActivity, activityOpts);
+  document.addEventListener('touchstart', onActivity, activityOpts);
 
-  // 启动时按当前可见性校正
+  // 启动时按当前可见性校正；首屏也给一段冷静，避免刚进站就被同步堵死
   if (document.visibilityState === 'hidden') markAppBackground();
-  else recoverNavPointer();
+  else {
+    recoverNavPointer();
+    noteUserActivity(4800);
+  }
 
   return () => {
     document.removeEventListener('visibilitychange', onVisibility);
@@ -146,6 +186,10 @@ export const installForegroundGuard = (): (() => void) => {
     window.removeEventListener('focus', onFocus);
     window.removeEventListener('tp-desktop-focus', onDesktopFocus as EventListener);
     window.removeEventListener('tp-desktop-blur', onDesktopBlur as EventListener);
+    document.removeEventListener('pointerdown', onActivity, activityOpts);
+    document.removeEventListener('keydown', onActivity, activityOpts);
+    document.removeEventListener('wheel', onActivity, activityOpts);
+    document.removeEventListener('touchstart', onActivity, activityOpts);
     if (resumeTimer) clearTimeout(resumeTimer);
   };
 };

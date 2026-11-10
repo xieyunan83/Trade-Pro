@@ -69,6 +69,11 @@ const scheduleIdlePersist = () => {
   persistTimer = setTimeout(() => {
     persistTimer = null;
     const run = () => {
+      // 用户正在操作：整表 merge/stringify 会卡死主线程，改稍后再写
+      if (shouldDeferHeavyWork()) {
+        scheduleIdlePersist();
+        return;
+      }
       if (!persistCtx?.isReady()) return;
       const viewer = persistCtx.getViewer();
       if (!viewer) {
@@ -92,11 +97,16 @@ const scheduleIdlePersist = () => {
     } else {
       run();
     }
-  }, 600);
+  }, 900);
 
   if (cloudTimer) clearTimeout(cloudTimer);
   cloudTimer = setTimeout(() => {
     cloudTimer = null;
+    if (shouldDeferHeavyWork()) {
+      // 冷静期把整次落盘/云同步再往后推，避免和点击抢主线程
+      scheduleIdlePersist();
+      return;
+    }
     if (!persistCtx?.isReady()) return;
     if (clients.length > 800) return;
     void (async () => {

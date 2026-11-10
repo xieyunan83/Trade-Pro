@@ -325,6 +325,13 @@ const pump = async () => {
   pumping = true;
   try {
     while (!shouldStop) {
+      try {
+        const { waitUntilWorkAllowed } = await import('./backgroundWorkScheduler');
+        const ok = await waitUntilWorkAllowed(() => shouldStop, 120_000);
+        if (!ok) break;
+      } catch {
+        /* ignore */
+      }
       failStaleRunningJobs();
       const runningCount = jobs.filter((j) => j.status === 'running').length;
       const slots = MAX_CONCURRENT - runningCount;
