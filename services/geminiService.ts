@@ -5633,9 +5633,6 @@ export const streamStrategyChat = async function* (
     const marketLeads = (strategyContext?.marketLeads || []).slice(0, 20);
 
     const coldEmailMode = isColdEmailIntent(newMessage) || history.some((m) => isColdEmailIntent(m.text || ''));
-    const wantsLiveMarket = /市场趋势|最新|行情|关税|政策|新闻|2024|2025|2026|trend|tariff|import\s*data|news/i.test(
-      newMessage || ''
-    );
 
     // 开发信默认关掉「必须联网」口令，避免模型只跑 web_search、忽略知识库
     let systemInstruction = coldEmailMode
@@ -5645,7 +5642,7 @@ export const streamStrategyChat = async function* (
     if (coldEmailMode) {
       systemInstruction += `\n\n${YIBING_STRATEGY_CHAT_HINT}\n${YIBING_MAIL_GROUP_RULES}`;
       systemInstruction += `\n输出格式：先给简短中文策略，再给 Subject 1/2/3 + Email 1/2/3（可直接复制）。`;
-      systemInstruction += `\n【知识库优先】产品功能、材质、包装、玩法、卖点必须优先引用「Our offer / 知识库摘录」与创作素材；没有依据的规格不要写。目标市场趋势可作宏观补充，但不得用联网搜索替代知识库产品事实。`;
+      systemInstruction += `\n【知识库优先】产品功能、材质、包装、玩法、卖点必须优先引用「Our offer / 知识库摘录」与创作素材；没有依据的规格不要写。目标市场趋势用买家国家/品类作宏观补充即可，勿等待联网搜索。`;
     }
 
     if (companies.length) {
@@ -5745,9 +5742,14 @@ export const streamStrategyChat = async function* (
       maxImages: 2,
       maxTextChars: 5_000,
     });
-    const historyMsgs = slimChatHistoryForAi(history, { maxTurns: 12, maxCharsPerMsg: 4_000 });
-    // 开发信默认不强制联网，避免模型只调 web_search、知识库形同虚设；用户点名要趋势时才开
-    const searchExtra = qwenSearchPayload(!coldEmailMode || wantsLiveMarket);
+    const historyMsgs = slimChatHistoryForAi(history, {
+      maxTurns: coldEmailMode ? 6 : 12,
+      maxCharsPerMsg: coldEmailMode ? 2_500 : 4_000,
+    });
+    // 开发信模板常含「市场趋势」字样，绝不能因此开联网——联网搜索易拖过 120s 超时且挤掉知识库
+    const searchExtra = coldEmailMode ? undefined : qwenSearchPayload(true);
+    // 三封开发信生成较慢；无联网时仍给足时间，避免误报超时
+    const strategyTimeoutMs = coldEmailMode ? 180_000 : 120_000;
 
     let messages: Array<{ role: string; content: unknown }> = [
             { role: 'system', content: systemInstruction },
@@ -5770,7 +5772,7 @@ export const streamStrategyChat = async function* (
             stream: true,
             ...searchExtra,
         }),
-    }, 120_000);
+    }, strategyTimeoutMs);
 
     let response = await doFetch(messages);
 
