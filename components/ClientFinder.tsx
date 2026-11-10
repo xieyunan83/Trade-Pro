@@ -310,8 +310,8 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
     const searchIndustry = [state.industry, catBits ? `official category ${catBits}` : '']
       .filter(Boolean)
       .join(', ');
-    // 先清空旧结果，避免误以为「点了没反应」
-    patchState({ results: [], hasSearched: true, product });
+    // 保留上一次结果直至本次返回，避免「搜索中 + 结果(0)」被误当成搜完为空
+    patchState({ hasSearched: true, product });
     try {
       const typeArg = selectedTypes.join(', ') || '';
       // 多国并行搜索（限 2），缩短总等待；仍按国分别归档
@@ -838,7 +838,9 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
           <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
             <h3 className="text-base sm:text-lg font-black text-slate-800 tracking-tight flex items-center gap-2">
               <span className="w-1.5 h-1.5 rounded-full bg-signal-500 shadow-[0_0_0_3px_rgba(6,182,212,0.2)]" />
-              搜索结果 ({state.results.length})
+              {loading
+                ? '正在搜索目标市场…'
+                : `搜索结果 (${state.results.length})`}
             </h3>
             <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
               <button
@@ -857,6 +859,16 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
               </button>
             </div>
           </div>
+
+          {loading && state.results.length === 0 && (
+            <div className="rounded-2xl border border-cyan-100 bg-cyan-50/60 px-4 py-8 text-center">
+              <Loader2 className="animate-spin mx-auto text-cyan-600 mb-2" size={22} />
+              <p className="text-sm font-bold text-slate-700">联网取证与名单整理中</p>
+              <p className="text-xs text-slate-500 font-medium mt-1">
+                通常需要 1–3 分钟；完成后这里会列出合格买家，不会提前显示「0 条」。
+              </p>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4">
             {state.results.map((res, idx) => {
