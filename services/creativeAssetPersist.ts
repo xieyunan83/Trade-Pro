@@ -97,10 +97,16 @@ export const persistModel3dJob = async (job: Model3dJob): Promise<Model3dJob> =>
     (await preserveOriginalModel3dInVault(job)) ||
     (await findOriginalModel3dVaultRefForJob(job));
 
+  // 已拆分：主槽必须用分件 modelUrl，禁止 pbr（常为未分割整模）盖住
+  const segmented = !!(job.segmentTaskId || '').trim();
   const primary =
-    (job.pbrModelUrl || job.modelUrl || job.baseModelUrl || '').trim() || undefined;
+    (
+      segmented
+        ? job.modelUrl || job.pbrModelUrl || job.baseModelUrl
+        : job.pbrModelUrl || job.modelUrl || job.baseModelUrl
+    )?.trim() || undefined;
   const meshId = model3dVaultIdForJob(job.id);
-  const hint = job.providerTaskId || job.sourceTaskId || job.id;
+  const hint = job.segmentTaskId || job.providerTaskId || job.sourceTaskId || job.id;
   const primaryIsLocal = !!(
     primary &&
     (isVaultRef(primary) || primary.startsWith('blob:') || primary.startsWith('data:'))

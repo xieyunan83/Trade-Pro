@@ -2000,6 +2000,16 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                         ? prev
                         : names
                     );
+                    // 拆分「成功」但网格仍是一整块：明确提示，避免误以为炸开坏了
+                    if (names.length < 2) {
+                      setMsgTone('error');
+                      setMsg(
+                        '分件网格仍是 1 块，炸开不会散开。请点「重新拆分」并选「精细」；须挂首次生成任务（勿清素材）。'
+                      );
+                    } else {
+                      setMsgTone('ok');
+                      setMsg(`部件预览：共 ${names.length} 件，可拖转并调节炸开`);
+                    }
                   }}
                 />
               ) : (

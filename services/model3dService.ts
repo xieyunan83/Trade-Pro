@@ -356,11 +356,20 @@ const pollTask = async (
 
 const pickUrls = (data: any): Model3dGenerateResult => {
   const out = data.output || data.result || data;
+  const results = Array.isArray(out.results) ? out.results : [];
+  const first = results[0] || out;
+  // 分割结果优先 seg_model；禁止未分割 pbr 盖住分件
   const modelUrl =
-    out.pbr_model ||
-    out.model ||
-    out.base_model ||
+    first.seg_model_url ||
+    first.seg_model ||
+    out.seg_model_url ||
+    out.seg_model ||
+    first.model_url ||
     out.model_url ||
+    first.model ||
+    out.model ||
+    out.pbr_model ||
+    out.base_model ||
     out.glb_url ||
     out.mesh_url ||
     out.fbx_url ||
@@ -370,16 +379,35 @@ const pickUrls = (data: any): Model3dGenerateResult => {
     out.gltf_url ||
     '';
   const previewImageUrl =
-    out.rendered_image || out.preview_image || out.thumbnail || out.rendered_image_url || '';
+    first.rendered_image_url ||
+    out.rendered_image ||
+    out.preview_image ||
+    out.thumbnail ||
+    out.rendered_image_url ||
+    '';
   if (!modelUrl) {
     throw new Error('任务完成但未返回模型下载地址，请检查账户额度与权限');
   }
+  const partRaw = first.part_names || out.part_names || first.partNames || out.partNames;
+  const partNames = Array.isArray(partRaw)
+    ? partRaw.map((x: unknown) => String(x || '').trim()).filter(Boolean)
+    : typeof partRaw === 'string' && partRaw.trim()
+      ? partRaw
+          .split(/[,，;；|/]+/)
+          .map((s: string) => s.trim())
+          .filter(Boolean)
+      : undefined;
   return {
-    taskId: String(data.task_id || ''),
+    taskId: String(data.task_id || first.task_id || ''),
     modelUrl: String(modelUrl),
     previewImageUrl: previewImageUrl ? String(previewImageUrl) : undefined,
-    pbrModelUrl: out.pbr_model ? String(out.pbr_model) : undefined,
-    baseModelUrl: out.base_model ? String(out.base_model) : undefined,
+    pbrModelUrl: out.pbr_model || first.pbr_model_url
+      ? String(out.pbr_model || first.pbr_model_url)
+      : undefined,
+    baseModelUrl: out.base_model || first.base_model_url
+      ? String(out.base_model || first.base_model_url)
+      : undefined,
+    partNames,
     raw: data,
   };
 };
