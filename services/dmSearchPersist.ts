@@ -4,6 +4,7 @@
  */
 import type { AnalysisResult, DecisionMaker, HistoryItem } from '../types';
 import { hasRichProductCatalog } from './productCatalog';
+import { mergeDecisionMakers } from './multiModelMerge';
 
 const STORAGE_KEY = 'trade_scout_dm_results_v2';
 const MAX_RECORDS = 2000;
@@ -65,15 +66,18 @@ export const upsertDmPersistRecord = (rec: Omit<DmPersistRecord, 'updatedAt'>): 
   });
   if (idx >= 0) {
     const prev = list[idx];
-    // 只允许更新时间更新或联系人更多的结果覆盖
+    // 决策人只合并不覆盖：再次背调 / 静默补全不得冲掉已挖联系人
     const prevAt = prev.searchedAt || 0;
     const nextAt = nextRec.searchedAt || 0;
+    const mergedDms = mergeDecisionMakers(prev.decisionMakers || [], nextRec.decisionMakers || []);
     const prevN = prev.decisionMakers?.length || 0;
-    const nextN = nextRec.decisionMakers?.length || 0;
+    const nextN = mergedDms.length;
     if (nextAt < prevAt && nextN <= prevN) return;
     list[idx] = {
       ...prev,
       ...nextRec,
+      decisionMakers: mergedDms,
+      searchedAt: Math.max(prevAt, nextAt) || nextAt || prevAt,
       searchHistory: [
         ...new Set([...(prev.searchHistory || []), ...(nextRec.searchHistory || []), nextAt].filter(Boolean)),
       ].slice(-30),
@@ -218,10 +222,10 @@ export const mergeTwoHistoryItemsRich = (a: HistoryItem, b: HistoryItem): Histor
       productSummary: pa?.productSummary || baseData.productSummary,
       businessScope: pa?.businessScope || baseData.businessScope,
       tradeIntelligence: pa?.tradeIntelligence || baseData.tradeIntelligence,
-      decisionMakers:
-        (da?.decisionMakers?.length || 0) >= (baseData.decisionMakers?.length || 0)
-          ? da?.decisionMakers || baseData.decisionMakers
-          : baseData.decisionMakers,
+      decisionMakers: mergeDecisionMakers(
+        baseData.decisionMakers || [],
+        da?.decisionMakers || []
+      ),
       decisionMakerEmailSearchAt: Math.max(
         da?.decisionMakerEmailSearchAt || 0,
         baseData.decisionMakerEmailSearchAt || 0,

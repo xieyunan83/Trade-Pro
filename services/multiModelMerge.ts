@@ -123,7 +123,7 @@ const mergeCategories = (a: any[], b: any[]): WebsiteCategory[] => {
   return [...map.values()];
 };
 
-/** 合并决策人列表（邮箱 / LinkedIn / 姓名去重） */
+/** 合并决策人列表（邮箱 / LinkedIn / 姓名去重）——只增改，不丢已有联系人 */
 export const mergeDecisionMakers = (a: any[], b: any[]): DecisionMaker[] => {
   const map = new Map<string, any>();
   const keyOf = (dm: any) => {
@@ -147,6 +147,7 @@ export const mergeDecisionMakers = (a: any[], b: any[]): DecisionMaker[] => {
       map.set(k, { ...dm, name });
       return;
     }
+    // 字段级择优：禁止空值/未验证覆盖已有实锤资料
     map.set(k, {
       ...prev,
       ...dm,
@@ -157,11 +158,64 @@ export const mergeDecisionMakers = (a: any[], b: any[]): DecisionMaker[] => {
       whatsapp: preferString(prev.whatsapp, dm.whatsapp),
       linkedin: preferString(prev.linkedin, dm.linkedin),
       department: preferString(prev.department, dm.department),
+      emailSource: preferString(prev.emailSource, dm.emailSource),
+      emailStatus: preferString(prev.emailStatus, dm.emailStatus),
+      type: preferString(prev.type, dm.type) || prev.type || dm.type,
+      source: preferString(prev.source, dm.source) || prev.source || dm.source,
+      isVerified: !!(prev.isVerified || dm.isVerified),
+      influenceScore:
+        Math.max(Number(prev.influenceScore) || 0, Number(dm.influenceScore) || 0) ||
+        prev.influenceScore ||
+        dm.influenceScore,
     });
   };
   (a || []).forEach(put);
   (b || []).forEach(put);
   return [...map.values()];
+};
+
+/**
+ * 再次背调：把「旧报告」并入「新结果」。
+ * 决策人/产品/品类等只增改；已验证邮箱、已挖时间戳不降级。
+ */
+export const mergeAnalysisWithPrevious = (
+  previous: AnalysisResult | null | undefined,
+  incoming: AnalysisResult
+): AnalysisResult => {
+  if (!previous) return incoming;
+  const merged = mergeAnalysisRaws(previous as any, incoming as any) as AnalysisResult;
+  merged.decisionMakers = mergeDecisionMakers(
+    previous.decisionMakers || [],
+    incoming.decisionMakers || []
+  );
+  const prevAt = previous.decisionMakerEmailSearchAt || 0;
+  const nextAt = incoming.decisionMakerEmailSearchAt || 0;
+  merged.decisionMakerEmailSearchAt = Math.max(prevAt, nextAt) || previous.decisionMakerEmailSearchAt || incoming.decisionMakerEmailSearchAt;
+  merged.decisionMakerEmailSearchHistory = [
+    ...new Set(
+      [
+        ...(previous.decisionMakerEmailSearchHistory || []),
+        ...(incoming.decisionMakerEmailSearchHistory || []),
+        merged.decisionMakerEmailSearchAt,
+      ].filter((n): n is number => typeof n === 'number' && n > 0)
+    ),
+  ]
+    .sort((x, y) => x - y)
+    .slice(-30);
+  if (!incoming.generatedEmails && previous.generatedEmails) {
+    merged.generatedEmails = previous.generatedEmails;
+    merged.generatedEmailsAt = previous.generatedEmailsAt;
+  }
+  if (!incoming.decisionEnrichment && previous.decisionEnrichment) {
+    merged.decisionEnrichment = previous.decisionEnrichment;
+  } else if (
+    previous.decisionEnrichment &&
+    incoming.decisionEnrichment &&
+    (previous.decisionEnrichment.updatedAt || 0) > (incoming.decisionEnrichment.updatedAt || 0)
+  ) {
+    merged.decisionEnrichment = previous.decisionEnrichment;
+  }
+  return merged;
 };
 
 const mergeSimilar = (a: any[], b: any[]): SimilarCompany[] => {

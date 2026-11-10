@@ -105,7 +105,7 @@ import {
   upsertDmPersistRecord,
   findDmPersistForCompany,
 } from './services/dmSearchPersist';
-import { mergeDecisionMakers } from './services/multiModelMerge';
+import { mergeDecisionMakers, mergeAnalysisWithPrevious } from './services/multiModelMerge';
 import { enqueueDmEmailSearch, type DmEmailSearchJob } from './services/dmEmailSearchQueue';
 import {
   gatherSilentCompanyChannelIntel,
@@ -2162,7 +2162,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
     void enqueueBackgroundAnalysis(domain, override);
   };
 
-  /** 报告页决策人：合并历史 / CRM contacts / 挖掘账本，避免列表有数量、打开却是 0 */
+  /** 报告页决策人：合并历史 / CRM contacts / 挖掘账本；再次背调不得删已有联系人 */
   const enrichAnalysisDecisionMakers = (
     data: AnalysisResult,
     opts?: { historyItem?: HistoryItem | null; client?: Client | null }
@@ -2187,19 +2187,43 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       });
 
     const ledger = findDmPersistForCompany(website, name);
-    let dms = Array.isArray(data.decisionMakers) ? [...data.decisionMakers] : [];
-    const rawHist = opts?.historyItem?.data?.decisionMakers;
-    if (Array.isArray(rawHist) && rawHist.length) {
-      dms = mergeDecisionMakers(dms, rawHist);
-    }
-    if (Array.isArray(client?.contacts) && client.contacts.length) {
-      dms = mergeDecisionMakers(dms, client.contacts);
-    }
-    if (Array.isArray(ledger?.decisionMakers) && ledger.decisionMakers.length) {
-      dms = mergeDecisionMakers(dms, ledger.decisionMakers);
-    }
+    const priorPools: DecisionMaker[][] = [
+      opts?.historyItem?.data?.decisionMakers || [],
+      client?.contacts || [],
+      ledger?.decisionMakers || [],
+    ];
+    // 旧资料作底，新结果叠上去：只增改
+    let dms = mergeDecisionMakers(
+      priorPools.reduce((acc, cur) => mergeDecisionMakers(acc, cur), [] as DecisionMaker[]),
+      Array.isArray(data.decisionMakers) ? data.decisionMakers : []
+    );
 
+    const priorKey = new Set(
+      priorPools
+        .flat()
+        .map((d) => {
+          const email = (d.emailGuess || '').toLowerCase();
+          if (email.includes('@')) return `e:${email}`;
+          const li = (d.linkedin || '').toLowerCase();
+          if (li) return `l:${li}`;
+          const phone = (d.phone || d.whatsapp || '').trim();
+          if (phone) return `p:${phone}`;
+          return `n:${(d.name || '').toLowerCase()}|${(d.title || '').toLowerCase()}`;
+        })
+        .filter(Boolean)
+    );
+    const dmKey = (d: DecisionMaker) => {
+      const email = (d.emailGuess || '').toLowerCase();
+      if (email.includes('@')) return `e:${email}`;
+      const li = (d.linkedin || '').toLowerCase();
+      if (li) return `l:${li}`;
+      const phone = (d.phone || d.whatsapp || '').trim();
+      if (phone) return `p:${phone}`;
+      return `n:${(d.name || '').toLowerCase()}|${(d.title || '').toLowerCase()}`;
+    };
+    // 已有联系人一律保留；新线索仍要求有邮箱/电话/姓名+职位或领英
     dms = dms.filter((d) => {
+      if (priorKey.has(dmKey(d))) return true;
       const hasEmail = !!(d.emailGuess && String(d.emailGuess).includes('@'));
       const hasPhone = !!(d.phone || '').trim() || !!(d.whatsapp || '').trim();
       const hasName = !!(d.name || '').trim() && (d.name || '').trim() !== '公开信息未找到';
@@ -2208,10 +2232,12 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
 
     const hasEmailContact = dms.some((d) => !!(d.emailGuess && String(d.emailGuess).includes('@')));
     const effectiveAt =
-      data.decisionMakerEmailSearchAt ||
-      opts?.historyItem?.data?.decisionMakerEmailSearchAt ||
-      ledger?.searchedAt ||
-      (hasEmailContact ? Date.now() : undefined);
+      Math.max(
+        data.decisionMakerEmailSearchAt || 0,
+        opts?.historyItem?.data?.decisionMakerEmailSearchAt || 0,
+        ledger?.searchedAt || 0
+      ) ||
+      (hasEmailContact ? data.decisionMakerEmailSearchAt || opts?.historyItem?.data?.decisionMakerEmailSearchAt || ledger?.searchedAt : undefined);
 
     const histTimes = [
       ...(data.decisionMakerEmailSearchHistory || []),
@@ -2446,12 +2472,33 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       opts?.companyName || analysisDataRef.current?.companyInfo?.name || '';
     // 入库前剔除「at 别家公司」的串公司脏数据，避免写回 CRM/历史
     const { filterDecisionMakersForCompany } = await import('./services/linkedinEmployeeLocator');
-    const scopedDms = filterDecisionMakersForCompany(patch.decisionMakers || [], {
+    const scopedIncoming = filterDecisionMakersForCompany(patch.decisionMakers || [], {
       companyName: companyLabel,
       domain: domainKey,
       mode: 'lenient',
     });
-    const safePatch = { ...patch, decisionMakers: scopedDms };
+    // 与现有报告 / 历史 / 账本合并：再次背调或补全不得整表覆盖已有联系人
+    const histHit =
+      (matchId && historyRef.current.find((h) => h.id === matchId)) ||
+      historyRef.current.find((h) => {
+        const hHost = cleanHost(h.domain || h.data?.companyInfo?.website);
+        const hName = (h.data?.companyInfo?.name || '').trim().toLowerCase();
+        return (
+          (!!domainKey && !!hHost && domainKey === hHost) ||
+          (!!nameKey && !!hName && nameKey === hName)
+        );
+      });
+    const ledger = findDmPersistForCompany(domainKey, companyLabel);
+    const existingDms = mergeDecisionMakers(
+      mergeDecisionMakers(histHit?.data?.decisionMakers || [], ledger?.decisionMakers || []),
+      analysisDataRef.current &&
+        (cleanHost(analysisDataRef.current.companyInfo?.website) === domainKey ||
+          (analysisDataRef.current.companyInfo?.name || '').trim().toLowerCase() === nameKey)
+        ? analysisDataRef.current.decisionMakers || []
+        : []
+    );
+    const mergedDms = mergeDecisionMakers(existingDms, scopedIncoming);
+    const safePatch = { ...patch, decisionMakers: mergedDms };
 
     // 1) 先写入耐久化 ledger（刷新后可恢复，避免积分白费）
     upsertDmPersistRecord({
@@ -2472,12 +2519,24 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       if (!sameView) return prev;
       return {
         ...prev,
-        decisionMakers: safePatch.decisionMakers,
+        decisionMakers: mergeDecisionMakers(prev.decisionMakers || [], safePatch.decisionMakers),
         ...(safePatch.decisionMakerEmailSearchAt != null
-          ? { decisionMakerEmailSearchAt: safePatch.decisionMakerEmailSearchAt }
+          ? {
+              decisionMakerEmailSearchAt: Math.max(
+                prev.decisionMakerEmailSearchAt || 0,
+                safePatch.decisionMakerEmailSearchAt
+              ),
+            }
           : {}),
         ...(safePatch.decisionMakerEmailSearchHistory
-          ? { decisionMakerEmailSearchHistory: safePatch.decisionMakerEmailSearchHistory }
+          ? {
+              decisionMakerEmailSearchHistory: [
+                ...new Set([
+                  ...(prev.decisionMakerEmailSearchHistory || []),
+                  ...safePatch.decisionMakerEmailSearchHistory,
+                ]),
+              ].slice(-30),
+            }
           : {}),
       };
     });
@@ -2522,12 +2581,24 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
         ...h,
         data: {
           ...h.data,
-          decisionMakers: safePatch.decisionMakers,
+          decisionMakers: mergeDecisionMakers(h.data.decisionMakers || [], safePatch.decisionMakers),
           ...(safePatch.decisionMakerEmailSearchAt != null
-            ? { decisionMakerEmailSearchAt: safePatch.decisionMakerEmailSearchAt }
+            ? {
+                decisionMakerEmailSearchAt: Math.max(
+                  h.data.decisionMakerEmailSearchAt || 0,
+                  safePatch.decisionMakerEmailSearchAt
+                ),
+              }
             : {}),
           ...(safePatch.decisionMakerEmailSearchHistory
-            ? { decisionMakerEmailSearchHistory: safePatch.decisionMakerEmailSearchHistory }
+            ? {
+                decisionMakerEmailSearchHistory: [
+                  ...new Set([
+                    ...(h.data.decisionMakerEmailSearchHistory || []),
+                    ...safePatch.decisionMakerEmailSearchHistory,
+                  ]),
+                ].slice(-30),
+              }
             : {}),
         },
       };
@@ -3156,19 +3227,21 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
         (result.searchKeyword || discoveryState.product || '').trim() || undefined;
       if (keyword) addCustomKeyword(keyword);
 
-      // 再次背调不得冲掉已挖掘的决策人：合并旧历史 / CRM / 账本
-      const enriched = enrichAnalysisDecisionMakers(result, {
-        historyItem: historyRef.current.find((h) => {
-          const host = (h.domain || h.data?.companyInfo?.website || '')
-            .toLowerCase()
-            .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
-            .split('/')[0];
-          const dHost = (domain || '')
-            .toLowerCase()
-            .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
-            .split('/')[0];
-          return !!(host && dHost && host === dHost);
-        }),
+      // 再次背调：整份报告与旧资料合并（产品/品类/决策人只增改不删）
+      const prevHistory = historyRef.current.find((h) => {
+        const host = (h.domain || h.data?.companyInfo?.website || '')
+          .toLowerCase()
+          .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
+          .split('/')[0];
+        const dHost = (domain || '')
+          .toLowerCase()
+          .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
+          .split('/')[0];
+        return !!(host && dHost && host === dHost);
+      });
+      const mergedWithPrev = mergeAnalysisWithPrevious(prevHistory?.data, result);
+      const enriched = enrichAnalysisDecisionMakers(mergedWithPrev, {
+        historyItem: prevHistory,
       });
 
       const historyItem: HistoryItem = stampOwnership({
@@ -3382,7 +3455,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
         searchCountry: task.country || undefined,
       };
       const preferredMode = task.mode || 'economy';
-      const result = await withRateLimitRetry(
+      const rawResult = await withRateLimitRetry(
         async () => {
           try {
             return await analyzeCompany(task.website, preferredMode, analyzeOpts);
@@ -3401,6 +3474,26 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
           shouldStop: () => shouldStopRef.current,
           retryTransient: true,
         }
+      );
+
+      // 再次背调：先并入旧历史/账本决策人，避免任务态与静默补全只拿「新结果」冲掉已有联系人
+      const domainForPrev = rawResult.companyInfo?.website || task.website || '';
+      const nameForPrev = rawResult.companyInfo?.name || task.clientName || '';
+      const prevHist = historyRef.current.find((h) => {
+        const host = (h.domain || h.data?.companyInfo?.website || '')
+          .toLowerCase()
+          .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
+          .split('/')[0];
+        const dHost = (domainForPrev || '')
+          .toLowerCase()
+          .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
+          .split('/')[0];
+        return !!(host && dHost && host === dHost);
+      });
+      const ledgerPrev = findDmPersistForCompany(domainForPrev, nameForPrev);
+      const result = enrichAnalysisDecisionMakers(
+        mergeAnalysisWithPrevious(prevHist?.data, rawResult),
+        { historyItem: prevHist }
       );
 
       const completedTask: AutomationResult = {
@@ -3441,7 +3534,10 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       await updateCrmStatus(result);
 
       let enrichedResult = result;
-      let seededDecisionMakers: DecisionMaker[] = result.decisionMakers || [];
+      let seededDecisionMakers: DecisionMaker[] = mergeDecisionMakers(
+        result.decisionMakers || [],
+        ledgerPrev?.decisionMakers || []
+      );
       const domain = result.companyInfo?.website || task.website || '';
       const companyName = result.companyInfo?.name || task.clientName || domain;
 
@@ -3456,7 +3552,11 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
             existingDecisionMakers: seededDecisionMakers,
           });
           enrichedResult = mergeSilentIntelIntoAnalysis(result, intel);
-          seededDecisionMakers = enrichedResult.decisionMakers || [];
+          seededDecisionMakers = mergeDecisionMakers(
+            seededDecisionMakers,
+            enrichedResult.decisionMakers || []
+          );
+          enrichedResult = { ...enrichedResult, decisionMakers: seededDecisionMakers };
           if (seededDecisionMakers.length || intel.socials.facebook || intel.socials.linkedin) {
             await persistDecisionMakerResearch(
               { decisionMakers: seededDecisionMakers },
@@ -3877,17 +3977,32 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
               )
             );
 
-            // Excel 导入的联系人等种子字段与背调结果合并
+            // 再次背调 / Excel 种子：旧报告 + 账本 + 导入联系人只合并不覆盖
+            const domainForPrev = rawResult.companyInfo?.website || task.website || '';
+            const nameForPrev = rawResult.companyInfo?.name || task.clientName || '';
+            const prevHist = historyRef.current.find((h) => {
+              const host = (h.domain || h.data?.companyInfo?.website || '')
+                .toLowerCase()
+                .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
+                .split('/')[0];
+              const dHost = (domainForPrev || '')
+                .toLowerCase()
+                .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
+                .split('/')[0];
+              return !!(host && dHost && host === dHost);
+            });
             const seedContacts = task.importSeed?.contacts || [];
-            const result = seedContacts.length
-              ? {
-                  ...rawResult,
-                  decisionMakers: mergeDecisionMakers(
-                    rawResult.decisionMakers || [],
-                    seedContacts
-                  ),
-                }
-              : rawResult;
+            const withPrev = mergeAnalysisWithPrevious(prevHist?.data, rawResult);
+            const result = enrichAnalysisDecisionMakers(
+              {
+                ...withPrev,
+                decisionMakers: mergeDecisionMakers(
+                  withPrev.decisionMakers || [],
+                  seedContacts
+                ),
+              },
+              { historyItem: prevHist }
+            );
 
               const completedTask: AutomationResult = { 
                   ...task, 
@@ -3934,7 +4049,13 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                     country: task.country || result.searchCountry,
                     existingDecisionMakers: result.decisionMakers || [],
                   });
-                  const mergedAnalysis = mergeSilentIntelIntoAnalysis(result, intel);
+                  const mergedAnalysis = {
+                    ...mergeSilentIntelIntoAnalysis(result, intel),
+                    decisionMakers: mergeDecisionMakers(
+                      result.decisionMakers || [],
+                      intel.decisionMakers || []
+                    ),
+                  };
                   if (
                     intel.decisionMakers.length ||
                     intel.socials.facebook ||
@@ -4907,8 +5028,8 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       }
       const timeLabel = formatBackgroundCheckTime(task.completedAt || task.createdAt);
       const tip = timeLabel
-        ? `该公司已于 ${timeLabel} 完成背调。是否再次背调以更新信息？`
-        : '是否对该客户再次背调？';
+        ? `该公司已于 ${timeLabel} 完成背调。是否再次背调以更新信息？\n\n已有决策人与联系方式会保留，仅在原有资料上更新或新增。`
+        : '是否对该客户再次背调？\n\n已有决策人与联系方式会保留，仅在原有资料上更新或新增。';
       if (!confirm(tip)) return;
       const reset: AutomationResult = {
         ...task,
@@ -4947,8 +5068,8 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
         ).historyItem;
       const timeLabel = formatBackgroundCheckTime(hist?.timestamp);
       const tip = timeLabel
-        ? `该公司已于 ${timeLabel} 完成背调。是否再次背调以更新信息？`
-        : '是否再次背调以更新该公司信息？';
+        ? `该公司已于 ${timeLabel} 完成背调。是否再次背调以更新信息？\n\n已有决策人与联系方式会保留，仅在原有资料上更新或新增。`
+        : '是否再次背调以更新该公司信息？\n\n已有决策人与联系方式会保留，仅在原有资料上更新或新增。';
       if (!confirm(tip)) return;
       const limit = checkLimit('analysis');
       if (!limit.allowed) {
@@ -4988,8 +5109,8 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       }
       const timeLabel = formatBackgroundCheckTime(item.timestamp);
       const tip = timeLabel
-        ? `该公司已于 ${timeLabel} 完成背调。是否再次背调以更新信息？`
-        : '是否再次背调？';
+        ? `该公司已于 ${timeLabel} 完成背调。是否再次背调以更新信息？\n\n已有决策人与联系方式会保留，仅在原有资料上更新或新增。`
+        : '是否再次背调？\n\n已有决策人与联系方式会保留，仅在原有资料上更新或新增。';
       if (!confirm(tip)) return;
       if (!hasPermission(currentUser, 'feature.analyze_company')) {
         alert('你没有「单次背调」权限，请联系管理员或部门主管开通。');
