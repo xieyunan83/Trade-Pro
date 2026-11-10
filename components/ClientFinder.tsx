@@ -115,10 +115,17 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
   const countryPanelRef = useRef<HTMLDivElement>(null);
   const [icpTemplates, setIcpTemplates] = useState<IcpTemplate[]>(() => loadIcpTemplates(username));
   const [icpNameDraft, setIcpNameDraft] = useState('');
-  /** 用户是否手动改过类目；改过则关键词变化时不强行覆盖，除非清空产品重录 */
+  /** 用户是否手动改过类目；改过则绝不被自动匹配覆盖 */
   const categoryManualRef = useRef(false);
   const lastAutoProductRef = useRef('');
   const [autoCatHint, setAutoCatHint] = useState<string | null>(null);
+  /** 低置信建议：不自动写入，等用户点「采用」 */
+  const [pendingCat, setPendingCat] = useState<{
+    l1: string;
+    l2: string;
+    label: string;
+    score: number;
+  } | null>(null);
 
   useEffect(() => {
     setIcpTemplates(loadIcpTemplates(username));
@@ -233,23 +240,16 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
     [state.categoryL1]
   );
 
-  // 产品关键词录入后：自动匹配官方一级/二级品类（防抖）
+  // 产品关键词 → 类目建议（防抖）。高置信才自动填；否则只提示，手选优先。
   useEffect(() => {
     const kw = state.product.trim();
     if (kw.length < 2) {
       setAutoCatHint(null);
+      setPendingCat(null);
       if (!kw) {
         categoryManualRef.current = false;
         lastAutoProductRef.current = '';
       }
-      return;
-    }
-    // 用户刚手动改过类目，且关键词未实质变化 → 不覆盖
-    if (
-      categoryManualRef.current &&
-      lastAutoProductRef.current &&
-      kw.toLowerCase() === lastAutoProductRef.current.toLowerCase()
-    ) {
       return;
     }
     const timer = window.setTimeout(() => {
@@ -258,11 +258,13 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
         sug = suggestToyCategoriesFromKeyword(kw, 3)[0];
       } catch (e) {
         console.warn('[ClientFinder] category suggest failed', e);
-        setAutoCatHint('类目匹配繁忙，请手动选择一级/二级');
+        setPendingCat(null);
+        setAutoCatHint('类目匹配繁忙。请手动选择一级/二级；不选也可直接搜索。');
         return;
       }
       if (!sug) {
-        setAutoCatHint('未匹配到官方品类，可手动选择一级/二级');
+        setPendingCat(null);
+        setAutoCatHint('未自动匹配到类目。请手动选择一级/二级，或不选直接搜。');
         return;
       }
       const label =
@@ -270,30 +272,67 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
         (sug.l2Id || sug.l1Id
           ? formatTaxonomyLabel(sug.l2Id || sug.l1Id)
           : `${sug.l1}${sug.l2 && sug.l2 !== sug.l1 ? ` / ${sug.l2}` : ''}`);
-      setAutoCatHint(`已自动匹配：${label}`);
+      const l2 = sug.l2 && sug.l2 !== sug.l1 ? sug.l2 : sug.l2 || '';
+      const highConfidence = (sug.score || 0) >= 70;
       lastAutoProductRef.current = kw;
-      // 手动改过且关键词仅微调（同一词干）时，只在类目为空时补全
-      if (categoryManualRef.current && state.categoryL1 && state.categoryL1 !== sug.l1) {
-        if (!state.categoryL2) {
-          /* 保留用户一级，不强改 */
-        }
+
+      // 手动选择锁：只给建议，绝不覆盖
+      if (categoryManualRef.current) {
+        setPendingCat({ l1: sug.l1, l2, label, score: sug.score || 0 });
+        setAutoCatHint(
+          `当前为手动类目。系统另建议「${label}」——若不准确请继续手改；点「采用建议」可改回自动结果。`
+        );
         return;
       }
-      categoryManualRef.current = false;
+
+      // 低置信：不自动写入，避免错配把结果滤空
+      if (!highConfidence) {
+        setPendingCat({ l1: sug.l1, l2, label, score: sug.score || 0 });
+        setAutoCatHint(
+          `建议类目「${label}」（仅供参考）。若不准确请手动选择一级/二级；也可不选直接搜索。`
+        );
+        return;
+      }
+
+      // 高置信且未手改：自动填，但仍提示可手改
+      setPendingCat(null);
       const patch: Partial<DiscoveryState> = {
         categoryL1: sug.l1,
-        categoryL2: sug.l2 && sug.l2 !== sug.l1 ? sug.l2 : sug.l2 || '',
+        categoryL2: l2,
       };
-      // 行业为空或默认时，用匹配到的一级英文作行业线索，便于检索
       const ind = (state.industry || '').trim();
       if (!ind || ind === DEFAULT_INDUSTRY_EN) {
-        patch.industry = sug.l1;
+        // 不覆盖用户已选的多行业标签；仅空/默认时补一条
+        /* 行业仍以用户多选为准，类目单独展示 */
       }
       patchState(patch);
+      setAutoCatHint(
+        `已自动匹配：${label}。若匹配错误，请手动改选一级/二级类目（可不选）。`
+      );
     }, 550);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.product]);
+
+  const applyPendingCategory = () => {
+    if (!pendingCat) return;
+    categoryManualRef.current = false;
+    patchState({
+      categoryL1: pendingCat.l1,
+      categoryL2: pendingCat.l2,
+    });
+    setAutoCatHint(
+      `已采用建议：${pendingCat.label}。若仍不准确请手动改选一级/二级。`
+    );
+    setPendingCat(null);
+  };
+
+  const clearOfficialCategory = () => {
+    categoryManualRef.current = true;
+    setPendingCat(null);
+    patchState({ categoryL1: '', categoryL2: '' });
+    setAutoCatHint('已清空官方类目。可不选类目，仅按产品词 + 行业 + 国家搜索。');
+  };
 
   const handleSearch = async () => {
     const product = state.product.trim();
@@ -304,10 +343,18 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
     setCountryOpen(false);
     setLoading(true);
     setErrorMsg(null);
-    // 类目只进行业约束，绝不拼进产品关键词：
-    // 否则「robot dog (Smart Electronics…)」会把 Electronics 当相关词，玩具买家反而被滤成 0 条
-    const catBits = [state.categoryL1, state.categoryL2].filter(Boolean).join(' / ');
-    const searchIndustry = [state.industry, catBits ? `official category ${catBits}` : '']
+    // 类目只作补充线索，绝不拼进产品关键词；非玩具列表内的误配类目默认不参与检索
+    const l1KnownToy = toyCats.some((c) => c.nameEn === state.categoryL1);
+    const catBits =
+      state.categoryL1 && (l1KnownToy || categoryManualRef.current)
+        ? [state.categoryL1, state.categoryL2].filter(Boolean).join(' / ')
+        : '';
+    if (state.categoryL1 && !l1KnownToy && !categoryManualRef.current) {
+      setErrorMsg(
+        `当前类目「${state.categoryL1}」疑似误配，已忽略该类目检索。请手动改选玩具类目，或点「清空类目」后重试。`
+      );
+    }
+    const searchIndustry = [state.industry, catBits ? `category hint: ${catBits}` : '']
       .filter(Boolean)
       .join(', ');
     // 保留上一次结果直至本次返回，避免「搜索中 + 结果(0)」被误当成搜完为空
@@ -514,15 +561,17 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
                 type="text"
                 value={state.product}
                 onChange={(e) => {
-                  // 关键词实质变化时允许重新自动匹配
                   const next = e.target.value;
-                  if (next.trim().toLowerCase() !== lastAutoProductRef.current.toLowerCase()) {
+                  // 清空产品才解开手动锁；改词不再偷偷冲掉用户手选类目
+                  if (!next.trim()) {
                     categoryManualRef.current = false;
+                    lastAutoProductRef.current = '';
+                    setPendingCat(null);
                   }
                   patchState({ product: next });
                 }}
                 className="w-full pl-12 pr-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-cyan-500/30 font-bold"
-                placeholder="例如: Silicone Baby Bibs / 合金车"
+                placeholder="例如: Silicone Baby Bibs / 合金车 / robot dog"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault();
@@ -532,15 +581,26 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
               />
             </div>
             {autoCatHint && (
-              <p
-                className={`mt-1.5 text-[11px] font-bold ${
-                  autoCatHint.startsWith('已自动')
-                    ? 'text-emerald-700'
-                    : 'text-amber-700'
-                }`}
-              >
-                {autoCatHint}
-              </p>
+              <div className="mt-1.5 space-y-1.5">
+                <p
+                  className={`text-[11px] font-bold leading-snug ${
+                    autoCatHint.startsWith('已自动') || autoCatHint.startsWith('已采用')
+                      ? 'text-emerald-700'
+                      : 'text-amber-800'
+                  }`}
+                >
+                  {autoCatHint}
+                </p>
+                {pendingCat && (
+                  <button
+                    type="button"
+                    onClick={applyPendingCategory}
+                    className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-black text-amber-900 hover:bg-amber-100"
+                  >
+                    采用建议「{pendingCat.label}」
+                  </button>
+                )}
+              </div>
             )}
           </div>
           <div className="relative z-[20]">
@@ -555,21 +615,35 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
           </div>
 
           <div>
-            <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
-              一级品类（官方类目）
-            </label>
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <label className="block text-xs font-black text-slate-400 uppercase tracking-widest">
+                一级品类（可手选）
+              </label>
+              {(state.categoryL1 || state.categoryL2) && (
+                <button
+                  type="button"
+                  onClick={clearOfficialCategory}
+                  className="text-[10px] font-black text-slate-500 hover:text-rose-600"
+                >
+                  清空类目
+                </button>
+              )}
+            </div>
             <select
               value={state.categoryL1 || ''}
               onChange={(e) => {
                 categoryManualRef.current = true;
+                setPendingCat(null);
                 patchState({ categoryL1: e.target.value, categoryL2: '' });
                 setAutoCatHint(
-                  e.target.value ? `已手动选择一级：${e.target.value}` : null
+                  e.target.value
+                    ? `已手动选择一级：${e.target.value}。二级可继续手选；匹配不准时以手选为准。`
+                    : '已不限一级类目。可不选类目直接搜索。'
                 );
               }}
               className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold text-sm bg-white focus:ring-2 focus:ring-cyan-500/30"
             >
-              <option value="">全部一级 / 不限</option>
+              <option value="">不限 / 请手动选择</option>
               {toyCats.map((c) => (
                 <option key={c.id} value={c.nameEn}>
                   {c.nameEn}
@@ -584,24 +658,27 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
           </div>
           <div>
             <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
-              二级品类（官方类目）
+              二级品类（可手选）
             </label>
             <select
               value={state.categoryL2 || ''}
               onChange={(e) => {
                 categoryManualRef.current = true;
+                setPendingCat(null);
                 patchState({ categoryL2: e.target.value });
                 setAutoCatHint(
                   e.target.value
-                    ? `已手动选择：${state.categoryL1 || ''} / ${e.target.value}`
-                    : autoCatHint
+                    ? `已手动选择：${state.categoryL1 || ''} / ${e.target.value}。若自动匹配错误，以手选为准。`
+                    : state.categoryL1
+                      ? `已选一级「${state.categoryL1}」，二级不限。`
+                      : autoCatHint
                 );
               }}
               disabled={!state.categoryL1}
               className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold text-sm bg-white focus:ring-2 focus:ring-cyan-500/30 disabled:bg-slate-50 disabled:text-slate-400"
             >
               <option value="">
-                {state.categoryL1 ? '全部二级 / 不限' : '请先选一级类目'}
+                {state.categoryL1 ? '不限二级' : '请先选一级类目'}
               </option>
               {l2Options.map((name) => (
                 <option key={name} value={name}>
@@ -613,8 +690,8 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
                   <option value={state.categoryL2}>{state.categoryL2}</option>
                 )}
             </select>
-            <p className="mt-1 text-[10px] font-bold text-slate-400">
-              录入产品关键词后自动匹配；也可手动改选。检索时会带上已选品类。
+            <p className="mt-1 text-[10px] font-bold text-slate-500 leading-relaxed">
+              自动匹配仅供参考。若匹配错误，请手动选择一、二级类目；也可清空类目，只靠产品词 + 行业 + 国家搜索。
             </p>
           </div>
 
