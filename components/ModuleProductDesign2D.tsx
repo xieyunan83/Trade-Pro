@@ -113,11 +113,12 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
   /** 画布多选：用于删除 / 推送到下游模块 */
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [activePack, setActivePack] = useState<EnterpriseDesignPack | null>(null);
-  /** 核心：结构化二次创作（默认） / 自由提示词 */
-  const [agentMode, setAgentMode] = useState<'secondary' | 'free'>('secondary');
+  /** secondary=改已有产品；create=从0写大段提示词（可无参考图） */
+  const [agentMode, setAgentMode] = useState<'secondary' | 'create'>('secondary');
   const [secondaryFields, setSecondaryFields] = useState<SecondaryCreationFields>(
     () => ({ ...DEFAULT_SECONDARY_FIELDS })
   );
+  const isCreateFromScratch = agentMode === 'create';
   const refInputRef = useRef<HTMLInputElement>(null);
   const skus = useMemo(() => loadCatalogSkus(), []);
   const status = getDesignAgentConfigStatus();
@@ -135,8 +136,11 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     };
   };
 
-  /** 二次创作最终用户改动清单（结构化优先，否则用自由提示词） */
+  /** 用户提示词：二次创作=改动清单；从0创作=整段创意描述 */
   const resolveEditBrief = (): string => {
+    if (isCreateFromScratch) {
+      return prompt.trim();
+    }
     const layoutMode = lastRefIsLayout || packImpliesLayoutLastRef(activePack);
     const layoutSwapZh =
       '【版式换品】末张是版式/海报模板：只借构图、色块、字体层级与装饰；必须把前面产品参考图换入成图；禁止复刻模板里的原商品（毛绒/字母罐等样本货）。';
@@ -321,20 +325,20 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     const skuRowEarly = skus.find((s) => s.id === skuPick || s.skuCode === skuPick);
     const hasRefsEarly =
       refUploads.length > 0 ||
-      canvasProductRefUrls.length > 0 ||
-      !!(skuRowEarly?.images?.length);
-    if (!hasRefsEarly) {
+      (!isCreateFromScratch && canvasProductRefUrls.length > 0) ||
+      (!isCreateFromScratch && !!(skuRowEarly?.images?.length));
+    if (!isCreateFromScratch && !hasRefsEarly) {
       setError(
-        '请先：上传参考图、从产品库选带图 SKU，或在画布勾选已生成的产品图，再填写包装/颜色/外观改动。'
+        '二次创作需要产品图：请上传参考图、从产品库选带图 SKU，或点右侧「从0创作」用文字直接开画。'
       );
       return;
     }
     const editBriefCheck = resolveEditBrief();
     if (!editBriefCheck.trim()) {
       setError(
-        agentMode === 'secondary'
-          ? '请在「产品二次创作」中至少填写一项改动（包装、颜色、外观等），或切换到自由指令。'
-          : '请写明二次创作要求，例如：包装改红色、去掉某配件、增加灯光功能等。'
+        isCreateFromScratch
+          ? '请在「从0创作」输入框里写上完整提示词（可一次性粘贴一大段）。'
+          : '请在「产品二次创作」中至少填写一项改动，或切换到「从0创作」写整段提示词。'
       );
       return;
     }
@@ -353,8 +357,8 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
       const skuRow = skus.find((s) => s.id === skuPick || s.skuCode === skuPick);
       const hasRefs =
         refUploads.length > 0 ||
-        canvasProductRefUrls.length > 0 ||
-        !!(skuRow?.images?.length);
+        (!isCreateFromScratch && canvasProductRefUrls.length > 0) ||
+        (!isCreateFromScratch && !!(skuRow?.images?.length));
       let marketNote = '';
       try {
         const profiles = await loadProductCatalog();
@@ -443,12 +447,15 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
         skillCraftNotes: [
           skill.craftNotes,
           packCraftNotes(activePack),
-          hasRefs
-            ? '二次创作：以参考图为唯一外形真相；用户提示词仅为改动清单（颜色/部位/包装/功能等）；未提及处保持一致。禁止整体换模。'
-            : '',
-          skillId === 'multi_product_poster' && !layoutLast
+          isCreateFromScratch
+            ? '从0创作：严格按用户完整提示词执行；参考图可选。无参考图时按文字想象商业级产品图，禁止擅自改写成二次局部改色。'
+            : hasRefs
+              ? '二次创作：以参考图为唯一外形真相；用户提示词仅为改动清单（颜色/部位/包装/功能等）；未提及处保持一致。禁止整体换模。'
+              : '',
+          !isCreateFromScratch && skillId === 'multi_product_poster' && !layoutLast
             ? '多产品整合：每张产品参考图对应独立 SKU，成图必须全部出现，禁止只保留一张。'
             : '',
+          !isCreateFromScratch &&
           previewRefs.refs.length >= 2 &&
             !(skillId === 'multi_product_poster' && !layoutLast)
             ? layoutLast
@@ -467,16 +474,19 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
           ...(skill.qaChecklist || []),
           '图面英文无乱码、无假词、仅白名单短句',
           '产品未遮挡文字，卖点短句完整可读',
-          previewRefs.refs.length >= 2
+          !isCreateFromScratch && previewRefs.refs.length >= 2
             ? '每一张产品参考图都出现在成图中（角度/SKU 对应）'
             : '',
+          isCreateFromScratch ? '成图符合用户完整提示词' : '',
         ]
           .filter(Boolean)
           .slice(0, 8),
         userBrief: [
-          hasRefs
-            ? `【参考图二次创作·改动清单】\n${resolveEditBrief()}`
-            : resolveEditBrief(),
+          isCreateFromScratch
+            ? `【从0创作·完整提示词】\n${resolveEditBrief()}`
+            : hasRefs
+              ? `【参考图二次创作·改动清单】\n${resolveEditBrief()}`
+              : resolveEditBrief(),
           activePack
             ? `【企业模板】${activePack.name}（L1 ${activePack.layoutRefs.length} 页）`
             : '',
@@ -494,8 +504,10 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
           .join('\n'),
         skuCode: skuMeta.code,
         skuName: skuMeta.name,
-        hasReferenceImages: hasRefs || previewRefs.refs.length > 0,
-        referenceCount: previewRefs.refs.length || (hasRefs ? 1 : 0),
+        hasReferenceImages: !isCreateFromScratch && (hasRefs || previewRefs.refs.length > 0),
+        referenceCount: isCreateFromScratch
+          ? refUploads.length
+          : previewRefs.refs.length || (hasRefs ? 1 : 0),
         lastRefIsLayout: layoutLast,
         distinctProducts: skillId === 'multi_product_poster' && !layoutLast,
         lockedOnImageCopy: copyPlan.approvedOnImageEn,
@@ -602,10 +614,14 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     }
     const productMerged: string[] = [];
     const productLabels: string[] = [];
-    // 上传 → 画布选中/生成图 → 产品库；排除版式样本 URL；末位留给 1 张 L1 版式
+    // 从0创作：只用用户主动上传的参考（可选），绝不自动吞画布旧图
+    // 二次创作：上传 → 画布选中/生成图 → 产品库；排除版式样本 URL；末位留给 1 张 L1 版式
     const reserveLayout = activePack?.layoutRefs?.length ? 1 : 0;
     const productCap = Math.max(1, MAX_DESIGN_REF_IMAGES - reserveLayout);
-    for (const u of [...refUploads, ...canvasProductRefUrls, ...fromSku]) {
+    const productPool = isCreateFromScratch
+      ? [...refUploads]
+      : [...refUploads, ...canvasProductRefUrls, ...fromSku];
+    for (const u of productPool) {
       if (!u || productMerged.includes(u) || layoutSet.has(u)) continue;
       productMerged.push(u);
       productLabels.push(angleByUrl.get(u) || `product ${productMerged.length}`);
@@ -1015,6 +1031,26 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                     目录封面 / 网格内页 / 卖点文案 · 一键套用
                   </p>
                 </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSkillId('free');
+                    setAgentMode('create');
+                    setNegativePrompt(
+                      DESIGN_SKILLS.find((x) => x.id === 'free')?.negativePrompt || ''
+                    );
+                    setError(null);
+                  }}
+                  className="w-full text-left rounded-xl px-3 py-3 border-2 border-violet-400 bg-violet-50 hover:bg-violet-100"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-black text-violet-900">从0创作 · 大段提示词</span>
+                    <span className="text-[9px] font-bold text-violet-700">推荐</span>
+                  </div>
+                  <p className="text-[10px] text-violet-800/80 font-medium mt-0.5 leading-snug">
+                    一次性粘贴完整提示词开画，不走二次创作字段
+                  </p>
+                </button>
                 <div className="grid grid-cols-2 gap-1.5">
                   {DESIGN_SKILLS.map((s) => (
                     <button
@@ -1022,7 +1058,12 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                       type="button"
                       onClick={() => {
                         setSkillId(s.id);
-                        if (s.defaultPrompt) setPrompt(s.defaultPrompt);
+                        if (s.id === 'free') {
+                          setAgentMode('create');
+                          if (!prompt.trim()) setPrompt('');
+                        } else if (s.defaultPrompt && !isCreateFromScratch) {
+                          setPrompt(s.defaultPrompt);
+                        }
                         setNegativePrompt(s.negativePrompt || '');
                         if (
                           s.id === 'multi_product_poster' &&
@@ -1335,7 +1376,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             <button
               type="button"
               onClick={() => setAgentMode('secondary')}
-              className={`flex-1 py-2 text-[11px] font-black ${
+              className={`flex-1 py-2.5 text-[11px] font-black ${
                 agentMode === 'secondary'
                   ? 'bg-emerald-600 text-white'
                   : 'bg-slate-50 text-slate-500'
@@ -1345,16 +1386,29 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             </button>
             <button
               type="button"
-              onClick={() => setAgentMode('free')}
-              className={`flex-1 py-2 text-[11px] font-black ${
-                agentMode === 'free'
+              onClick={() => {
+                setAgentMode('create');
+                if (skillId !== 'free') setSkillId('free');
+                setError(null);
+              }}
+              className={`flex-1 py-2.5 text-[11px] font-black ${
+                isCreateFromScratch
                   ? 'bg-violet-600 text-white'
                   : 'bg-slate-50 text-slate-500'
               }`}
             >
-              自由指令
+              从0创作
             </button>
           </div>
+          {isCreateFromScratch ? (
+            <div className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-[11px] font-bold text-violet-900 leading-snug">
+              在下方大框一次性粘贴完整提示词即可开画；参考图可选，不会自动沿用画布旧图。
+            </div>
+          ) : (
+            <div className="rounded-xl border border-emerald-100 bg-emerald-50/70 px-3 py-2 text-[10px] font-medium text-emerald-900 leading-snug">
+              当前是改已有产品。要写整段新提示词请点上方「从0创作」。
+            </div>
+          )}
           <div>
             <label className="text-[10px] font-black text-slate-400 uppercase flex items-center gap-1">
               <Package size={10} /> ① 产品库挑图（或下方上传）
@@ -1414,7 +1468,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             <label className="text-[10px] font-black text-slate-400 uppercase flex items-center gap-1">
               <ImagePlus size={10} /> ② 参考图（最多 {MAX_DESIGN_REF_IMAGES} 张）
             </label>
-            {canvasProductRefUrls.length > 0 && (
+            {!isCreateFromScratch && canvasProductRefUrls.length > 0 && (
               <div className="mt-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-[10px] font-bold text-emerald-800">
                 {selectedIds.length
                   ? `将使用画布选中 ${Math.min(selectedIds.length, MAX_DESIGN_REF_IMAGES)} 张作产品参考`
@@ -1429,6 +1483,11 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                   </button>
                 ) : null}
               </div>
+            )}
+            {isCreateFromScratch && (
+              <p className="mt-1.5 text-[10px] font-medium text-violet-700 leading-snug">
+                从0创作默认不使用画布旧图；若要参考，请点下方「上传」。
+              </p>
             )}
             <input
               ref={refInputRef}
@@ -1514,15 +1573,20 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             />
           ) : (
             <>
+              <label className="text-[10px] font-black text-violet-700 uppercase tracking-widest">
+                完整提示词（可粘贴一大段）
+              </label>
               <textarea
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
-                rows={4}
-                placeholder="只写要改的：如「机身改哑光黑、包装盒改红金、加声光、去掉肩带」——未写的部位保持与参考图一致"
-                className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-medium resize-y min-h-[5rem]"
+                rows={12}
+                placeholder={
+                  '在此粘贴或书写完整创作提示词，例如产品外观、材质、场景、构图、光线、文案要求等。\n\n无需先填二次创作字段；参考图可不上传。'
+                }
+                className="w-full rounded-xl border-2 border-violet-300 bg-violet-50/30 px-3 py-3 text-sm font-medium resize-y min-h-[14rem] focus:outline-none focus:ring-2 focus:ring-violet-400"
               />
-              <p className="text-[9px] text-violet-700/90 font-medium -mt-1 leading-relaxed">
-                自由指令仍走二次创作引擎：必须有参考图；只改点名项，禁止整体换模。
+              <p className="text-[9px] text-violet-800/90 font-medium -mt-1 leading-relaxed">
+                从0创作按你的整段描述生图；若额外上传了参考图，仅作可选辅助，不会自动带入画布旧图。
               </p>
             </>
           )}
@@ -1600,14 +1664,18 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                 ? skillId === 'multi_angle'
                   ? '多角度生成中（约需数分钟）…'
                   : '生图中，约 1–2 分钟…'
-                : skillId === 'multi_angle'
-                  ? '确认生成多角度套图'
-                  : '确认生成'}
+                : isCreateFromScratch
+                  ? '确认从0生成'
+                  : skillId === 'multi_angle'
+                    ? '确认生成多角度套图'
+                    : '确认生成'}
           </button>
           <p className="text-[10px] text-slate-400 font-medium leading-relaxed">
-            {skillId === 'multi_angle'
-              ? '多角度将连续生成 4 张（默认 1K），便于后续 3D / 视频。'
-              : '默认 1K、1 张更省额度；需要更清晰再选 2K。生成前需确认。'}
+            {isCreateFromScratch
+              ? '从0创作可不上传参考图；写好提示词后点确认即可。'
+              : skillId === 'multi_angle'
+                ? '多角度将连续生成 4 张（默认 1K），便于后续 3D / 视频。'
+                : '默认 1K、1 张更省额度；需要更清晰再选 2K。生成前需确认。'}
           </p>
         </aside>
       </div>
