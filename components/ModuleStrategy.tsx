@@ -87,6 +87,7 @@ export const ModuleStrategy: React.FC<Props> = ({
 }) => {
   const history = useHistoryItems();
   const [knowledgeBase, setKnowledgeBase] = useState<KnowledgeFile[]>([]);
+  const [kbTotalCount, setKbTotalCount] = useState(0);
   const [mailDraft, setMailDraft] = useState<StrategyMailDraft | null>(() => loadStrategyMailDraft());
   const [copyHint, setCopyHint] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>(() => [
@@ -167,6 +168,7 @@ export const ModuleStrategy: React.FC<Props> = ({
     const loadFiles = async () => {
       try {
         const files = await getAllFilesFromDB();
+        setKbTotalCount(files.length);
         // 只保留文本类进策略上下文，避免 70+ 大图/PDF 原件拖慢开发信并烧 Token
         setKnowledgeBase(filterTextKnowledgeFiles(files));
       } catch (e) {
@@ -695,6 +697,28 @@ export const ModuleStrategy: React.FC<Props> = ({
                 {selectedOfferIds.length > 0 ? ` · 已选素材 ${selectedOfferIds.length}` : ''}
               </p>
               <div className="flex flex-wrap items-center gap-2 mt-1">
+                <span
+                  className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${
+                    knowledgeBase.length > 0
+                      ? 'text-emerald-800 bg-emerald-50 border border-emerald-100'
+                      : kbTotalCount > 0
+                        ? 'text-amber-900 bg-amber-50 border border-amber-200'
+                        : 'text-slate-600 bg-slate-50 border border-slate-200'
+                  }`}
+                  title={
+                    knowledgeBase.length > 0
+                      ? '开发信会优先引用知识库文本摘录'
+                      : kbTotalCount > 0
+                        ? '知识库多为 PDF/图片，需转 Markdown 后才能写入开发信'
+                        : '后台知识库为空'
+                  }
+                >
+                  {knowledgeBase.length > 0
+                    ? `知识库可用 ${knowledgeBase.length} 份文本`
+                    : kbTotalCount > 0
+                      ? `知识库 ${kbTotalCount} 份多为 PDF/图，请先转 Markdown`
+                      : '知识库未载入文本'}
+                </span>
                 <span
                   className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${
                     llmStatus.ready

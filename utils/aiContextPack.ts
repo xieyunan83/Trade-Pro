@@ -68,6 +68,8 @@ const PRODUCT_HINT_WORDS = [
   '优势',
   '规格',
   '报价',
+  '卖点',
+  '包装',
   'catalog',
   'product',
   'advantage',
@@ -80,6 +82,11 @@ const PRODUCT_HINT_WORDS = [
   'email',
   '玩具',
   'toy',
+  'robot',
+  '机器狗',
+  '遥控',
+  'feature',
+  'packaging',
 ];
 
 const scoreFileRelevance = (file: KnowledgeFile, hints: string[], previewText = ''): number => {
@@ -121,9 +128,9 @@ export const buildKnowledgeExcerpts = (
   const purpose = opts?.purpose || 'general';
   const defaults =
     purpose === 'email'
-      ? { maxTotalChars: 2_400, maxPerFile: 600, maxFiles: 4 }
+      ? { maxTotalChars: 5_500, maxPerFile: 1_200, maxFiles: 8 }
       : purpose === 'chat'
-        ? { maxTotalChars: 3_500, maxPerFile: 700, maxFiles: 5 }
+        ? { maxTotalChars: 4_500, maxPerFile: 900, maxFiles: 6 }
         : { maxTotalChars: 6_000, maxPerFile: 800, maxFiles: 8 };
 
   const maxTotal = opts?.maxTotalChars ?? defaults.maxTotalChars;

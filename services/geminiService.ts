@@ -5633,12 +5633,19 @@ export const streamStrategyChat = async function* (
     const marketLeads = (strategyContext?.marketLeads || []).slice(0, 20);
 
     const coldEmailMode = isColdEmailIntent(newMessage) || history.some((m) => isColdEmailIntent(m.text || ''));
+    const wantsLiveMarket = /市场趋势|最新|行情|关税|政策|新闻|2024|2025|2026|trend|tariff|import\s*data|news/i.test(
+      newMessage || ''
+    );
 
-    let systemInstruction = `${QWEN_SYSTEM} 你是高级外贸策略顾问，擅长开发信撰写、谈判话术与市场进入策略。`;
-    systemInstruction += `\n\n写作要求：\n- 若提供了具体背调客户，策略与开发信必须针对该公司画像、产品与痛点。\n- 若提供了关键词/国家市场上下文，可写面向整个目标市场的通用开发信框架，并说明可如何按客户微调。\n- 用户上传的附件优先作为「我方产品/报价」参考，勿编造未出现的规格与价格。\n- 回复使用中文为主，开发信正文可用英文（外贸常用）。`;
+    // 开发信默认关掉「必须联网」口令，避免模型只跑 web_search、忽略知识库
+    let systemInstruction = coldEmailMode
+      ? `你是外贸客户开发专家「外贸智慧协同」，擅长开发信撰写与客户切入。所有说明用简体中文；开发信正文可用英文。`
+      : `${QWEN_SYSTEM} 你是高级外贸策略顾问，擅长开发信撰写、谈判话术与市场进入策略。`;
+    systemInstruction += `\n\n写作要求：\n- 若提供了具体背调客户，策略与开发信必须针对该公司画像、产品与痛点。\n- 若提供了关键词/国家市场上下文，可写面向整个目标市场的通用开发信框架，并说明可如何按客户微调。\n- 用户上传的附件与「我方知识库摘录」优先作为产品/报价事实来源，勿编造未出现的规格与价格。\n- 回复使用中文为主，开发信正文可用英文（外贸常用）。\n- 禁止在回复中输出 tool_call、function_call、XML 标签或原始搜索协议；直接写可读正文。`;
     if (coldEmailMode) {
       systemInstruction += `\n\n${YIBING_STRATEGY_CHAT_HINT}\n${YIBING_MAIL_GROUP_RULES}`;
       systemInstruction += `\n输出格式：先给简短中文策略，再给 Subject 1/2/3 + Email 1/2/3（可直接复制）。`;
+      systemInstruction += `\n【知识库优先】产品功能、材质、包装、玩法、卖点必须优先引用「Our offer / 知识库摘录」与创作素材；没有依据的规格不要写。目标市场趋势可作宏观补充，但不得用联网搜索替代知识库产品事实。`;
     }
 
     if (companies.length) {
@@ -5700,11 +5707,23 @@ export const streamStrategyChat = async function* (
 
     // 系统知识库：只抽相关文本摘录，禁止把 70+ 文件/大图整包塞进代理（会 413 FUNCTION_PAYLOAD_TOO_LARGE）
     if (knowledgeBase.length > 0) {
+      const hintBlob = [
+        creativeBrief,
+        newMessage,
+        ...(newAttachments || []).map((a) => a.name),
+      ]
+        .filter(Boolean)
+        .join(' ');
       const hints = [
         ...keywords,
         ...companies.map((c) => c.companyInfo?.name || ''),
         ...companies.flatMap((c) => c.businessScope?.coreProducts || []).slice(0, 8),
-        newMessage.slice(0, 80),
+        ...hintBlob
+          .split(/[\s,，、|/]+/)
+          .map((t) => t.trim())
+          .filter((t) => t.length >= 2)
+          .slice(0, 24),
+        newMessage.slice(0, 120),
         ...(newAttachments || []).map((a) => a.name),
       ].filter(Boolean) as string[];
       const kbText = buildKnowledgeExcerpts(knowledgeBase, {
@@ -5715,7 +5734,11 @@ export const streamStrategyChat = async function* (
         systemInstruction += coldEmailMode
           ? `\n\n## Our offer (KB excerpt)\n${buildCompactOurOfferBrief(kbText, creativeBrief)}`
           : `\n\n## 我方知识库摘录（精简，共 ${knowledgeBase.length} 个文件中选取相关文本）\n${kbText}`;
+      } else {
+        systemInstruction += `\n\n（知识库已加载 ${knowledgeBase.length} 个文本文件，但本次未抽到足够摘录；请用户在提问中写明产品名，或确认资料已「转 Markdown」。）`;
       }
+    } else if (coldEmailMode) {
+      systemInstruction += `\n\n（未载入可用文本知识库。若后台仅有 PDF/图片，请先在知识库转 Markdown，或把产品说明以附件上传。）`;
     }
 
     const slimAttachments = await prepareChatAttachments(newAttachments || [], {
@@ -5723,7 +5746,8 @@ export const streamStrategyChat = async function* (
       maxTextChars: 5_000,
     });
     const historyMsgs = slimChatHistoryForAi(history, { maxTurns: 12, maxCharsPerMsg: 4_000 });
-    const searchExtra = qwenSearchPayload(true);
+    // 开发信默认不强制联网，避免模型只调 web_search、知识库形同虚设；用户点名要趋势时才开
+    const searchExtra = qwenSearchPayload(!coldEmailMode || wantsLiveMarket);
 
     let messages: Array<{ role: string; content: unknown }> = [
             { role: 'system', content: systemInstruction },
@@ -5787,6 +5811,29 @@ export const streamStrategyChat = async function* (
 
     const decoder = new TextDecoder();
     let buffer = '';
+    /** 屏蔽模型把 <tool_call> web_search 当正文吐出来 */
+    let hold = '';
+    const takeVisible = (piece: string): string => {
+      hold += piece;
+      hold = hold.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '');
+      hold = hold.replace(/<\/?parameter\b[^>]*>/gi, '');
+      const open = hold.search(/<tool_call\b/i);
+      if (open >= 0) {
+        const visible = hold.slice(0, open);
+        hold = hold.slice(open);
+        if (hold.length > 4_000) hold = '';
+        return visible;
+      }
+      if (/<[a-z_/]*$/i.test(hold)) {
+        const keep = (hold.match(/<[a-z_/]*$/i) || [''])[0].length;
+        const visible = hold.slice(0, Math.max(0, hold.length - keep));
+        hold = hold.slice(visible.length);
+        return visible;
+      }
+      const out = hold;
+      hold = '';
+      return out;
+    };
 
     while (true) {
         const { done, value } = await reader.read();
@@ -5798,14 +5845,21 @@ export const streamStrategyChat = async function* (
             const trimmed = line.trim();
             if (!trimmed.startsWith('data:')) continue;
             const data = trimmed.slice(5).trim();
-            if (data === '[DONE]') return;
+            if (data === '[DONE]') {
+              if (hold && !/<tool_call\b/i.test(hold)) yield hold;
+              return;
+            }
             try {
                 const parsed = JSON.parse(data);
                 const chunk = parsed.choices?.[0]?.delta?.content;
-                if (chunk) yield chunk;
+                if (chunk) {
+                  const vis = takeVisible(chunk);
+                  if (vis) yield vis;
+                }
             } catch { /* skip malformed SSE */ }
         }
     }
+    if (hold && !/<tool_call\b/i.test(hold)) yield hold;
 };
 
 export const extractKeywordsFromMedia = async (file: KnowledgeFile): Promise<KeywordExtractionResult> => {

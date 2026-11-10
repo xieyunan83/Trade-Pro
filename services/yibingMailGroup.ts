@@ -57,8 +57,9 @@ export const buildCompactClientBrief = (client: AnalysisResult): string => {
 
 export const buildCompactOurOfferBrief = (kbSnippet: string, productContext?: string): string => {
   const parts: string[] = [];
-  if (productContext?.trim()) parts.push(`Offer note: ${productContext.trim().slice(0, 280)}`);
-  if (kbSnippet?.trim()) parts.push(`KB:\n${kbSnippet.trim().slice(0, 1800)}`);
+  if (productContext?.trim()) parts.push(`Offer note: ${productContext.trim().slice(0, 480)}`);
+  // 开发信必须以知识库正文为准，勿过度压缩导致「库在但模型看不见」
+  if (kbSnippet?.trim()) parts.push(`KB (authoritative product facts):\n${kbSnippet.trim().slice(0, 4500)}`);
   return parts.join('\n') || 'Offer: (use only generic factory advantages; do NOT invent prices/certs)';
 };
 
