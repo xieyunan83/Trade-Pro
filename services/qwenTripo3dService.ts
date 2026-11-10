@@ -337,6 +337,11 @@ export const runQwenTripoPostProcess = async (opts: {
   originalTaskId?: string;
   /** 公网模型 URL（与 task_id 二选一；补全仅支持 task_id） */
   modelUrl?: string;
+  /**
+   * 拆分：优先用 model_url（原模），忽略可能被污染的 original_model_task_id。
+   * 用于「重新拆分」时 sourceTaskId 已被写成上一次拆分任务的情况。
+   */
+  preferModelUrl?: boolean;
   format?: TripoConvertFormat;
   texturePrompt?: string;
   faceLimit?: number;
@@ -387,9 +392,16 @@ export const runQwenTripoPostProcess = async (opts: {
     }
   } else if (kind === 'segment') {
     // 千问文档：original_model_task_id 与 model_url 必须二选一，不能同时传
-    if (taskIdIn) input = { original_model_task_id: taskIdIn };
-    else if (urlIn && isPublicModelUrl(urlIn)) input = { model_url: urlIn };
-    else throw new Error('部件拆分需要前序任务 ID，或公网可访问的模型地址');
+    // preferModelUrl：脏 task_id 时强制走原模 URL，避免「拆分套拆分」仍回 1 块
+    if (opts.preferModelUrl && urlIn && isPublicModelUrl(urlIn)) {
+      input = { model_url: urlIn };
+    } else if (taskIdIn) {
+      input = { original_model_task_id: taskIdIn };
+    } else if (urlIn && isPublicModelUrl(urlIn)) {
+      input = { model_url: urlIn };
+    } else {
+      throw new Error('部件拆分需要首次生成任务 ID，或公网可访问的原模地址（勿用已拆分结果）');
+    }
     // 对齐千问 Tripo-Segmentation：v2 语义+几何才吃 granularity / 连通域拆分
     const gran = opts.segmentGranularity || 'balanced';
     parameters = {
@@ -433,19 +445,48 @@ export const runQwenTripoPostProcess = async (opts: {
     };
   }
 
-  opts.onProgress?.(8, 'queued');
-  const taskId = await createTask(cfg, input, parameters, modelId);
-  opts.onTaskCreated?.(taskId);
-  opts.onProgress?.(15, 'running');
-  const out = await pollTask(cfg, taskId, opts.onProgress);
-  const picked = pickUrls(out, taskId);
-  return {
-    ...picked,
-    provider: 'qwen_tripo',
-    modelVersion: modelId,
-    sourceTaskId: taskIdIn || undefined,
-    label: postProcessLabel(opts.kind, opts.format),
+  const runOnce = async (payload: Record<string, unknown>) => {
+    opts.onProgress?.(8, 'queued');
+    const taskId = await createTask(cfg, payload, parameters, modelId);
+    opts.onTaskCreated?.(taskId);
+    opts.onProgress?.(15, 'running');
+    const out = await pollTask(cfg, taskId, opts.onProgress);
+    const picked = pickUrls(out, taskId);
+    return {
+      ...picked,
+      provider: 'qwen_tripo' as const,
+      modelVersion: modelId,
+      sourceTaskId:
+        kind === 'segment'
+          ? // 拆分结果 task 绝不能回写成「生成根任务」
+            (typeof payload.original_model_task_id === 'string'
+              ? payload.original_model_task_id
+              : taskIdIn) || undefined
+          : taskIdIn || undefined,
+      label: postProcessLabel(opts.kind, opts.format),
+    };
   };
+
+  try {
+    return await runOnce(input);
+  } catch (e: any) {
+    // 拆分：task_id 失效/挂错时，若有原模公网链则改走 model_url 重试一次
+    if (
+      kind === 'segment' &&
+      input.original_model_task_id &&
+      urlIn &&
+      isPublicModelUrl(urlIn) &&
+      !opts.preferModelUrl
+    ) {
+      console.warn(
+        '[qwenTripo] segment by task_id failed, retry model_url',
+        e?.message || e
+      );
+      opts.onProgress?.(6, 'retry_model_url');
+      return await runOnce({ model_url: urlIn });
+    }
+    throw e;
+  }
 };
 
 /** 单次查询任务（刷新后捞回已成功的计费结果）；未完成返回 null */

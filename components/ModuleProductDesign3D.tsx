@@ -63,6 +63,7 @@ import {
   model3dVaultIdForJob,
   preserveOriginalModel3dInVault,
   putBlobInVault,
+  resolveMediaUrl,
   tryPersistMediaUrl,
 } from '../services/creativeAssetVault';
 import { CreativePipelineBar, CreativeRefPicker } from './CreativeRefPicker';
@@ -701,47 +702,125 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
       // 仅当没有千问、只有官方 Key 时，才把模型导入官方编辑通道
       let upstreamId = '';
       let publicModelUrl: string | undefined;
+      let preferModelUrl = false;
+      let preferOfficial = !qwenEditReady;
+      /** 后处理任务 ID：绝不能当作「首次生成」再喂给拆分 */
+      const rejectTaskIds = new Set(
+        [
+          active.segmentTaskId,
+          ...((active.meshOps || [])
+            .filter((o) =>
+              ['segment', 'retopo', 'texture_hd', 'rig', 'complete', 'convert'].includes(o.kind)
+            )
+            .map((o) => o.taskId) || []),
+        ]
+          .map((s) => (s || '').trim())
+          .filter(Boolean)
+      );
+      const pickHealthyRootId = (...cands: Array<string | undefined>) =>
+        cands
+          .map((s) => (s || '').trim())
+          .find((id) => id && !rejectTaskIds.has(id)) || '';
 
       if (qwenEditReady) {
         if (kind === 'complete') {
-          // 补全必须挂在「拆分任务」上（千问文档）
           upstreamId = (active.segmentTaskId || '').trim();
         } else if (kind === 'segment') {
-          // 拆分必须挂在「首次生成」task_id 上，禁止用上一次拆分/后处理 ID（否则常原样回传、仍是一整块）
-          upstreamId = (
-            active.sourceTaskId ||
-            (active.provider === 'qwen_tripo' ? active.providerTaskId : '') ||
-            ''
-          ).trim();
-          // 若 providerTaskId 已被误写成拆分任务，仍以 source 为准；没有 source 再用公网 model_url
+          // 只挂首次生成；拒绝上一次拆分/后处理 ID（否则常原样回传 1 块）
+          upstreamId = pickHealthyRootId(
+            active.sourceTaskId,
+            active.provider === 'qwen_tripo' ? active.providerTaskId : '',
+            active.provider === 'tripo' ? active.providerTaskId : ''
+          );
+          // 仅原模公网链；禁止把已落库的分件 https 再喂回去
+          publicModelUrl = [active.originalModelUrl, active.baseModelUrl].find(
+            (u) => u && /^https?:\/\//i.test(u) && !/localhost|127\.0\.0\.1/i.test(u)
+          );
+          if (!upstreamId && publicModelUrl) {
+            preferModelUrl = true;
+          } else if (
+            publicModelUrl &&
+            (rejectTaskIds.has((active.sourceTaskId || '').trim()) || !!active.segmentTaskId)
+          ) {
+            // 已拆过或 source 已脏：强制原模 URL，避免拆分套拆分空耗额度
+            preferModelUrl = true;
+            upstreamId = '';
+          }
+          if (!upstreamId && !publicModelUrl) {
+            const origRef =
+              (await findOriginalModel3dVaultRefForJob(active)) ||
+              active.originalModelUrl ||
+              active.baseModelUrl ||
+              '';
+            if (origRef && isTripoOfficialReady()) {
+              setMsg('原模仅在本机，正在导入编辑通道后拆分…');
+              const resolved = (await resolveMediaUrl(origRef)) || origRef;
+              upstreamId = await ensureOfficialModelTaskId({
+                modelUrl: resolved,
+                onProgress: (pct, status) => {
+                  patchJob(active.id, {
+                    status: 'running',
+                    progress: Math.min(35, Math.round(pct * 0.35)),
+                    previewHint: `导入原模 ${status} ${Math.round(pct)}%`,
+                  });
+                },
+              });
+              preferOfficial = true;
+              if (upstreamId !== active.officialTaskId) {
+                patchJob(active.id, { officialTaskId: upstreamId });
+              }
+            } else {
+              throw new Error(
+                '找不到可用的「首次生成」任务或原模公网地址。请重新生成 3D（勿清空本机素材）后再拆分；已拆坏的任务请勿连续重试以免重复计费。'
+              );
+            }
+          }
         } else {
-          upstreamId = (
-            active.providerTaskId ||
-            active.sourceTaskId ||
-            active.segmentTaskId ||
-            ''
-          ).trim();
+          upstreamId = pickHealthyRootId(
+            active.providerTaskId,
+            active.sourceTaskId,
+            active.segmentTaskId
+          );
+          publicModelUrl = [active.modelUrl, active.pbrModelUrl, active.baseModelUrl, modelUrl].find(
+            (u) => u && /^https?:\/\//i.test(u) && !/localhost|127\.0\.0\.1/i.test(u)
+          );
         }
-        // 拆分时：优先传 task_id；仅无「原模」公网链作兜底，避免把已错误落库的分件链再喂回去
-        const candList =
-          kind === 'segment'
-            ? [active.originalModelUrl, active.baseModelUrl, active.modelUrl, active.pbrModelUrl, modelUrl]
-            : [active.modelUrl, active.pbrModelUrl, active.baseModelUrl, modelUrl];
-        const cand = candList.find(
-          (u) => u && /^https?:\/\//i.test(u) && !/localhost|127\.0\.0\.1/i.test(u)
-        );
-        publicModelUrl = cand;
         if (!upstreamId && !publicModelUrl && !isTripoOfficialReady()) {
           throw new Error(
             '当前模型没有云端生成任务 ID 或公网地址。请用主通道重新生成后再拆分（勿只用本机 vault）。'
           );
         }
       } else {
+        const importUrl =
+          kind === 'segment'
+            ? await (async () => {
+                const origHttps = [active.originalModelUrl, active.baseModelUrl].find(
+                  (u) => u && /^https?:\/\//i.test(u) && !/localhost|127\.0\.0\.1/i.test(u)
+                );
+                if (origHttps) return origHttps;
+                const origRef =
+                  (await findOriginalModel3dVaultRefForJob(active)) ||
+                  active.originalModelUrl ||
+                  active.baseModelUrl ||
+                  modelUrl;
+                if (!origRef) return modelUrl;
+                if (isVaultRef(origRef) || origRef.startsWith('blob:')) {
+                  return (await resolveMediaUrl(origRef)) || origRef;
+                }
+                return origRef;
+              })()
+            : modelUrl;
         const officialId = await ensureOfficialModelTaskId({
           provider: active.provider,
-          providerTaskId: active.providerTaskId,
-          officialTaskId: active.officialTaskId,
-          modelUrl,
+          providerTaskId:
+            kind === 'segment'
+              ? pickHealthyRootId(
+                  active.sourceTaskId,
+                  active.provider === 'tripo' ? active.providerTaskId : ''
+                ) || undefined
+              : active.providerTaskId,
+          officialTaskId: kind === 'segment' ? undefined : active.officialTaskId,
+          modelUrl: importUrl,
           onProgress: (pct, status) => {
             patchJob(active.id, {
               status: 'running',
@@ -756,29 +835,54 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         upstreamId =
           kind === 'complete'
             ? (active.segmentTaskId || officialId).trim()
-            : (active.provider === 'tripo'
-                ? active.providerTaskId || officialId
-                : officialId
-              ).trim();
+            : kind === 'segment'
+              ? officialId
+              : (active.provider === 'tripo'
+                  ? active.providerTaskId || officialId
+                  : officialId
+                ).trim();
+      }
+
+      // 拆分前先固化原模（尚未写 segmentTaskId，才能把主槽拷到 _orig）
+      const keepOriginal =
+        active.originalModelUrl ||
+        (kind === 'segment'
+          ? active.baseModelUrl || active.modelUrl || active.pbrModelUrl
+          : kind !== 'convert'
+            ? active.modelUrl || active.pbrModelUrl || active.baseModelUrl
+            : undefined);
+      let vaultedOriginal: string | undefined;
+      if (kind === 'segment') {
+        try {
+          vaultedOriginal =
+            (await preserveOriginalModel3dInVault({
+              ...active,
+              segmentTaskId: undefined,
+              originalModelUrl: keepOriginal || active.originalModelUrl,
+            })) || undefined;
+        } catch {
+          /* 原模备份失败不阻断 */
+        }
       }
 
       const result = await runTripoPostProcess({
         kind,
         originalTaskId: upstreamId || undefined,
         modelUrl: publicModelUrl,
+        preferModelUrl: kind === 'segment' ? preferModelUrl : undefined,
         format,
         texturePrompt: prompt.trim() || undefined,
         faceLimit: retopoFaceLimit,
         quad: retopoQuad,
         segmentGranularity,
         rigType,
-        preferOfficial: !qwenEditReady,
+        preferOfficial,
         onTaskCreated: (tid) => {
-          // 拆分/后处理：绝不能用新 task 覆盖「生成」providerTaskId / sourceTaskId
+          // 拆分：创建时不写 segmentTaskId，避免 preserve 跳过主槽拷贝
           if (kind === 'segment') {
             patchJob(active.id, {
-              segmentTaskId: tid,
-              ...(qwenEditReady ? {} : { officialTaskId: tid }),
+              ...(preferOfficial || !qwenEditReady ? { officialTaskId: tid } : {}),
+              previewHint: '拆分任务已创建…',
             });
             return;
           }
@@ -790,7 +894,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         onProgress: (pct, status) => {
           patchJob(active.id, {
             status: 'running',
-            progress: Math.round(qwenEditReady ? pct : 35 + pct * 0.65),
+            progress: Math.round(qwenEditReady && !preferOfficial ? pct : 35 + pct * 0.65),
             previewHint: `${kindHint.replace('…', '')} · ${status} ${Math.round(pct)}%`,
           });
         },
@@ -823,43 +927,43 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         label: result.label,
         at: Date.now(),
       };
-      // 拆分/重拓扑会换 modelUrl：先把当前本机网格拷到 _orig，再写入新结果
-      const keepOriginal =
-        active.originalModelUrl ||
-        (kind !== 'convert'
-          ? active.modelUrl || active.pbrModelUrl || active.baseModelUrl
-          : undefined);
-      let vaultedOriginal: string | undefined;
-      if (kind !== 'convert') {
+      if (kind !== 'convert' && kind !== 'segment') {
         try {
           vaultedOriginal =
             (await preserveOriginalModel3dInVault({
               ...active,
               originalModelUrl: keepOriginal || active.originalModelUrl,
-            })) || undefined;
+            })) || vaultedOriginal;
         } catch {
-          /* 原模备份失败不阻断拆分结果展示 */
+          /* ignore */
         }
       }
-      // 生成根任务 ID 永不变；拆分只写 segmentTaskId
-      const rootSourceId = (
-        active.sourceTaskId ||
-        (kind === 'segment' ? upstreamId : '') ||
-        active.providerTaskId ||
-        ''
-      ).trim();
+      const healedSourceId = pickHealthyRootId(
+        kind === 'segment' ? upstreamId : '',
+        active.sourceTaskId,
+        active.provider === 'qwen_tripo' || active.provider === 'tripo'
+          ? active.providerTaskId
+          : '',
+        result.sourceTaskId
+      );
       const next: Partial<Model3dJob> = {
         status: 'ready',
         progress: 100,
         provider: result.provider || active.provider,
         providerTaskId:
           kind === 'segment'
-            ? active.providerTaskId || rootSourceId || result.taskId
+            ? pickHealthyRootId(active.providerTaskId, healedSourceId) ||
+              active.providerTaskId ||
+              healedSourceId
             : result.taskId,
-        officialTaskId: qwenEditReady
-          ? active.officialTaskId
-          : result.taskId || active.officialTaskId,
-        sourceTaskId: rootSourceId || active.sourceTaskId || result.taskId,
+        officialTaskId:
+          preferOfficial || !qwenEditReady
+            ? result.taskId || active.officialTaskId
+            : active.officialTaskId,
+        sourceTaskId:
+          kind === 'segment'
+            ? healedSourceId || active.sourceTaskId
+            : healedSourceId || active.sourceTaskId || result.taskId,
         segmentTaskId: kind === 'segment' ? result.taskId : active.segmentTaskId,
         modelUrl: kind === 'convert' ? active.modelUrl || result.modelUrl : result.modelUrl,
         pbrModelUrl: kind === 'convert' ? active.pbrModelUrl : result.pbrModelUrl || result.modelUrl,
@@ -884,6 +988,13 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         error: undefined,
         updatedAt: Date.now(),
       };
+      if (
+        kind === 'segment' &&
+        next.sourceTaskId &&
+        (next.sourceTaskId === result.taskId || rejectTaskIds.has(next.sourceTaskId))
+      ) {
+        next.sourceTaskId = healedSourceId || undefined;
+      }
       patchJob(active.id, next);
       setBusy(false);
       setMsgTone('ok');
@@ -891,13 +1002,12 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         if (result.partNames?.length) {
           setPartNames(result.partNames);
         }
-        // 拆分成功后直接看分件效果（否则用户以为失败）
         setPreviewMode('parts');
         setWorkbenchTool('segment');
         setMsg(
           result.partNames?.length
             ? `部件拆分完成：API 返回 ${result.partNames.length} 个部件，已切换到分件着色 / 可炸开`
-            : '部件拆分完成：已切换到分件着色。若仍是 1 块，请点「重新拆分」并选「精细」'
+            : '部件拆分完成：已切换到分件着色。若仍是 1 块，请选「精细」再拆一次（本次已纠正上游任务）'
         );
       } else {
         setMsg(
@@ -915,6 +1025,9 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
             baseModelUrl: vaulted.baseModelUrl,
             originalModelUrl: vaulted.originalModelUrl || vaultedOriginal || keepOriginal,
             previewImageUrl: vaulted.previewImageUrl,
+            sourceTaskId: merged.sourceTaskId,
+            segmentTaskId: merged.segmentTaskId,
+            providerTaskId: merged.providerTaskId,
           });
         });
       }

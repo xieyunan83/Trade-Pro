@@ -844,11 +844,13 @@ const runOfficialTripoPostProcess = async (opts: {
       bake: true,
     };
   } else if (kind === 'segment') {
-    // 官方 tsk_ OpenAPI：几何拆分 v1（粒度参数在千问 MaaS v2 通道）
+    // 与千问通道对齐：v2 + 粒度 + 连通域，避免官方垫底永远粗拆成 1 块
     body = {
       type: 'mesh_segmentation',
       original_model_task_id: original,
-      model_version: 'v1.0-20250506',
+      model_version: 'v2.0-20260430',
+      segmentation_granularity: opts.segmentGranularity || 'balanced',
+      split_by_connectivity: true,
     };
   } else if (kind === 'complete') {
     body = {
@@ -902,6 +904,8 @@ export const runTripoPostProcess = async (opts: {
   originalTaskId?: string;
   /** 公网模型 URL（千问通道在无 task_id 时可用） */
   modelUrl?: string;
+  /** 拆分时优先 model_url（治愈脏 task_id） */
+  preferModelUrl?: boolean;
   format?: TripoConvertFormat;
   texturePrompt?: string;
   faceLimit?: number;
@@ -925,6 +929,7 @@ export const runTripoPostProcess = async (opts: {
         kind: opts.kind,
         originalTaskId: opts.originalTaskId,
         modelUrl: opts.modelUrl,
+        preferModelUrl: opts.preferModelUrl,
         format: opts.format,
         texturePrompt: opts.texturePrompt,
         faceLimit: opts.faceLimit,
