@@ -52,7 +52,7 @@ const LS_PACKS = 'trade_scout_enterprise_design_packs_v1';
 const LS_ACTIVE = 'trade_scout_enterprise_design_pack_active_v1';
 const LS_SEEDED = 'trade_scout_enterprise_design_packs_seeded_v1';
 /** 升级样本库时递增，强制刷新内置包 L1/L2 */
-const SEED_VERSION = 'edu_catalog_v3_layout_fidelity';
+const SEED_VERSION = 'edu_catalog_v4_default_pure_white';
 
 const T = {
   coverIntro: '/enterprise-templates/cover-new-2026.jpg',
@@ -311,8 +311,10 @@ export const ensureEnterprisePacksSeeded = (): EnterpriseDesignPack[] => {
     const next = [...builtins, ...orphanCustom];
     saveEnterprisePacks(next);
     localStorage.setItem(LS_SEEDED, SEED_VERSION);
+    // 默认激活「跨境主图·纯白」，避免一进站就套「年度封面」海报语法污染产品主图
     if (!getActiveEnterprisePackId() || versionBump) {
-      setActiveEnterprisePackId(builtins[0].id);
+      const pureWhite = builtins.find((b) => b.id === 'pack_listing_pure_white');
+      setActiveEnterprisePackId(pureWhite?.id || builtins[0].id);
     }
     return next.map(withCopyDefaults);
   }
@@ -471,7 +473,8 @@ export const resetBuiltinEnterprisePacks = (): EnterpriseDesignPack[] => {
   const next = [...builtins, ...customs];
   saveEnterprisePacks(next);
   localStorage.setItem(LS_SEEDED, SEED_VERSION);
-  setActiveEnterprisePackId(builtins[0]?.id || null);
+  const pureWhite = builtins.find((b) => b.id === 'pack_listing_pure_white');
+  setActiveEnterprisePackId(pureWhite?.id || builtins[0]?.id || null);
   return next;
 };
 

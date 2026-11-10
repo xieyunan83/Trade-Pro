@@ -53,16 +53,21 @@ export const llmCreativeBrain: CreativeBrainPort = {
       }
       const llmCore = (parsed.toolPrompt || '').trim();
       // 再套质量内核：身份锁 + 负向库 + 商业脚注，避免 LLM 漏掉一致性
+      const productShotMode = !!input.productShotMode || !!fallback.multiAngle;
       const hardened = composeImageGenerationPrompt({
         baseToolPrompt: llmCore || fallback.toolPrompt,
         hasReferenceImages: input.hasReferenceImages,
         referenceCount: input.referenceCount,
-        lastRefIsLayout: input.lastRefIsLayout,
-        distinctProducts: input.distinctProducts,
-        lockedOnImageCopy: input.lockedOnImageCopy,
-        onImageLockBlock: input.onImageLockBlock,
+        lastRefIsLayout: productShotMode ? false : input.lastRefIsLayout,
+        distinctProducts: productShotMode ? false : input.distinctProducts,
+        lockedOnImageCopy: productShotMode ? [] : input.lockedOnImageCopy,
+        onImageLockBlock: productShotMode ? undefined : input.onImageLockBlock,
         skillNegative: input.skillNegativePrompt,
-        series: input.skillId === 'listing_set' || input.skillId === 'multi_angle',
+        series:
+          input.skillId === 'listing_set' ||
+          input.skillId === 'multi_angle' ||
+          !!fallback.multiAngle,
+        productShotMode,
       });
       const toolPrompt = hardened.prompt;
       const qa =
@@ -76,8 +81,9 @@ export const llmCreativeBrain: CreativeBrainPort = {
         toolPrompt,
         qaChecklist: qa,
         brainId: 'llm',
-        lockedOnImageCopy: input.lockedOnImageCopy,
-        onImageLockBlock: input.onImageLockBlock,
+        multiAngle: fallback.multiAngle,
+        lockedOnImageCopy: productShotMode ? [] : input.lockedOnImageCopy,
+        onImageLockBlock: productShotMode ? undefined : input.onImageLockBlock,
       };
     } catch {
       return fallback;

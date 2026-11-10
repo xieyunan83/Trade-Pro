@@ -2,7 +2,10 @@
  * 无大模型也能跑的规则大脑：用 Skill 底稿 + 产品语境 + 质量内核拼 Brief。
  * 保证「换模型前 / 模型挂了」平台仍专业可用。
  */
-import { composeImageGenerationPrompt } from '../creativeQualityKit';
+import {
+  composeImageGenerationPrompt,
+  detectMultiAngleProductShotIntent,
+} from '../creativeQualityKit';
 import type { CreativeBrief, CreativeBrainPort, CreativePlanInput } from './types';
 
 const QA_BY_DOMAIN: Record<CreativePlanInput['domain'], string[]> = {
@@ -47,7 +50,11 @@ export const ruleCreativeBrain: CreativeBrainPort = {
   id: 'rule',
   label: '规则编排',
   plan: async (input) => {
-    const multiAngle = input.skillId === 'multi_angle';
+    const multiAngle =
+      input.skillId === 'multi_angle' ||
+      !!input.forceMultiAngle ||
+      detectMultiAngleProductShotIntent(input.userBrief);
+    const productShotMode = !!input.productShotMode || multiAngle;
     const series = input.skillId === 'listing_set' || multiAngle;
     const composed = composeImageGenerationPrompt({
       skillDefaultPrompt: input.skillDefaultPrompt,
@@ -60,19 +67,22 @@ export const ruleCreativeBrain: CreativeBrainPort = {
       palette: input.palette,
       hasReferenceImages: input.hasReferenceImages,
       referenceCount: input.referenceCount,
-      lastRefIsLayout: input.lastRefIsLayout,
-      distinctProducts: input.distinctProducts,
-      lockedOnImageCopy: input.lockedOnImageCopy,
-      onImageLockBlock: input.onImageLockBlock,
+      lastRefIsLayout: productShotMode ? false : input.lastRefIsLayout,
+      distinctProducts: productShotMode ? false : input.distinctProducts,
+      lockedOnImageCopy: productShotMode ? [] : input.lockedOnImageCopy,
+      onImageLockBlock: productShotMode ? undefined : input.onImageLockBlock,
       skillNegative: input.skillNegativePrompt,
       series,
       negativeAsFieldOnly: false,
+      productShotMode,
     });
     const brief: CreativeBrief = {
       domain: input.domain,
       skillId: input.skillId,
-      titleZh: `${input.skillLabel}方案`,
-      summaryZh: buildSummaryZh(input),
+      titleZh: multiAngle ? `${input.skillLabel}·多角度产品图` : `${input.skillLabel}方案`,
+      summaryZh: multiAngle
+        ? `${buildSummaryZh(input)} · 将输出四张独立产品照片（正面/45°/侧面/背面），非海报拼版`
+        : buildSummaryZh(input),
       toolPrompt: composed.prompt,
       qaChecklist:
         input.skillQaChecklist && input.skillQaChecklist.length >= 2
@@ -80,8 +90,8 @@ export const ruleCreativeBrain: CreativeBrainPort = {
           : QA_BY_DOMAIN[input.domain] || QA_BY_DOMAIN.design_2d,
       multiAngle,
       brainId: 'rule',
-      lockedOnImageCopy: input.lockedOnImageCopy,
-      onImageLockBlock: input.onImageLockBlock,
+      lockedOnImageCopy: productShotMode ? [] : input.lockedOnImageCopy,
+      onImageLockBlock: productShotMode ? undefined : input.onImageLockBlock,
     };
     return brief;
   },

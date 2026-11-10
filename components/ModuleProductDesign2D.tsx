@@ -37,7 +37,10 @@ import {
 } from '../services/designAgentService';
 import { planCreativeBrief } from '../services/creativeAgent/runtime';
 import type { CreativeBrief } from '../services/creativeAgent/types';
-import { composeImageGenerationPrompt } from '../services/creativeQualityKit';
+import {
+  composeImageGenerationPrompt,
+  detectMultiAngleProductShotIntent,
+} from '../services/creativeQualityKit';
 import { runMarketingCopyPipeline } from '../services/creativeMarketingCopyPipeline';
 import { loadCatalogSkus } from '../services/productCatalogTypes';
 import { compressImageDataUrl } from '../services/catalogExcelService';
@@ -330,42 +333,62 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     return s ? { code: s.skuCode, name: s.name } : { code: undefined, name: undefined };
   };
 
+  /** 从0创作 / 多角度产品主图：禁用企业海报模板，避免把提示词改写成封面拼版 */
+  const packForGeneration = (): EnterpriseDesignPack | null => {
+    if (isCreateFromScratch) return null;
+    if (skillId === 'multi_angle') return null;
+    const brief = resolveEditBrief();
+    if (detectMultiAngleProductShotIntent(brief) || detectMultiAngleProductShotIntent(prompt)) {
+      return null;
+    }
+    return activePack;
+  };
+
   const buildFinalPrompt = (refCountOverride?: number, layoutOverride?: boolean) => {
     if (pendingBrief?.toolPrompt) return pendingBrief.toolPrompt;
+    const pack = packForGeneration();
     const skuMeta = resolveSkuMeta();
     const skuRow = skus.find((s) => s.id === skuPick || s.skuCode === skuPick);
+    const productShot =
+      isCreateFromScratch ||
+      skillId === 'multi_angle' ||
+      detectMultiAngleProductShotIntent(prompt);
     const hasRefs =
       refUploads.length > 0 ||
-      canvasProductRefUrls.length > 0 ||
-      !!(skuRow?.images?.length) ||
-      !!(activePack?.layoutRefs?.length);
+      (!productShot && canvasProductRefUrls.length > 0) ||
+      (!productShot && !!(skuRow?.images?.length)) ||
+      !!(pack?.layoutRefs?.length);
     const refCountHint =
       refCountOverride ??
       Math.max(
         refUploads.length +
-          canvasProductRefUrls.length +
-          (activePack?.layoutRefs?.length || 0),
+          (productShot ? 0 : canvasProductRefUrls.length) +
+          (pack?.layoutRefs?.length || 0),
         hasRefs ? Math.min(skuRow?.images?.length || 0, MAX_DESIGN_REF_IMAGES) : 0
       );
-    const layoutLast = layoutOverride ?? (effectiveLastIsLayout && refCountHint >= 2);
+    const layoutLast = productShot
+      ? false
+      : layoutOverride ?? (effectiveLastIsLayout && refCountHint >= 2);
     const composed = composeImageGenerationPrompt({
-      skillDefaultPrompt:
-        skill.defaultPrompt || 'Create a polished commercial product design visual',
-      craftNotes: [skill.craftNotes, packCraftNotes(activePack)].filter(Boolean).join('\n'),
+      skillDefaultPrompt: productShot
+        ? 'Create a single commercial product photograph on pure white seamless background'
+        : skill.defaultPrompt || 'Create a polished commercial product design visual',
+      craftNotes: [skill.craftNotes, packCraftNotes(pack)].filter(Boolean).join('\n'),
       userBrief: prompt.trim(),
       skuName: skuMeta.name,
       skuCode: skuMeta.code,
       hasReferenceImages: hasRefs,
       referenceCount: refCountHint || (hasRefs ? 1 : 0),
       lastRefIsLayout: layoutLast,
-      distinctProducts: skillId === 'multi_product_poster' && !layoutLast,
+      distinctProducts: !productShot && skillId === 'multi_product_poster' && !layoutLast,
       skillNegative: applyPackNegative(
         negativePrompt.trim() || skill.negativePrompt,
-        activePack
+        pack
       ),
-      series: skillId === 'listing_set',
+      series: skillId === 'listing_set' || productShot,
+      productShotMode: productShot,
     }).prompt;
-    return applyPackStyleToPrompt(composed, activePack);
+    return productShot ? composed : applyPackStyleToPrompt(composed, pack);
   };
 
   const requestGenerate = async () => {
@@ -410,107 +433,136 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     try {
       const skuMeta = resolveSkuMeta();
       const skuRow = skus.find((s) => s.id === skuPick || s.skuCode === skuPick);
+      const editBrief = resolveEditBrief();
+      const wantMultiAngle =
+        skillId === 'multi_angle' ||
+        detectMultiAngleProductShotIntent(editBrief) ||
+        detectMultiAngleProductShotIntent(prompt);
+      const productShotMode = isCreateFromScratch || wantMultiAngle;
+      const pack = packForGeneration();
       const hasRefs =
         refUploads.length > 0 ||
         (!isCreateFromScratch && canvasProductRefUrls.length > 0) ||
         (!isCreateFromScratch && !!(skuRow?.images?.length));
       let marketNote = '';
-      try {
-        const profiles = await loadProductCatalog();
-        const journey = loadTradeJourney();
-        const card = buildDesignConstraintCard({
-          categoryOrName: skuRow?.category || skuMeta.name || prompt.trim() || '玩具',
-          targetMarket: journey.targetMarket || undefined,
-          profiles,
-          ourFactoryCny:
-            skuRow?.factoryPrice != null && skuRow.factoryPrice > 0
-              ? skuRow.currency === 'USD'
-                ? skuRow.factoryPrice * 7.2
-                : skuRow.currency === 'EUR'
-                  ? skuRow.factoryPrice * 7.8
-                  : skuRow.factoryPrice
-              : undefined,
-        });
-        marketNote = designConstraintToPromptNote(card);
-      } catch {
-        /* 约束卡失败不阻断设计 */
+      if (!productShotMode) {
+        try {
+          const profiles = await loadProductCatalog();
+          const journey = loadTradeJourney();
+          const card = buildDesignConstraintCard({
+            categoryOrName: skuRow?.category || skuMeta.name || prompt.trim() || '玩具',
+            targetMarket: journey.targetMarket || undefined,
+            profiles,
+            ourFactoryCny:
+              skuRow?.factoryPrice != null && skuRow.factoryPrice > 0
+                ? skuRow.currency === 'USD'
+                  ? skuRow.factoryPrice * 7.2
+                  : skuRow.currency === 'EUR'
+                    ? skuRow.factoryPrice * 7.8
+                    : skuRow.factoryPrice
+                : undefined,
+          });
+          marketNote = designConstraintToPromptNote(card);
+        } catch {
+          /* 约束卡失败不阻断设计 */
+        }
       }
       const previewProj = ensureProject();
       const previewRefs = collectRefImagesDetailed(previewProj);
-      const layoutLast =
-        previewRefs.lastRefIsLayout ||
-        (lastRefIsLayout && previewRefs.refs.length >= 2);
-      const generationPromptHints = [
-        prompt.trim(),
-        agentMode === 'secondary' && secondaryFieldsHaveEdits(secondaryFields)
-          ? [
-              secondaryFields.addFeatures,
-              secondaryFields.appearanceEdit,
-              secondaryFields.materialFinish,
-              secondaryFields.productColor,
-              secondaryFields.freeNote,
-              buildSecondaryCreationEditEnglish(secondaryFields),
-            ]
-              .filter(Boolean)
-              .join('\n')
-          : '',
-        ...canvasAssets
-          .slice()
-          .sort((a, b) => b.createdAt - a.createdAt)
-          .slice(0, 4)
-          .map((a) => a.prompt || ''),
-        skill.defaultPrompt || '',
-      ].filter((h) => (h || '').trim().length >= 8);
-      const copyPlan = await runMarketingCopyPipeline({
-        productName: skuMeta.name || skuRow?.name,
-        skuCode: skuMeta.code || skuRow?.skuCode,
-        category: skuRow?.category,
-        specs: skuRow?.specs,
-        userHighlight: resolveEditBrief(),
-        locale: 'en',
-        seedLines: [skuMeta.name || '', skuMeta.code ? `Model ${skuMeta.code}` : ''].filter(
-          Boolean
-        ),
-        generationPromptHints,
-        onProgress: (msg) => setError(msg),
-      });
+      const layoutLast = productShotMode
+        ? false
+        : previewRefs.lastRefIsLayout ||
+          (lastRefIsLayout && previewRefs.refs.length >= 2);
+      let copyPlan = {
+        productSummaryZh: '',
+        functions: [] as string[],
+        approvedOnImageEn: [] as string[],
+        onImageLockBlock: '',
+      };
+      // 产品主图 / 多角度：跳过营销上图文案，避免把单张产品图逼成海报
+      if (!productShotMode) {
+        const generationPromptHints = [
+          prompt.trim(),
+          agentMode === 'secondary' && secondaryFieldsHaveEdits(secondaryFields)
+            ? [
+                secondaryFields.addFeatures,
+                secondaryFields.appearanceEdit,
+                secondaryFields.materialFinish,
+                secondaryFields.productColor,
+                secondaryFields.freeNote,
+                buildSecondaryCreationEditEnglish(secondaryFields),
+              ]
+                .filter(Boolean)
+                .join('\n')
+            : '',
+          ...canvasAssets
+            .slice()
+            .sort((a, b) => b.createdAt - a.createdAt)
+            .slice(0, 4)
+            .map((a) => a.prompt || ''),
+          skill.defaultPrompt || '',
+        ].filter((h) => (h || '').trim().length >= 8);
+        copyPlan = await runMarketingCopyPipeline({
+          productName: skuMeta.name || skuRow?.name,
+          skuCode: skuMeta.code || skuRow?.skuCode,
+          category: skuRow?.category,
+          specs: skuRow?.specs,
+          userHighlight: editBrief,
+          locale: 'en',
+          seedLines: [skuMeta.name || '', skuMeta.code ? `Model ${skuMeta.code}` : ''].filter(
+            Boolean
+          ),
+          generationPromptHints,
+          onProgress: (msg) => setError(msg),
+        });
+      }
       const brief = await planCreativeBrief({
         domain: 'design_2d',
-        skillId,
-        skillLabel: skill.label,
-        skillHint: skill.hint,
-        skillDefaultPrompt: applyPackStyleToPrompt(
-          [
-            skill.defaultPrompt,
-            previewRefs.refs.length >= 2 && skillId !== 'multi_angle'
-              ? 'Multiple product reference photos are attached: compose a catalog-style layout that places EVERY product cutout on the poster (match each Image angle/pose). Forbidden: single-hero shot that invents other angles from Image 1 alone.'
-              : '',
-          ]
-            .filter(Boolean)
-            .join('\n'),
-          activePack
-        ),
+        skillId: wantMultiAngle ? 'multi_angle' : skillId,
+        skillLabel: wantMultiAngle ? '多角度产品图' : skill.label,
+        skillHint: wantMultiAngle
+          ? '输出四张独立产品照片（正面/45°/侧面/背面），禁止海报拼版'
+          : skill.hint,
+        skillDefaultPrompt: productShotMode
+          ? 'Create a single commercial product photograph on pure white seamless background. One product, one camera angle per image. No poster, no catalog cover, no on-image marketing copy.'
+          : applyPackStyleToPrompt(
+              [
+                skill.defaultPrompt,
+                previewRefs.refs.length >= 2
+                  ? 'Multiple product reference photos are attached: compose a catalog-style layout that places EVERY product cutout on the poster (match each Image angle/pose). Forbidden: single-hero shot that invents other angles from Image 1 alone.'
+                  : '',
+              ]
+                .filter(Boolean)
+                .join('\n'),
+              pack
+            ),
         skillNegativePrompt: applyPackNegative(
           [
             negativePrompt.trim() || skill.negativePrompt,
             agentMode === 'secondary' ? SECONDARY_CREATION_NEGATIVE : '',
+            productShotMode
+              ? 'poster, catalog cover, color-block layout, NEW headline, mission paragraph, collage, multi-panel, on-image marketing text'
+              : '',
           ]
             .filter(Boolean)
             .join(', '),
-          activePack
+          pack
         ),
         skillCraftNotes: [
           skill.craftNotes,
-          packCraftNotes(activePack),
+          productShotMode ? '' : packCraftNotes(pack),
           isCreateFromScratch
-            ? '从0创作：严格按用户完整提示词执行；参考图可选。无参考图时按文字想象商业级产品图，禁止擅自改写成二次局部改色。'
+            ? '从0创作：严格按用户完整提示词执行；参考图可选。输出单独的商业产品照片，禁止改写成海报/画册封面/色块拼版。'
             : hasRefs
               ? '二次创作：以参考图为唯一外形真相；用户提示词仅为改动清单（颜色/部位/包装/功能等）；未提及处保持一致。禁止整体换模。'
               : '',
-          !isCreateFromScratch && skillId === 'multi_product_poster' && !layoutLast
+          wantMultiAngle
+            ? '多角度：必须连出四张独立照片（正面/45°/侧面/背面），每张仅一个视角；禁止一张图拼多角、禁止海报模板。'
+            : '',
+          !productShotMode && skillId === 'multi_product_poster' && !layoutLast
             ? '多产品整合：每张产品参考图对应独立 SKU，成图必须全部出现，禁止只保留一张。'
             : '',
-          !isCreateFromScratch &&
+          !productShotMode &&
           previewRefs.refs.length >= 2 &&
             !(skillId === 'multi_product_poster' && !layoutLast)
             ? layoutLast
@@ -520,40 +572,45 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
           agentMode === 'secondary'
             ? buildSecondaryCreationEditEnglish(secondaryFields)
             : '',
-          '图面文字只能使用已校验白名单短句；禁止自由编造英文段落。',
-          '产品与文字分区：产品只放在版式产品坑位；不得挡住任何标题/卖点文字。',
+          productShotMode
+            ? '图面禁止任何文字、字母、品牌标识；纯白影棚产品图。'
+            : '图面文字只能使用已校验白名单短句；禁止自由编造英文段落。',
+          productShotMode
+            ? ''
+            : '产品与文字分区：产品只放在版式产品坑位；不得挡住任何标题/卖点文字。',
         ]
           .filter(Boolean)
           .join('\n'),
         skillQaChecklist: [
           ...(skill.qaChecklist || []),
-          '图面英文无乱码、无假词、仅白名单短句',
-          '产品未遮挡文字，卖点短句完整可读',
-          !isCreateFromScratch && previewRefs.refs.length >= 2
+          productShotMode
+            ? '每张图仅为单个产品视角，无海报色块/无图面英文'
+            : '图面英文无乱码、无假词、仅白名单短句',
+          productShotMode ? '纯白背景、产品居中、边缘干净' : '产品未遮挡文字，卖点短句完整可读',
+          !productShotMode && previewRefs.refs.length >= 2
             ? '每一张产品参考图都出现在成图中（角度/SKU 对应）'
             : '',
           isCreateFromScratch ? '成图符合用户完整提示词' : '',
+          wantMultiAngle ? '四张角度彼此独立，非一张拼版' : '',
         ]
           .filter(Boolean)
           .slice(0, 8),
         userBrief: [
           isCreateFromScratch
-            ? `【从0创作·完整提示词】\n${resolveEditBrief()}`
+            ? `【从0创作·完整提示词】\n${editBrief}`
             : hasRefs
-              ? `【参考图二次创作·改动清单】\n${resolveEditBrief()}`
-              : resolveEditBrief(),
-          activePack
-            ? `【企业模板】${activePack.name}（L1 ${activePack.layoutRefs.length} 页）`
+              ? `【参考图二次创作·改动清单】\n${editBrief}`
+              : editBrief,
+          !productShotMode && pack
+            ? `【企业模板】${pack.name}（L1 ${pack.layoutRefs.length} 页）`
             : '',
           marketNote,
-          copyPlan.productSummaryZh
+          !productShotMode && copyPlan.productSummaryZh
             ? `【文案方案】${copyPlan.productSummaryZh}${
                 copyPlan.functions.length ? `；功能：${copyPlan.functions.join('、')}` : ''
               }`
             : '',
-          copyPlan.approvedOnImageEn.length
-            ? `【可上图英文】\n${copyPlan.approvedOnImageEn.join('\n')}`
-            : '【可上图英文】无 — 图面禁止文字',
+          '【可上图英文】无 — 图面禁止文字',
         ]
           .filter(Boolean)
           .join('\n'),
@@ -564,22 +621,29 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
           ? refUploads.length
           : previewRefs.refs.length || (hasRefs ? 1 : 0),
         lastRefIsLayout: layoutLast,
-        distinctProducts: skillId === 'multi_product_poster' && !layoutLast,
-        lockedOnImageCopy: copyPlan.approvedOnImageEn,
-        onImageLockBlock: copyPlan.onImageLockBlock,
+        distinctProducts: !productShotMode && skillId === 'multi_product_poster' && !layoutLast,
+        lockedOnImageCopy: productShotMode ? [] : copyPlan.approvedOnImageEn,
+        onImageLockBlock: productShotMode ? undefined : copyPlan.onImageLockBlock,
+        forceMultiAngle: wantMultiAngle,
+        productShotMode,
       });
       setPendingBrief({
         ...brief,
-        lockedOnImageCopy: copyPlan.approvedOnImageEn,
-        onImageLockBlock: copyPlan.onImageLockBlock,
-        copyPlanSummaryZh: [
-          copyPlan.productSummaryZh,
-          copyPlan.approvedOnImageEn.length
-            ? `上图：${copyPlan.approvedOnImageEn.join(' · ')}`
-            : '上图：无文字',
-        ]
-          .filter(Boolean)
-          .join('；'),
+        multiAngle: wantMultiAngle || !!brief.multiAngle,
+        lockedOnImageCopy: productShotMode ? [] : copyPlan.approvedOnImageEn,
+        onImageLockBlock: productShotMode ? undefined : copyPlan.onImageLockBlock,
+        copyPlanSummaryZh: productShotMode
+          ? wantMultiAngle
+            ? '多角度产品主图：四张独立照片，图面无文字'
+            : '产品主图：图面无文字'
+          : [
+              copyPlan.productSummaryZh,
+              copyPlan.approvedOnImageEn.length
+                ? `上图：${copyPlan.approvedOnImageEn.join(' · ')}`
+                : '上图：无文字',
+            ]
+              .filter(Boolean)
+              .join('；'),
       });
       setError(null);
       setConfirmOpen(true);
@@ -662,16 +726,17 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
       skus.find((s) => s.id === skuPick || s.skuCode === skuPick) ||
       skus.find((s) => s.skuCode === proj.skuCode);
     const fromSku = (boundSku?.images || []).filter(Boolean);
-    const layoutSet = new Set((activePack?.layoutRefs || []).filter(Boolean));
+    const pack = packForGeneration();
+    const layoutSet = new Set((pack?.layoutRefs || []).filter(Boolean));
     const angleByUrl = new Map<string, string>();
     for (const a of canvasAssets) {
       if (a.url && a.angle) angleByUrl.set(a.url, a.angle);
     }
     const productMerged: string[] = [];
     const productLabels: string[] = [];
-    // 从0创作：只用用户主动上传的参考（可选），绝不自动吞画布旧图
+    // 从0创作：只用用户主动上传的参考（可选），绝不自动吞画布旧图 / 企业版式
     // 二次创作：上传 → 画布选中/生成图 → 产品库；排除版式样本 URL；末位留给 1 张 L1 版式
-    const reserveLayout = activePack?.layoutRefs?.length ? 1 : 0;
+    const reserveLayout = pack?.layoutRefs?.length ? 1 : 0;
     const productCap = Math.max(1, MAX_DESIGN_REF_IMAGES - reserveLayout);
     const productPool = isCreateFromScratch
       ? [...refUploads]
@@ -682,11 +747,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
       productLabels.push(angleByUrl.get(u) || `product ${productMerged.length}`);
       if (productMerged.length >= productCap) break;
     }
-    const merged = mergeRefsWithPack(
-      productMerged,
-      activePack,
-      MAX_DESIGN_REF_IMAGES
-    );
+    const merged = mergeRefsWithPack(productMerged, pack, MAX_DESIGN_REF_IMAGES);
     // 仅：企业模板末张 / 用户勾选末张为版式。多品技能本身不再自动把末张当版式。
     const layoutLast =
       merged.lastRefIsLayout ||
@@ -722,7 +783,8 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
   };
 
   const effectiveLastIsLayout =
-    lastRefIsLayout || packImpliesLayoutLastRef(activePack);
+    !isCreateFromScratch &&
+    (lastRefIsLayout || packImpliesLayoutLastRef(packForGeneration()));
 
   const runGenerate = async () => {
     setConfirmOpen(false);
@@ -730,20 +792,29 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     const collected = collectRefImagesDetailed(proj);
     const refImages = collected.refs;
     const refLabels = collected.labels;
-    const layoutLast = collected.lastRefIsLayout;
+    const editBrief = resolveEditBrief();
+    const wantMultiAngle =
+      skillId === 'multi_angle' ||
+      !!pendingBrief?.multiAngle ||
+      detectMultiAngleProductShotIntent(editBrief) ||
+      detectMultiAngleProductShotIntent(prompt);
+    const productShotMode = isCreateFromScratch || wantMultiAngle;
+    const pack = packForGeneration();
+    const layoutLast = productShotMode ? false : collected.lastRefIsLayout;
     const finalPrompt =
       pendingBrief?.toolPrompt || buildFinalPrompt(refImages.length, layoutLast);
     const qaLine = pendingBrief?.qaChecklist?.length
       ? `\n质检关注：${pendingBrief.qaChecklist.slice(0, 3).join('；')}`
       : '';
-    const packHint = activePack ? ` · 模板「${activePack.name}」` : '';
-    const modeHint = refImages.length
-      ? `参考图 ${refImages.length} 张（${refLabels.filter(Boolean).join(' / ') || '产品'}）+ 文字${packHint}`
-      : `纯文字${packHint}`;
-    if (refImages.length >= 2) {
+    const packHint = !productShotMode && pack ? ` · 模板「${pack.name}」` : '';
+    const modeHint = wantMultiAngle
+      ? `多角度产品主图（正面/45°/侧面/背面各一张）`
+      : refImages.length
+        ? `参考图 ${refImages.length} 张（${refLabels.filter(Boolean).join(' / ') || '产品'}）+ 文字${packHint}`
+        : `纯文字产品主图${packHint}`;
+    if (refImages.length >= 2 && !wantMultiAngle) {
       setError(`将使用全部 ${refImages.length} 张参考图：${refLabels.join('、')}`);
     }
-    const editBrief = resolveEditBrief();
     const userMsg = {
       id: newDesignId('m'),
       role: 'user' as const,
@@ -754,24 +825,30 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
       [
         negativePrompt.trim() || skill.negativePrompt,
         agentMode === 'secondary' ? SECONDARY_CREATION_NEGATIVE : '',
-        skillId === 'multi_product_poster'
+        productShotMode
+          ? 'poster, catalog cover, color-block layout, NEW headline, mission paragraph, collage, multi-panel, on-image text, letters, watermark'
+          : '',
+        !productShotMode && skillId === 'multi_product_poster'
           ? 'dropping any product SKU, single-product-only poster when multiple product refs provided'
           : '',
-        refImages.length >= 2
+        !productShotMode && refImages.length >= 2
           ? 'using only first reference, inventing angles from one photo, cloning front view into every slot, dropping later reference images, product covering text'
           : '',
       ]
         .filter(Boolean)
         .join(', '),
-      activePack
+      pack
     );
-    const styledPrompt = applyPackStyleToPrompt(finalPrompt, activePack);
+    // 产品主图 / 多角度绝不套企业海报风格
+    const styledPrompt = productShotMode
+      ? finalPrompt
+      : applyPackStyleToPrompt(finalPrompt, pack);
 
     setLoading(true);
     setError(null);
     try {
       let genRefs = refImages;
-      if (refImages.length) {
+      if (refImages.length && !wantMultiAngle) {
         setError('正在抠出产品主体（去背景）…');
         const { ensureProductCutouts } = await import('../services/productCutoutService');
         const productSlots = layoutLast ? Math.max(1, refImages.length - 1) : refImages.length;
@@ -783,7 +860,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
         });
         setError(null);
       }
-      const isMulti = skillId === 'multi_angle' || !!pendingBrief?.multiAngle;
+      const isMulti = wantMultiAngle;
       const result = isMulti
         ? await generateMultiAngleDesignImages({
             prompt: styledPrompt,
@@ -808,15 +885,17 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             referenceLabels: genRefs.length ? refLabels.slice(0, genRefs.length) : undefined,
             negativePrompt: [
               mergedNeg,
-              'white product cards, rounded photo frames, boxed thumbnails, studio white backdrop behind product',
+              productShotMode
+                ? 'poster layout, catalog cover, collage, multi-panel, on-image marketing copy'
+                : 'white product cards, rounded photo frames, boxed thumbnails, studio white backdrop behind product',
             ]
               .filter(Boolean)
               .join(', '),
             series: skillId === 'listing_set' || count > 1,
             lastRefIsLayout: layoutLast,
-            distinctProducts: skillId === 'multi_product_poster' && !layoutLast,
-            lockedOnImageCopy: pendingBrief?.lockedOnImageCopy,
-            onImageLockBlock: pendingBrief?.onImageLockBlock,
+            distinctProducts: !productShotMode && skillId === 'multi_product_poster' && !layoutLast,
+            lockedOnImageCopy: productShotMode ? [] : pendingBrief?.lockedOnImageCopy,
+            onImageLockBlock: productShotMode ? undefined : pendingBrief?.onImageLockBlock,
             userEditBrief: editBrief,
           });
       const now = Date.now();
@@ -1472,7 +1551,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
           </div>
           {isCreateFromScratch ? (
             <div className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-[11px] font-bold text-violet-900 leading-snug">
-              在下方大框一次性粘贴完整提示词即可开画；参考图可选，不会自动沿用画布旧图。
+              粘贴完整产品提示词即可开画。若写明正面/侧面等多角度，将输出四张独立产品照片（不套海报模板）；参考图可选。
             </div>
           ) : (
             <div className="rounded-xl border border-emerald-100 bg-emerald-50/70 px-3 py-2 text-[10px] font-medium text-emerald-900 leading-snug">
@@ -1611,12 +1690,13 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                 </button>
               )}
             </div>
+            {!isCreateFromScratch && (
             <label className="mt-2 flex items-start gap-2 text-[10px] font-medium text-slate-600 cursor-pointer">
               <input
                 type="checkbox"
                 className="mt-0.5 rounded border-slate-300"
                 checked={effectiveLastIsLayout}
-                disabled={packImpliesLayoutLastRef(activePack)}
+                disabled={packImpliesLayoutLastRef(packForGeneration())}
                 onChange={(e) => setLastRefIsLayout(e.target.checked)}
               />
               <span>
@@ -1625,6 +1705,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                 <strong className="text-rose-700">不会复刻模板里的原商品</strong>）
               </span>
             </label>
+            )}
             <p className="text-[9px] text-slate-400 font-medium mt-1 leading-relaxed">
               多品整合：默认每张上传图都是产品且必须入画；仅有独立版式图时再勾选末张为模板。
             </p>

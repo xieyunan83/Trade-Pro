@@ -25,6 +25,28 @@ export const UNIVERSAL_3D_NEGATIVES =
 export const COMMERCIAL_CRAFT_FOOTER =
   'Commercial China toy/gift export quality: catalog sharpness, true plastics/fabrics/metals, locked product identity, soft dual softbox + gentle rim, clean silhouette, no watermark, no gibberish text, ready for marketplace and trade-fair use.';
 
+/**
+ * 用户要的是「单独多角度产品主图」，不是海报/画册拼版。
+ * 命中后应走 multi_angle 单图连出，并跳过企业版式模板。
+ */
+export const detectMultiAngleProductShotIntent = (text: string): boolean => {
+  const t = (text || '').trim();
+  if (!t) return false;
+  if (/多角度|四视角|四视图|四张视角|同组输出\s*四|四张[:：]|multi[- ]?angle|multi[- ]?view/i.test(t)) {
+    return true;
+  }
+  const hasFront = /正面|front\b|3\s*\/\s*4|three[- ]?quarter/i.test(t);
+  const hasSide = /侧面|正侧|全侧|\b45\s*°?|\b45\s*度|side\s*(view|profile)?/i.test(t);
+  const hasBack = /背面|后视|rear|back\s*view/i.test(t);
+  const hasCloseup = /头部特写|特写|close[- ]?up/i.test(t);
+  const angleHits = [hasFront, hasSide, hasBack, hasCloseup].filter(Boolean).length;
+  return angleHits >= 2;
+};
+
+/** 纯产品主图模式脚注：禁止海报色块、图面英文、拼版 */
+export const PRODUCT_SHOT_MODE_BLOCK =
+  'PRODUCT PHOTO MODE (STRICT): Output a single commercial product photograph only — pure white seamless cyclorama, one centered hero product, soft studio softbox, sharp catalog detail. FORBIDDEN: poster, catalog cover, color-block layout, NEW/year headline, mission paragraph, collage, contact sheet, multi-panel grid, marketing copy on image, typography bands.';
+
 /** 有参考图时的身份锁（以参考图为唯一真相） */
 export const identityLockBlock = (hasRefs: boolean, domain: 'image' | 'video' | '3d' = 'image'): string => {
   if (!hasRefs) return '';
@@ -230,23 +252,42 @@ export const composeImageGenerationPrompt = (opts: {
   baseToolPrompt?: string;
   /** true：负向只返回字段，不拼进 prompt（留给将来 API） */
   negativeAsFieldOnly?: boolean;
+  /**
+   * 纯产品主图 / 多角度单图：禁止海报版式、图面文案区、多切图拼进一张。
+   * 从0创作粘贴完整产品提示词时应打开。
+   */
+  productShotMode?: boolean;
 }): CreativePromptParts => {
+  const productShot = !!opts.productShotMode;
   const hasRefs = !!opts.hasReferenceImages;
   const refCount = Math.max(0, opts.referenceCount ?? (hasRefs ? 1 : 0));
   const identity = identityLockBlock(hasRefs, 'image');
-  const roles = multiImageRoleBlock(refCount, {
-    lastIsLayout: opts.lastRefIsLayout,
-    distinctProducts: opts.distinctProducts,
-  });
-  const textLock =
-    (opts.onImageLockBlock || '').trim() ||
-    (opts.lockedOnImageCopy
-      ? lockedOnImageCopyBlock(opts.lockedOnImageCopy)
-      : lockedOnImageCopyBlock([]));
-  const cutoutComposite = hasRefs ? productCutoutCompositeBlock() : '';
-  const typeSafe = typographySafeLayoutBlock({
-    hasLayoutTemplate: !!opts.lastRefIsLayout,
-  });
+  const roles = productShot
+    ? hasRefs
+      ? refCount <= 1
+        ? 'REFERENCE: Image 1 is the product ground truth — keep identity locked. Output ONE single product photograph (not a poster).'
+        : `REFERENCE: Images 1–${refCount} are identity locks for the SAME product. Output ONE single product photograph for the requested camera angle only — never collage multiple angles into one frame.`
+      : ''
+    : multiImageRoleBlock(refCount, {
+        lastIsLayout: opts.lastRefIsLayout,
+        distinctProducts: opts.distinctProducts,
+      });
+  const textLock = productShot
+    ? lockedOnImageCopyBlock([])
+    : (opts.onImageLockBlock || '').trim() ||
+      (opts.lockedOnImageCopy
+        ? lockedOnImageCopyBlock(opts.lockedOnImageCopy)
+        : lockedOnImageCopyBlock([]));
+  const cutoutComposite = productShot
+    ? ''
+    : hasRefs
+      ? productCutoutCompositeBlock()
+      : '';
+  const typeSafe = productShot
+    ? PRODUCT_SHOT_MODE_BLOCK
+    : typographySafeLayoutBlock({
+        hasLayoutTemplate: !!opts.lastRefIsLayout,
+      });
   const skuLine =
     opts.skuName || opts.skuCode
       ? `Product identity: ${[opts.skuName, opts.skuCode].filter(Boolean).join(' / ')}. Keep SKU appearance consistent.`
@@ -254,7 +295,7 @@ export const composeImageGenerationPrompt = (opts: {
 
   const editDirective = hasRefs ? referenceEditDirectiveBlock(opts.userBrief) : '';
   const layoutSwap =
-    hasRefs && opts.lastRefIsLayout && refCount >= 2
+    !productShot && hasRefs && opts.lastRefIsLayout && refCount >= 2
       ? layoutProductSwapDirectiveBlock(refCount - 1)
       : '';
 
@@ -299,10 +340,16 @@ export const composeImageGenerationPrompt = (opts: {
   const negative = mergeNegatives(
     UNIVERSAL_IMAGE_NEGATIVES,
     'garbled English, invented words, Latin gibberish, fake body paragraphs on poster',
-    'white product cards, rounded photo frames, boxed thumbnails, studio white backdrop behind product, polaroid frames, contact-sheet cells',
-    'product covering text, toy overlapping headlines, text behind product, illegible occluded copy, long prose paragraph on poster',
-    'using only first reference, inventing angles from one photo, cloning front view into every slot, dropping later reference images',
-    opts.lastRefIsLayout ? LAYOUT_SWAP_NEGATIVES : '',
+    productShot
+      ? 'poster layout, catalog cover, color-block split, NEW for YEAR headline, mission paragraph, collage, contact sheet, multi-panel, multi-angle in one frame, marketing copy on image'
+      : 'white product cards, rounded photo frames, boxed thumbnails, studio white backdrop behind product, polaroid frames, contact-sheet cells',
+    productShot
+      ? ''
+      : 'product covering text, toy overlapping headlines, text behind product, illegible occluded copy, long prose paragraph on poster',
+    productShot
+      ? ''
+      : 'using only first reference, inventing angles from one photo, cloning front view into every slot, dropping later reference images',
+    !productShot && opts.lastRefIsLayout ? LAYOUT_SWAP_NEGATIVES : '',
     opts.skillNegative
   );
   const prompt = opts.negativeAsFieldOnly

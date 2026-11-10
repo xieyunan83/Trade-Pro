@@ -229,7 +229,7 @@ export const buildReferenceManifestBlock = (
   ].join('\n');
 };
 
-/** 去掉易触发「一张图拼多角」的措辞，保留产品描述 */
+/** 去掉易触发「一张图拼多角」的措辞，保留产品描述（角度由 MULTI_ANGLE_VIEWS 逐张注入） */
 const stripMultiViewCollageLanguage = (prompt: string): string =>
   prompt
     .replace(
@@ -238,6 +238,11 @@ const stripMultiViewCollageLanguage = (prompt: string): string =>
     )
     .replace(/\b(front,?\s*(three[- ]?quarter|45°?|45 degrees?),?\s*side,?\s*back)\b/gi, ' ')
     .replace(/四视图拼版|四宫格|九宫格|拼版套图|一张图多角度/g, ' ')
+    .replace(
+      /同组输出\s*四张[^。\n]*[。\n]?|输出四张[^。\n]*[。\n]?|正面\s*3\s*\/\s*4[^，,。\n]*[，,]?\s*正侧全侧[^，,。\n]*[，,]?\s*背面\s*3\s*\/\s*4[^，,。\n]*[，,]?\s*头部特写[^。\n]*[。\n]?/g,
+      ' '
+    )
+    .replace(/构图[：:]\s*正面[^。\n]*/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 

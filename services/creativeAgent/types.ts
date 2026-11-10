@@ -37,6 +37,10 @@ export type CreativePlanInput = {
   /** 渠道 / 卖场等扩展字段（包装等） */
   channel?: string;
   palette?: string;
+  /** 强制多角度单图连出（即使 Skill 不是 multi_angle） */
+  forceMultiAngle?: boolean;
+  /** 纯产品主图：禁止海报版式 / 图面文案拼版 */
+  productShotMode?: boolean;
 };
 
 /** 确认卡展示 + 下游工具统一吃这份 Brief */
