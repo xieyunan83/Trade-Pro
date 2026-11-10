@@ -22,9 +22,14 @@ import {
   type PackagingAsset,
   type PackagingProject,
   type PackagingSkillId,
+  type PackagingViewKind,
+  detectPackagingOutputIntent,
   loadPackagingAssets,
   loadPackagingProjects,
   newPackagingId,
+  packagingSealedCartonOverride,
+  packagingViewDirective,
+  packagingViewLabel,
   savePackagingAssets,
   savePackagingProjects,
 } from '../services/packagingAgentStore';
@@ -142,10 +147,25 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
           /* ignore */
         }
         if (cancelled) return;
-        const migrated = await persistPackagingAssets(raw);
+        // 重新读本机库：进站 8s 后的旧 raw 不能盖掉用户刚生成的包装图
+        const latest = loadPackagingAssets();
+        const migrated = await persistPackagingAssets(latest);
         if (cancelled) return;
-        savePackagingAssets(migrated);
-        setAssets(migrated);
+        const byId = new Map<string, PackagingAsset>();
+        for (const a of loadPackagingAssets()) byId.set(a.id, a);
+        for (const a of migrated) {
+          const cur = byId.get(a.id);
+          if (!cur || (a.createdAt || 0) >= (cur.createdAt || 0)) byId.set(a.id, a);
+        }
+        // 保留 remigrate 期间新写入、但不在 migrated 列表里的资产
+        for (const a of loadPackagingAssets()) {
+          if (!byId.has(a.id)) byId.set(a.id, a);
+        }
+        const merged = Array.from(byId.values()).sort(
+          (a, b) => (b.createdAt || 0) - (a.createdAt || 0)
+        );
+        savePackagingAssets(merged);
+        setAssets(merged);
       } catch (e) {
         console.warn('packaging assets migrate', e);
       }
@@ -301,15 +321,26 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
     return merged;
   };
 
+  const packagingIntent = useMemo(
+    () => detectPackagingOutputIntent(prompt, negativePrompt),
+    [prompt, negativePrompt]
+  );
+
   const runGenerate = async () => {
     setConfirmOpen(false);
     const proj = ensureProject();
     const refImages = collectRefImages(proj);
-    let finalPrompt = composeImageGenerationPrompt({
-      skillDefaultPrompt:
-        skill.defaultPrompt ||
-        'Create a polished commercial toy packaging design visual',
-      craftNotes: skill.craftNotes,
+    const intent = detectPackagingOutputIntent(prompt, negativePrompt);
+    const sealedBit = intent.sealedNoWindow ? packagingSealedCartonOverride() : '';
+    // 用户要密封插舌时，弱化「开窗彩盒」Skill 底稿，避免出 PVC 开窗
+    const skillDefault =
+      intent.sealedNoWindow && skillId === 'window_box'
+        ? 'Photorealistic sealed tuck-top folding carton toy packaging mockup, no window, product photography on main panel, accurate crease logic, commercial retail lighting'
+        : skill.defaultPrompt ||
+          'Create a polished commercial toy packaging design visual';
+    let basePrompt = composeImageGenerationPrompt({
+      skillDefaultPrompt: skillDefault,
+      craftNotes: [skill.craftNotes, sealedBit].filter(Boolean).join(' '),
       userBrief: prompt.trim(),
       skuName:
         active?.skuName ||
@@ -323,6 +354,9 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
       referenceCount: refImages.length,
       skillNegative: negativePrompt.trim() || skill.negativePrompt,
     }).prompt;
+    if (sealedBit && !basePrompt.includes(sealedBit.slice(0, 24))) {
+      basePrompt = `${sealedBit}\n${basePrompt}`;
+    }
     try {
       const skuRow = skus.find((s) => s.id === skuPick || s.skuCode === skuPick);
       const profiles = await loadProductCatalog();
@@ -341,17 +375,18 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
             : undefined,
       });
       const note = designConstraintToPromptNote(card);
-      if (note) finalPrompt = `${finalPrompt}\n${note}`;
+      if (note) basePrompt = `${basePrompt}\n${note}`;
     } catch {
       /* ignore */
     }
     const modeHint = refImages.length
       ? `参考图 ${refImages.length} 张 + 文字`
       : '纯文字';
+    const dualHint = intent.dual ? '；将分别生成立体效果图与展开刀模图' : '';
     const userMsg = {
       id: newPackagingId('m'),
       role: 'user' as const,
-      text: prompt.trim() || `使用 Skill「${skill.label}」生成包装（${modeHint}）`,
+      text: prompt.trim() || `使用 Skill「${skill.label}」生成包装（${modeHint}${dualHint}）`,
       at: Date.now(),
     };
 
@@ -376,7 +411,7 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
         ].filter(Boolean),
         generationPromptHints: [
           prompt.trim(),
-          finalPrompt,
+          basePrompt,
           skill.defaultPrompt || '',
         ].filter((h) => (h || '').trim().length >= 8),
         onProgress: (msg) => setError(msg),
@@ -390,40 +425,87 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
           onProgress: (msg) => setError(msg),
         });
       }
-      const result = await generateDesignImages({
-        prompt: finalPrompt,
-        size,
-        n: count,
-        thinkingMode: false,
-        referenceImages: genRefs.length ? genRefs : undefined,
-        negativePrompt: [
-          negativePrompt.trim() || skill.negativePrompt,
-          'white product cards, rounded photo frames, boxed thumbnails, studio white backdrop',
-        ]
-          .filter(Boolean)
-          .join(', '),
-        series: count > 1,
-        lockedOnImageCopy: copyPlan.approvedOnImageEn,
-        onImageLockBlock: copyPlan.onImageLockBlock,
-      });
+
+      const viewJobs: { kind: PackagingViewKind; n: number }[] = intent.dual
+        ? [
+            { kind: 'packshot', n: 1 },
+            { kind: 'dieline', n: 1 },
+          ]
+        : intent.wantsDieline && !intent.wantsPackShot
+          ? [{ kind: 'dieline', n: count }]
+          : intent.wantsPackShot && !intent.wantsDieline
+            ? [{ kind: 'packshot', n: count }]
+            : [{ kind: 'general', n: count }];
+
+      const negBase = [
+        negativePrompt.trim() || skill.negativePrompt,
+        'white product cards, rounded photo frames, boxed thumbnails, studio white backdrop',
+        intent.sealedNoWindow ? 'PVC window, PET window, open window cutout, blister window' : '',
+      ]
+        .filter(Boolean)
+        .join(', ');
+
+      const newAssetsRaw: PackagingAsset[] = [];
+      for (const job of viewJobs) {
+        const viewDir = packagingViewDirective(job.kind);
+        const finalPrompt = viewDir ? `${viewDir}\n${basePrompt}` : basePrompt;
+        setError(
+          intent.dual
+            ? job.kind === 'packshot'
+              ? '正在生成立体效果图…'
+              : '正在生成展开刀模图…'
+            : null
+        );
+        const result = await generateDesignImages({
+          prompt: finalPrompt,
+          size,
+          n: job.n,
+          thinkingMode: false,
+          referenceImages: genRefs.length ? genRefs : undefined,
+          negativePrompt: [
+            negBase,
+            job.kind === 'packshot'
+              ? 'dieline, flat unfold, knife-line sheet, crease grid net layout'
+              : job.kind === 'dieline'
+                ? '3D assembled box mockup, perspective pack shot, lifestyle scene dominating frame'
+                : '',
+          ]
+            .filter(Boolean)
+            .join(', '),
+          series: job.n > 1,
+          lockedOnImageCopy: copyPlan.approvedOnImageEn,
+          onImageLockBlock: copyPlan.onImageLockBlock,
+        });
+        const now = Date.now();
+        for (const url of result.images) {
+          newAssetsRaw.push({
+            id: newPackagingId('pa'),
+            projectId: proj.id,
+            url,
+            prompt: finalPrompt,
+            skillId,
+            createdAt: now,
+            viewKind: job.kind === 'general' ? undefined : job.kind,
+          });
+        }
+      }
+
       setError(null);
       const now = Date.now();
-      const newAssetsRaw: PackagingAsset[] = result.images.map((url) => ({
-        id: newPackagingId('pa'),
-        projectId: proj.id,
-        url,
-        prompt: finalPrompt,
-        skillId,
-        createdAt: now,
-      }));
       const newAssets = await persistPackagingAssets(newAssetsRaw);
+      const viewSummary = intent.dual
+        ? '立体效果图 + 展开刀模图各 1 张'
+        : `${newAssets.length} 张`;
       const agentMsg = {
         id: newPackagingId('m'),
         role: 'agent' as const,
-        text: `已生成 ${newAssets.length} 张「${skill.label}」包装视觉并放到画布（已存本机）。可换 Skill 再出一版，或改配色描述继续改稿。`,
+        text: `已生成 ${viewSummary}「${skill.label}」包装视觉并放到画布（已存本机）。${
+          intent.sealedNoWindow ? '已按密封插舌盒处理（不开窗）。' : ''
+        }可换 Skill 再出一版，或改配色描述继续改稿。`,
         at: now,
         assetIds: newAssets.map((a) => a.id),
       };
+      // 合并进最新本机库，避免与 remigrate 竞态
       persistAssets([
         ...newAssets,
         ...loadPackagingAssets().filter((a) => !newAssets.some((n) => n.id === a.id)),
@@ -657,6 +739,11 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
                     className="rounded-xl overflow-hidden border border-white shadow-sm bg-white group relative"
                   >
                     <VaultImg src={a.url} alt="" className="w-full aspect-square object-contain bg-slate-50" />
+                    {a.viewKind && a.viewKind !== 'general' && (
+                      <div className="absolute top-2 left-2 rounded-md bg-slate-900/80 text-amber-100 text-[10px] font-black px-1.5 py-0.5">
+                        {packagingViewLabel(a.viewKind)}
+                      </div>
+                    )}
                     <div className="absolute bottom-2 left-2 right-2 flex flex-wrap gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                       <button
                         type="button"
@@ -836,6 +923,12 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
               className="w-20 rounded-xl border border-slate-200 px-2 py-2 text-xs font-bold"
               value={count}
               onChange={(e) => setCount(Number(e.target.value))}
+              disabled={packagingIntent.dual}
+              title={
+                packagingIntent.dual
+                  ? '已识别立体+展开双输出，将固定生成 2 张'
+                  : undefined
+              }
             >
               {[1, 2, 3, 4].map((n) => (
                 <option key={n} value={n}>
@@ -844,6 +937,11 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
               ))}
             </select>
           </div>
+          {packagingIntent.dual && (
+            <p className="text-[10px] font-bold text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-2 py-1.5">
+              已识别「立体效果图 + 展开刀模图」，将分两次生成并都放到画布。
+            </p>
+          )}
           {error && (
             <p className="text-[11px] font-bold text-rose-700 bg-rose-50 border border-rose-100 rounded-lg px-2 py-1.5">
               {error}
@@ -869,9 +967,19 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
           <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-5 space-y-3 border border-amber-100">
             <div className="font-extrabold text-slate-900 text-lg">确认生成包装</div>
             <p className="text-sm text-slate-600 font-medium leading-relaxed">
-              Skill「{skill.label}」· {count} 张 · {size}
+              Skill「{skill.label}」·{' '}
+              {packagingIntent.dual
+                ? '立体效果图 + 展开刀模图（共 2 张）'
+                : `${count} 张`}{' '}
+              · {size}
               <br />
               卖场：{skill.channel}
+              {packagingIntent.sealedNoWindow ? (
+                <>
+                  <br />
+                  结构：按密封插舌盒处理（不开窗）
+                </>
+              ) : null}
             </p>
             <p className="text-[11px] text-slate-500 bg-slate-50 rounded-xl px-3 py-2 font-medium max-h-24 overflow-y-auto">
               {buildFinalPrompt()}

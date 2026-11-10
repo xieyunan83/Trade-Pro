@@ -19,6 +19,8 @@ export type PackagingSkillId =
   | 'export_master'
   | 'free';
 
+export type PackagingViewKind = 'packshot' | 'dieline' | 'general';
+
 export type PackagingAsset = {
   id: string;
   projectId: string;
@@ -26,6 +28,8 @@ export type PackagingAsset = {
   prompt: string;
   skillId: PackagingSkillId;
   createdAt: number;
+  /** 立体效果图 / 展开刀模 / 普通 */
+  viewKind?: PackagingViewKind;
 };
 
 export type PackagingChatMsg = {
@@ -298,3 +302,62 @@ export const savePackagingAssets = (rows: PackagingAsset[]) => {
 
 export const newPackagingId = (prefix: string) =>
   `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+/** 从用户正/负向文案判断是否要立体效果图 + 展开刀模双输出，以及是否强制密封插舌盒 */
+export const detectPackagingOutputIntent = (
+  brief: string,
+  negative = ''
+): {
+  wantsPackShot: boolean;
+  wantsDieline: boolean;
+  dual: boolean;
+  sealedNoWindow: boolean;
+} => {
+  const t = `${brief || ''}\n${negative || ''}`;
+  const wantsPackShot =
+    /立体|效果图|组装|立体渲染|pack\s*shot|assembled|3\s*[Dd].{0,12}(效果|渲染|mock)/i.test(
+      t
+    );
+  const wantsDieline =
+    /展开|刀模|dieline|die[- ]?line|平面图|六面|折线标注|出血线/i.test(t);
+  const sealedNoWindow =
+    /插舌|密封|闭窗|无开窗|不开窗|sealed|tuck[- ]?top|folding\s+carton/i.test(
+      brief || ''
+    ) || /开窗结构/.test(negative || '');
+  return {
+    wantsPackShot,
+    wantsDieline,
+    dual: wantsPackShot && wantsDieline,
+    sealedNoWindow,
+  };
+};
+
+export const packagingViewLabel = (kind?: PackagingViewKind): string => {
+  if (kind === 'packshot') return '立体效果图';
+  if (kind === 'dieline') return '展开刀模图';
+  return '包装图';
+};
+
+/** 追加到主提示：强制单张只出一种视图，避免立体/展开糊成一张 */
+export const packagingViewDirective = (kind: PackagingViewKind): string => {
+  if (kind === 'packshot') {
+    return [
+      'OUTPUT CONTRACT — PACKSHOT ONLY:',
+      'Generate ONE photorealistic 3D assembled retail carton mockup (hero pack shot).',
+      'Show the closed box as a physical object with perspective, soft studio lighting, and readable panel hierarchy.',
+      'Do NOT draw dieline, flat unfold, net layout, crease grid, or technical knife-line sheet in this image.',
+    ].join(' ');
+  }
+  if (kind === 'dieline') {
+    return [
+      'OUTPUT CONTRACT — DIELINE ONLY:',
+      'Generate ONE technical six-panel flat dieline / unfold layout for the same carton.',
+      'Include bleed marks and crease/fold lines; keep panels orthographic and production-readable.',
+      'Do NOT draw a 3D assembled box, perspective mockup, or lifestyle pack shot in this image.',
+    ].join(' ');
+  }
+  return '';
+};
+
+export const packagingSealedCartonOverride = (): string =>
+  'STRUCTURE OVERRIDE: tuck-top locked folding carton (插舌封口折叠纸盒), sealed color box, NO PVC/PET window cutout, no open-window structure.';
