@@ -342,22 +342,66 @@ export const packagingViewLabel = (kind?: PackagingViewKind): string => {
 export const packagingViewDirective = (kind: PackagingViewKind): string => {
   if (kind === 'packshot') {
     return [
-      'OUTPUT CONTRACT — PACKSHOT ONLY:',
-      'Generate ONE photorealistic 3D assembled retail carton mockup (hero pack shot).',
-      'Show the closed box as a physical object with perspective, soft studio lighting, and readable panel hierarchy.',
-      'Do NOT draw dieline, flat unfold, net layout, crease grid, or technical knife-line sheet in this image.',
+      'OUTPUT CONTRACT — PACKSHOT ONLY (CRITICAL):',
+      'Generate ONE photorealistic 3D assembled retail carton sitting on a surface, 3/4 hero angle, real cardboard thickness, soft studio lighting, contact shadow.',
+      'The box must look like a physical product you could pick up — NOT a flat print layout.',
+      'FORBIDDEN in this image: dieline, flat unfold, net/layout sheet, knife-lines, crease grid, orthographic panel collage, top-down flat artwork only.',
     ].join(' ');
   }
   if (kind === 'dieline') {
     return [
-      'OUTPUT CONTRACT — DIELINE ONLY:',
+      'OUTPUT CONTRACT — DIELINE ONLY (CRITICAL):',
       'Generate ONE technical six-panel flat dieline / unfold layout for the same carton.',
       'Include bleed marks and crease/fold lines; keep panels orthographic and production-readable.',
-      'Do NOT draw a 3D assembled box, perspective mockup, or lifestyle pack shot in this image.',
+      'FORBIDDEN in this image: 3D assembled box, perspective pack shot, floating carton mockup.',
     ].join(' ');
   }
   return '';
 };
 
+/** 按视图清洗用户简述，避免「立体+展开」同句把立体那张也画成展开图 */
+export const briefForPackagingView = (
+  brief: string,
+  kind: PackagingViewKind
+): string => {
+  const base = (brief || '').trim();
+  if (!base) return base;
+  if (kind === 'packshot') {
+    const cleaned = base
+      .replace(/[；;，,]?\s*输出[：:][^。\n]*/g, '')
+      .replace(/六面展开[^。；;\n]*/g, '')
+      .replace(/展开[式平面图图]*[^。；;\n]*/g, '')
+      .replace(/刀模[线线图]*[^。；;\n]*/g, '')
+      .replace(/含出血线与折线标注/g, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    return `${cleaned}\n\n【本张唯一任务】只生成密封插舌彩盒的立体组装效果图（3/4 透视实物包装盒）。不要展开图、不要刀模线、不要平面网图。`;
+  }
+  if (kind === 'dieline') {
+    const cleaned = base
+      .replace(/[；;，,]?\s*输出[：:][^。\n]*/g, '')
+      .replace(/立体效果图[^。；;\n]*/g, '')
+      .replace(/组装效果图?[^。；;\n]*/g, '')
+      .replace(/立体渲染[^。；;\n]*/g, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    return `${cleaned}\n\n【本张唯一任务】只生成同一盒型的六面展开平面刀模图（含出血线与折线）。不要立体透视组装盒。`;
+  }
+  return base;
+};
+
 export const packagingSealedCartonOverride = (): string =>
   'STRUCTURE OVERRIDE: tuck-top locked folding carton (插舌封口折叠纸盒), sealed color box, NO PVC/PET window cutout, no open-window structure.';
+
+/** 适市约束里若写开窗，密封需求时剔除，避免与用户负向冲突 */
+export const scrubPackagingConstraintNote = (
+  note: string,
+  sealedNoWindow: boolean
+): string => {
+  if (!sealedNoWindow || !note) return note || '';
+  return note
+    .replace(/开窗彩盒/g, '闭窗彩盒')
+    .replace(/开窗/g, '密封')
+    .replace(/PVC\/?PET\s*开窗[^；;\n]*/gi, '')
+    .trim();
+};
