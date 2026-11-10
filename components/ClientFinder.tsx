@@ -304,10 +304,10 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
     setCountryOpen(false);
     setLoading(true);
     setErrorMsg(null);
-    // 类目拼进检索词，提高精准度
+    // 类目只进行业约束，绝不拼进产品关键词：
+    // 否则「robot dog (Smart Electronics…)」会把 Electronics 当相关词，玩具买家反而被滤成 0 条
     const catBits = [state.categoryL1, state.categoryL2].filter(Boolean).join(' / ');
-    const searchProduct = catBits ? `${product} (${catBits})` : product;
-    const searchIndustry = [state.industry, state.categoryL1, state.categoryL2]
+    const searchIndustry = [state.industry, catBits ? `official category ${catBits}` : '']
       .filter(Boolean)
       .join(', ');
     // 先清空旧结果，避免误以为「点了没反应」
@@ -323,7 +323,7 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
       const searchOneCountry = async (country: string) => {
         const searchId = `disc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         const raw = await searchPotentialClients(
-          searchProduct,
+          product,
           country,
           searchIndustry,
           typeArg,
@@ -395,6 +395,10 @@ export const ClientFinder: React.FC<ClientFinderProps> = ({
 
       if (merged.length === 0 && errors.length) {
         setErrorMsg(errors.join('；'));
+      } else if (merged.length === 0) {
+        setErrorMsg(
+          '本次未找到合格买家。可检查：产品词是否过窄、目标国是否过少、官方类目是否误到非玩具大类；改完后重试。'
+        );
       } else if (errors.length) {
         setErrorMsg(`部分市场失败：${errors.join('；')}（已保存成功的结果）`);
       }

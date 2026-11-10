@@ -138,7 +138,10 @@ export const suggestToyCategoriesFromKeyword = (
   // 快路径不够再走统一匹配（内部已改为玩具子集倒排，不再全表卡死）
   try {
     const preferred = assignCategories(kw, limit, { preferRootId: TOY_ROOT_ID, skipVerify: true });
-    const pool = preferred.filter((a) => a.score >= 18);
+    // 找客页只接受玩具大类，避免「robot」误命中消费电子·智能机器人
+    const pool = preferred.filter(
+      (a) => a.score >= 18 && (!a.rootId || a.rootId === TOY_ROOT_ID)
+    );
     if (pool.length) {
       return pool.map((a) => ({
         l1: a.l1NameEn,
@@ -147,7 +150,7 @@ export const suggestToyCategoriesFromKeyword = (
         reason: a.reason,
         l1Id: a.l1Id,
         l2Id: a.l2Id,
-        rootId: a.rootId,
+        rootId: a.rootId || TOY_ROOT_ID,
         labelZh: a.label,
       }));
     }

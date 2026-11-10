@@ -5153,6 +5153,14 @@ const countriesLikelyMatch = (a?: string, b?: string): boolean => {
   return na.includes(nb) || nb.includes(na);
 };
 
+/** 去掉「(Smart Electronics / …)」类目尾巴，相关度过滤只用纯产品词 */
+const stripCategoryParenFromKeyword = (productKeyword: string): string =>
+  (productKeyword || '')
+    .replace(/\([^)]*(?:electronics|robot|category|类目)[^)]*\)/gi, ' ')
+    .replace(/\([^)]{0,80}\)/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
 /** 行业词为空时，从产品关键词推断检索约束，避免模型乱扩到无关行业 */
 const inferIndustryConstraint = (productKeyword: string, industry: string): string => {
   const ind = (industry || '').trim();
@@ -5160,8 +5168,12 @@ const inferIndustryConstraint = (productKeyword: string, industry: string): stri
     return `Must operate in industry: ${ind}. Do NOT return companies outside this industry.`;
   }
   const p = (productKeyword || '').toLowerCase();
-  if (/bubble|wand|soap.?bubble|泡泡|玩具|toy|doll|plush|teddy|lego|puzzle|game|kids|children|baby|infant|juvenile|party.?favor|novelty|car\s*toy|汽车玩具/i.test(p)) {
-    return 'Toys / children’s products / party favors / outdoor play / novelty gifts（玩具、儿童用品、派对礼品）。严禁返回食品超市、餐饮、生鲜肉类海鲜、银行、软件、建材等无关行业。';
+  if (
+    /bubble|wand|soap.?bubble|泡泡|玩具|toy|doll|plush|teddy|lego|puzzle|game|kids|children|baby|infant|juvenile|party.?favor|novelty|car\s*toy|汽车玩具|robot\s*dog|robotic\s*dog|robot\s*pet|机器狗|智能机器狗/i.test(
+      p
+    )
+  ) {
+    return 'Toys / children’s products / party favors / outdoor play / novelty gifts / electronic & RC toys（玩具、儿童用品、电子/遥控玩具、派对礼品）。严禁返回食品超市、餐饮、生鲜肉类海鲜、银行、纯工业机器人、纯消费电子品牌专卖、建材等无关行业。';
   }
   if (/silicone|baby|paci|teether|bib|nursery|母婴/i.test(p)) {
     return 'Baby products / nursery / infant feeding（母婴用品）。严禁返回无关的食品杂货、建材等。';
@@ -5177,9 +5189,13 @@ const inferIndustryConstraint = (productKeyword: string, industry: string): stri
 
 /** 按关键词推断「可软通过」的品类词（禁止用零售/进口等万能词） */
 const softCategoryRegexForKeyword = (productKeyword: string): RegExp | null => {
-  const p = (productKeyword || '').toLowerCase();
-  if (/bubble|wand|soap.?bubble|泡泡|玩具|toy|doll|plush|teddy|lego|puzzle|game|kids|children|juvenile|party.?favor|novelty|car\s*toy|汽车玩具/i.test(p)) {
-    return /玩具|儿童用品|童装|益智|拼图|玩偶|毛绒|泡泡|派对礼品|户外玩具|novelty|\btoys?\b|kids\s*product|children'?s|playset|party\s*favor/i;
+  const p = stripCategoryParenFromKeyword(productKeyword || '').toLowerCase();
+  if (
+    /bubble|wand|soap.?bubble|泡泡|玩具|toy|doll|plush|teddy|lego|puzzle|game|kids|children|juvenile|party.?favor|novelty|car\s*toy|汽车玩具|robot\s*dog|robotic\s*dog|robot\s*pet|机器狗|智能机器狗|遥控玩具/i.test(
+      p
+    )
+  ) {
+    return /玩具|儿童用品|童装|益智|拼图|玩偶|毛绒|泡泡|派对礼品|户外玩具|电子玩具|遥控|机器狗|机器人玩具|novelty|\btoys?\b|kids\s*product|children'?s|playset|party\s*favor|robot\s*dog|robotic|\brc\b/i;
   }
   if (/silicone|baby|paci|teether|bib|nursery|母婴|奶嘴/i.test(p)) {
     return /母婴|婴儿|奶嘴|牙胶|bib|nursery|infant|baby\s*product|teether|pacifier/i;
@@ -5195,7 +5211,7 @@ const softCategoryRegexForKeyword = (productKeyword: string): RegExp | null => {
 
 /** 明显跨品类：关键词是 A、文案却是 B → 直接丢弃 */
 const isHardCrossCategoryMismatch = (productKeyword: string, blob: string): boolean => {
-  const p = (productKeyword || '').toLowerCase();
+  const p = stripCategoryParenFromKeyword(productKeyword || '').toLowerCase();
   const b = blob.toLowerCase();
   if (
     /跨品类|完全不匹配|无关品类|不匹配|完全不采购|重新筛选|与.{0,12}无关|不属于.{0,8}品类|搜索误差/.test(b)
@@ -5203,7 +5219,9 @@ const isHardCrossCategoryMismatch = (productKeyword: string, blob: string): bool
     return true;
   }
   const isToyKw =
-    /bubble|wand|泡泡|玩具|toy|doll|plush|lego|puzzle|kids|children|party.?favor|novelty|car\s*toy|汽车玩具/i.test(p);
+    /bubble|wand|泡泡|玩具|toy|doll|plush|lego|puzzle|kids|children|party.?favor|novelty|car\s*toy|汽车玩具|robot\s*dog|robotic\s*dog|robot\s*pet|机器狗|智能机器狗/i.test(
+      p
+    );
   const isFoodBlob =
     /食品超市|精品食品|高端食品|生鲜|肉类|海鲜|奶酪|烘焙|餐饮服务|grocery|supermarket|gourmet\s*food|specialty\s*food|seafood|butcher|bakery|cfia|食品零售|纯食品/i.test(
       b
@@ -5226,25 +5244,45 @@ const productRelevanceOk = (
 
   const blob = `${r.name || ''} ${r.mainProducts || ''} ${r.description || ''} ${r.fitReason || ''}`;
   const blobLower = blob.toLowerCase();
-  const kw = (productKeyword || '').trim().toLowerCase();
+  const kw = stripCategoryParenFromKeyword(productKeyword || '').toLowerCase();
   if (!kw) return score >= 4;
 
   if (isHardCrossCategoryMismatch(kw, blob)) return false;
 
-  const rawParts = kw.split(/[\s/_+\-,，、]+/).map((t) => t.trim()).filter(Boolean);
-  const tokens = [kw, ...rawParts.filter((t) => t.length >= 2)].filter(
-    (t, i, arr) => arr.indexOf(t) === i
-  );
+  // 停用词：类目/渠道泛词不能当产品命中（否则 Electronics 会放过整页电子商）
+  const STOP = new Set([
+    'smart',
+    'electronics',
+    'electronic',
+    'products',
+    'product',
+    'official',
+    'category',
+    'and',
+    'the',
+    'for',
+    'with',
+  ]);
+  const rawParts = kw
+    .split(/[\s/_+\-,，、()（）]+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2 && !STOP.has(t));
+  const tokens = [kw, ...rawParts].filter((t, i, arr) => arr.indexOf(t) === i);
 
   const hit = tokens.some((t) => blobLower.includes(t.toLowerCase()));
   const softRe = softCategoryRegexForKeyword(kw);
   const softHit = softRe ? softRe.test(blob) : false;
 
+  // 中文同义：机器狗 ↔ robot dog
+  const zhToyHit =
+    /robot\s*dog|robotic|机器狗|智能狗|机器宠物/i.test(kw) &&
+    /机器狗|智能狗|机器宠物|机器人玩具|遥控玩具|电子玩具|\btoys?\b|玩具/i.test(blob);
+
   // 必须关键词命中，或（高分 + 同品类软词）。禁止再用「零售/进口」等万能词放行。
-  if (hit && (score === 0 || score >= 3)) return true;
+  if ((hit || zhToyHit) && (score === 0 || score >= 3)) return true;
   if (softHit && score >= 4) return true;
-  if (softHit && score >= 3 && hit) return true;
-  if (score === 0) return hit || softHit;
+  if (softHit && score >= 3 && (hit || zhToyHit)) return true;
+  if (score === 0) return hit || softHit || zhToyHit;
   return false;
 };
 

@@ -58,6 +58,24 @@ export const TAXONOMY_ALIAS_RULES: Array<{
     labelZh: '遥控玩具',
   },
   {
+    // 机器狗是玩具，禁止落到消费电子「智能机器人」
+    keys: [
+      'robot dog',
+      'robotic dog',
+      'ai dog',
+      'robot pet',
+      'robotic pet',
+      '机器狗',
+      '智能机器狗',
+      '机器宠物',
+      '电子机器狗',
+      '遥控机器狗',
+    ],
+    l1Id: 'l1__parents_kids_and_toys__remote_control_toys',
+    l2Hint: 'robot',
+    labelZh: '遥控玩具 / 机器狗',
+  },
+  {
     keys: ['plush', '软玩具', '毛绒', 'stuffed', 'soft toy'],
     l1Id: 'l1__parents_kids_and_toys__stuffed_animals_and_plush_toys',
     l2Hint: 'stuffed',
