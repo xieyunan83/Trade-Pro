@@ -550,6 +550,12 @@ const runOneJob = async (job: NightUpgradeJob) => {
 export const pumpNightUpgrade = async () => {
   if (pumping || shouldStop) return;
   if (!state.enabled || !handlers) return;
+  try {
+    const { shouldDeferHeavyWork } = await import('./foregroundGuard');
+    if (shouldDeferHeavyWork()) return;
+  } catch {
+    /* ignore */
+  }
   // 挂机模式：白天也跑轻量；非挂机：仍仅夜间窗
   const worker = isWorkerModeActive();
   const inNight = isQwenNightPromoWindow();

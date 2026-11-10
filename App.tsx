@@ -19,6 +19,7 @@ import {
 } from './services/automationQueueStore';
 import { AppNavDock } from './components/AppNavDock';
 import { CooldownOverlay } from './components/CooldownOverlay';
+import { installForegroundGuard } from './services/foregroundGuard';
 import {
   loadAndRepairAutomationQueue,
   mergeDecisionMakersIntoAutomationTasks,
@@ -590,6 +591,9 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
   }, []);
 
   useEffect(() => subscribeWorkerMode((s) => setWorkerModeOn(s.active)), []);
+
+  // 最小化 / 切应用返回：先恢复侧栏可点，并冷静期让路，避免定时器回补饿死菜单
+  useEffect(() => installForegroundGuard(), []);
 
   /** 仅 admin 挂机端：静默补齐缺口（白天轻量 / 夜间重补全）；业务员本机绝不自动开跑 */
   useEffect(() => {

@@ -63,8 +63,7 @@ export const CreativeStorageBadge: React.FC<Props> = ({ className = '', compact 
   const onClear = async () => {
     if (
       !window.confirm(
-        '清空本机创作素材库？已生成的图片 / 3D / 视频预览将无法再打开（可重新生成）。\n\n存储位置：浏览器 IndexedDB → ' +
-          VAULT_DB_NAME
+        '清空本机创作素材库？已生成的图片 / 3D / 视频预览将无法再打开（可重新生成）。'
       )
     ) {
       return;
@@ -82,7 +81,7 @@ export const CreativeStorageBadge: React.FC<Props> = ({ className = '', compact 
     return (
       <div
         className={`inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 px-2 py-1 text-[10px] font-bold ${className}`}
-        title={`本机 IndexedDB「${VAULT_DB_NAME}」，无总容量上限`}
+        title="本机素材库，无总容量上限"
       >
         <HardDrive size={12} />
         本机素材 {formatBytes(bytes)}
@@ -118,8 +117,7 @@ export const CreativeStorageBadge: React.FC<Props> = ({ className = '', compact 
           <span className="text-slate-400 font-medium"> · 无总容量上限</span>
         </div>
         <div className="text-[10px] font-medium text-slate-500 mt-0.5 leading-snug">
-          存于浏览器 IndexedDB「{VAULT_DB_NAME}」（非普通文件夹）。Chrome：F12 → Application →
-          IndexedDB；桌面客户端同理。可点清空，或在开发者工具里删除该库。
+          素材保存在本机应用空间。可点清理旧文件或清空后重新生成。
         </div>
       </div>
       <button

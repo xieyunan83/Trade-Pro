@@ -210,7 +210,7 @@ export const SiteOneClickForm: React.FC<Props> = ({
                 <input
                   value={form.tagline}
                   onChange={(e) => patch('tagline', e.target.value)}
-                  placeholder="例如：澄海源头工厂 · 欧美合规玩具"
+                  placeholder="例如：源头工厂 · 欧美合规玩具"
                   className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-teal-400"
                 />
               </label>

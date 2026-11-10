@@ -1,5 +1,5 @@
 /**
- * 澄海玩具出口 · 自动化获客剧本（一键填入流水线配置）
+ * 自动化获客剧本（一键填入流水线配置）
  * 前台中性文案，不暴露数据源与供应商名。
  */
 import type { AutomationPipelineConfig } from '../types';
@@ -25,7 +25,7 @@ export const ACQUISITION_PLAYBOOKS: AcquisitionPlaybook[] = [
       clientTypes: ['Importer', 'Distributor', 'Wholesaler'],
       countries: ['Germany', 'Netherlands', 'Poland'],
       perCountryLimit: 6,
-      productContext: '澄海源头：磁力积木 / 益智拼搭 / 户外泡泡，支持 CE、混装箱、OEM。',
+      productContext: '源头工厂：磁力积木 / 益智拼搭 / 户外泡泡，支持 CE、混装箱、OEM。',
       doBackgroundCheck: true,
       doLinkedInLocate: true,
       doDmMine: true,

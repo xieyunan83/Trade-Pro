@@ -20,7 +20,7 @@ export type ModuleRoadmap = {
 export const JOURNEY_ROADMAP_NOTE = {
   phase: 'P0' as const,
   summary:
-    '澄海玩具出口任务流：选品适市 → 设计 → 市调专家/产品经理 → 客户匹配 → 开发信组 → CRM；指挥舱一站推进。',
+    '出口任务流：选品适市 → 设计 → 市调与产品匹配 → 开发信组 → CRM；指挥舱一站推进。',
   bullets: [
     '双专家：全球市调定国家趋势，产品经理定定位与设计要点',
     '设计完成后匹配 CRM / 背调客户库，并输出专业匹配理由',

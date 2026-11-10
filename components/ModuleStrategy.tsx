@@ -554,7 +554,7 @@ export const ModuleStrategy: React.FC<Props> = ({
           '请求体积过大（附件或系统知识库过多）。已自动压缩仍失败时，请：去掉大图/PDF、减少附件，或点右上角清空对话后再试。';
       } else {
         errorText = errorText
-          .replace(/千问|通义|DashScope|Qwen|Gemini|Tavily/gi, '策略服务')
+          .replace(/千问|通义|DashScope|Qwen|Gemini|Tavily|万相|Tripo|混元|AnyMail|Hunter/gi, '策略服务')
           .slice(0, 280);
       }
       setMessages((prev) => [
@@ -623,7 +623,7 @@ export const ModuleStrategy: React.FC<Props> = ({
       const raw = e instanceof Error ? e.message : String(e);
       setGenerateMsg(
         `生成失败：${raw
-          .replace(/千问|通义|DashScope|Qwen|Gemini|Tavily/gi, '策略服务')
+          .replace(/千问|通义|DashScope|Qwen|Gemini|Tavily|万相|Tripo|混元|AnyMail|Hunter/gi, '策略服务')
           .slice(0, 220)}`
       );
     } finally {

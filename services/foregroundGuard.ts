@@ -1,0 +1,135 @@
+/**
+ * 前台交互守护：窗口最小化 / 切到别的 App 再回来时，
+ * Chromium 会一口气补跑被节流的定时器与 React 更新，侧栏点击常被饿死。
+ * 后台暂停重任务通知；回前台先让导航可点，再短暂延迟恢复泵。
+ */
+
+type Listener = (foreground: boolean) => void;
+
+let foreground = typeof document === 'undefined' ? true : document.visibilityState !== 'hidden';
+let resumeTimer: ReturnType<typeof setTimeout> | null = null;
+/** 回前台后额外冷静期，期间重任务应让路给点击 */
+let calmUntil = 0;
+const listeners = new Set<Listener>();
+
+const emit = () => {
+  listeners.forEach((fn) => {
+    try {
+      fn(foreground);
+    } catch {
+      /* ignore */
+    }
+  });
+};
+
+const recoverNavPointer = () => {
+  if (typeof document === 'undefined') return;
+  try {
+    document.querySelectorAll<HTMLElement>('[data-tp-nav-dock], .tp-sidebar.tp-sphere-rail').forEach((el) => {
+      el.style.pointerEvents = 'auto';
+      el.style.zIndex = '9999';
+    });
+    // 清掉可能残留的全屏挡板（冷却层除外）
+    document.body.style.pointerEvents = '';
+  } catch {
+    /* ignore */
+  }
+};
+
+export const isAppForeground = (): boolean => foreground;
+
+/** 重任务泵应在后台或冷静期内让路 */
+export const shouldDeferHeavyWork = (): boolean => {
+  if (!foreground) return true;
+  return Date.now() < calmUntil;
+};
+
+export const subscribeForeground = (fn: Listener): (() => void) => {
+  listeners.add(fn);
+  try {
+    fn(foreground);
+  } catch {
+    /* ignore */
+  }
+  return () => listeners.delete(fn);
+};
+
+export const markAppBackground = () => {
+  if (!foreground) return;
+  foreground = false;
+  calmUntil = Number.POSITIVE_INFINITY;
+  if (resumeTimer) {
+    clearTimeout(resumeTimer);
+    resumeTimer = null;
+  }
+  emit();
+};
+
+export const markAppForeground = (opts?: { calmMs?: number }) => {
+  const calmMs = opts?.calmMs ?? 1800;
+  foreground = true;
+  calmUntil = Date.now() + calmMs;
+  recoverNavPointer();
+  // 双 rAF：等一帧布局后再强调可点
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(() => {
+      recoverNavPointer();
+      requestAnimationFrame(recoverNavPointer);
+    });
+  }
+  if (resumeTimer) clearTimeout(resumeTimer);
+  resumeTimer = setTimeout(() => {
+    resumeTimer = null;
+    calmUntil = 0;
+    emit();
+  }, calmMs);
+  emit();
+};
+
+/** 在 App / LoginBoot 挂一次即可 */
+export const installForegroundGuard = (): (() => void) => {
+  if (typeof window === 'undefined' || typeof document === 'undefined') {
+    return () => undefined;
+  }
+
+  const onVisibility = () => {
+    if (document.visibilityState === 'hidden') markAppBackground();
+    else markAppForeground();
+  };
+  const onPageHide = () => markAppBackground();
+  const onPageShow = () => markAppForeground();
+  const onBlur = () => {
+    // Electron 最小化有时只 blur 不改 visibility
+    if (document.visibilityState === 'hidden') markAppBackground();
+    else {
+      // 失焦但仍可见：短冷静，避免切窗瞬间被泵抢走
+      calmUntil = Math.max(calmUntil, Date.now() + 800);
+    }
+  };
+  const onFocus = () => markAppForeground({ calmMs: 1600 });
+  const onDesktopFocus = () => markAppForeground({ calmMs: 2000 });
+  const onDesktopBlur = () => markAppBackground();
+
+  document.addEventListener('visibilitychange', onVisibility);
+  window.addEventListener('pagehide', onPageHide);
+  window.addEventListener('pageshow', onPageShow);
+  window.addEventListener('blur', onBlur);
+  window.addEventListener('focus', onFocus);
+  window.addEventListener('tp-desktop-focus', onDesktopFocus as EventListener);
+  window.addEventListener('tp-desktop-blur', onDesktopBlur as EventListener);
+
+  // 启动时按当前可见性校正
+  if (document.visibilityState === 'hidden') markAppBackground();
+  else recoverNavPointer();
+
+  return () => {
+    document.removeEventListener('visibilitychange', onVisibility);
+    window.removeEventListener('pagehide', onPageHide);
+    window.removeEventListener('pageshow', onPageShow);
+    window.removeEventListener('blur', onBlur);
+    window.removeEventListener('focus', onFocus);
+    window.removeEventListener('tp-desktop-focus', onDesktopFocus as EventListener);
+    window.removeEventListener('tp-desktop-blur', onDesktopBlur as EventListener);
+    if (resumeTimer) clearTimeout(resumeTimer);
+  };
+};

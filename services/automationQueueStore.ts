@@ -5,6 +5,7 @@
  */
 import type { AutomationResult } from '../types';
 import { slimAutomationQueueForUi } from './db';
+import { isAppForeground, subscribeForeground } from './foregroundGuard';
 
 export type AutomationCounts = {
   total: number;
@@ -32,6 +33,13 @@ let counts: AutomationCounts = {
 
 const listeners = new Set<Listener>();
 const countListeners = new Set<Listener>();
+let emitQueued = false;
+
+const flushEmit = () => {
+  emitQueued = false;
+  emit();
+  emitCounts();
+};
 
 const recomputeCounts = (list: AutomationResult[]): AutomationCounts => {
   let pending = 0;
@@ -83,8 +91,19 @@ const commit = (next: AutomationResult[]) => {
   uiTasks = slimAutomationQueueForUi(next);
   version += 1;
   counts = recomputeCounts(next);
-  emit();
-  emitCounts();
+  // 后台/最小化时积压通知，回前台再刷，避免切回瞬间饿死侧栏
+  if (!isAppForeground()) {
+    if (!emitQueued) {
+      emitQueued = true;
+      if (typeof window !== 'undefined') {
+        window.setTimeout(() => {
+          if (isAppForeground()) flushEmit();
+        }, 400);
+      }
+    }
+    return;
+  }
+  flushEmit();
 };
 
 export const getAutomationQueueSnapshot = (): AutomationResult[] => tasks;
@@ -116,3 +135,10 @@ export const subscribeAutomationCounts = (fn: Listener): (() => void) => {
   countListeners.add(fn);
   return () => countListeners.delete(fn);
 };
+
+// 回前台时冲掉后台积压的队列通知
+if (typeof window !== 'undefined') {
+  subscribeForeground((fg) => {
+    if (fg && emitQueued) flushEmit();
+  });
+}

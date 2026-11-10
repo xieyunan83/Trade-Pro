@@ -55,7 +55,7 @@ body {
   overflow-y: auto !important;
   -webkit-overflow-scrolling: touch;
   /* 高于主区 loading/冷却遮罩，避免「看得见菜单但点不到」 */
-  z-index: 80 !important;
+  z-index: 9999 !important;
   box-sizing: border-box !important;
   transform: none !important;
   pointer-events: auto !important;

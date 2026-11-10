@@ -348,6 +348,23 @@ function createWindow() {
   mainWindow.once('ready-to-show', showSoon);
   setTimeout(showSoon, 80);
 
+  // 最小化 / 失焦 / 恢复：通知页面先恢复侧栏可点，避免回前台定时器回补卡死菜单
+  const pingRenderer = (name) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    void mainWindow.webContents
+      .executeJavaScript(
+        `try{window.dispatchEvent(new Event(${JSON.stringify(name)}));}catch(e){}`,
+        true
+      )
+      .catch(() => undefined);
+  };
+  mainWindow.on('minimize', () => pingRenderer('tp-desktop-blur'));
+  mainWindow.on('hide', () => pingRenderer('tp-desktop-blur'));
+  mainWindow.on('restore', () => pingRenderer('tp-desktop-focus'));
+  mainWindow.on('show', () => pingRenderer('tp-desktop-focus'));
+  mainWindow.on('focus', () => pingRenderer('tp-desktop-focus'));
+  mainWindow.on('blur', () => pingRenderer('tp-desktop-blur'));
+
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isAppUrl(url)) return { action: 'allow' };
     shell.openExternal(url).catch(() => {});

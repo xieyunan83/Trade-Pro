@@ -285,13 +285,13 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
       <div className="text-center mb-8 sm:mb-11 px-2 relative z-10 tp-login-hero">
         <div className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full border border-teal-300/30 bg-teal-400/10 text-teal-100 text-[11px] font-bold tracking-[0.22em] mb-5">
           <Sparkles size={12} className="text-teal-300" />
-          澄海 · 智造出海
+          智造出海
         </div>
         <h1 className="text-4xl sm:text-5xl md:text-[3.35rem] font-extrabold text-white tracking-tight mb-3 sm:mb-4 drop-shadow-[0_2px_28px_rgba(0,0,0,0.4)]">
           外贸智慧协同
         </h1>
         <p className="text-base sm:text-lg md:text-xl text-slate-300/85 font-medium tracking-wide">
-          赋能澄海玩具产业升级
+          赋能出海产业升级
         </p>
       </div>
 
@@ -310,7 +310,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onUsersChange }) => {
             </h2>
             {!pendingUser && (
               <p className="text-[11px] font-semibold text-slate-400 mt-0.5 tracking-wide">
-                澄海玩具 · 数字化外贸工作台
+                数字化外贸工作台
               </p>
             )}
           </div>

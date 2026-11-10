@@ -204,7 +204,7 @@ export const ModuleSocialContent: React.FC<Props> = ({ currentUser }) => {
       const raw = e instanceof Error ? e.message : String(e);
       setMsg(
         raw
-          .replace(/千问|通义|DashScope|Qwen|Gemini|Tavily/gi, '文案服务')
+          .replace(/千问|通义|DashScope|Qwen|Gemini|Tavily|万相|Tripo|混元/gi, '文案服务')
           .slice(0, 200) || '生成失败，请稍后重试'
       );
     } finally {

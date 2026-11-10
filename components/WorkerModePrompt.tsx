@@ -63,15 +63,14 @@ export const WorkerModePrompt: React.FC<Props> = ({ open, onConfirm, onDecline, 
             <Moon size={14} className="text-indigo-500 mt-0.5 shrink-0" />
             <div className="text-[11px] text-slate-700 leading-snug">
               <span className="font-black">夜间 22:00–08:00</span>
-              ：全量背调并行（当前可用 Key {status.qwenKeyCount} 把 → 并行最多{' '}
-              {Math.min(2, Math.max(1, status.qwenKeyCount || 1))} 路）+ 联系人等重补全
+              ：自动继续背调与联系人补全，适合挂机跑完待办
             </div>
           </div>
           <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5 flex gap-2.5">
             <Sun size={14} className="text-amber-500 mt-0.5 shrink-0" />
             <div className="text-[11px] text-slate-700 leading-snug">
               <span className="font-black">白天</span>
-              ：仅轻量补全（品类匹配、邮箱入队等），不抢优惠时段算力
+              ：仅做轻量补全，尽量不影响你正常操作
             </div>
           </div>
         </div>

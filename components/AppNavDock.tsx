@@ -71,8 +71,8 @@ export const AppNavDock = memo(function AppNavDock({
 
   const node = (
     <aside
-      className={`tp-sidebar tp-sphere-rail z-[80] flex-col ${
-        mobileMenuOpen ? 'fixed inset-y-0 left-0 z-[90] flex translate-x-0' : 'hidden md:flex'
+        className={`tp-sidebar tp-sphere-rail z-[9999] flex-col ${
+        mobileMenuOpen ? 'fixed inset-y-0 left-0 z-[9999] flex translate-x-0' : 'hidden md:flex'
       } ${dockWidthClass}`}
       aria-label="平台导航坞"
       data-tp-nav-dock="1"

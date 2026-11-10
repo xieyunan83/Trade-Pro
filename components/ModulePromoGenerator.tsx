@@ -599,7 +599,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
           <Ruler className="text-blue-600" /> 自动化获客工作流
         </h2>
         <p className="text-sm text-slate-500 font-medium mb-4 leading-relaxed">
-          澄海玩具出口剧本一键开跑：按国家搜索 → 并行背调 / 决策人邮箱 / 入 CRM。也可自定义全部选项。
+          获客剧本一键开跑：按国家搜索客户，完成背调与联系人准备并可入库。也可自定义全部选项。
         </p>
 
         <div className="mb-5">

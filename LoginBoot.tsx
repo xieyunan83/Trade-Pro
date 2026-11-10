@@ -23,6 +23,7 @@ import {
 } from './services/sessionStore';
 import { setUsageScope } from './services/limitService';
 import { hydrateProductTaxonomy } from './data/productTaxonomy';
+import { installForegroundGuard } from './services/foregroundGuard';
 
 let appImportPromise: Promise<typeof import('./App')> | null = null;
 const loadAppModule = () => {
@@ -47,6 +48,8 @@ export const LoginBoot: React.FC = () => {
   const [bootUser, setBootUser] = useState<User | null>(null);
   /** 先出登录，再异步恢复会话；禁止 ready=false 整页空白 */
   const intentionalLogout = useRef(false);
+
+  useEffect(() => installForegroundGuard(), []);
 
   // 登录页画出来后再慢慢预取主包；类目等进站后再拉，别和首屏抢网
   useEffect(() => {
