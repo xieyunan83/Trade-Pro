@@ -60,7 +60,7 @@ type LeftTab = 'projects' | 'skills' | 'assets';
  */
 export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigateModule }) => {
   const [projects, setProjects] = useState<PackagingProject[]>(() => loadPackagingProjects());
-  const [assets, setAssets] = useState<PackagingAsset[]>(() => loadPackagingAssets());
+  const [assets, setAssets] = useState<PackagingAsset[]>([]);
   const [activeId, setActiveId] = useState<string | null>(projects[0]?.id || null);
   const [leftTab, setLeftTab] = useState<LeftTab>('skills');
   const [prompt, setPrompt] = useState('');
@@ -119,7 +119,21 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
     let cancelled = false;
     (async () => {
       try {
+        await new Promise<void>((r) => {
+          window.requestAnimationFrame(() => window.setTimeout(r, 0));
+        });
+        if (cancelled) return;
         const raw = loadPackagingAssets();
+        if (!cancelled) setAssets(raw);
+        await new Promise((r) => window.setTimeout(r, 8_000));
+        if (cancelled) return;
+        try {
+          const { waitUntilWorkAllowed } = await import('../services/backgroundWorkScheduler');
+          await waitUntilWorkAllowed(() => cancelled, 180_000);
+        } catch {
+          /* ignore */
+        }
+        if (cancelled) return;
         const migrated = await persistPackagingAssets(raw);
         if (cancelled) return;
         savePackagingAssets(migrated);

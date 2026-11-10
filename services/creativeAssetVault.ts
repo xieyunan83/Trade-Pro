@@ -318,6 +318,65 @@ const guessMime = (kind: VaultKind, blobType: string, url: string): string => {
   return blobType || 'application/octet-stream';
 };
 
+const yieldBriefly = () =>
+  new Promise<void>((resolve) => {
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => setTimeout(resolve, 0));
+      return;
+    }
+    setTimeout(resolve, 0);
+  });
+
+/**
+ * 冷启动重建元数据索引。
+ * 禁止 getAll()：会把整库 blob（几百 MB）一次性拖进内存，桌面端直接假死。
+ * 改用游标逐条抽 meta，并每几条让出主线程。
+ */
+const rebuildVaultMetaIndex = async (): Promise<VaultMeta[]> => {
+  const db = await openDb();
+  const meta: VaultMeta[] = [];
+  try {
+    const tx = db.transaction(STORE, 'readonly');
+    const store = tx.objectStore(STORE);
+    let sinceYield = 0;
+    await new Promise<void>((resolve, reject) => {
+      const req = store.openCursor();
+      req.onerror = () => reject(req.error || new Error('素材索引扫描失败'));
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (!cursor) {
+          resolve();
+          return;
+        }
+        try {
+          const row = cursor.value as VaultRow;
+          const { blob: _b, ...m } = row;
+          if (m?.id) meta.push(m);
+        } catch {
+          /* skip corrupt */
+        }
+        sinceYield += 1;
+        if (sinceYield >= 4) {
+          sinceYield = 0;
+          void yieldBriefly().then(() => {
+            try {
+              cursor.continue();
+            } catch (e) {
+              reject(e);
+            }
+          });
+          return;
+        }
+        cursor.continue();
+      };
+    });
+  } finally {
+    db.close();
+  }
+  writeMetaLs(meta);
+  return meta.map((m) => ({ ...m }));
+};
+
 export const listVaultMeta = async (): Promise<VaultMeta[]> => {
   if (!isBrowser()) return [];
   if (metaMemory) return metaMemory.map((m) => ({ ...m }));
@@ -326,17 +385,7 @@ export const listVaultMeta = async (): Promise<VaultMeta[]> => {
     metaMemory = fromLs;
     return fromLs.map((m) => ({ ...m }));
   }
-  // 冷启动重建索引（只此一次会扫 blob；之后走 LS）
-  const db = await openDb();
-  try {
-    const tx = db.transaction(STORE, 'readonly');
-    const all = await idbReq(tx.objectStore(STORE).getAll());
-    const meta = (all as VaultRow[]).map(({ blob: _b, ...m }) => m);
-    writeMetaLs(meta);
-    return meta.map((m) => ({ ...m }));
-  } finally {
-    db.close();
-  }
+  return rebuildVaultMetaIndex();
 };
 
 export const getVaultStats = async (): Promise<{

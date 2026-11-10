@@ -33,13 +33,41 @@ export const CreativeStorageBadge: React.FC<Props> = ({ className = '', compact 
   }, []);
 
   useEffect(() => {
-    void refresh();
-    const t = window.setInterval(() => void refresh(), 60_000);
-    const onVault = () => void refresh();
+    let cancelled = false;
+    const run = () => {
+      if (cancelled) return;
+      void refresh();
+    };
+    // 进创作模块立刻扫库会卡死；空闲后再统计
+    let idleId = 0;
+    const ric = (
+      window as Window & {
+        requestIdleCallback?: (cb: () => void, opts?: { timeout?: number }) => number;
+      }
+    ).requestIdleCallback;
+    if (typeof ric === 'function') {
+      idleId = ric(run, { timeout: 12_000 });
+    } else {
+      idleId = window.setTimeout(run, 6_000) as unknown as number;
+    }
+    const t = window.setInterval(() => void refresh(), 120_000);
+    const onVault = () => {
+      window.setTimeout(run, 2_500);
+    };
     window.addEventListener('trade-pro-vault-changed', onVault);
     return () => {
+      cancelled = true;
       window.clearInterval(t);
       window.removeEventListener('trade-pro-vault-changed', onVault);
+      try {
+        const cic = (
+          window as Window & { cancelIdleCallback?: (id: number) => void }
+        ).cancelIdleCallback;
+        if (typeof cic === 'function') cic(idleId);
+        else window.clearTimeout(idleId);
+      } catch {
+        /* ignore */
+      }
     };
   }, [refresh]);
 

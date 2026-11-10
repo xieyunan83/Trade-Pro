@@ -87,7 +87,10 @@ type LeftTab = 'projects' | 'skills' | 'packs' | 'assets';
  */
 export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigateModule }) => {
   const [projects, setProjects] = useState<DesignProject[]>(() => loadDesignProjects());
-  const [assets, setAssets] = useState<DesignAsset[]>(() => loadDesignAssets());
+  /** 禁止首屏同步 JSON.parse 大素材表；先出 UI 再异步灌入 */
+  const [assets, setAssets] = useState<DesignAsset[]>([]);
+  const [assetsReady, setAssetsReady] = useState(false);
+  const [canvasShowAll, setCanvasShowAll] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(projects[0]?.id || null);
   /** 默认落在「模板」，避免新功能藏在 Skills 里找不到 */
   const [leftTab, setLeftTab] = useState<LeftTab>('packs');
@@ -174,6 +177,11 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     () => assets.filter((a) => a.projectId === activeId),
     [assets, activeId]
   );
+  const CANVAS_PREVIEW_CAP = 8;
+  const visibleCanvasAssets = useMemo(
+    () => (canvasShowAll ? canvasAssets : canvasAssets.slice(0, CANVAS_PREVIEW_CAP)),
+    [canvasAssets, canvasShowAll]
+  );
   const selectedAssets = useMemo(
     () => canvasAssets.filter((a) => selectedIds.includes(a.id)),
     [canvasAssets, selectedIds]
@@ -198,6 +206,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
 
   React.useEffect(() => {
     setSelectedIds([]);
+    setCanvasShowAll(false);
   }, [activeId]);
 
   const persistProjects = (next: DesignProject[]) => {
@@ -209,18 +218,43 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     saveDesignAssets(next);
   };
 
-  /** 启动时：把仍挂临时外链 / dataURL 的图迁入本机 IndexedDB */
+  /** 首屏让出后再读素材；迁移必须在用户停手后做，禁止进模块就拖死 */
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
+        await new Promise<void>((r) => {
+          window.requestAnimationFrame(() => window.setTimeout(r, 0));
+        });
+        if (cancelled) return;
         const raw = loadDesignAssets();
+        if (cancelled) return;
+        setAssets(raw);
+        setAssetsReady(true);
+        // 延后很久再迁 dataURL → vault，且遇操作就停
+        await new Promise((r) => window.setTimeout(r, 8_000));
+        if (cancelled) return;
+        try {
+          const { waitUntilWorkAllowed } = await import('../services/backgroundWorkScheduler');
+          const ok = await waitUntilWorkAllowed(() => cancelled, 180_000);
+          if (!ok || cancelled) return;
+        } catch {
+          /* ignore */
+        }
+        const needMigrate = raw.some(
+          (a) =>
+            (a.url || '').startsWith('data:') ||
+            /^https?:\/\//i.test(a.url || '') ||
+            (a.url || '').startsWith('blob:')
+        );
+        if (!needMigrate) return;
         const migrated = await persistDesignAssets(raw);
         if (cancelled) return;
         saveDesignAssets(migrated);
         setAssets(migrated);
       } catch (e) {
         console.warn('design assets migrate', e);
+        if (!cancelled) setAssetsReady(true);
       }
     })();
     return () => {
@@ -1259,8 +1293,11 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                 <p className="text-[10px] text-slate-400 font-medium">
                   勾选后可「选中 → 作参考」做二次创作，或直接确认生成（会自动用选中/画布图作身份锁）。也可推送 3D / 视频 / 包装。
                 </p>
+                {!assetsReady && (
+                  <p className="text-[11px] font-bold text-slate-400 mb-2">画布素材加载中…</p>
+                )}
                 <div className="tp-2d-canvas-grid grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-2.5">
-                  {canvasAssets.map((a, i) => {
+                  {visibleCanvasAssets.map((a, i) => {
                     const selected = selectedIds.includes(a.id);
                     return (
                       <div
@@ -1283,6 +1320,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                         <VaultImg
                           src={a.url}
                           alt=""
+                          lazyResolve
                           className="w-full aspect-square max-h-56 object-contain bg-slate-50 pointer-events-none"
                         />
                         <span
@@ -1349,6 +1387,17 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                     );
                   })}
                 </div>
+                {canvasAssets.length > CANVAS_PREVIEW_CAP && (
+                  <button
+                    type="button"
+                    onClick={() => setCanvasShowAll((v) => !v)}
+                    className="mt-2 text-[11px] font-black text-violet-700 hover:text-violet-900"
+                  >
+                    {canvasShowAll
+                      ? '收起画布预览'
+                      : `还有 ${canvasAssets.length - CANVAS_PREVIEW_CAP} 张，点此展开（展开可能稍慢）`}
+                  </button>
+                )}
               </div>
             )}
           </div>

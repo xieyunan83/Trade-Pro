@@ -41,13 +41,34 @@ export const persistUrlField = async (
   return tryPersistMediaUrl(url, kind, opts?.sourceHint, { id: opts?.id });
 };
 
+const yieldUi = () =>
+  new Promise<void>((r) => {
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => setTimeout(r, 0));
+      return;
+    }
+    setTimeout(r, 0);
+  });
+
 export const persistDesignAssets = async (rows: DesignAsset[]): Promise<DesignAsset[]> => {
   const out: DesignAsset[] = [];
-  for (const a of rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const a = rows[i];
+    try {
+      const { shouldDeferHeavyWork } = await import('./foregroundGuard');
+      let spins = 0;
+      while (shouldDeferHeavyWork() && spins < 80) {
+        await new Promise((r) => setTimeout(r, 200));
+        spins += 1;
+      }
+    } catch {
+      /* ignore */
+    }
     out.push({
       ...a,
       url: (await persistUrlField(a.url, 'image')) || a.url,
     });
+    if (i % 2 === 1) await yieldUi();
   }
   return out;
 };

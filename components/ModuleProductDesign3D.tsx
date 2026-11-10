@@ -82,7 +82,7 @@ type Props = {
  * 产品设计 · 3D：图/文生 3D、品质档、真实 GLB 导出。
  */
 export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigateModule }) => {
-  const [jobs, setJobs] = useState<Model3dJob[]>(() => sanitizeModel3dJobs(loadModel3dJobs()));
+  const [jobs, setJobs] = useState<Model3dJob[]>([]);
   const [mode, setMode] = useState<Model3dMode>('image');
   const [modelSkillId, setModelSkillId] = useState<Model3dSkillId>('turntable_hero');
   const [quality, setQuality] = useState<Model3dQuality>('high_detail');
@@ -100,10 +100,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [msgTone, setMsgTone] = useState<'info' | 'error' | 'ok'>('info');
-  const [activeId, setActiveId] = useState<string | null>(() => {
-    const initial = sanitizeModel3dJobs(loadModel3dJobs());
-    return initial[0]?.id || null;
-  });
+  const [activeId, setActiveId] = useState<string | null>(null);
   const [provider, setProvider] = useState(() => getModel3dProviderStatus());
   const [hydrating, setHydrating] = useState(true);
   const [quickKey, setQuickKey] = useState('');
@@ -194,10 +191,15 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     let cancelled = false;
     (async () => {
       setHydrating(true);
-      // 先清僵尸 running@100%，立刻可操作，再异步恢复/落库
+      // 先让出首屏，再读本机任务；禁止进模块同步 JSON.parse/落盘堵死点击
+      await new Promise<void>((r) => {
+        window.requestAnimationFrame(() => window.setTimeout(r, 0));
+      });
+      if (cancelled) return;
       const cleaned = sanitizeModel3dJobs(loadModel3dJobs());
       saveModel3dJobs(cleaned);
       setJobs(cleaned);
+      setActiveId((id) => id || cleaned[0]?.id || null);
       const stuck = cleaned.filter((j) => j.status === 'failed' && (j.error || '').includes('中断'));
       if (stuck.length) {
         setMsgTone('error');

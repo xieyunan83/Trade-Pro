@@ -257,7 +257,27 @@ export const loadDesignAssets = (): DesignAsset[] => {
 };
 
 export const saveDesignAssets = (rows: DesignAsset[]) => {
-  localStorage.setItem(LS_ASSETS, JSON.stringify(rows));
+  // localStorage 只保留短引用；禁止把 dataURL 整图再写回，否则下次进模块 JSON.parse 直接卡死
+  const slim = rows.map((a) => {
+    const u = a.url || '';
+    if (u.startsWith('data:') && u.length > 2_000) {
+      return { ...a, url: '' };
+    }
+    return a;
+  });
+  try {
+    localStorage.setItem(LS_ASSETS, JSON.stringify(slim));
+  } catch (e) {
+    console.warn('[designAssets] save failed (quota?)', e);
+    try {
+      const vaultOnly = slim.map((a) =>
+        (a.url || '').startsWith('vault:') ? a : { ...a, url: (a.url || '').startsWith('http') ? a.url : '' }
+      );
+      localStorage.setItem(LS_ASSETS, JSON.stringify(vaultOnly));
+    } catch {
+      /* ignore */
+    }
+  }
 };
 
 export const newDesignId = (prefix: string) =>

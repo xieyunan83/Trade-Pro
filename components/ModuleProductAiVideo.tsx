@@ -55,7 +55,7 @@ type Props = {
  * 产品 AI 视频：文/图/多参考真实生视频；样片确认后正片。
  */
 export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateModule }) => {
-  const [jobs, setJobs] = useState<VideoJob[]>(() => loadVideoJobs());
+  const [jobs, setJobs] = useState<VideoJob[]>([]);
   const [mode, setMode] = useState<VideoMode>('image');
   const [videoSkillId, setVideoSkillId] = useState<VideoSkillId>('amazon_gallery');
   const [productName, setProductName] = useState('');
@@ -76,7 +76,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
   const lastFrameFileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
-  const [activeId, setActiveId] = useState<string | null>(jobs[0]?.id || null);
+  const [activeId, setActiveId] = useState<string | null>(null);
   const [provider, setProvider] = useState(() => getVideoProviderStatus());
   const fileRef = useRef<HTMLInputElement>(null);
   const skus = useMemo(() => loadCatalogSkus(), []);
@@ -102,9 +102,32 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
     (async () => {
       const st = await hydrateVideoProvider();
       try {
+        await new Promise<void>((r) => {
+          window.requestAnimationFrame(() => window.setTimeout(r, 0));
+        });
+        if (cancelled) return;
         const raw = loadVideoJobs();
+        if (!cancelled) {
+          setJobs(raw);
+          setActiveId((id) => id || raw[0]?.id || null);
+        }
+        await new Promise((r) => window.setTimeout(r, 8_000));
+        if (cancelled) return;
+        try {
+          const { waitUntilWorkAllowed } = await import('../services/backgroundWorkScheduler');
+          await waitUntilWorkAllowed(() => cancelled, 180_000);
+        } catch {
+          /* ignore */
+        }
+        if (cancelled) return;
         const migrated: VideoJob[] = [];
-        for (const j of raw) migrated.push(await persistVideoJob(j));
+        for (let i = 0; i < raw.length; i++) {
+          if (cancelled) return;
+          migrated.push(await persistVideoJob(raw[i]));
+          if (i % 2 === 1) {
+            await new Promise<void>((r) => window.setTimeout(r, 0));
+          }
+        }
         if (!cancelled) {
           saveVideoJobs(migrated);
           setJobs(migrated);
