@@ -3458,6 +3458,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
         searchTags: kw ? buildSearchTags(kw, task.country || '') : undefined,
         searchCountry: task.country || undefined,
         skipCache: !!task.skipCache,
+        forceProductDig: !!task.skipCache,
       };
       const preferredMode = task.mode || 'economy';
       const rawResult = await withRateLimitRetry(
@@ -3959,6 +3960,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
               searchCountry: task.country || undefined,
               qwenApiKey: stickyKey || undefined,
               skipCache: !!task.skipCache,
+              forceProductDig: !!task.skipCache,
             };
             const preferredMode = task.mode || 'economy';
             const rawResult = await withHeavyJob('automation', () =>
@@ -5034,7 +5036,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
   };
 
   const REANALYZE_MERGE_HINT =
-    '将在原有资料基础上全面再分析并补充（公司概况、产品品类、贸易情报、决策人与联系方式等）；已有内容会保留，只更新或新增。';
+    '将在原有资料基础上全面再分析并补充，尤其加强品类、类目与产品全站采集；已有内容会保留，只更新或新增。';
 
   /** 已完成任务：重置后再次背调 */
   const handleRerunCompletedTask = async (id: string) => {

@@ -73,7 +73,14 @@ import { LEAD_EVIDENCE_USAGE_HINT, resolveDirectorySitesForMarket } from './lead
 import { collectInternalLeads, mergeInternalOverOnline } from './internalLeadSources';
 import { hasRichProductCatalog } from './productCatalog';
 import { applyEstimatedFobFromRetail, FOB_OVER_RETAIL } from './tradePricingTheory';
-import { mergeAnalysisRaws, mergeClientSearchResults, isEmptyPlaceholder, preferString } from './multiModelMerge';
+import {
+  mergeAnalysisRaws,
+  mergeClientSearchResults,
+  mergeCategories,
+  mergeProducts,
+  isEmptyPlaceholder,
+  preferString,
+} from './multiModelMerge';
 import {
   buildFallbackEvidenceFromReport,
   evidenceItemsFromTavilyResults,
@@ -3258,6 +3265,8 @@ export const analyzeCompany = async (
     searchTags?: string[];
     searchCountry?: string;
     skipCache?: boolean;
+    /** 再次背调：无论首轮是否「够用」，强制再跑一轮品类/产品深挖 */
+    forceProductDig?: boolean;
     /** 挂机并行：粘滞到指定千问 Key，避免多路挤同一把 */
     qwenApiKey?: string;
   }
@@ -3767,14 +3776,20 @@ ${productFocusBlock}
     }
   }
 
-  // 新背调必须带上品类与价格：若首轮不足，自动再跑一轮产品深挖并合并（不得冲掉策略字段）
-  if (!hasRichProductCatalog(normalized)) {
+  // 品类/类目/产品：首轮不足必补；再次背调（skipCache）强制再深挖一轮并与原有合并
+  const forceProductDig = !!(opts?.forceProductDig || opts?.skipCache);
+  if (forceProductDig || !hasRichProductCatalog(normalized)) {
     try {
-      console.info('[analyzeCompany] product catalog incomplete → auto digProductIntelligence');
+      console.info(
+        forceProductDig
+          ? '[analyzeCompany] force product dig (reanalyze)'
+          : '[analyzeCompany] product catalog incomplete → auto digProductIntelligence'
+      );
       const beforeDig = normalized;
       normalized = await digProductIntelligence(hasDomain ? canonicalDomain : rawInput, normalized, {
         searchKeyword: searchKeyword || undefined,
         searchCountry: searchCountry || undefined,
+        forceDeep: forceProductDig,
       });
       normalized = preserveStrategySections(beforeDig, normalized);
     } catch (e) {
@@ -4433,10 +4448,11 @@ const repairStrategySections = async (
 export const digProductIntelligence = async (
   domainOrName: string,
   existing?: AnalysisResult | null,
-  opts?: { searchKeyword?: string; searchCountry?: string }
+  opts?: { searchKeyword?: string; searchCountry?: string; forceDeep?: boolean }
 ): Promise<AnalysisResult> => {
   const searchKeyword = (opts?.searchKeyword || existing?.searchKeyword || '').trim();
   const searchCountry = (opts?.searchCountry || existing?.searchCountry || '').trim();
+  const forceDeep = !!opts?.forceDeep;
   const rawInput = (domainOrName || existing?.companyInfo?.website || existing?.companyInfo?.name || '').trim();
   const canonicalDomain = cleanDomain(rawInput).toLowerCase();
   const hasDomain = Boolean(canonicalDomain && canonicalDomain.includes('.') && !/\s/.test(canonicalDomain));
@@ -4451,18 +4467,22 @@ export const digProductIntelligence = async (
         companyHint: companyName,
         searchKeyword: searchKeyword || undefined,
         searchCountry: searchCountry || undefined,
+        deepProduct: forceDeep,
       });
-      // 控制体量：过大证据会把 /api/qwen 请求打到边缘，加重代理压力
-      productEvidence = String(tavilyBundle.text || '').slice(0, 8_000);
+      // 控制体量：过大证据会把 /api/qwen 请求打到边缘；再次背调允许更宽品类摘录
+      productEvidence = String(tavilyBundle.text || '').slice(0, forceDeep ? 12_000 : 8_000);
       digEvidenceItems = tavilyBundle.items || [];
       } catch (e) {
       console.warn('[digProductIntelligence] Tavily skipped', e);
     }
   }
 
+  const catRange = forceDeep ? '8–20' : '5–15';
+  const productRange = forceDeep ? '12–20' : '8–15';
   const prompt = `
 Target company: "${companyName}" / domain: "${hasDomain ? canonicalDomain : rawInput}".
 Task: EVIDENCE-BASED SELL + PROCURE product intelligence for Chinese exporters' matching DB.
+${forceDeep ? 'MODE: COMPREHENSIVE CATALOG REFRESH — enumerate the full sell-side nav/category tree found on the site; do NOT stop after a few SKUs. Prefer breadth of categories + representative products in each major category.' : ''}
 ${searchKeyword ? `Discovery keyword (match AFTER full catalog): "${searchKeyword}".` : ''}
 ${searchCountry ? `Market: ${searchCountry}.` : ''}
 
@@ -4479,8 +4499,8 @@ ${taxonomyPromptList({ maxL2PerL1: 6 })}
 Requirements (简体中文描述字段):
 1. SELL side (对方在售/分销): full assortment from website nav + shop + marketplace + social product posts.
 2. PROCURE side (对方采购/进口需求): importCategories, buyer pages, wholesale sourcing, customs lines — what they BUY from factories.
-3. websiteCategories: 5–15 real sell-side nav categories with priceMinCNY/priceMaxCNY/priceBand + evidenceUrl or evidenceSnippet + taxonomyL1Id when mappable.
-4. products[]: 8–15 concrete items. Each MUST set role = "sell" | "procure" | "both", tags[], evidenceUrl/evidenceSnippet when possible, taxonomyL1Id/taxonomyL2Id from ALLOWED TAXONOMY.
+3. websiteCategories: ${catRange} real sell-side nav categories with priceMinCNY/priceMaxCNY/priceBand + evidenceUrl or evidenceSnippet + taxonomyL1Id when mappable.${forceDeep ? ' Cover every major top-level department/category visible in nav or sitemap evidence.' : ''}
+4. products[]: ${productRange} concrete items spanning multiple categories. Each MUST set role = "sell" | "procure" | "both", tags[], evidenceUrl/evidenceSnippet when possible, taxonomyL1Id/taxonomyL2Id from ALLOWED TAXONOMY.
 5. productIntel: structured { sell, procure, matchTags, sourceNote } — both sides required when evidence exists; category labels must mirror evidenced assortment.
 6. keywordMatch=true only if related to "${searchKeyword || ''}"; never drop non-matching SKUs.
 7. Do NOT overwrite strategy / similarCompanies / marketTrends / decisionMakers.
@@ -4633,9 +4653,8 @@ Output JSON only:
         similarCompanies: [],
       } as AnalysisResult);
 
-  const merged: AnalysisResult = {
-    ...base,
-    websiteCategories: Array.isArray(ai.websiteCategories) && ai.websiteCategories.length
+  const mappedCategories =
+    Array.isArray(ai.websiteCategories) && ai.websiteCategories.length
       ? ai.websiteCategories.map((cat: any) => {
           const priceMinCNY =
             typeof cat?.priceMinCNY === 'number' && cat.priceMinCNY > 0 ? cat.priceMinCNY : undefined;
@@ -4669,16 +4688,59 @@ Output JSON only:
             evidenceSnippet: String(cat?.evidenceSnippet || '').trim() || undefined,
           };
         })
-      : base.websiteCategories,
+      : [];
+
+  const unionSide = (
+    a?: { categories?: string[]; items?: string[]; tags?: string[]; notes?: string },
+    b?: { categories?: string[]; items?: string[]; tags?: string[]; notes?: string }
+  ) => ({
+    categories: [...new Set([...(a?.categories || []), ...(b?.categories || [])].map(String).filter(Boolean))].slice(
+      0,
+      40
+    ),
+    items: [...new Set([...(a?.items || []), ...(b?.items || [])].map(String).filter(Boolean))].slice(0, 60),
+    tags: [...new Set([...(a?.tags || []), ...(b?.tags || [])].map(String).filter(Boolean))].slice(0, 36),
+    notes: preferString(a?.notes, b?.notes) || undefined,
+  });
+
+  const mergedProductIntel = productIntel
+    ? {
+        sell: unionSide(base.productIntel?.sell, productIntel.sell),
+        procure: unionSide(base.productIntel?.procure, productIntel.procure),
+        matchTags: [
+          ...new Set([...(base.productIntel?.matchTags || []), ...(productIntel.matchTags || [])].map(String).filter(Boolean)),
+        ].slice(0, 48),
+        sourceNote: preferString(productIntel.sourceNote, base.productIntel?.sourceNote) || productIntel.sourceNote,
+      }
+    : base.productIntel;
+
+  const merged: AnalysisResult = {
+    ...base,
+    // 品类/产品只增改合并，避免浅结果冲掉已有目录
+    websiteCategories: mergeCategories(base.websiteCategories || [], mappedCategories),
     businessScope: {
       ...base.businessScope,
       ...(ai.businessScope || {}),
-      coreProducts: ai.businessScope?.coreProducts?.length
-        ? ai.businessScope.coreProducts
-        : base.businessScope.coreProducts,
-      relevantProducts: ai.businessScope?.relevantProducts?.length
-        ? ai.businessScope.relevantProducts
-        : base.businessScope.relevantProducts,
+      coreProducts: [
+        ...new Set(
+          [
+            ...(Array.isArray(ai.businessScope?.coreProducts) ? ai.businessScope.coreProducts : []),
+            ...(base.businessScope?.coreProducts || []),
+          ]
+            .map(String)
+            .filter(Boolean)
+        ),
+      ].slice(0, 40),
+      relevantProducts: [
+        ...new Set(
+          [
+            ...(Array.isArray(ai.businessScope?.relevantProducts) ? ai.businessScope.relevantProducts : []),
+            ...(base.businessScope?.relevantProducts || []),
+          ]
+            .map(String)
+            .filter(Boolean)
+        ),
+      ].slice(0, 60),
     },
     tradeIntelligence: {
       ...(base.tradeIntelligence || {
@@ -4698,24 +4760,46 @@ Output JSON only:
         riskLevel: '未知' as const,
         riskNotes: '',
       }),
-      hsCodes: ai.tradeIntelligence?.hsCodes?.length
-        ? ai.tradeIntelligence.hsCodes
-        : base.tradeIntelligence?.hsCodes || [],
-      importCategories: ai.tradeIntelligence?.importCategories?.length
-        ? ai.tradeIntelligence.importCategories
-        : base.tradeIntelligence?.importCategories || [],
+      hsCodes: [
+        ...new Set(
+          [
+            ...(Array.isArray(ai.tradeIntelligence?.hsCodes) ? ai.tradeIntelligence.hsCodes : []),
+            ...(base.tradeIntelligence?.hsCodes || []),
+          ]
+            .map(String)
+            .filter(Boolean)
+        ),
+      ].slice(0, 30),
+      importCategories: [
+        ...new Set(
+          [
+            ...(Array.isArray(ai.tradeIntelligence?.importCategories)
+              ? ai.tradeIntelligence.importCategories
+              : []),
+            ...(base.tradeIntelligence?.importCategories || []),
+          ]
+            .map(String)
+            .filter(Boolean)
+        ),
+      ].slice(0, 40),
     },
     productSummary: ai.productSummary
       ? {
-          marketPreference: ai.productSummary.marketPreference || base.productSummary?.marketPreference || '',
-          recommendedProducts: ai.productSummary.recommendedProducts || base.productSummary?.recommendedProducts || '',
-          packagingAnalysis: ai.productSummary.packagingAnalysis || base.productSummary?.packagingAnalysis || '',
-          colorPreference: ai.productSummary.colorPreference || base.productSummary?.colorPreference || '',
-          featureAnalysis: ai.productSummary.featureAnalysis || base.productSummary?.featureAnalysis || '',
+          marketPreference:
+            preferString(ai.productSummary.marketPreference, base.productSummary?.marketPreference) || '',
+          recommendedProducts:
+            preferString(ai.productSummary.recommendedProducts, base.productSummary?.recommendedProducts) ||
+            '',
+          packagingAnalysis:
+            preferString(ai.productSummary.packagingAnalysis, base.productSummary?.packagingAnalysis) || '',
+          colorPreference:
+            preferString(ai.productSummary.colorPreference, base.productSummary?.colorPreference) || '',
+          featureAnalysis:
+            preferString(ai.productSummary.featureAnalysis, base.productSummary?.featureAnalysis) || '',
         }
       : base.productSummary,
-    productIntel: productIntel || base.productIntel,
-    products: products.length ? products : base.products,
+    productIntel: mergedProductIntel,
+    products: mergeProducts(base.products || [], products),
     searchKeyword: searchKeyword || base.searchKeyword,
     searchCountry: searchCountry || base.searchCountry,
     // 品类补采绝不可冲掉首轮背调的行动计划 / 同类公司 / 市场趋势 / 决策人 / 证据链

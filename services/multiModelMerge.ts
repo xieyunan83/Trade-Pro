@@ -56,7 +56,7 @@ const scoreProduct = (p: ProductAnalysis | Record<string, any>): number => {
   return n;
 };
 
-const mergeProducts = (a: any[], b: any[]): ProductAnalysis[] => {
+export const mergeProducts = (a: any[], b: any[]): ProductAnalysis[] => {
   const map = new Map<string, any>();
   const put = (p: any) => {
     if (!p || isEmptyPlaceholder(p.name)) return;
@@ -93,7 +93,7 @@ const mergeProducts = (a: any[], b: any[]): ProductAnalysis[] => {
   return [...map.values()];
 };
 
-const mergeCategories = (a: any[], b: any[]): WebsiteCategory[] => {
+export const mergeCategories = (a: any[], b: any[]): WebsiteCategory[] => {
   const map = new Map<string, WebsiteCategory>();
   const put = (c: any) => {
     if (!c) return;

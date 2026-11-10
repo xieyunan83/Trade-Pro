@@ -418,6 +418,8 @@ export const gatherTavilyCompanyEvidenceBundle = async (opts: {
   companyHint?: string;
   searchKeyword?: string;
   searchCountry?: string;
+  /** 再次背调 / 品类深挖：加宽目录页检索与正文抽取 */
+  deepProduct?: boolean;
 }): Promise<TavilyCompanyEvidenceBundle> => {
   if (!hasTavilyKey()) return { text: '', items: [] };
   const domain = (opts.domain || '').replace(/^https?:\/\//i, '').replace(/\/.*$/, '').trim();
@@ -425,6 +427,7 @@ export const gatherTavilyCompanyEvidenceBundle = async (opts: {
   const name = (opts.companyHint || domain).trim();
   const kw = (opts.searchKeyword || '').trim();
   const country = (opts.searchCountry || '').trim();
+  const deepProduct = !!opts.deepProduct;
 
   const queries = [
     // 优先全站品类/目录/商城页（先全量，再关键词）
@@ -433,6 +436,12 @@ export const gatherTavilyCompanyEvidenceBundle = async (opts: {
     `site:${domain} about OR contact OR company`,
     `"${name}" ${country} (product range OR catalog OR assortment OR wholesale OR import OR distributor)`.replace(/\s+/g, ' ').trim(),
   ];
+  if (deepProduct) {
+    queries.push(
+      `site:${domain} (sitemap OR "all categories" OR "product categories" OR departments OR oferta OR asortyment OR kategorie OR produkty OR sklep)`
+    );
+    queries.push(`site:${domain} (toys OR baby OR kids OR outdoor OR sport OR home OR fashion OR electronics OR garden)`);
+  }
   if (kw) {
     // 关键词查询仅作补充匹配，不替代全站品类采集
     queries.push(`site:${domain} ${kw} (price OR shop OR product OR catalog OR buy)`);
@@ -447,7 +456,7 @@ export const gatherTavilyCompanyEvidenceBundle = async (opts: {
   const items: TavilyCompanyEvidenceBundle['items'] = [];
   const seenUrls = new Set<string>();
   let topUrls: string[] = [];
-  const querySlice = queries.slice(0, 5);
+  const querySlice = queries.slice(0, deepProduct ? 7 : 5);
 
   // 先写入官网与常见路径，避免检索额度耗尽时证据链只剩空包
   const official = `https://${domain}`;
@@ -461,6 +470,9 @@ export const gatherTavilyCompanyEvidenceBundle = async (opts: {
     '/collections',
     '/company',
     '/wholesale',
+    ...(deepProduct
+      ? ['/categories', '/category', '/departments', '/store', '/buy', '/oferta', '/produkty', '/sklep', '/kategorie']
+      : []),
   ];
   for (const path of seedPaths) {
     const url = path ? `https://${domain}${path}` : official;
@@ -473,7 +485,11 @@ export const gatherTavilyCompanyEvidenceBundle = async (opts: {
   }
 
   const runCompanyQuery = async (q: string) => {
-    const data = await tavilySearch(q, { maxResults: 8, searchDepth: 'basic', includeAnswer: true });
+    const data = await tavilySearch(q, {
+      maxResults: deepProduct ? 10 : 8,
+      searchDepth: deepProduct ? 'advanced' : 'basic',
+      includeAnswer: true,
+    });
     const block = formatTavilyEvidence(data, `TAVILY:${q.slice(0, 40)}`);
     if (block) chunks.push(block);
     for (const r of data.results || []) {
@@ -487,7 +503,7 @@ export const gatherTavilyCompanyEvidenceBundle = async (opts: {
           score: typeof r.score === 'number' ? r.score : undefined,
         });
       }
-      if (url && /https?:\/\//i.test(url) && topUrls.length < 5) {
+      if (url && /https?:\/\//i.test(url) && topUrls.length < (deepProduct ? 8 : 5)) {
         if (!topUrls.includes(url)) topUrls.push(url);
       }
     }
@@ -523,13 +539,17 @@ export const gatherTavilyCompanyEvidenceBundle = async (opts: {
     '/category',
     '/categories',
     '/department',
+    '/oferta',
+    '/produkty',
+    '/sklep',
+    '/kategorie',
     '/about',
     '/contact',
   ];
   const productish = [...seenUrls].filter((u) =>
     productPathHints.some((h) => u.toLowerCase().includes(h))
   );
-  topUrls = [...new Set([official, ...productish, ...topUrls])].slice(0, 8);
+  topUrls = [...new Set([official, ...productish, ...topUrls])].slice(0, deepProduct ? 12 : 8);
   if (!poolExhausted) {
     try {
       const extracted = await tavilyExtract(topUrls);
