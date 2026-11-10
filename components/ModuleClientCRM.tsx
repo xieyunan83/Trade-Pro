@@ -659,12 +659,8 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   );
 
   const triggerReanalyze = useCallback(
-    (client: Client, bgAt?: number) => {
-      const timeLabel = formatBackgroundCheckTime(bgAt);
-      const tip = timeLabel
-        ? `该公司已于 ${timeLabel} 完成背调。是否再次背调以更新信息？`
-        : '是否对该客户再次背调？';
-      if (!confirm(tip)) return;
+    (client: Client, _bgAt?: number) => {
+      // 确认文案与强制全量再分析由 App.onReanalyze 统一处理，避免「跳过库内已有」
       if (onReanalyze) onReanalyze(client);
       else void onBatchAnalyze([client]);
     },

@@ -243,6 +243,11 @@ export interface AutomationResult {
   productContext?: string;
   productImages?: string[];
   mode?: 'detailed' | 'economy';
+  /**
+   * 用户明确「再次背调」：跳过本地背调缓存，强制全量再分析；
+   * 结果仍与旧报告合并（只增改不删）。
+   */
+  skipCache?: boolean;
   /** 关联关键词，便于任务归类 */
   keyword?: string;
   createdAt?: number;

@@ -436,6 +436,8 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
   const [pendingBatchContext, setPendingBatchContext] = useState<string>('');
   /** Per-domain country hints for batch 背调 (avoids hardcoding Global) */
   const [pendingBatchCountries, setPendingBatchCountries] = useState<Record<string, string>>({});
+  /** 批量「再次背调」：不跳过库内已有，且任务 skipCache */
+  const pendingBatchForceRef = useRef(false);
   /** Excel 批量背调面板 */
   const [excelBatchOpen, setExcelBatchOpen] = useState(false);
   /** 背调页排除/删除：用应用内确认，避免 window.confirm 被环境拦截 */
@@ -2130,6 +2132,8 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       productContext: kw || 'Manual',
       productImages: [],
       mode: override?.mode || 'economy',
+      /** 再次背调：绕过本地缓存，强制全量再跑 */
+      skipCache: !!override?.force,
       keyword: kw || undefined,
       createdAt: Date.now(),
     });
@@ -3453,6 +3457,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
         searchKeyword: kw || undefined,
         searchTags: kw ? buildSearchTags(kw, task.country || '') : undefined,
         searchCountry: task.country || undefined,
+        skipCache: !!task.skipCache,
       };
       const preferredMode = task.mode || 'economy';
       const rawResult = await withRateLimitRetry(
@@ -3953,6 +3958,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
               searchTags: kw ? buildSearchTags(kw, task.country || '') : undefined,
               searchCountry: task.country || undefined,
               qwenApiKey: stickyKey || undefined,
+              skipCache: !!task.skipCache,
             };
             const preferredMode = task.mode || 'economy';
             const rawResult = await withHeavyJob('automation', () =>
@@ -4036,8 +4042,8 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
               console.error('批量结果写入历史失败，但任务队列已保存', histErr);
             }
 
-            // 仅挂机端：背调后静默四通道补全；业务员本机跳过，避免拖死交互
-            if (isWorkerModeActive()) {
+            // 挂机端常规补全；用户「再次背调」即使在业务员本机也跑四通道（领英对齐/社媒等）
+            if (isWorkerModeActive() || task.skipCache) {
               try {
                 const domain = result.companyInfo?.website || task.website || '';
                 const companyName = result.companyInfo?.name || task.clientName || domain;
@@ -4074,6 +4080,12 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                       prev.map((t) => (t.id === task.id ? withContacts : t))
                     );
                     await saveAutomationTask(withContacts).catch(() => undefined);
+                    try {
+                      const savedAgain = await saveAnalysisToHistory(mergedAnalysis, 'batch');
+                      histId = savedAgain.id;
+                    } catch {
+                      /* 队列已含补全结果 */
+                    }
                   }
                 }
               } catch (seedErr) {
@@ -4915,7 +4927,9 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
           ? discoveryCountry
           : '';
 
-      // 库内已有 → 跳过全量背调，只补 CRM；其余入队
+      // 库内已有 → 跳过全量背调，只补 CRM；「再次背调」批量则强制重跑
+      const forceReanalyze = pendingBatchForceRef.current;
+      pendingBatchForceRef.current = false;
       const toQueue: string[] = [];
       let skippedExisting = 0;
       const histToCrm: HistoryItem[] = [];
@@ -4926,7 +4940,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
           historyRef.current,
           crmClientsRef.current
         );
-        if (lookup.checked) {
+        if (!forceReanalyze && lookup.checked) {
           skippedExisting += 1;
           if (lookup.historyItem?.data) histToCrm.push(lookup.historyItem);
           continue;
@@ -4954,6 +4968,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
           productContext: pendingBatchContext, 
           productImages: [], 
           mode: mode,
+          skipCache: forceReanalyze,
           keyword: kw || undefined,
           createdAt: Date.now(),
       }));
@@ -5018,6 +5033,9 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       void processBatchQueue([{ ...task, status: 'pending' }]);
   };
 
+  const REANALYZE_MERGE_HINT =
+    '将在原有资料基础上全面再分析并补充（公司概况、产品品类、贸易情报、决策人与联系方式等）；已有内容会保留，只更新或新增。';
+
   /** 已完成任务：重置后再次背调 */
   const handleRerunCompletedTask = async (id: string) => {
       const task = getAutomationQueueSnapshot().find((t) => t.id === id);
@@ -5028,8 +5046,8 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       }
       const timeLabel = formatBackgroundCheckTime(task.completedAt || task.createdAt);
       const tip = timeLabel
-        ? `该公司已于 ${timeLabel} 完成背调。是否再次背调以更新信息？\n\n已有决策人与联系方式会保留，仅在原有资料上更新或新增。`
-        : '是否对该客户再次背调？\n\n已有决策人与联系方式会保留，仅在原有资料上更新或新增。';
+        ? `该公司已于 ${timeLabel} 完成背调。是否再次背调以更新信息？\n\n${REANALYZE_MERGE_HINT}`
+        : `是否对该客户再次背调？\n\n${REANALYZE_MERGE_HINT}`;
       if (!confirm(tip)) return;
       const reset: AutomationResult = {
         ...task,
@@ -5037,6 +5055,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
         analysis: undefined,
         mailGroup: undefined,
         completedAt: undefined,
+        skipCache: true,
       };
       await saveAutomationTask(reset);
       batchSeedByIdRef.current.set(reset.id, reset);
@@ -5068,8 +5087,8 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
         ).historyItem;
       const timeLabel = formatBackgroundCheckTime(hist?.timestamp);
       const tip = timeLabel
-        ? `该公司已于 ${timeLabel} 完成背调。是否再次背调以更新信息？\n\n已有决策人与联系方式会保留，仅在原有资料上更新或新增。`
-        : '是否再次背调以更新该公司信息？\n\n已有决策人与联系方式会保留，仅在原有资料上更新或新增。';
+        ? `该公司已于 ${timeLabel} 完成背调。是否再次背调以更新信息？\n\n${REANALYZE_MERGE_HINT}`
+        : `是否再次背调以更新该公司信息？\n\n${REANALYZE_MERGE_HINT}`;
       if (!confirm(tip)) return;
       const limit = checkLimit('analysis');
       if (!limit.allowed) {
@@ -5081,6 +5100,38 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
         searchKeyword: data.searchKeyword || discoveryState.product || undefined,
         searchTags: data.searchTags,
         searchCountry: data.searchCountry || undefined,
+        force: true,
+      });
+  };
+
+  /** CRM：单客户再次背调（全量再分析 + 与旧资料合并，不走「跳过库内已有」） */
+  const handleReanalyzeCrmClient = (client: Client) => {
+      const domain = (client.website || client.name || '').trim();
+      if (!domain) {
+        alert('缺少公司网址，无法再次背调。');
+        return;
+      }
+      if (!hasPermission(currentUser, 'feature.analyze_company') && !hasPermission(currentUser, 'feature.batch_analyze')) {
+        alert('你没有背调权限，请联系管理员或部门主管开通。');
+        return;
+      }
+      const hist = findHistoryForClient(client, getHistorySnapshot());
+      const timeLabel = formatBackgroundCheckTime(
+        hist?.timestamp || client.lastBackgroundCheckAt
+      );
+      const tip = timeLabel
+        ? `该公司已于 ${timeLabel} 完成背调。是否再次背调以更新信息？\n\n${REANALYZE_MERGE_HINT}`
+        : `是否对该客户再次背调？\n\n${REANALYZE_MERGE_HINT}`;
+      if (!confirm(tip)) return;
+      const limit = checkLimit('analysis');
+      if (!limit.allowed) {
+        alert(`今日背调次数已达上限（${limit.current}/${limit.max}）。请联系管理员提高限额，或明日再试。`);
+        return;
+      }
+      setDomainInput(domain);
+      performSingleAnalysis(domain, {
+        searchKeyword: client.searchKeyword || discoveryState.product || undefined,
+        searchCountry: client.country || undefined,
         force: true,
       });
   };
@@ -5109,8 +5160,8 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       }
       const timeLabel = formatBackgroundCheckTime(item.timestamp);
       const tip = timeLabel
-        ? `该公司已于 ${timeLabel} 完成背调。是否再次背调以更新信息？\n\n已有决策人与联系方式会保留，仅在原有资料上更新或新增。`
-        : '是否再次背调？\n\n已有决策人与联系方式会保留，仅在原有资料上更新或新增。';
+        ? `该公司已于 ${timeLabel} 完成背调。是否再次背调以更新信息？\n\n${REANALYZE_MERGE_HINT}`
+        : `是否再次背调？\n\n${REANALYZE_MERGE_HINT}`;
       if (!confirm(tip)) return;
       if (!hasPermission(currentUser, 'feature.analyze_company')) {
         alert('你没有「单次背调」权限，请联系管理员或部门主管开通。');
@@ -5671,11 +5722,19 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       alert('所选记录缺少网址/名称，无法背调。');
       return;
     }
+    if (
+      !confirm(
+        `将对选中的 ${targets.length} 条记录再次背调。\n\n${REANALYZE_MERGE_HINT}`
+      )
+    ) {
+      return;
+    }
     const kw =
       items.find((h) => h.keyword || h.data?.searchKeyword)?.keyword ||
       items.find((h) => h.data?.searchKeyword)?.data?.searchKeyword ||
       discoveryState.product ||
       'Records Batch';
+    pendingBatchForceRef.current = true;
     setPendingBatch(targets);
     setPendingBatchContext(kw);
     const countryMap: Record<string, string> = {};
@@ -6541,10 +6600,17 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                             alert(`今日背调次数已达上限（${limit.current}/${limit.max}）。请联系管理员提高限额，或明日再试。`);
                             return;
                           }
+                          const alreadyChecked = lookupBackgroundCheck(
+                            domain,
+                            typeof item === 'string' ? domain : item.name,
+                            getHistorySnapshot(),
+                            getCrmClientsSnapshot()
+                          ).checked;
                           performSingleAnalysis(domain, {
                             searchKeyword: kw || undefined,
                             searchCountry: countryFromItem || undefined,
                             searchTags: tags,
+                            force: alreadyChecked,
                           });
                         }}
                         onOpenExistingReport={handleOpenExistingFromSearch}
@@ -6575,7 +6641,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                         }}
                         onRecoverCrm={handleRecoverCrm}
                         productDigBusy={isProductDigQueueBusy() || productDigProgress.active > 0}
-                        onReanalyze={(client) => void handleBatchAnalyzeFromCRM([client])}
+                        onReanalyze={handleReanalyzeCrmClient}
                         history={history}
                         onOpenHistory={loadFromHistory}
                         onOpenClientReport={openCrmClientReport}
