@@ -86,11 +86,20 @@ export const markAppForeground = (opts?: { calmMs?: number }) => {
   emit();
 };
 
-/** 用户点侧栏时立刻让路：暂停重任务泵一小段时间 */
+/** 用户点侧栏时立刻让路：只拉长冷静期，禁止立刻 emit（否则会冲刷积压的大列表） */
 export const preferNavInteraction = (ms = 1200) => {
-  calmUntil = Math.max(calmUntil, Date.now() + ms);
+  const until = Date.now() + ms;
+  calmUntil = Math.max(calmUntil, until);
   recoverNavPointer();
-  if (foreground) emit();
+  // 冷静结束后再通知订阅方冲刷积压；不要在 pointerdown 当下 emit
+  if (resumeTimer) clearTimeout(resumeTimer);
+  resumeTimer = setTimeout(() => {
+    resumeTimer = null;
+    if (Date.now() >= calmUntil) {
+      calmUntil = 0;
+      emit();
+    }
+  }, ms + 50);
 };
 
 /** 在 App / LoginBoot 挂一次即可 */

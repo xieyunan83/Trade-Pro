@@ -5,7 +5,11 @@
  */
 import type { AutomationResult } from '../types';
 import { slimAutomationQueueForUi } from './db';
-import { isAppForeground, subscribeForeground } from './foregroundGuard';
+import {
+  isAppForeground,
+  shouldDeferHeavyWork,
+  subscribeForeground,
+} from './foregroundGuard';
 
 export type AutomationCounts = {
   total: number;
@@ -34,11 +38,31 @@ let counts: AutomationCounts = {
 const listeners = new Set<Listener>();
 const countListeners = new Set<Listener>();
 let emitQueued = false;
+/** 前台短合并：背调跑起来时每秒几十次 commit，不能每次都逼 React 重绘大表 */
+let coalesceTimer: ReturnType<typeof setTimeout> | null = null;
 
 const flushEmit = () => {
   emitQueued = false;
+  if (coalesceTimer) {
+    clearTimeout(coalesceTimer);
+    coalesceTimer = null;
+  }
   emit();
   emitCounts();
+};
+
+const scheduleCoalescedFlush = () => {
+  emitQueued = true;
+  if (coalesceTimer) return;
+  coalesceTimer = setTimeout(() => {
+    coalesceTimer = null;
+    if (shouldDeferHeavyWork()) {
+      // 冷静期内继续积压，等 foreground 订阅冲刷
+      emitQueued = true;
+      return;
+    }
+    flushEmit();
+  }, 160);
 };
 
 const recomputeCounts = (list: AutomationResult[]): AutomationCounts => {
@@ -91,19 +115,12 @@ const commit = (next: AutomationResult[]) => {
   uiTasks = slimAutomationQueueForUi(next);
   version += 1;
   counts = recomputeCounts(next);
-  // 后台/最小化时积压通知，回前台再刷，避免切回瞬间饿死侧栏
-  if (!isAppForeground()) {
-    if (!emitQueued) {
-      emitQueued = true;
-      if (typeof window !== 'undefined') {
-        window.setTimeout(() => {
-          if (isAppForeground()) flushEmit();
-        }, 400);
-      }
-    }
+  // 后台 / 冷静期只积压；前台也做短合并，避免大表被每条任务状态拖死
+  if (shouldDeferHeavyWork()) {
+    emitQueued = true;
     return;
   }
-  flushEmit();
+  scheduleCoalescedFlush();
 };
 
 export const getAutomationQueueSnapshot = (): AutomationResult[] => tasks;
@@ -136,9 +153,9 @@ export const subscribeAutomationCounts = (fn: Listener): (() => void) => {
   return () => countListeners.delete(fn);
 };
 
-// 回前台时冲掉后台积压的队列通知
+// 回前台且冷静结束后，冲掉积压的队列通知
 if (typeof window !== 'undefined') {
   subscribeForeground((fg) => {
-    if (fg && emitQueued) flushEmit();
+    if (fg && emitQueued && !shouldDeferHeavyWork()) flushEmit();
   });
 }

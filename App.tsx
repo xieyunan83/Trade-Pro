@@ -461,6 +461,9 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
   const historyRef = useRef<HistoryItem[]>([]);
   const automationResultsRef = useRef<AutomationResult[]>([]);
   const crmClientsRef = useRef<Client[]>([]);
+  /** 夜间品类匹配等批量写 CRM：合并成一次 setState，避免整树狂刷卡死 */
+  const pendingCrmPatchesRef = useRef<Map<string, Client>>(new Map());
+  const crmPatchFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const viewingHistoryIdRef = useRef<string | null>(null);
   const analysisDataRef = useRef<AnalysisResult | null>(null);
   const userDataReadyRef = useRef(false);
@@ -468,6 +471,47 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
   const discoveryHydratedRef = useRef(false);
   /** 登录云端 CRM 合并完成前禁止 persist 写回，避免首屏按墓碑过滤后把全库冲掉 */
   const crmPersistReadyRef = useRef(false);
+
+  const flushPendingCrmPatches = useCallback(() => {
+    if (crmPatchFlushTimerRef.current) {
+      clearTimeout(crmPatchFlushTimerRef.current);
+      crmPatchFlushTimerRef.current = null;
+    }
+    const patches = pendingCrmPatchesRef.current;
+    if (!patches.size) return;
+    pendingCrmPatchesRef.current = new Map();
+    setCrmClients((prev) => {
+      let changed = false;
+      const next = prev.map((c) => {
+        const p = patches.get(c.id);
+        if (!p) return c;
+        changed = true;
+        return p;
+      });
+      if (!changed) return prev;
+      crmClientsRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const scheduleCrmClientPatch = useCallback(
+    (client: Client) => {
+      pendingCrmPatchesRef.current.set(client.id, client);
+      // 同步更新 ref，后台任务立刻读到最新
+      const idx = crmClientsRef.current.findIndex((c) => c.id === client.id);
+      if (idx >= 0) {
+        const copy = crmClientsRef.current.slice();
+        copy[idx] = client;
+        crmClientsRef.current = copy;
+      }
+      if (crmPatchFlushTimerRef.current) return;
+      crmPatchFlushTimerRef.current = setTimeout(() => {
+        crmPatchFlushTimerRef.current = null;
+        flushPendingCrmPatches();
+      }, 900);
+    },
+    [flushPendingCrmPatches]
+  );
 
   useEffect(() => {
     historyRef.current = history;
@@ -701,17 +745,13 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
           }
         }
         const tagged = applyCatalogMatchTagsToClient(client, report);
-        setCrmClients((prev) => {
-          const next = prev.map((c) => (c.id === client.id ? tagged : c));
-          crmClientsRef.current = next;
-          return next;
-        });
+        scheduleCrmClientPatch(tagged);
         void enqueueCrmClientCloudPush(tagged);
         return { note: report.note };
       },
     });
     return () => stopNightSilentUpgrade();
-  }, [currentUser?.username, workerModeOn]);
+  }, [currentUser?.username, workerModeOn, scheduleCrmClientPatch]);
 
   useEffect(() => {
     viewingHistoryIdRef.current = viewingHistoryId;

@@ -227,8 +227,8 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   );
 
   const alignStats = useMemo(
-    () => summarizePromoCrmAlignment(allRows, crmClients),
-    [allRows, crmClients]
+    () => summarizePromoCrmAlignment(allRows, deferredCrm),
+    [allRows, deferredCrm]
   );
   const completedCount = alignStats.completedWithReport;
   const crmOnlyCount = alignStats.crmOnlyRowCount;

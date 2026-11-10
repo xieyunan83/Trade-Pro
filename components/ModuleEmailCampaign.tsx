@@ -111,6 +111,15 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
   const quillRef = useRef<{ getEditor: () => { getSelection: (b?: boolean) => { index: number }; insertText: (i: number, t: string) => void; insertEmbed: (i: number, t: string, v: string) => void } } | null>(null);
   /** 切换用户后跳过一次保存，避免用上一用户的 state 写穿 */
   const skipNextSaveRef = useRef(false);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const crmClientsRef = useRef(crmClients);
+  const usersRef = useRef(users);
+  const departmentsRef = useRef(departments);
+  const visibleCrmRef = useRef(visibleCrmClients);
+  crmClientsRef.current = crmClients;
+  usersRef.current = users;
+  departmentsRef.current = departments;
+  visibleCrmRef.current = visibleCrmClients;
 
   const macros = ['{{company_name}}', '{{contact_name}}'];
   const dmReady = isDirectMailConfigured(config);
@@ -135,7 +144,7 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
         const existing = new Set(prevTasks.map((t) => t.recipientEmail.toLowerCase()));
         const newTasks = emailTasksFromGtmOutreach(
           handoff,
-          visibleCrmClients,
+          visibleCrmRef.current,
           owner,
           existing
         ).map(stampOwnership);
@@ -182,31 +191,34 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
         setSelectedTemplateId(first.id);
       }
     },
-    [currentUser.username, currentUser.departmentId, stampOwnership, visibleCrmClients]
+    [currentUser.username, currentUser.departmentId, stampOwnership]
   );
+
+  const ingestRef = useRef(ingestGtmHandoff);
+  ingestRef.current = ingestGtmHandoff;
 
   useEffect(() => {
     const handoff = consumeGtmOutreachHandoff('email_campaign');
-    if (handoff) ingestGtmHandoff(handoff);
-  }, [currentUser.username, ingestGtmHandoff]);
+    if (handoff) ingestRef.current(handoff);
+  }, [currentUser.username]);
 
   useEffect(() => {
     const onHandoff = () => {
       const handoff = consumeGtmOutreachHandoff('email_campaign');
-      if (handoff) ingestGtmHandoff(handoff);
+      if (handoff) ingestRef.current(handoff);
     };
     window.addEventListener(GTM_OUTREACH_EVENT, onHandoff as EventListener);
     return () => window.removeEventListener(GTM_OUTREACH_EVENT, onHandoff as EventListener);
-  }, [ingestGtmHandoff]);
+  }, []);
 
   // 切换登录用户时重载可见数据
   useEffect(() => {
     skipNextSaveRef.current = true;
     const next = loadEmailCampaignStoreForUser(
       currentUser,
-      users,
-      departments,
-      crmClients
+      usersRef.current,
+      departmentsRef.current,
+      crmClientsRef.current
     );
     setTasks(next.tasks);
     setTemplates(next.templates);
@@ -216,19 +228,30 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUser.username, currentUser.role, currentUser.departmentId]);
 
+  // 仅在邮件数据变化时落盘；CRM 抖动不得触发 JSON 重写（保活面板也会跟着卡死整页）
   useEffect(() => {
     if (skipNextSaveRef.current) {
       skipNextSaveRef.current = false;
       return;
     }
-    saveEmailCampaignStoreForUser(
-      currentUser,
-      users,
-      departments,
-      { tasks, templates, config },
-      crmClients
-    );
-  }, [tasks, templates, config, currentUser, users, departments, crmClients]);
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      saveTimerRef.current = null;
+      saveEmailCampaignStoreForUser(
+        currentUser,
+        usersRef.current,
+        departmentsRef.current,
+        { tasks, templates, config },
+        crmClientsRef.current
+      );
+    }, 400);
+    return () => {
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+    };
+  }, [tasks, templates, config, currentUser]);
 
   const contactMatchesRole = (contact: { type?: string; title?: string; emailGuess?: string }) => {
     if (!contact.emailGuess?.includes('@')) return false;
