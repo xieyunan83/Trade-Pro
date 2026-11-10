@@ -117,6 +117,8 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
 
   useEffect(() => {
     let cancelled = false;
+    const onCleared = () => setAssets([]);
+    window.addEventListener('trade-pro-creative-media-cleared', onCleared);
     (async () => {
       try {
         await new Promise<void>((r) => {
@@ -127,6 +129,12 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
         if (!cancelled) setAssets(raw);
         await new Promise((r) => window.setTimeout(r, 8_000));
         if (cancelled) return;
+        try {
+          const { shouldSkipCreativeRemigration } = await import('../services/creativeAssetVault');
+          if (shouldSkipCreativeRemigration()) return;
+        } catch {
+          /* ignore */
+        }
         try {
           const { waitUntilWorkAllowed } = await import('../services/backgroundWorkScheduler');
           await waitUntilWorkAllowed(() => cancelled, 180_000);
@@ -144,6 +152,7 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
     })();
     return () => {
       cancelled = true;
+      window.removeEventListener('trade-pro-creative-media-cleared', onCleared);
     };
   }, []);
 

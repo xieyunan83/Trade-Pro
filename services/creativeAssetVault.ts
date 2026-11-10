@@ -453,8 +453,16 @@ const deleteRow = async (id: string): Promise<void> => {
  */
 export const enforceVaultQuota = async (targetFreeBytes = 0): Promise<number> => {
   if (!targetFreeBytes || targetFreeBytes <= 0) return 0;
-  const rows = await listVaultMeta();
-  const sorted = [...rows].sort((a, b) => a.lastAccessAt - b.lastAccessAt);
+  // 元数据空但库里可能还有文件：先重建索引再删
+  let rows = await listVaultMeta();
+  if (!rows.length) {
+    try {
+      rows = await rebuildVaultMetaIndex();
+    } catch {
+      rows = [];
+    }
+  }
+  const sorted = [...rows].sort((a, b) => (a.lastAccessAt || 0) - (b.lastAccessAt || 0));
   let need = targetFreeBytes;
   let removed = 0;
   for (const r of sorted) {
@@ -463,6 +471,7 @@ export const enforceVaultQuota = async (targetFreeBytes = 0): Promise<number> =>
     need -= r.size || 0;
     removed += 1;
   }
+  if (removed > 0) notifyVaultChanged();
   return removed;
 };
 
@@ -917,8 +926,9 @@ export const purgeMediaUrls = async (
   return removed;
 };
 
-/** 清空全部本地素材（管理员紧急清理） */
-export const clearVault = async (): Promise<void> => {
+/** 清空全部本地素材（IndexedDB + 元数据 + blob 缓存） */
+export const clearVault = async (): Promise<{ removedMeta: number }> => {
+  const before = (metaMemory || readMetaLs() || []).length;
   for (const [, obj] of objectUrlCache) {
     try {
       URL.revokeObjectURL(obj);
@@ -928,14 +938,57 @@ export const clearVault = async (): Promise<void> => {
   }
   objectUrlCache.clear();
   writeMetaLs([]);
+  metaMemory = [];
+
+  if (typeof localStorage !== 'undefined') {
+    try {
+      localStorage.removeItem(META_LS);
+      localStorage.setItem(META_LS, '[]');
+    } catch {
+      /* ignore */
+    }
+  }
+
   const db = await openDb();
   try {
-    const tx = db.transaction(STORE, 'readwrite');
-    await idbReq(tx.objectStore(STORE).clear());
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE, 'readwrite');
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error('清空素材库事务失败'));
+      tx.onabort = () => reject(tx.error || new Error('清空素材库事务中断'));
+      tx.objectStore(STORE).clear();
+    });
   } finally {
     db.close();
   }
+
+  // 再确认：避免 clear 后游标重建把空库又扫成旧 meta（旧 LS 残留）
+  writeMetaLs([]);
+  metaMemory = [];
   notifyVaultChanged();
+  return { removedMeta: before };
+};
+
+/** 本会话内已手动清空：禁止模块启动时把外链再迁回 vault */
+const CLEARED_SESSION_KEY = 'trade_pro_creative_cleared_session';
+
+export const markCreativeVaultClearedSession = () => {
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.setItem(CLEARED_SESSION_KEY, String(Date.now()));
+    }
+  } catch {
+    /* ignore */
+  }
+};
+
+export const shouldSkipCreativeRemigration = (): boolean => {
+  try {
+    if (typeof sessionStorage === 'undefined') return false;
+    return !!sessionStorage.getItem(CLEARED_SESSION_KEY);
+  } catch {
+    return false;
+  }
 };
 
 export const formatBytes = (n: number): string => {

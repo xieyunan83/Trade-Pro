@@ -275,3 +275,142 @@ export const purgeDeletedCreativeMedia = async (
   const keep = collectReferencedCreativeMediaUrls();
   return purgeMediaUrls(candidates, keep);
 };
+
+export type ClearCreativeMediaReport = {
+  ok: boolean;
+  vaultMetaBefore: number;
+  designAssetsCleared: number;
+  packagingAssetsCleared: number;
+  model3dJobsTouched: number;
+  videoJobsTouched: number;
+  socialTouched: number;
+  error?: string;
+};
+
+const stripMediaUrl = (u?: string): string | undefined => {
+  if (!u) return undefined;
+  // 清空后一律去掉本机/临时媒体，避免马上又迁回 vault
+  if (
+    u.startsWith('vault:') ||
+    u.startsWith('data:') ||
+    u.startsWith('blob:') ||
+    /^https?:\/\//i.test(u)
+  ) {
+    return undefined;
+  }
+  return u;
+};
+
+/**
+ * 真正「清空素材」：清 IndexedDB vault + 创作模块本地媒体引用。
+ * 只清 vault 不够——画布/任务里还挂着链接时，进模块会立刻再迁回库。
+ */
+export const clearAllCreativeLocalMedia = async (): Promise<ClearCreativeMediaReport> => {
+  const report: ClearCreativeMediaReport = {
+    ok: false,
+    vaultMetaBefore: 0,
+    designAssetsCleared: 0,
+    packagingAssetsCleared: 0,
+    model3dJobsTouched: 0,
+    videoJobsTouched: 0,
+    socialTouched: 0,
+  };
+  try {
+    const { clearVault, markCreativeVaultClearedSession, getVaultStats } = await import(
+      './creativeAssetVault'
+    );
+    try {
+      const before = await getVaultStats();
+      report.vaultMetaBefore = before.count;
+    } catch {
+      /* ignore */
+    }
+
+    const vaultRes = await clearVault();
+    report.vaultMetaBefore = Math.max(report.vaultMetaBefore, vaultRes.removedMeta);
+    markCreativeVaultClearedSession();
+
+    const { saveDesignAssets, loadDesignAssets } = await import('./designAgentStore');
+    const design = loadDesignAssets();
+    report.designAssetsCleared = design.length;
+    saveDesignAssets([]);
+
+    const { savePackagingAssets, loadPackagingAssets } = await import('./packagingAgentStore');
+    const pack = loadPackagingAssets();
+    report.packagingAssetsCleared = pack.length;
+    savePackagingAssets([]);
+
+    const {
+      loadModel3dJobs,
+      saveModel3dJobs,
+      loadVideoJobs,
+      saveVideoJobs,
+      loadSocialPieces,
+      saveSocialPieces,
+    } = await import('./creativeStudioStore');
+
+    const models = loadModel3dJobs().map((j) => {
+      report.model3dJobsTouched += 1;
+      return {
+        ...j,
+        sourceImage: stripMediaUrl(j.sourceImage),
+        sourceImages: (j.sourceImages || []).map((u) => stripMediaUrl(u) || '').filter(Boolean),
+        modelUrl: stripMediaUrl(j.modelUrl),
+        pbrModelUrl: stripMediaUrl(j.pbrModelUrl),
+        baseModelUrl: stripMediaUrl(j.baseModelUrl),
+        originalModelUrl: stripMediaUrl(j.originalModelUrl),
+        originalPreviewImageUrl: stripMediaUrl(j.originalPreviewImageUrl),
+        previewImageUrl: stripMediaUrl(j.previewImageUrl),
+        uvAtlasUrl: stripMediaUrl(j.uvAtlasUrl),
+        convertedUrls: undefined,
+        previewHint: '本机素材已清空，请重新生成',
+        status: j.status === 'ready' ? ('failed' as const) : j.status,
+        error: j.status === 'ready' ? '本机素材已清空' : j.error,
+      };
+    });
+    saveModel3dJobs(models);
+
+    const videos = loadVideoJobs().map((j) => {
+      report.videoJobsTouched += 1;
+      return {
+        ...j,
+        sourceImages: [],
+        lastFrameImage: undefined,
+        draftVideoUrl: stripMediaUrl(j.draftVideoUrl),
+        videoUrl: stripMediaUrl(j.videoUrl),
+        previewHint: '本机素材已清空，请重新生成',
+        status: j.status === 'ready' ? ('failed' as const) : j.status,
+        error: j.status === 'ready' ? '本机素材已清空' : j.error,
+      };
+    });
+    saveVideoJobs(videos);
+
+    const social = loadSocialPieces().map((p) => {
+      report.socialTouched += 1;
+      return {
+        ...p,
+        referenceImageDataUrl: stripMediaUrl(p.referenceImageDataUrl),
+        productImageDataUrl: stripMediaUrl(p.productImageDataUrl),
+        coverImageDataUrl: stripMediaUrl(p.coverImageDataUrl),
+      };
+    });
+    saveSocialPieces(social);
+
+    try {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('trade-pro-creative-media-cleared', { detail: report })
+        );
+      }
+    } catch {
+      /* ignore */
+    }
+
+    report.ok = true;
+    return report;
+  } catch (e: any) {
+    report.ok = false;
+    report.error = e?.message || String(e);
+    return report;
+  }
+};

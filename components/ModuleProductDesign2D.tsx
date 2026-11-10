@@ -221,6 +221,12 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
   /** 首屏让出后再读素材；迁移必须在用户停手后做，禁止进模块就拖死 */
   useEffect(() => {
     let cancelled = false;
+    const onCleared = () => {
+      setAssets([]);
+      setAssetsReady(true);
+      setSelectedIds([]);
+    };
+    window.addEventListener('trade-pro-creative-media-cleared', onCleared);
     (async () => {
       try {
         await new Promise<void>((r) => {
@@ -234,6 +240,12 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
         // 延后很久再迁 dataURL → vault，且遇操作就停
         await new Promise((r) => window.setTimeout(r, 8_000));
         if (cancelled) return;
+        try {
+          const { shouldSkipCreativeRemigration } = await import('../services/creativeAssetVault');
+          if (shouldSkipCreativeRemigration()) return;
+        } catch {
+          /* ignore */
+        }
         try {
           const { waitUntilWorkAllowed } = await import('../services/backgroundWorkScheduler');
           const ok = await waitUntilWorkAllowed(() => cancelled, 180_000);
@@ -259,6 +271,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
     })();
     return () => {
       cancelled = true;
+      window.removeEventListener('trade-pro-creative-media-cleared', onCleared);
     };
   }, []);
 

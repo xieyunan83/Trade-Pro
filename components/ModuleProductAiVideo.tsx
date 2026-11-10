@@ -99,6 +99,15 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
 
   useEffect(() => {
     let cancelled = false;
+    const onCleared = () => {
+      try {
+        const raw = loadVideoJobs();
+        setJobs(raw);
+      } catch {
+        setJobs([]);
+      }
+    };
+    window.addEventListener('trade-pro-creative-media-cleared', onCleared);
     (async () => {
       const st = await hydrateVideoProvider();
       try {
@@ -113,6 +122,12 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
         }
         await new Promise((r) => window.setTimeout(r, 8_000));
         if (cancelled) return;
+        try {
+          const { shouldSkipCreativeRemigration } = await import('../services/creativeAssetVault');
+          if (shouldSkipCreativeRemigration()) return;
+        } catch {
+          /* ignore */
+        }
         try {
           const { waitUntilWorkAllowed } = await import('../services/backgroundWorkScheduler');
           await waitUntilWorkAllowed(() => cancelled, 180_000);
@@ -139,6 +154,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
     })();
     return () => {
       cancelled = true;
+      window.removeEventListener('trade-pro-creative-media-cleared', onCleared);
     };
   }, []);
 

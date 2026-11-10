@@ -189,6 +189,14 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
 
   useEffect(() => {
     let cancelled = false;
+    const onCleared = () => {
+      try {
+        setJobs(sanitizeModel3dJobs(loadModel3dJobs()));
+      } catch {
+        setJobs([]);
+      }
+    };
+    window.addEventListener('trade-pro-creative-media-cleared', onCleared);
     (async () => {
       setHydrating(true);
       // 先让出首屏，再读本机任务；禁止进模块同步 JSON.parse/落盘堵死点击
@@ -231,6 +239,12 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
 
         // 仅对仍是远程链的 ready 任务后台落库；已 vault/blob 的跳过，避免进模块就串行重下
         void (async () => {
+          try {
+            const { shouldSkipCreativeRemigration } = await import('../services/creativeAssetVault');
+            if (shouldSkipCreativeRemigration()) return;
+          } catch {
+            /* ignore */
+          }
           const migrated: Model3dJob[] = [];
           for (const j of recovered) {
             const primary = (j.pbrModelUrl || j.modelUrl || j.baseModelUrl || '').trim();
@@ -257,6 +271,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     void import('@google/model-viewer').catch(() => undefined);
     return () => {
       cancelled = true;
+      window.removeEventListener('trade-pro-creative-media-cleared', onCleared);
     };
   }, []);
 
