@@ -1194,7 +1194,10 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                     if (!cancelled) setWorkspaceSyncStatus(msg);
                   },
                 });
-                workspacePulledOk = true;
+                // 仅当 CRM/历史都合并成功时跳过二次全量拉取；有错则走后面兜底
+                workspacePulledOk =
+                  !ws.errors.some((e) => /CRM|背调历史/.test(e)) &&
+                  (ws.crm.merged > 0 || ws.crm.local > 0 || ws.history.merged > 0 || ws.history.local > 0);
                 console.info('[workspace-sync pull]\n' + formatWorkspaceSyncReport(ws));
                 // 可选：合并云端「额度耗尽」指纹，避免多机抢同一把已尽 Key
                 try {

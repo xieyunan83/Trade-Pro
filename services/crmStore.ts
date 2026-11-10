@@ -61,6 +61,9 @@ const scheduleCoalescedFlush = () => {
   }, 220);
 };
 
+/** 最近一次 mergeSave 后的全库快照，供 GitHub 整表备份（禁止用可见切片覆盖全库） */
+let lastMergedAll: Client[] | null = null;
+
 const scheduleIdlePersist = () => {
   if (persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
@@ -70,9 +73,11 @@ const scheduleIdlePersist = () => {
       const viewer = persistCtx.getViewer();
       if (!viewer) {
         saveAllCrmClients(clients);
+        lastMergedAll = clients;
         return;
       }
-      mergeSaveCrmClients(
+      // 与旧 App effect 一致：可见列表 merge 进全库，他人部门数据保留
+      lastMergedAll = mergeSaveCrmClients(
         viewer,
         clients,
         persistCtx.getUsers(),
@@ -97,6 +102,7 @@ const scheduleIdlePersist = () => {
     void (async () => {
       try {
         const { isSupabaseConfigured, syncCrmClients } = await import('./supabase');
+        // 与旧逻辑一致：Supabase 按可见集 upsert（不删他人）
         if (isSupabaseConfigured() && clients.length > 0) {
           await syncCrmClients(clients);
         }
@@ -104,9 +110,15 @@ const scheduleIdlePersist = () => {
         console.error('Supabase CRM sync failed', e);
       }
       try {
-        if (persistCtx?.isGitHubConnected() && clients.length > 0 && clients.length <= 800) {
+        const forGh = lastMergedAll && lastMergedAll.length ? lastMergedAll : clients;
+        if (
+          persistCtx?.isGitHubConnected() &&
+          forGh.length > 0 &&
+          forGh.length <= 800
+        ) {
           const { saveCRMToCloud } = await import('./githubService');
-          await saveCRMToCloud(clients);
+          // GitHub 必须写全库合并结果，避免把其它部门冲掉
+          await saveCRMToCloud(forGh);
         }
       } catch (e) {
         console.error('Auto CRM GitHub sync failed', e);

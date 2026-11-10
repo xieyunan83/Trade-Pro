@@ -685,13 +685,13 @@ export const startNightSilentUpgrade = (h: Handlers) => {
   if (tickTimer) clearInterval(tickTimer);
   tickTimer = setInterval(() => {
     void import('./backgroundWorkScheduler').then(({ enqueueBackgroundWork }) => {
-      enqueueBackgroundWork('night_upgrade', () => pumpNightUpgrade());
+      enqueueBackgroundWork('night_upgrade', () => pumpNightUpgrade(), 'night_upgrade_tick');
     });
   }, TICK_MS);
   // 启动后若已在夜间窗口，稍延迟再扫，避免登录高峰抢资源
   window.setTimeout(() => {
     void import('./backgroundWorkScheduler').then(({ enqueueBackgroundWork }) => {
-      enqueueBackgroundWork('night_upgrade', () => pumpNightUpgrade());
+      enqueueBackgroundWork('night_upgrade', () => pumpNightUpgrade(), 'night_upgrade_boot');
     });
   }, 12_000);
 };

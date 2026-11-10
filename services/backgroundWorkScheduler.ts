@@ -62,6 +62,11 @@ export const enqueueBackgroundWork = (
   run: () => void | Promise<void>,
   id = `${kind}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
 ) => {
+  // 同 id 不重复入队，避免夜间 tick 堆积几十个空转任务
+  if (queue.some((u) => u.id === id)) {
+    scheduleWake(shouldDeferHeavyWork() ? 600 : 40);
+    return;
+  }
   queue.push({ id, kind, run, enqueuedAt: Date.now() });
   scheduleWake(shouldDeferHeavyWork() ? 600 : 40);
 };
