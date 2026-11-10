@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="build-stamp" content="login-shell-20261109a">
+    <meta name="build-stamp" content="login-shell-20261110b">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
     <meta http-equiv="Pragma" content="no-cache" />
     <title>外贸智慧协同</title>
@@ -108,24 +108,24 @@
                 }
             } catch (e) {}
         };
-        // 12s 仍停在启动壳 → 自动重试；3s 先露出「重试」按钮，避免一直傻转
+        // 20s 仍停在启动壳 → 自动重试；8s 再露出重试（弱网下 3s 太容易误报）
         window.__TP_BOOT_TIMER = setTimeout(function () {
             if (document.getElementById('tp-boot')) {
                 window.__TP_BOOT_FAIL('boot-timeout');
             }
-        }, 12000);
+        }, 20000);
         window.setTimeout(function () {
             try {
                 var tip = document.getElementById('tp-boot-tip');
                 var btn = document.getElementById('tp-boot-retry');
                 if (document.getElementById('tp-boot') && tip) {
-                    tip.textContent = '加载较慢，可点下方重试';
+                    tip.textContent = '仍在加载登录界面，请稍候…';
                 }
                 if (document.getElementById('tp-boot') && btn) {
                     btn.style.display = 'inline-flex';
                 }
             } catch (e) {}
-        }, 3000);
+        }, 8000);
     </script>
 
     <meta name="description" content="外贸智慧协同：赋能出海产业升级——选品适市、客户背调、开发触达与协同成交。">
@@ -1151,7 +1151,7 @@
           <input type="text" disabled placeholder="用户名" style="width:100%;box-sizing:border-box;padding:12px 14px;border-radius:12px;border:1px solid #e2e8f0;background:#f8fafc;color:#94a3b8;font-size:15px;font-weight:600;" />
           <input type="password" disabled placeholder="密码" style="width:100%;box-sizing:border-box;padding:12px 14px;border-radius:12px;border:1px solid #e2e8f0;background:#f8fafc;color:#94a3b8;font-size:15px;font-weight:600;" />
           <button type="button" disabled style="width:100%;padding:12px 14px;border:0;border-radius:12px;background:linear-gradient(135deg,#2dd4bf,#0e7490);color:#fff;font-size:16px;font-weight:800;opacity:0.55;">登录</button>
-          <button id="tp-boot-retry" type="button" onclick="location.href=location.pathname+'?_boot='+Date.now()+location.hash" style="display:none;margin:4px auto 0;padding:8px 16px;border:0;border-radius:10px;background:#0f172a;color:#e2e8f0;font-size:12px;font-weight:700;cursor:pointer;align-items:center;justify-content:center;">网络较慢 · 点此重试</button>
+          <button id="tp-boot-retry" type="button" onclick="location.href=location.pathname+'?_boot='+Date.now()+location.hash" style="display:none;margin:4px auto 0;padding:8px 16px;border:0;border-radius:10px;background:#0f172a;color:#e2e8f0;font-size:12px;font-weight:700;cursor:pointer;align-items:center;justify-content:center;">仍未就绪 · 点此重试</button>
         </div>
       </div>
     </div>

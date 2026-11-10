@@ -51,13 +51,24 @@ export const LoginBoot: React.FC = () => {
 
   useEffect(() => installForegroundGuard(), []);
 
-  // 登录页画出来后再慢慢预取主包；类目等进站后再拉，别和首屏抢网
+  // 登录页可交互后再预取主包；弱网下过早预取会和登录 chunk 抢带宽
   useEffect(() => {
     if (bootUser) return;
-    const t = window.setTimeout(() => {
+    const warm = () => {
       void loadAppModule().catch((e) => console.warn('[LoginBoot] prefetch App failed', e));
-    }, 1500);
-    return () => window.clearTimeout(t);
+    };
+    let idleId = 0;
+    const t = window.setTimeout(() => {
+      if (typeof requestIdleCallback === 'function') {
+        idleId = requestIdleCallback(warm, { timeout: 6000 });
+      } else {
+        warm();
+      }
+    }, 5000);
+    return () => {
+      window.clearTimeout(t);
+      if (idleId && typeof cancelIdleCallback === 'function') cancelIdleCallback(idleId);
+    };
   }, [bootUser]);
 
   useEffect(() => {
