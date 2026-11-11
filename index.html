@@ -539,6 +539,40 @@
           0%, 100% { background-position: 100% 0; }
           50% { background-position: 0% 0; }
         }
+        /* 今日看板 · 全球市场雷达控制台（纯 CSS，无额外资源请求） */
+        .tp-landing .tp-hub-radar {
+          position: relative;
+          border-radius: var(--tp-radius);
+          border: 1px solid rgba(45, 212, 191, 0.22);
+          background:
+            linear-gradient(180deg, rgba(8, 18, 28, 0.04), transparent 28%),
+            linear-gradient(118deg, #071018 0%, #0b1522 48%, #0a1c1c 100%);
+          box-shadow:
+            0 16px 36px -22px rgba(8, 24, 48, 0.55),
+            inset 0 1px 0 rgba(94, 234, 212, 0.08);
+          color: #e2e8f0;
+        }
+        .tp-landing .tp-hub-radar::before {
+          content: '';
+          position: absolute;
+          inset: 0;
+          pointer-events: none;
+          opacity: 0.35;
+          background-image:
+            linear-gradient(rgba(45, 212, 191, 0.05) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(45, 212, 191, 0.04) 1px, transparent 1px);
+          background-size: 28px 28px;
+          mask-image: linear-gradient(180deg, rgba(0,0,0,0.55), transparent 88%);
+        }
+        .tp-landing .tp-hub-radar-link:hover {
+          background: rgba(45, 212, 191, 0.08);
+        }
+        .tp-landing .tp-hub-fx tbody tr:nth-child(even) {
+          background: rgba(248, 250, 252, 0.65);
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .tp-landing .tp-hub-radar::before { opacity: 0.18; }
+        }
         /* 小媛：钉在左侧导航栏底部，禁止浮动定位 */
         .tp-xiaoyuan-rail {
           pointer-events: auto;

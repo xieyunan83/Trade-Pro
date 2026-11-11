@@ -70,10 +70,10 @@ const fmtTime = (ms?: number) => {
 };
 
 const CATEGORY_ICON: Record<IntelNavCategory, React.ReactNode> = {
-  trend: <TrendingUp size={12} />,
-  macro: <Landmark size={12} />,
-  verify: <BadgeCheck size={12} />,
-  demand: <Wallet size={12} />,
+  trend: <TrendingUp size={12} strokeWidth={2.25} />,
+  macro: <Landmark size={12} strokeWidth={2.25} />,
+  verify: <BadgeCheck size={12} strokeWidth={2.25} />,
+  demand: <Wallet size={12} strokeWidth={2.25} />,
 };
 
 export const ModuleLandingHub: React.FC<Props> = ({
@@ -138,20 +138,20 @@ export const ModuleLandingHub: React.FC<Props> = ({
   };
 
   return (
-    <div className="tp-landing relative w-full max-w-none min-w-0 box-border space-y-2.5">
-      {/* 顶栏 */}
+    <div className="tp-landing relative w-full max-w-none min-w-0 box-border space-y-3">
+      {/* 指挥顶栏 */}
       <section className="tp-hub-hero text-white">
-        <div className="relative px-3 sm:px-4 py-2 flex flex-nowrap items-center gap-2 sm:gap-3 min-h-[2.75rem]">
-          <div className="hidden sm:inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-[0.18em] text-teal-300/90 shrink-0">
-            <Radio size={10} className="tp-live-dot text-teal-400" /> Hub
+        <div className="relative px-3 sm:px-4 py-2.5 flex flex-nowrap items-center gap-2 sm:gap-3 min-h-[2.85rem]">
+          <div className="hidden sm:inline-flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-[0.2em] text-teal-300/90 shrink-0">
+            <Radio size={10} className="tp-live-dot text-teal-400" /> Live Hub
           </div>
           <div className="min-w-0 flex-1 flex items-center gap-2 truncate">
-            <span className="text-[13px] sm:text-sm font-extrabold tracking-tight truncate">
+            <span className="text-sm font-bold tracking-tight truncate">
               外贸智慧协同
-              <span className="font-medium text-slate-300 text-[11px] ml-1.5">{currentUser.username}</span>
+              <span className="font-medium text-slate-300 text-xs ml-2">{currentUser.username}</span>
             </span>
-            <span className="hidden md:inline text-[10px] text-slate-400/90 font-medium truncate">
-              · 库 {jp.skuCount} · 待调 {jp.pendingTasks} · 已调 {jp.completedBg} · CRM {jp.crmCount}
+            <span className="hidden lg:inline text-[10px] text-slate-400/90 font-medium truncate font-mono tabular-nums">
+              SKU {jp.skuCount} · QUEUE {jp.pendingTasks} · DONE {jp.completedBg} · CRM {jp.crmCount}
               {data?.fetchedAt ? ` · ${fmtTime(data.fetchedAt)}` : ''}
             </span>
           </div>
@@ -163,7 +163,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
                 void load(true);
               }}
               disabled={loading}
-              className="inline-flex items-center gap-1 rounded-lg bg-white/10 hover:bg-white/15 border border-white/15 px-2 py-1 text-[10px] font-bold disabled:opacity-50"
+              className="inline-flex items-center gap-1 rounded-lg bg-white/10 hover:bg-white/15 border border-white/15 px-2.5 py-1 text-xs font-semibold disabled:opacity-50"
             >
               {loading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
               刷新
@@ -172,7 +172,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={onEnterWorkspace}
-                className="inline-flex items-center gap-1 rounded-lg bg-teal-400 hover:bg-teal-300 text-slate-950 px-2.5 py-1 text-[10px] font-extrabold"
+                className="inline-flex items-center gap-1 rounded-lg bg-teal-400 hover:bg-teal-300 text-slate-950 px-3 py-1 text-xs font-bold"
               >
                 客户搜索
               </button>
@@ -181,7 +181,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={() => onNavigateModule(ModuleType.PROMO_GENERATOR)}
-                className="inline-flex items-center gap-1 rounded-lg bg-white/10 hover:bg-white/15 border border-white/15 px-2 py-1 text-[10px] font-bold"
+                className="inline-flex items-center gap-1 rounded-lg bg-white/10 hover:bg-white/15 border border-white/15 px-2.5 py-1 text-xs font-semibold"
               >
                 自动化获客
               </button>
@@ -191,141 +191,102 @@ export const ModuleLandingHub: React.FC<Props> = ({
       </section>
 
       {err && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-950 px-3 py-2 text-xs font-bold">
+        <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-950 px-3 py-2 text-xs font-semibold">
           部分情报暂未刷新，可点「刷新」；或进入客户搜索 / 智能任务。
         </div>
       )}
 
-      {/* 汇率条 + 市场雷达：静态外链零请求；汇率复用已有缓存数据 */}
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-2.5 items-stretch">
-        <section className="tp-surface xl:col-span-5 overflow-hidden flex flex-col min-h-0">
-          <header className="px-3 py-2 border-b border-slate-100/90 flex items-center justify-between gap-2 shrink-0">
-            <div className="flex items-center gap-2 min-w-0">
-              <div className="h-7 w-7 rounded-lg bg-slate-900 text-emerald-300 flex items-center justify-center shrink-0">
-                <LineChart size={13} />
-              </div>
-              <div className="min-w-0">
-                <h2 className="text-[13px] font-extrabold text-slate-900 leading-tight tracking-tight">
-                  即时汇率
-                </h2>
-                <p className="text-[9px] text-slate-500 font-medium">中行买入 / 卖出 / 中间价</p>
-              </div>
+      {/* 全球市场雷达：深色控制台，四通道列表，非卡片堆叠 */}
+      <section className="tp-hub-radar overflow-hidden">
+        <header className="relative z-[1] px-3 sm:px-4 py-2.5 flex items-center justify-between gap-3 border-b border-white/10">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="h-8 w-8 rounded-lg bg-teal-400/15 border border-teal-300/25 text-teal-200 flex items-center justify-center shrink-0">
+              <Globe2 size={15} />
             </div>
-            <span className="text-[8px] text-slate-400 font-medium shrink-0 hidden sm:inline">
-              /100 外币
-              {fx[0]?.publishedAt ? ` · ${fx[0].publishedAt}` : ''}
-            </span>
-          </header>
-          <div className="flex-1 p-2">
-            {loading && !fx.length ? (
-              <div className="flex items-center gap-2 text-slate-400 text-xs font-bold py-6 justify-center">
-                <Loader2 className="animate-spin" size={14} /> 拉取中…
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-bold text-white tracking-tight">全球市场雷达</h2>
+                <span className="hidden sm:inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-[0.16em] text-teal-300/80">
+                  <span className="tp-live-dot inline-block h-1.5 w-1.5 rounded-full bg-teal-400" />
+                  Signal Open
+                </span>
               </div>
-            ) : fx.length === 0 ? (
-              <p className="text-xs text-slate-500 font-medium py-6 text-center">
-                {data?.fx?.error || '暂无汇率数据'}
+              <p className="text-[10px] text-slate-400 font-medium truncate">
+                精选权威公开源 · 点击直达 · 本地静态入口不增加加载负担
               </p>
-            ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
-                {fx.slice(0, 6).map((q) => (
-                  <div
-                    key={q.code || q.currency}
-                    className="rounded-lg border border-slate-100 bg-slate-50/70 px-2 py-1.5 hover:border-emerald-200 hover:bg-emerald-50/40 transition-colors"
-                  >
-                    <div className="flex items-baseline justify-between gap-1">
-                      <span className="text-[10px] font-extrabold text-slate-800 truncate">
-                        {q.currency}
-                      </span>
-                      <span className="text-[8px] font-bold text-slate-400">{q.code}</span>
-                    </div>
-                    <div className="mt-0.5 flex items-baseline justify-between gap-1 font-mono tabular-nums">
-                      <span className="text-[11px] font-extrabold text-slate-900">{q.bocMid}</span>
-                      <span className="text-[8px] font-bold text-emerald-700">{q.bocBuy}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
-
-        <section className="tp-surface xl:col-span-7 overflow-hidden flex flex-col min-h-0">
-          <header className="px-3 py-2 border-b border-slate-100/90 flex items-center justify-between gap-2 shrink-0 bg-gradient-to-r from-slate-50/90 to-teal-50/35">
-            <div className="flex items-center gap-2 min-w-0">
-              <div className="h-7 w-7 rounded-lg bg-slate-900 text-sky-200 flex items-center justify-center shrink-0">
-                <Globe2 size={13} />
-              </div>
-              <div className="min-w-0">
-                <h2 className="text-[13px] font-extrabold text-slate-900 leading-tight tracking-tight">
-                  全球市场雷达
-                </h2>
-                <p className="text-[9px] text-slate-500 font-medium truncate">
-                  精选公开情报入口 · 点击直达权威数据源
-                </p>
-              </div>
             </div>
-          </header>
-          <div className="flex-1 p-2.5 space-y-2.5">
-            {INTEL_NAV_CATEGORIES.map((cat) => {
-              const items = LANDING_INTEL_NAV.filter((i) => i.category === cat.id);
-              if (!items.length) return null;
-              return (
-                <div key={cat.id} className="min-w-0">
-                  <div className="flex items-center gap-1.5 mb-1 px-0.5">
-                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-slate-900/90 text-teal-200">
-                      {CATEGORY_ICON[cat.id]}
-                    </span>
-                    <span className="text-[10px] font-extrabold text-slate-800">{cat.title}</span>
-                    <span className="text-[9px] font-medium text-slate-400">{cat.sub}</span>
+          </div>
+          <span className="hidden md:inline text-[9px] font-mono text-slate-500 tracking-wider shrink-0">
+            INTEL × {LANDING_INTEL_NAV.length}
+          </span>
+        </header>
+        <div className="relative z-[1] grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-white/8">
+          {INTEL_NAV_CATEGORIES.map((cat) => {
+            const items = LANDING_INTEL_NAV.filter((i) => i.category === cat.id);
+            if (!items.length) return null;
+            return (
+              <div key={cat.id} className="tp-hub-radar-channel min-w-0 p-3 sm:p-3.5">
+                <div className="flex items-center gap-2 mb-2.5">
+                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-white/5 border border-white/10 text-teal-200">
+                    {CATEGORY_ICON[cat.id]}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="text-xs font-bold text-slate-100">{cat.title}</span>
+                      <span className="text-[9px] font-mono text-teal-400/70 tracking-wider">
+                        {cat.channel}
+                      </span>
+                    </div>
+                    <p className="text-[9px] text-slate-500 font-medium">{cat.sub}</p>
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
-                    {items.map((item) => (
+                </div>
+                <ul className="space-y-0.5">
+                  {items.map((item) => (
+                    <li key={item.id}>
                       <a
-                        key={item.id}
                         href={item.href}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="group flex items-start gap-2 rounded-lg border border-slate-100 bg-white px-2 py-1.5 hover:border-teal-300 hover:bg-teal-50/50 transition-colors"
+                        className="tp-hub-radar-link group flex items-center gap-2 rounded-md px-1.5 py-1.5"
                       >
-                        <div className="min-w-0 flex-1">
-                          <p className="text-[11px] font-extrabold text-slate-800 leading-snug group-hover:text-teal-900 truncate">
+                        <span className="w-9 shrink-0 text-[9px] font-mono font-bold text-teal-400/80 tracking-wide">
+                          {item.code}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-xs font-semibold text-slate-100 truncate group-hover:text-teal-100">
                             {item.label}
-                          </p>
-                          <p className="text-[9px] font-medium text-slate-400 mt-0.5 truncate">
-                            {item.blurb}
-                          </p>
-                        </div>
+                          </span>
+                          <span className="block text-[9px] text-slate-500 truncate">{item.blurb}</span>
+                        </span>
                         <ExternalLink
-                          size={10}
-                          className="shrink-0 text-slate-300 mt-1 group-hover:text-teal-600"
+                          size={11}
+                          className="shrink-0 text-slate-600 group-hover:text-teal-300 transition-colors"
                         />
                       </a>
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })}
+        </div>
+      </section>
 
-      {/* 新闻 + 新品 */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 items-stretch">
-        <section className="tp-surface lg:col-span-4 overflow-hidden flex flex-col min-h-[220px] max-h-[340px] lg:max-h-[320px]">
-          <header className="px-3 py-2 border-b border-slate-100/90 flex items-center gap-2 shrink-0">
+      {/* 作业主区：新闻 | 新品 | 汇率 */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-stretch">
+        <section className="tp-surface lg:col-span-3 overflow-hidden flex flex-col min-h-[240px] max-h-[360px] lg:max-h-[340px]">
+          <header className="px-3 py-2.5 border-b border-slate-100/90 flex items-center gap-2 shrink-0">
             <div className="h-7 w-7 rounded-lg bg-slate-900 text-teal-300 flex items-center justify-center">
               <Newspaper size={13} />
             </div>
             <div className="min-w-0">
-              <h2 className="text-[13px] font-extrabold text-slate-900 leading-tight tracking-tight">
-                行业新闻
-              </h2>
-              <p className="text-[9px] text-slate-500 font-medium">国内 · 国际 · 优选</p>
+              <h2 className="text-sm font-bold text-slate-900 leading-tight tracking-tight">行业新闻</h2>
+              <p className="text-[10px] text-slate-500 font-medium">国内 · 国际 · 优选</p>
             </div>
           </header>
           <div className="flex-1 overflow-y-auto custom-scrollbar p-1.5 space-y-0.5">
             {loading && !news.length ? (
-              <div className="flex items-center gap-2 text-slate-400 text-xs font-bold p-4 justify-center">
+              <div className="flex items-center gap-2 text-slate-400 text-xs font-semibold p-4 justify-center">
                 <Loader2 className="animate-spin" size={14} /> 拉取中…
               </div>
             ) : news.length === 0 ? (
@@ -344,15 +305,15 @@ export const ModuleLandingHub: React.FC<Props> = ({
                       n.region === 'intl'
                         ? 'bg-sky-500'
                         : n.region === 'industry'
-                          ? 'bg-violet-500'
+                          ? 'bg-cyan-600'
                           : 'bg-emerald-500'
                     }`}
                   />
                   <div className="min-w-0 flex-1">
-                    <p className="text-[11px] font-bold text-slate-800 leading-snug line-clamp-2 group-hover:text-teal-900">
+                    <p className="text-xs font-semibold text-slate-800 leading-snug line-clamp-2 group-hover:text-teal-900">
                       {n.title}
                     </p>
-                    <p className="text-[9px] font-bold text-slate-400 mt-0.5">{n.source}</p>
+                    <p className="text-[10px] font-medium text-slate-400 mt-0.5">{n.source}</p>
                   </div>
                   <ExternalLink size={10} className="shrink-0 text-slate-300 mt-1 group-hover:text-teal-600" />
                 </a>
@@ -361,17 +322,15 @@ export const ModuleLandingHub: React.FC<Props> = ({
           </div>
         </section>
 
-        <section className="tp-surface lg:col-span-8 overflow-hidden flex flex-col min-h-[220px] max-h-[340px] lg:max-h-[320px]">
-          <header className="px-3 py-2 border-b border-slate-100/90 flex items-center justify-between gap-2 shrink-0 bg-gradient-to-r from-stone-50/80 to-teal-50/40">
+        <section className="tp-surface lg:col-span-6 overflow-hidden flex flex-col min-h-[240px] max-h-[360px] lg:max-h-[340px]">
+          <header className="px-3 py-2.5 border-b border-slate-100/90 flex items-center justify-between gap-2 shrink-0">
             <div className="flex items-center gap-2 min-w-0">
               <div className="h-7 w-7 rounded-lg bg-slate-900 text-amber-200 flex items-center justify-center shrink-0">
                 <Sparkles size={13} />
               </div>
               <div className="min-w-0">
-                <h2 className="text-[13px] font-extrabold text-slate-900 leading-tight tracking-tight">
-                  新品推荐
-                </h2>
-                <p className="text-[9px] text-slate-500 font-medium truncate">
+                <h2 className="text-sm font-bold text-slate-900 leading-tight tracking-tight">新品推荐</h2>
+                <p className="text-[10px] text-slate-500 font-medium truncate">
                   优先展示产品库带图 SKU · 点击进产品库
                 </p>
               </div>
@@ -380,42 +339,42 @@ export const ModuleLandingHub: React.FC<Props> = ({
               <button
                 type="button"
                 onClick={goCatalog}
-                className="shrink-0 inline-flex items-center gap-1 text-[10px] font-extrabold text-teal-800 bg-teal-50 hover:bg-teal-100 border border-teal-200/80 px-2.5 py-1 rounded-lg"
+                className="shrink-0 inline-flex items-center gap-1 text-xs font-bold text-teal-800 bg-teal-50 hover:bg-teal-100 border border-teal-200/80 px-2.5 py-1 rounded-lg"
               >
-                去产品库 <ArrowRight size={11} />
+                去产品库 <ArrowRight size={12} />
               </button>
             ) : null}
           </header>
-          <div className="flex-1 overflow-y-auto custom-scrollbar p-2">
+          <div className="flex-1 overflow-y-auto custom-scrollbar p-2.5">
             {loading && products.length === 0 ? (
-              <div className="flex items-center gap-2 text-slate-400 text-xs font-bold py-10 justify-center">
+              <div className="flex items-center gap-2 text-slate-400 text-xs font-semibold py-10 justify-center">
                 <Loader2 className="animate-spin" size={14} /> 加载中…
               </div>
             ) : products.length === 0 ? (
               <div className="flex flex-col items-center justify-center gap-2 py-10 px-4 text-center">
                 <p className="text-xs text-slate-500 font-medium leading-relaxed">
-                  暂无带图新品。请到产品库为 SKU 点「图」上传后，再回看板点刷新（或重新进入今日看板）。
+                  暂无带图新品。请到产品库为 SKU 点「图」上传后，再回看板点刷新。
                 </p>
                 {onNavigateModule ? (
                   <button
                     type="button"
                     onClick={goCatalog}
-                    className="text-[11px] font-extrabold text-teal-800 bg-teal-50 border border-teal-200 px-3 py-1.5 rounded-lg"
+                    className="text-xs font-bold text-teal-800 bg-teal-50 border border-teal-200 px-3 py-1.5 rounded-lg"
                   >
                     去产品库补图
                   </button>
                 ) : null}
               </div>
             ) : (
-              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+              <div className="grid grid-cols-3 sm:grid-cols-3 gap-2">
                 {products.map((p) => (
                   <button
                     key={p.id}
                     type="button"
                     onClick={goCatalog}
-                    className="group text-left rounded-xl border border-slate-200 hover:border-teal-300 hover:shadow-sm bg-white overflow-hidden transition-all"
+                    className="group text-left rounded-xl border border-slate-200/90 hover:border-teal-300 hover:shadow-sm bg-white overflow-hidden transition-all"
                   >
-                    <div className="relative aspect-square bg-slate-50 border-b border-slate-100 flex items-center justify-center p-1.5">
+                    <div className="relative aspect-[4/3] bg-slate-50 border-b border-slate-100 flex items-center justify-center p-2">
                       <img
                         src={p.image}
                         alt=""
@@ -427,12 +386,12 @@ export const ModuleLandingHub: React.FC<Props> = ({
                         }}
                       />
                     </div>
-                    <div className="px-1.5 py-1.5">
-                      <p className="text-[10px] font-extrabold text-slate-800 leading-snug line-clamp-2 group-hover:text-teal-900">
+                    <div className="px-2 py-1.5">
+                      <p className="text-xs font-bold text-slate-800 leading-snug line-clamp-2 group-hover:text-teal-900">
                         {p.title}
                       </p>
                       {p.specs?.[0] ? (
-                        <p className="text-[9px] font-bold text-slate-400 mt-0.5 truncate">
+                        <p className="text-[10px] font-medium text-slate-400 mt-0.5 truncate">
                           {p.specs[0].label} {p.specs[0].value}
                         </p>
                       ) : null}
@@ -443,21 +402,81 @@ export const ModuleLandingHub: React.FC<Props> = ({
             )}
           </div>
         </section>
+
+        <section className="tp-surface tp-hub-fx lg:col-span-3 overflow-hidden flex flex-col min-h-[240px] max-h-[360px] lg:max-h-[340px]">
+          <header className="px-3 py-2.5 border-b border-slate-100/90 flex items-center gap-2 shrink-0">
+            <div className="h-7 w-7 rounded-lg bg-slate-900 text-emerald-300 flex items-center justify-center">
+              <LineChart size={13} />
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-sm font-bold text-slate-900 leading-tight">即时汇率</h2>
+              <p className="text-[10px] text-slate-500 font-medium">中行买入 / 卖出 / 中间价</p>
+            </div>
+          </header>
+          <div className="flex-1 overflow-y-auto custom-scrollbar">
+            {loading && !fx.length ? (
+              <div className="flex items-center gap-2 text-slate-400 text-xs font-semibold p-4 justify-center">
+                <Loader2 className="animate-spin" size={14} /> 拉取中…
+              </div>
+            ) : fx.length === 0 ? (
+              <p className="text-xs text-slate-500 font-medium p-3 text-center">
+                {data?.fx?.error || '暂无汇率数据'}
+              </p>
+            ) : (
+              <table className="w-full text-left text-[11px]">
+                <thead className="sticky top-0 bg-slate-50/95 text-slate-500 font-bold backdrop-blur-sm">
+                  <tr>
+                    <th className="px-2.5 py-2 font-semibold">货币</th>
+                    <th className="px-1.5 py-2 text-right font-semibold">买入</th>
+                    <th className="px-1.5 py-2 text-right font-semibold">卖出</th>
+                    <th className="px-2.5 py-2 text-right font-semibold">中间</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {fx.map((q) => (
+                    <tr
+                      key={q.code || q.currency}
+                      className="border-t border-slate-50 hover:bg-emerald-50/50 transition-colors"
+                    >
+                      <td className="px-2.5 py-2">
+                        <div className="font-bold text-slate-800">{q.currency}</div>
+                        <div className="text-[9px] font-mono font-semibold text-slate-400">{q.code}</div>
+                      </td>
+                      <td className="px-1.5 py-2 text-right font-mono font-semibold text-emerald-700 tabular-nums">
+                        {q.bocBuy}
+                      </td>
+                      <td className="px-1.5 py-2 text-right font-mono font-semibold text-rose-700 tabular-nums">
+                        {q.bocSell}
+                      </td>
+                      <td className="px-2.5 py-2 text-right font-mono font-bold text-slate-900 tabular-nums">
+                        {q.bocMid}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+          <footer className="px-2.5 py-1.5 border-t border-slate-100 text-[9px] text-slate-400 font-medium shrink-0 font-mono">
+            BOC · /100 FX
+            {fx[0]?.publishedAt ? ` · ${fx[0].publishedAt}` : ''}
+          </footer>
+        </section>
       </div>
 
       {/* 优选匹配客户 */}
       <section className="tp-surface overflow-hidden">
-        <header className="px-3 py-2 border-b border-slate-100/90 flex flex-wrap items-center justify-between gap-2 bg-gradient-to-r from-violet-50/50 to-teal-50/30">
+        <header className="px-3 py-2.5 border-b border-slate-100/90 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
-            <div className="h-7 w-7 rounded-lg bg-slate-900 text-violet-200 flex items-center justify-center shrink-0">
+            <div className="h-7 w-7 rounded-lg bg-slate-900 text-teal-200 flex items-center justify-center shrink-0">
               <Target size={13} />
             </div>
             <div className="min-w-0">
-              <h2 className="text-[13px] font-extrabold text-slate-900 leading-tight tracking-tight">
+              <h2 className="text-sm font-bold text-slate-900 leading-tight tracking-tight">
                 优选匹配客户
               </h2>
-              <p className="text-[9px] text-slate-500 font-medium truncate">
-                产品库挂好一级+二级类目后自动匹配已背调客户 · 重点一对一 / 邮件测品
+              <p className="text-[10px] text-slate-500 font-medium truncate">
+                产品库挂好一级与二级类目后自动匹配已背调客户 · 重点一对一 / 邮件测品
               </p>
             </div>
           </div>
@@ -467,16 +486,16 @@ export const ModuleLandingHub: React.FC<Props> = ({
                 <button
                   type="button"
                   onClick={goCatalog}
-                  className="inline-flex items-center gap-1 text-[10px] font-extrabold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-lg"
+                  className="inline-flex items-center gap-1 text-xs font-bold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-lg"
                 >
                   产品库
                 </button>
                 <button
                   type="button"
                   onClick={goMatch}
-                  className="inline-flex items-center gap-1 text-[10px] font-extrabold text-violet-900 bg-violet-50 hover:bg-violet-100 border border-violet-200/80 px-2.5 py-1 rounded-lg"
+                  className="inline-flex items-center gap-1 text-xs font-bold text-teal-900 bg-teal-50 hover:bg-teal-100 border border-teal-200/80 px-2.5 py-1 rounded-lg"
                 >
-                  产品匹配 <ArrowRight size={11} />
+                  产品匹配 <ArrowRight size={12} />
                 </button>
               </>
             ) : null}
@@ -485,14 +504,14 @@ export const ModuleLandingHub: React.FC<Props> = ({
         <div className="p-3">
           {!matchFresh || !matchReport ? (
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-xl border border-dashed border-slate-200 bg-slate-50/60 px-3 py-3">
-              <p className="text-[11px] text-slate-600 font-medium leading-relaxed">
+              <p className="text-xs text-slate-600 font-medium leading-relaxed">
                 尚无入库匹配结果。请到产品库为 SKU 选择官方一级与二级小类后导入/保存，系统会自动匹配并在此展示重点客户。
               </p>
               {onNavigateModule ? (
                 <button
                   type="button"
                   onClick={goCatalog}
-                  className="shrink-0 text-[11px] font-extrabold text-teal-800 bg-teal-50 border border-teal-200 px-3 py-1.5 rounded-lg"
+                  className="shrink-0 text-xs font-bold text-teal-800 bg-teal-50 border border-teal-200 px-3 py-1.5 rounded-lg"
                 >
                   去挂类目
                 </button>
@@ -500,20 +519,20 @@ export const ModuleLandingHub: React.FC<Props> = ({
             </div>
           ) : (
             <div className="space-y-2.5">
-              <div className="flex flex-wrap gap-2 text-[10px] font-bold">
-                <span className="rounded-full bg-emerald-100 text-emerald-800 px-2.5 py-0.5">
+              <div className="flex flex-wrap gap-2 text-[10px] font-semibold">
+                <span className="rounded-md bg-emerald-100 text-emerald-800 px-2.5 py-0.5">
                   重点一对一 {matchReport.priorityCount}
                 </span>
-                <span className="rounded-full bg-amber-100 text-amber-900 px-2.5 py-0.5 inline-flex items-center gap-1">
+                <span className="rounded-md bg-amber-100 text-amber-900 px-2.5 py-0.5 inline-flex items-center gap-1">
                   <Mail size={10} /> EDM 测品 {matchReport.edmCount}
                 </span>
-                <span className="rounded-full bg-slate-100 text-slate-600 px-2.5 py-0.5">
+                <span className="rounded-md bg-slate-100 text-slate-600 px-2.5 py-0.5">
                   扫 SKU {matchReport.skuCount} · 命中 {matchReport.matchCount}
                 </span>
                 <span className="text-slate-400 font-medium ml-auto">{fmtTime(matchReport.at)}</span>
               </div>
               {priorityHits.length === 0 ? (
-                <p className="text-[11px] text-slate-500 font-medium">
+                <p className="text-xs text-slate-500 font-medium">
                   暂无「重点一对一」客户，可到产品匹配查看 EDM 测品名单或补跑匹配。
                 </p>
               ) : (
@@ -525,19 +544,17 @@ export const ModuleLandingHub: React.FC<Props> = ({
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
-                          <p className="text-[11px] font-extrabold text-slate-900 truncate">
-                            {h.companyName}
-                          </p>
-                          <p className="text-[9px] font-bold text-slate-500 truncate mt-0.5">
+                          <p className="text-xs font-bold text-slate-900 truncate">{h.companyName}</p>
+                          <p className="text-[10px] font-medium text-slate-500 truncate mt-0.5">
                             {h.country || '—'}
                             {h.website ? ` · ${h.website}` : ''}
                           </p>
                         </div>
-                        <span className="shrink-0 text-[9px] font-black text-emerald-800 bg-white border border-emerald-200 rounded-full px-1.5 py-0.5">
+                        <span className="shrink-0 text-[10px] font-bold text-emerald-800 bg-white border border-emerald-200 rounded-md px-1.5 py-0.5">
                           {h.score}分
                         </span>
                       </div>
-                      <p className="text-[9px] text-slate-600 font-medium mt-1 line-clamp-2 leading-snug">
+                      <p className="text-[10px] text-slate-600 font-medium mt-1 line-clamp-2 leading-snug">
                         {h.outreachAdvice || h.gradeReasons?.[0] || h.reasons[0] || '建议一对一精准开发'}
                       </p>
                     </li>
