@@ -43,8 +43,9 @@ const startUrl = (forceBust = false) => {
   const hourBucket = Math.floor(Date.now() / (60 * 60 * 1000));
   if (forceBust) return `${APP_ORIGIN}/?_boot=${Date.now()}`;
   try {
-    const failFlagPath = path.join(app.getPath('userData'), 'last-boot-failed');
-    if (fs.existsSync(failFlagPath)) return `${APP_ORIGIN}/?_boot=${Date.now()}`;
+    if (fs.existsSync(failFlagPath()) || fs.existsSync(bootInProgressPath())) {
+      return `${APP_ORIGIN}/?_boot=${Date.now()}`;
+    }
   } catch {
     /* ignore */
   }
@@ -236,11 +237,7 @@ function showBootError(reason, errMsg = '') {
   if (showingError) return;
   showingError = true;
   clearLoadWatchdog();
-  try {
-    fs.writeFileSync(path.join(app.getPath('userData'), 'last-boot-failed'), String(Date.now()));
-  } catch {
-    /* ignore */
-  }
+  markBootFailed();
   try {
     mainWindow.webContents
       .executeJavaScript(
@@ -280,6 +277,68 @@ function showBootError(reason, errMsg = '') {
  * 窗口底色与登录页一致；HTML 到达后由站点内启动壳承接。
  * @param {{ retry?: boolean, forceBust?: boolean }} [opts]
  */
+/** 启动中标记：进程若在 boot 完成前被 SIGSEGV 杀掉，下次启动可识别并清缓存强刷 */
+const bootInProgressPath = () => path.join(app.getPath('userData'), 'boot-in-progress');
+const failFlagPath = () => path.join(app.getPath('userData'), 'last-boot-failed');
+
+const markBootInProgress = () => {
+  try {
+    fs.writeFileSync(bootInProgressPath(), String(Date.now()), 'utf8');
+  } catch {
+    /* ignore */
+  }
+};
+
+const clearBootInProgress = () => {
+  try {
+    if (fs.existsSync(bootInProgressPath())) fs.unlinkSync(bootInProgressPath());
+  } catch {
+    /* ignore */
+  }
+};
+
+const markBootFailed = () => {
+  try {
+    fs.writeFileSync(failFlagPath(), String(Date.now()), 'utf8');
+  } catch {
+    /* ignore */
+  }
+  markBootInProgress();
+};
+
+const clearBootFailed = () => {
+  try {
+    if (fs.existsSync(failFlagPath())) fs.unlinkSync(failFlagPath());
+  } catch {
+    /* ignore */
+  }
+  clearBootInProgress();
+};
+
+/** 清 HTTP/代码/GPU 缓存目录（不动 Local Storage / IndexedDB 业务数据） */
+const wipeChromiumCaches = async (ses) => {
+  try {
+    await ses.clearCache();
+  } catch (e) {
+    console.warn('[cache] clearCache failed', e);
+  }
+  const root = app.getPath('userData');
+  for (const name of [
+    'Cache',
+    'Code Cache',
+    'GPUCache',
+    'DawnGraphiteCache',
+    'DawnWebGPUCache',
+    'DawnCache',
+  ]) {
+    try {
+      fs.rmSync(path.join(root, name), { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  }
+};
+
 function loadAppShell(opts = {}) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   bootOk = false;
@@ -288,17 +347,19 @@ function loadAppShell(opts = {}) {
   else bootAttempt = 1;
 
   const attempt = bootAttempt;
+  // 先落盘「启动中」：若随后原生崩溃，下次启动能强制清缓存，避免黑屏死循环
+  markBootInProgress();
   armLoadWatchdog(BOOT_LOAD_TIMEOUT_MS);
   const baseUa = mainWindow.webContents.getUserAgent().replace(/Electron\/\S+\s*/i, '');
-  // 仅明确要求或上次启动失败才 bust；自动重试尽量走磁盘缓存，国内弱网更快
-  const forceBust = !!opts.forceBust && attempt === 1;
+  // 强制 bust、或本轮任意重试都走 _boot，避免啃到发版后已删的旧 /assets
+  const forceBust = !!opts.forceBust || attempt > 1;
   mainWindow
     .loadURL(startUrl(forceBust), {
       userAgent: `${baseUa} TradeCollabClient/${app.getVersion()} BabyWorldClient/${app.getVersion()}`,
     })
     .catch((e) => {
       if (bootAttempt < MAX_BOOT_ATTEMPTS) {
-        void loadAppShell({ retry: true, forceBust: false });
+        void loadAppShell({ retry: true, forceBust: true });
       } else {
         showBootError('loadURL', e?.message || String(e));
       }
@@ -326,7 +387,8 @@ function createWindow() {
       spellcheck: false,
       // 最小化/失焦时也不降速，保证 Windows 背调工作站可持续跑队列
       backgroundThrottling: false,
-      v8CacheOptions: 'code',
+      // 不用持久化 code cache：损坏的 Code Cache 会在 V8 编译期 SIGSEGV，表现为深蓝空窗后「意外退出」
+      v8CacheOptions: 'none',
       enableBlinkFeatures: 'CSSBackdropFilter',
       // 打包后仍允许诊断（菜单打开），便于排查白屏
       devTools: true,
@@ -402,33 +464,38 @@ function createWindow() {
       return;
     }
     if (!isAppUrl(url)) return;
-    // 主文档已到即可视为登录壳可用（不必等 React reportBootOk，弱网下 JS 很慢会误报超时）
+    // 主文档已到即可停 watchdog（不必等 React）；失败标记留给 bw-boot-ok 再清，
+    // 避免 JS 资源挂掉 / 原生崩溃前就把 last-boot-failed 抹掉导致下次仍啃坏缓存。
     showingError = false;
     bootOk = true;
     clearLoadWatchdog();
-    try {
-      const failFlagPath = path.join(app.getPath('userData'), 'last-boot-failed');
-      if (fs.existsSync(failFlagPath)) fs.unlinkSync(failFlagPath);
-    } catch {
-      /* ignore */
-    }
   });
 
   mainWindow.webContents.on('render-process-gone', (_e, details) => {
     const reason = String(details?.reason || 'unknown');
     console.error('[render-gone]', reason, details);
-    // 渲染进程被杀（OOM/卡死强制退出）时尽量自动恢复，避免整应用「意外退出」
+    markBootFailed();
+    // 渲染进程被杀（OOM/卡死强制退出）时清缓存再拉，避免整应用「意外退出」后死循环
     if (!showingError && (reason === 'oom' || reason === 'crashed' || reason === 'killed')) {
       showingError = false;
       bootOk = false;
       bootAttempt = 0;
       clearLoadWatchdog();
-      try {
-        void loadAppShell({ forceBust: true });
-        return;
-      } catch (e) {
-        console.error('[render-gone] reload failed', e);
-      }
+      void wipeChromiumCaches(session.defaultSession)
+        .catch(() => undefined)
+        .finally(() => {
+          try {
+            void loadAppShell({ forceBust: true });
+          } catch (e) {
+            console.error('[render-gone] reload failed', e);
+            try {
+              showBootError('render-gone', reason);
+            } catch (e2) {
+              console.error('[render-gone] showBootError failed', e2);
+            }
+          }
+        });
+      return;
     }
     try {
       showBootError('render-gone', reason);
@@ -499,12 +566,7 @@ ipcMain.on('bw-boot-ok', () => {
   bootOk = true;
   showingError = false;
   clearLoadWatchdog();
-  try {
-    const failFlagPath = path.join(app.getPath('userData'), 'last-boot-failed');
-    if (fs.existsSync(failFlagPath)) fs.unlinkSync(failFlagPath);
-  } catch {
-    /* ignore */
-  }
+  clearBootFailed();
 });
 
 ipcMain.on('bw-boot-retry', () => {
@@ -607,18 +669,22 @@ app.whenReady().then(async () => {
   });
 
   /**
-   * 不再每次启动都 clearCache：弱网下会逼着重下整站 → 长时间深蓝空白。
-   * 仅当上次启动失败标记存在，或手动「强制刷新」时清理。
+   * 不再每次启动都清缓存：弱网下会逼着重下整站 → 长时间深蓝空白。
+   * 仅当上次启动失败 / 启动中途被杀（boot-in-progress 残留）时清理并强刷。
    */
   try {
-    const failFlagPath = path.join(app.getPath('userData'), 'last-boot-failed');
-    if (fs.existsSync(failFlagPath)) {
-      await ses.clearCache().catch((e) => console.warn('[cache] clearCache failed', e));
+    const dirty =
+      fs.existsSync(failFlagPath()) || fs.existsSync(bootInProgressPath());
+    if (dirty) {
+      console.warn('[cache] previous boot unclean — wipe Chromium caches');
+      await wipeChromiumCaches(ses);
+      // 保留 fail 标记给 startUrl 做 _boot bust；boot-in-progress 留给本轮 loadAppShell 重写
       try {
-        fs.unlinkSync(failFlagPath);
+        if (fs.existsSync(bootInProgressPath())) fs.unlinkSync(bootInProgressPath());
       } catch {
         /* ignore */
       }
+      markBootFailed();
     }
   } catch (e) {
     console.warn('[cache] conditional clear skipped', e);

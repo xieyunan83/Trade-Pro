@@ -10,6 +10,11 @@ import {
   ArrowRight,
   Target,
   Mail,
+  Globe2,
+  TrendingUp,
+  Landmark,
+  BadgeCheck,
+  Wallet,
 } from 'lucide-react';
 import type { User } from '../types';
 import { ModuleType } from '../types';
@@ -28,6 +33,11 @@ import {
 import type { JourneyProgressHint } from '../services/tradeJourney';
 import { useAutomationCounts } from '../services/automationQueueHooks';
 import { loadCatalogSkus } from '../services/productCatalogTypes';
+import {
+  INTEL_NAV_CATEGORIES,
+  LANDING_INTEL_NAV,
+  type IntelNavCategory,
+} from '../services/landingIntelNav';
 
 type Props = {
   currentUser: User;
@@ -57,6 +67,13 @@ const fmtTime = (ms?: number) => {
   } catch {
     return '';
   }
+};
+
+const CATEGORY_ICON: Record<IntelNavCategory, React.ReactNode> = {
+  trend: <TrendingUp size={12} />,
+  macro: <Landmark size={12} />,
+  verify: <BadgeCheck size={12} />,
+  demand: <Wallet size={12} />,
 };
 
 export const ModuleLandingHub: React.FC<Props> = ({
@@ -97,7 +114,6 @@ export const ModuleLandingHub: React.FC<Props> = ({
   }, [load]);
 
   useEffect(() => {
-    // 进入看板或刷新情报时同步产品库自动匹配结果
     setMatchReport(loadCatalogAutoMatchReport());
   }, [data?.fetchedAt, loading]);
 
@@ -123,7 +139,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
 
   return (
     <div className="tp-landing relative w-full max-w-none min-w-0 box-border space-y-2.5">
-      {/* 单行顶栏 */}
+      {/* 顶栏 */}
       <section className="tp-hub-hero text-white">
         <div className="relative px-3 sm:px-4 py-2 flex flex-nowrap items-center gap-2 sm:gap-3 min-h-[2.75rem]">
           <div className="hidden sm:inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-[0.18em] text-teal-300/90 shrink-0">
@@ -180,15 +196,130 @@ export const ModuleLandingHub: React.FC<Props> = ({
         </div>
       )}
 
-      {/* 情报三联上移 */}
+      {/* 汇率条 + 市场雷达：静态外链零请求；汇率复用已有缓存数据 */}
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-2.5 items-stretch">
+        <section className="tp-surface xl:col-span-5 overflow-hidden flex flex-col min-h-0">
+          <header className="px-3 py-2 border-b border-slate-100/90 flex items-center justify-between gap-2 shrink-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="h-7 w-7 rounded-lg bg-slate-900 text-emerald-300 flex items-center justify-center shrink-0">
+                <LineChart size={13} />
+              </div>
+              <div className="min-w-0">
+                <h2 className="text-[13px] font-extrabold text-slate-900 leading-tight tracking-tight">
+                  即时汇率
+                </h2>
+                <p className="text-[9px] text-slate-500 font-medium">中行买入 / 卖出 / 中间价</p>
+              </div>
+            </div>
+            <span className="text-[8px] text-slate-400 font-medium shrink-0 hidden sm:inline">
+              /100 外币
+              {fx[0]?.publishedAt ? ` · ${fx[0].publishedAt}` : ''}
+            </span>
+          </header>
+          <div className="flex-1 p-2">
+            {loading && !fx.length ? (
+              <div className="flex items-center gap-2 text-slate-400 text-xs font-bold py-6 justify-center">
+                <Loader2 className="animate-spin" size={14} /> 拉取中…
+              </div>
+            ) : fx.length === 0 ? (
+              <p className="text-xs text-slate-500 font-medium py-6 text-center">
+                {data?.fx?.error || '暂无汇率数据'}
+              </p>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                {fx.slice(0, 6).map((q) => (
+                  <div
+                    key={q.code || q.currency}
+                    className="rounded-lg border border-slate-100 bg-slate-50/70 px-2 py-1.5 hover:border-emerald-200 hover:bg-emerald-50/40 transition-colors"
+                  >
+                    <div className="flex items-baseline justify-between gap-1">
+                      <span className="text-[10px] font-extrabold text-slate-800 truncate">
+                        {q.currency}
+                      </span>
+                      <span className="text-[8px] font-bold text-slate-400">{q.code}</span>
+                    </div>
+                    <div className="mt-0.5 flex items-baseline justify-between gap-1 font-mono tabular-nums">
+                      <span className="text-[11px] font-extrabold text-slate-900">{q.bocMid}</span>
+                      <span className="text-[8px] font-bold text-emerald-700">{q.bocBuy}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="tp-surface xl:col-span-7 overflow-hidden flex flex-col min-h-0">
+          <header className="px-3 py-2 border-b border-slate-100/90 flex items-center justify-between gap-2 shrink-0 bg-gradient-to-r from-slate-50/90 to-teal-50/35">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="h-7 w-7 rounded-lg bg-slate-900 text-sky-200 flex items-center justify-center shrink-0">
+                <Globe2 size={13} />
+              </div>
+              <div className="min-w-0">
+                <h2 className="text-[13px] font-extrabold text-slate-900 leading-tight tracking-tight">
+                  全球市场雷达
+                </h2>
+                <p className="text-[9px] text-slate-500 font-medium truncate">
+                  精选公开情报入口 · 点击直达权威数据源
+                </p>
+              </div>
+            </div>
+          </header>
+          <div className="flex-1 p-2.5 space-y-2.5">
+            {INTEL_NAV_CATEGORIES.map((cat) => {
+              const items = LANDING_INTEL_NAV.filter((i) => i.category === cat.id);
+              if (!items.length) return null;
+              return (
+                <div key={cat.id} className="min-w-0">
+                  <div className="flex items-center gap-1.5 mb-1 px-0.5">
+                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-slate-900/90 text-teal-200">
+                      {CATEGORY_ICON[cat.id]}
+                    </span>
+                    <span className="text-[10px] font-extrabold text-slate-800">{cat.title}</span>
+                    <span className="text-[9px] font-medium text-slate-400">{cat.sub}</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
+                    {items.map((item) => (
+                      <a
+                        key={item.id}
+                        href={item.href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="group flex items-start gap-2 rounded-lg border border-slate-100 bg-white px-2 py-1.5 hover:border-teal-300 hover:bg-teal-50/50 transition-colors"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[11px] font-extrabold text-slate-800 leading-snug group-hover:text-teal-900 truncate">
+                            {item.label}
+                          </p>
+                          <p className="text-[9px] font-medium text-slate-400 mt-0.5 truncate">
+                            {item.blurb}
+                          </p>
+                        </div>
+                        <ExternalLink
+                          size={10}
+                          className="shrink-0 text-slate-300 mt-1 group-hover:text-teal-600"
+                        />
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      </div>
+
+      {/* 新闻 + 新品 */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 items-stretch">
-        <section className="tp-surface lg:col-span-3 overflow-hidden flex flex-col min-h-[220px] max-h-[320px] lg:max-h-[300px]">
+        <section className="tp-surface lg:col-span-4 overflow-hidden flex flex-col min-h-[220px] max-h-[340px] lg:max-h-[320px]">
           <header className="px-3 py-2 border-b border-slate-100/90 flex items-center gap-2 shrink-0">
             <div className="h-7 w-7 rounded-lg bg-slate-900 text-teal-300 flex items-center justify-center">
               <Newspaper size={13} />
             </div>
             <div className="min-w-0">
-              <h2 className="text-[13px] font-extrabold text-slate-900 leading-tight tracking-tight">行业新闻</h2>
+              <h2 className="text-[13px] font-extrabold text-slate-900 leading-tight tracking-tight">
+                行业新闻
+              </h2>
               <p className="text-[9px] text-slate-500 font-medium">国内 · 国际 · 优选</p>
             </div>
           </header>
@@ -230,14 +361,16 @@ export const ModuleLandingHub: React.FC<Props> = ({
           </div>
         </section>
 
-        <section className="tp-surface lg:col-span-6 overflow-hidden flex flex-col min-h-[220px] max-h-[320px] lg:max-h-[300px]">
+        <section className="tp-surface lg:col-span-8 overflow-hidden flex flex-col min-h-[220px] max-h-[340px] lg:max-h-[320px]">
           <header className="px-3 py-2 border-b border-slate-100/90 flex items-center justify-between gap-2 shrink-0 bg-gradient-to-r from-stone-50/80 to-teal-50/40">
             <div className="flex items-center gap-2 min-w-0">
               <div className="h-7 w-7 rounded-lg bg-slate-900 text-amber-200 flex items-center justify-center shrink-0">
                 <Sparkles size={13} />
               </div>
               <div className="min-w-0">
-                <h2 className="text-[13px] font-extrabold text-slate-900 leading-tight tracking-tight">新品推荐</h2>
+                <h2 className="text-[13px] font-extrabold text-slate-900 leading-tight tracking-tight">
+                  新品推荐
+                </h2>
                 <p className="text-[9px] text-slate-500 font-medium truncate">
                   优先展示产品库带图 SKU · 点击进产品库
                 </p>
@@ -274,7 +407,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
                 ) : null}
               </div>
             ) : (
-              <div className="grid grid-cols-3 sm:grid-cols-3 gap-2">
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
                 {products.map((p) => (
                   <button
                     key={p.id}
@@ -310,69 +443,9 @@ export const ModuleLandingHub: React.FC<Props> = ({
             )}
           </div>
         </section>
-
-        <section className="tp-surface lg:col-span-3 overflow-hidden flex flex-col min-h-[220px] max-h-[320px] lg:max-h-[300px]">
-          <header className="px-3 py-2 border-b border-slate-100 flex items-center gap-2 shrink-0">
-            <div className="h-7 w-7 rounded-lg bg-slate-900 text-emerald-300 flex items-center justify-center">
-              <LineChart size={13} />
-            </div>
-            <div className="min-w-0">
-              <h2 className="text-[13px] font-black text-slate-900 leading-tight">即时汇率</h2>
-              <p className="text-[9px] text-slate-500 font-medium">中行买入 / 卖出 / 中间价</p>
-            </div>
-          </header>
-          <div className="flex-1 overflow-y-auto custom-scrollbar">
-            {loading && !fx.length ? (
-              <div className="flex items-center gap-2 text-slate-400 text-xs font-bold p-4 justify-center">
-                <Loader2 className="animate-spin" size={14} /> 拉取中…
-              </div>
-            ) : fx.length === 0 ? (
-              <p className="text-xs text-slate-500 font-medium p-3 text-center">
-                {data?.fx?.error || '暂无汇率数据'}
-              </p>
-            ) : (
-              <table className="w-full text-left text-[10px]">
-                <thead className="sticky top-0 bg-slate-50 text-slate-500 font-black">
-                  <tr>
-                    <th className="px-2.5 py-1.5">货币</th>
-                    <th className="px-1.5 py-1.5 text-right">买入</th>
-                    <th className="px-1.5 py-1.5 text-right">卖出</th>
-                    <th className="px-2.5 py-1.5 text-right">中间</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {fx.map((q) => (
-                    <tr
-                      key={q.code || q.currency}
-                      className="border-t border-slate-50 hover:bg-emerald-50/40"
-                    >
-                      <td className="px-2.5 py-1.5">
-                        <div className="font-black text-slate-800">{q.currency}</div>
-                        <div className="text-[8px] font-bold text-slate-400">{q.code}</div>
-                      </td>
-                      <td className="px-1.5 py-1.5 text-right font-mono font-bold text-emerald-700 tabular-nums">
-                        {q.bocBuy}
-                      </td>
-                      <td className="px-1.5 py-1.5 text-right font-mono font-bold text-rose-700 tabular-nums">
-                        {q.bocSell}
-                      </td>
-                      <td className="px-2.5 py-1.5 text-right font-mono font-black text-slate-900 tabular-nums">
-                        {q.bocMid}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-          <footer className="px-2.5 py-1 border-t border-slate-100 text-[8px] text-slate-400 font-medium shrink-0">
-            中行牌价 · /100 外币
-            {fx[0]?.publishedAt ? ` · ${fx[0].publishedAt}` : ''}
-          </footer>
-        </section>
       </div>
 
-      {/* 产品入库后的类目匹配客户（重点一对一 / EDM） */}
+      {/* 优选匹配客户 */}
       <section className="tp-surface overflow-hidden">
         <header className="px-3 py-2 border-b border-slate-100/90 flex flex-wrap items-center justify-between gap-2 bg-gradient-to-r from-violet-50/50 to-teal-50/30">
           <div className="flex items-center gap-2 min-w-0">
@@ -437,9 +510,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
                 <span className="rounded-full bg-slate-100 text-slate-600 px-2.5 py-0.5">
                   扫 SKU {matchReport.skuCount} · 命中 {matchReport.matchCount}
                 </span>
-                <span className="text-slate-400 font-medium ml-auto">
-                  {fmtTime(matchReport.at)}
-                </span>
+                <span className="text-slate-400 font-medium ml-auto">{fmtTime(matchReport.at)}</span>
               </div>
               {priorityHits.length === 0 ? (
                 <p className="text-[11px] text-slate-500 font-medium">
@@ -477,7 +548,6 @@ export const ModuleLandingHub: React.FC<Props> = ({
           )}
         </div>
       </section>
-
     </div>
   );
 };
