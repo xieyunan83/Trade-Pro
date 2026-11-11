@@ -6440,7 +6440,13 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       {/* 主区：margin 让开固定侧栏，宽度 calc(100% - 侧栏) 保证满屏 */}
       <div className="tp-workspace min-w-0 max-w-none flex flex-col">
       <main className="tp-app-main flex-1 flex flex-col relative min-w-0 w-full max-w-none">
-        <header className="tp-header w-full max-w-none px-3 sm:px-5 py-3 sm:py-4 flex flex-col gap-3 z-10">
+        <header
+          className={`tp-header w-full max-w-none px-3 sm:px-5 z-10 ${
+            activeModule === ModuleType.DISCOVERY || activeModule === ModuleType.BACKGROUND
+              ? 'py-3 sm:py-4 flex flex-col gap-3'
+              : 'py-2 sm:py-2.5 flex flex-col gap-0 tp-header--slim'
+          }`}
+        >
           {activeModule === ModuleType.HOME || activeModule === ModuleType.SMART_TASKS ? (
             <div className="flex items-center gap-3">
               <button onClick={() => setMobileMenuOpen(true)} className="md:hidden p-2 text-slate-500 flex-shrink-0 touch-manipulation" aria-label="打开菜单"><Menu size={24} /></button>
@@ -6452,52 +6458,76 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                 </span>
               </div>
             </div>
-          ) : (
+          ) : activeModule === ModuleType.DISCOVERY || activeModule === ModuleType.BACKGROUND ? (
             <>
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4">
-          <div className="flex items-center gap-3 sm:contents">
-            <button onClick={() => setMobileMenuOpen(true)} className="md:hidden p-2 text-slate-500 flex-shrink-0 touch-manipulation" aria-label="打开菜单"><Menu size={24} /></button>
-            <div className="flex-1 relative group min-w-0 sm:order-none">
-              <Search className="absolute left-3 sm:left-4 top-3 sm:top-5 text-signal-500/70 pointer-events-none" size={20} />
-            <textarea 
-                  className="tp-scan-input w-full pl-10 sm:pl-12 pr-3 sm:pr-4 py-3 sm:py-4 rounded-2xl text-slate-950 font-semibold text-sm sm:text-base focus:outline-none transition-all resize-none overflow-hidden min-h-[48px] sm:min-h-[56px] focus:min-h-[100px] sm:focus:min-h-[120px] z-20 relative placeholder:text-slate-500" 
-                  placeholder="输入目标网址或公司名称..." 
-                value={domainInput} 
-                onChange={e => setDomainInput(e.target.value)} 
-                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAnalyzeInput(); } }}
-            />
-          </div>
-          </div>
-          <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto flex-shrink-0">
-            {hasPermission(currentUser, 'feature.batch_analyze') && (
-              <button
-                type="button"
-                onClick={() => setExcelBatchOpen(true)}
-                className="inline-flex items-center justify-center gap-1.5 rounded-2xl border border-teal-200 bg-teal-50 hover:bg-teal-100 text-teal-900 px-4 sm:px-5 py-3 text-sm font-extrabold touch-manipulation"
-                title="下载模板并上传 Excel，批量背调与产品分析"
-              >
-                <FileSpreadsheet size={18} /> Excel 批量
-              </button>
-            )}
-            <button onClick={() => handleAnalyzeInput()} disabled={loading || !domainInput.trim()} className="tp-btn-primary text-white px-6 sm:px-8 py-3 rounded-2xl font-extrabold disabled:opacity-50 w-full sm:w-auto sm:min-w-[140px] flex justify-center items-center touch-manipulation">
-            {loading ? <Loader2 className="animate-spin" size={20} /> : '深度调查'}
-          </button>
-          </div>
-          </div>
-          {(activeSectionMeta || activeNavItem) && (
-            <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold text-slate-500">
-              <span className="uppercase tracking-[0.16em] text-cyan-700/80">板块</span>
-              <span className="text-slate-800">{activeSectionMeta?.label || '—'}</span>
-              <span className="text-slate-300">/</span>
-              <span className="text-slate-700">{activeNavItem?.label || activeModule}</span>
-              {activeNavItem?.comingSoon && (
-                <span className="text-[9px] font-black uppercase tracking-wider text-amber-700 bg-amber-50 border border-amber-100 px-2 py-0.5 rounded-md">
-                  框架占位
-                </span>
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4">
+                <div className="flex items-center gap-3 sm:contents">
+                  <button onClick={() => setMobileMenuOpen(true)} className="md:hidden p-2 text-slate-500 flex-shrink-0 touch-manipulation" aria-label="打开菜单"><Menu size={24} /></button>
+                  <div className="flex-1 relative group min-w-0 sm:order-none">
+                    <Search className="absolute left-3 sm:left-4 top-3 sm:top-5 text-signal-500/70 pointer-events-none" size={20} />
+                    <textarea
+                      className="tp-scan-input w-full pl-10 sm:pl-12 pr-3 sm:pr-4 py-3 sm:py-4 rounded-2xl text-slate-950 font-semibold text-sm sm:text-base focus:outline-none transition-all resize-none overflow-hidden min-h-[48px] sm:min-h-[56px] focus:min-h-[100px] sm:focus:min-h-[120px] z-20 relative placeholder:text-slate-500"
+                      placeholder="输入目标网址或公司名称..."
+                      value={domainInput}
+                      onChange={(e) => setDomainInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          handleAnalyzeInput();
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
+                <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto flex-shrink-0">
+                  {hasPermission(currentUser, 'feature.batch_analyze') && (
+                    <button
+                      type="button"
+                      onClick={() => setExcelBatchOpen(true)}
+                      className="inline-flex items-center justify-center gap-1.5 rounded-2xl border border-teal-200 bg-teal-50 hover:bg-teal-100 text-teal-900 px-4 sm:px-5 py-3 text-sm font-extrabold touch-manipulation"
+                      title="下载模板并上传 Excel，批量背调与产品分析"
+                    >
+                      <FileSpreadsheet size={18} /> Excel 批量
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleAnalyzeInput()}
+                    disabled={loading || !domainInput.trim()}
+                    className="tp-btn-primary text-white px-6 sm:px-8 py-3 rounded-2xl font-extrabold disabled:opacity-50 w-full sm:w-auto sm:min-w-[140px] flex justify-center items-center touch-manipulation"
+                  >
+                    {loading ? <Loader2 className="animate-spin" size={20} /> : '深度调查'}
+                  </button>
+                </div>
+              </div>
+              {(activeSectionMeta || activeNavItem) && (
+                <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold text-slate-500">
+                  <span className="uppercase tracking-[0.16em] text-cyan-700/80">板块</span>
+                  <span className="text-slate-800">{activeSectionMeta?.label || '—'}</span>
+                  <span className="text-slate-300">/</span>
+                  <span className="text-slate-700">{activeNavItem?.label || activeModule}</span>
+                  {activeNavItem?.comingSoon && (
+                    <span className="text-[9px] font-black uppercase tracking-wider text-amber-700 bg-amber-50 border border-amber-100 px-2 py-0.5 rounded-md">
+                      框架占位
+                    </span>
+                  )}
+                </div>
               )}
-            </div>
-          )}
             </>
+          ) : (
+            <div className="flex items-center gap-3 min-w-0">
+              <button onClick={() => setMobileMenuOpen(true)} className="md:hidden p-2 text-slate-500 flex-shrink-0 touch-manipulation" aria-label="打开菜单"><Menu size={24} /></button>
+              <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold text-slate-500 min-w-0">
+                <span className="uppercase tracking-[0.16em] text-cyan-700/80">板块</span>
+                <span className="text-slate-800">{activeSectionMeta?.label || '—'}</span>
+                <span className="text-slate-300">/</span>
+                <span className="text-slate-700 truncate">{activeNavItem?.label || activeModule}</span>
+                {activeNavItem?.comingSoon && (
+                  <span className="text-[9px] font-black uppercase tracking-wider text-amber-700 bg-amber-50 border border-amber-100 px-2 py-0.5 rounded-md">
+                    框架占位
+                  </span>
+                )}
+              </div>
+            </div>
           )}
         </header>
 
