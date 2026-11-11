@@ -25,7 +25,6 @@ import {
   loadCatalogAutoMatchReport,
   type CatalogAutoMatchReport,
 } from '../services/catalogAutoMatch';
-import { TradeJourneyPanel } from './TradeJourneyPanel';
 import type { JourneyProgressHint } from '../services/tradeJourney';
 import { useAutomationCounts } from '../services/automationQueueHooks';
 import { loadCatalogSkus } from '../services/productCatalogTypes';
@@ -37,6 +36,7 @@ type Props = {
   onEnterWorkspace?: () => void;
   onOpenDataSetup?: () => void;
   onNavigateModule?: (mod: ModuleType) => void;
+  /** @deprecated 任务流已迁至「智能任务」菜单，保留仅用于顶栏作业计数 */
   onStartPlaybook?: (playbookId: string) => void;
   journeyProgress?: JourneyProgressHint;
 };
@@ -63,7 +63,6 @@ export const ModuleLandingHub: React.FC<Props> = ({
   currentUser,
   onEnterWorkspace,
   onNavigateModule,
-  onStartPlaybook,
   journeyProgress,
 }) => {
   const [data, setData] = useState<LandingPayload>(initialLanding);
@@ -177,7 +176,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
 
       {err && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-950 px-3 py-2 text-xs font-bold">
-          部分情报暂未刷新，可点「刷新」；或直接进入客户搜索 / 任务流。
+          部分情报暂未刷新，可点「刷新」；或进入客户搜索 / 智能任务。
         </div>
       )}
 
@@ -479,14 +478,6 @@ export const ModuleLandingHub: React.FC<Props> = ({
         </div>
       </section>
 
-      {/* 任务流置底 */}
-      {onNavigateModule ? (
-        <TradeJourneyPanel
-          progressHint={jp}
-          onNavigate={onNavigateModule}
-          onStartPlaybook={onStartPlaybook}
-        />
-      ) : null}
     </div>
   );
 };

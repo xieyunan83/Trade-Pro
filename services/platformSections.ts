@@ -28,6 +28,7 @@ import {
   Warehouse,
   FileSpreadsheet,
   Radio,
+  Compass,
   PackageOpen,
   type LucideIcon,
 } from 'lucide-react';
@@ -61,7 +62,8 @@ export const PLATFORM_SECTIONS: PlatformSection[] = [
     accent: '#67e8f9',
     icon: Radio,
     items: [
-      { id: ModuleType.HOME, label: '今日看板', sub: '任务流', icon: Radio },
+      { id: ModuleType.HOME, label: '今日看板', sub: '情报概览', icon: Radio },
+      { id: ModuleType.SMART_TASKS, label: '智能任务', sub: '七步任务流', icon: Compass },
     ],
   },
   {

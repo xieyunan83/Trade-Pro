@@ -198,6 +198,7 @@ import { ModuleSimilar } from './components/ModuleSimilar';
 import type { PromoListRow } from './utils/promoListRows';
 import { ModuleComingSoon } from './components/ModuleComingSoon';
 import { ModuleLandingHub } from './components/ModuleLandingHub';
+import { TradeJourneyPanel } from './components/TradeJourneyPanel';
 import { ModulePane } from './components/ModulePane';
 import { loadCatalogSkus } from './services/productCatalogTypes';
 import { setPreferredAcquisitionCategories } from './services/acquisitionMethods';
@@ -6440,13 +6441,15 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       <div className="tp-workspace min-w-0 max-w-none flex flex-col">
       <main className="tp-app-main flex-1 flex flex-col relative min-w-0 w-full max-w-none">
         <header className="tp-header w-full max-w-none px-3 sm:px-5 py-3 sm:py-4 flex flex-col gap-3 z-10">
-          {activeModule === ModuleType.HOME ? (
+          {activeModule === ModuleType.HOME || activeModule === ModuleType.SMART_TASKS ? (
             <div className="flex items-center gap-3">
               <button onClick={() => setMobileMenuOpen(true)} className="md:hidden p-2 text-slate-500 flex-shrink-0 touch-manipulation" aria-label="打开菜单"><Menu size={24} /></button>
               <div className="text-[11px] font-bold text-slate-500">
                 <span className="uppercase tracking-[0.16em] text-cyan-700/80">指挥舱</span>
                 <span className="text-slate-300 mx-2">/</span>
-                <span className="text-slate-800">今日看板</span>
+                <span className="text-slate-800">
+                  {activeModule === ModuleType.SMART_TASKS ? '智能任务' : '今日看板'}
+                </span>
               </div>
             </div>
           ) : (
@@ -6559,12 +6562,57 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                         }
                         navigateModule(mod);
                       }}
-                      onStartPlaybook={(playbookId) => {
-                        setPendingPlaybookId(playbookId);
-                        navigateModule(ModuleType.PROMO_GENERATOR);
+                      journeyProgress={{
+                        skuCount: loadCatalogSkus().length,
+                        pendingTasks: 0,
+                        failedTasks: 0,
+                        completedBg: 0,
+                        crmCount: crmClients.length,
                       }}
-                      journeyProgress={{ skuCount: loadCatalogSkus().length, pendingTasks: 0, failedTasks: 0, completedBg: 0, crmCount: crmClients.length }}
                     />
+                  </ErrorBoundary>
+                </ModulePane>
+                <ModulePane id={ModuleType.SMART_TASKS} activeId={activeModule} maxAlive={2}>
+                  <ErrorBoundary label="智能任务">
+                    <div className="w-full max-w-none min-w-0 space-y-3">
+                      <div className="rounded-2xl border border-cyan-100 bg-cyan-50/50 px-4 py-3">
+                        <div className="text-sm font-black text-slate-900">智能任务</div>
+                        <p className="text-xs text-slate-600 font-medium mt-1 leading-relaxed">
+                          按七步推进选品、报价、设计、获客、背调、触达与成交；可点步骤直接进入对应功能。
+                        </p>
+                      </div>
+                      <TradeJourneyPanel
+                        progressHint={{
+                          skuCount: loadCatalogSkus().length,
+                          pendingTasks: 0,
+                          failedTasks: 0,
+                          completedBg: history.length,
+                          crmCount: crmClients.length,
+                        }}
+                        onNavigate={(mod) => {
+                          const needsReport = (
+                            [
+                              ModuleType.BACKGROUND,
+                              ModuleType.PRODUCTS,
+                              ModuleType.DECISION_MAKERS,
+                              ModuleType.SIMILAR,
+                            ] as ModuleType[]
+                          ).includes(mod);
+                          if (needsReport && !analysisData) {
+                            navigateModule(ModuleType.PROMO_GENERATOR);
+                            setSystemNotice(
+                              '请先在「营销工具 / 背调作业」打开一条已完成报告，再查看背调详情。'
+                            );
+                            return;
+                          }
+                          navigateModule(mod);
+                        }}
+                        onStartPlaybook={(playbookId) => {
+                          setPendingPlaybookId(playbookId);
+                          navigateModule(ModuleType.PROMO_GENERATOR);
+                        }}
+                      />
+                    </div>
                   </ErrorBoundary>
                 </ModulePane>
                 <ModulePane id={ModuleType.DISCOVERY} activeId={activeModule} maxAlive={2}>

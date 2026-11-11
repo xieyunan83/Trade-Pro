@@ -9,7 +9,8 @@ export const PERMISSION_CATALOG: Array<{
   group: '模块' | '功能';
   description: string;
 }> = [
-  { key: 'module.home', label: '今日看板', group: '模块', description: '登录落地：任务流 + 行业新闻 / 新品 / 汇率' },
+  { key: 'module.home', label: '今日看板', group: '模块', description: '登录落地：行业新闻 / 新品 / 汇率与情报概览' },
+  { key: 'module.smart_tasks', label: '智能任务', group: '模块', description: '指挥舱七步任务流：选品→报价→设计→获客→背调→触达→成交' },
   { key: 'module.discovery', label: '客户搜索', group: '模块', description: '发现潜在客户列表' },
   { key: 'module.background', label: '背景调查', group: '模块', description: '查看公司背调报告' },
   { key: 'module.products', label: '产品分析', group: '模块', description: '查看产品分析页' },
@@ -58,6 +59,7 @@ export const PERMISSION_CATALOG: Array<{
 
 const MODULE_TO_PERM: Record<ModuleType, PermissionKey> = {
   [ModuleType.HOME]: 'module.home',
+  [ModuleType.SMART_TASKS]: 'module.smart_tasks',
   [ModuleType.DISCOVERY]: 'module.discovery',
   [ModuleType.BACKGROUND]: 'module.background',
   [ModuleType.PRODUCTS]: 'module.products',
@@ -93,6 +95,7 @@ const MODULE_TO_PERM: Record<ModuleType, PermissionKey> = {
 /** 新员工默认权限：不含邮箱搜索、PPT 下载等需管理员显式开通的功能 */
 const USER_BASELINE: PermissionKey[] = [
   'module.home',
+  'module.smart_tasks',
   'module.discovery',
   'module.background',
   'module.products',
@@ -134,6 +137,7 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = PERMISSION_CATALOG.map((p) =
 /** 平台升级新增模块权限（旧账号本地 permissions 数组可能缺失，运行时软补齐） */
 const PLATFORM_V2_MODULE_KEYS: PermissionKey[] = [
   'module.home',
+  'module.smart_tasks',
   'module.buyer_library',
   'module.customs_intel',
   'module.market_evidence',

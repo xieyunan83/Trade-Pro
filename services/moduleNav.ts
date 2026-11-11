@@ -9,6 +9,7 @@ export { PLATFORM_SECTIONS, ALL_PLATFORM_NAV_ITEMS };
 /** 无需先做背调即可进入的模块 */
 export const ALWAYS_ACTIVE_MODULES: ModuleType[] = [
   ModuleType.HOME,
+  ModuleType.SMART_TASKS,
   ModuleType.DISCOVERY,
   ModuleType.PROMO_GENERATOR,
   ModuleType.CLIENT_CRM,

@@ -2,6 +2,8 @@
 export enum ModuleType {
   /** 登录落地：行业新闻 / 新品 / 汇率 */
   HOME = 'home',
+  /** 指挥舱 · 智能任务（原今日看板内嵌任务流） */
+  SMART_TASKS = 'smart_tasks',
   DISCOVERY = 'discovery',
   BACKGROUND = 'background',
   PRODUCTS = 'products',
@@ -54,6 +56,7 @@ export type UserRole = 'admin' | 'director' | 'manager' | 'user';
 /** 细粒度权限（模块 + 功能） */
 export type PermissionKey =
   | 'module.home'
+  | 'module.smart_tasks'
   | 'module.discovery'
   | 'module.background'
   | 'module.products'

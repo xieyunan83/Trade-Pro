@@ -87,7 +87,7 @@ export const SphereNav: React.FC<Props> = ({
     // 同步切换相位（必须立刻反馈）；禁止后台预取其它模块
     setSectionId(sec.id);
     setPhase('submenu');
-    // 指挥舱仅一项：点板块直接进入今日看板
+    // 指挥舱：点板块默认进今日看板，侧栏仍可切「智能任务」
     if (sec.id === 'home' && sec.items[0]) {
       onSelectModule(sec.items[0].id);
     }
