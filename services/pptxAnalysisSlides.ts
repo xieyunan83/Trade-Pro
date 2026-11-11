@@ -79,12 +79,16 @@ export const clipText = (str: any, maxChars: number): string => {
   return t.slice(0, maxChars);
 };
 
-/** 估算文本框可容纳字符数（中英混排经验值） */
+/**
+ * 估算文本框可容纳字符数。
+ * 偏「能装尽装」：略放大系数，避免过碎分页导致百页空报。
+ */
 export const estimateCharCapacity = (wIn: number, hIn: number, fontSize: number): number => {
-  const cpl = Math.max(6, Math.floor((wIn * 72) / (fontSize * 0.98)));
-  const lineH = (fontSize * 1.38) / 72;
+  // 中英混排约 0.85–0.95em 宽；再给 12% 余量，优先同页塞满
+  const cpl = Math.max(8, Math.floor((wIn * 72) / (fontSize * 0.88)));
+  const lineH = (fontSize * 1.28) / 72;
   const lines = Math.max(1, Math.floor(hIn / lineH));
-  return Math.max(12, cpl * lines);
+  return Math.max(24, Math.floor(cpl * lines * 1.12));
 };
 
 /** 按容量分页，优先在句读处分段；绝不加省略号，保证全文可续页展示 */
@@ -252,7 +256,7 @@ const label = (slide: any, text: string, x: number, y: number, w: number, color 
   });
 };
 
-/** 全文分页卡片：装不下就续页，不加省略号 */
+/** 全文分页卡片：仅在整页正文装不下时续页；短文绝不拆成空页 */
 const addPagedBodySlides = (
   pptx: any,
   opts: {
@@ -291,56 +295,145 @@ const addPagedBodySlides = (
   });
 };
 
-/** 2×2 长文卡片：每块正文单独按容量续页（同标题后缀） */
+/**
+ * 稠密多栏卡片：能塞进 2×2 的同页；单块过长才整页续写。
+ * 禁止「每个字段拆一页」导致大量空白页。
+ */
 const addPagedQuadBlocks = (
   pptx: any,
   title: string,
   company: string,
   blocks: Array<{ t: string; b: string }>,
-  opts?: { fontSize?: number; cardH?: number }
+  opts?: { fontSize?: number }
 ) => {
   const usable = blocks.filter((b) => isMeaningful(b.b));
   if (!usable.length) return;
   const fontSize = opts?.fontSize ?? 12;
-  const cardH = opts?.cardH ?? 1.9;
-  const textW = 4.14;
-  const textH = cardH - 0.65;
-  const cap = estimateCharCapacity(textW, textH, fontSize);
-  // 每块先分页，再按「页索引」对齐铺成 2×2；剩余单独成页
-  const expanded: Array<{ t: string; b: string; part?: string }> = [];
-  usable.forEach((b) => {
-    const pages = paginateText(b.b, cap);
-    pages.forEach((p, i) => {
-      expanded.push({
-        t: pages.length > 1 ? `${b.t} (${i + 1}/${pages.length})` : b.t,
-        b: p,
-      });
-    });
-  });
-  chunk(expanded, 4).forEach((page, pi, all) => {
+  const quarterCap = estimateCharCapacity(4.14, 1.25, fontSize);
+  const halfCap = estimateCharCapacity(4.14, 3.2, fontSize);
+  const fullCap = estimateCharCapacity(8.7, 3.25, fontSize);
+
+  type Cell = { t: string; b: string; tall?: boolean };
+  const queue: Cell[] = [];
+  const flush = (pageTitle: string, cells: Cell[]) => {
+    if (!cells.length) return;
     const slide = pptx.addSlide();
-    paintChrome(
-      pptx,
-      slide,
-      all.length > 1 ? `${title} (${pi + 1}/${all.length})` : title,
-      company
-    );
-    page.forEach((b, i) => {
+    paintChrome(pptx, slide, pageTitle, company);
+    const tall = cells.length <= 2 || cells.some((c) => c.tall);
+    cells.forEach((b, i) => {
       const col = i % 2;
-      const row = Math.floor(i / 2);
+      const row = tall ? 0 : Math.floor(i / 2);
       const x = MX + col * 4.7;
-      const y = TOP + row * (cardH + 0.12);
-      card(pptx, slide, x, y, 4.5, cardH);
+      const y = tall ? TOP : TOP + row * 2.02;
+      const h = tall ? 4.05 : 1.9;
+      // 单块占满整行宽
+      if (cells.length === 1) {
+        card(pptx, slide, MX, TOP, 9.16, 4.05);
+        label(slide, b.t, MX + 0.2, TOP + 0.16, 8.7);
+        slide.addText(b.b, {
+          x: MX + 0.2,
+          y: TOP + 0.55,
+          w: 8.76,
+          h: 3.3,
+          ...bodyOpts(fontSize),
+        });
+        return;
+      }
+      card(pptx, slide, x, y, 4.5, h);
       label(slide, b.t, x + 0.18, y + 0.14, 4.1);
       slide.addText(b.b, {
         x: x + 0.18,
         y: y + 0.5,
-        w: textW,
-        h: textH,
+        w: 4.14,
+        h: h - 0.65,
         ...bodyOpts(fontSize),
       });
     });
-  });
+  };
+
+  let pageIdx = 0;
+  let i = 0;
+  while (i < usable.length) {
+    const cur = usable[i];
+    const len = sanitize(cur.b).length;
+
+    // 超长：整页续写，不占四分之一空卡
+    if (len > halfCap) {
+      const pages = paginateText(cur.b, fullCap);
+      pages.forEach((p, pi) => {
+        pageIdx += 1;
+        flush(
+          pages.length > 1 || usable.length > 1
+            ? `${title} · ${cur.t}${pages.length > 1 ? ` (${pi + 1}/${pages.length})` : ''}`
+            : title,
+          [{ t: cur.t, b: p }]
+        );
+      });
+      i += 1;
+      continue;
+    }
+
+    // 中等偏长：本页最多 2 块（左右半屏）
+    if (len > quarterCap) {
+      const pair: Cell[] = [{ t: cur.t, b: cur.b, tall: true }];
+      const next = usable[i + 1];
+      if (next && sanitize(next.b).length <= halfCap && sanitize(next.b).length > quarterCap) {
+        pair.push({ t: next.t, b: next.b, tall: true });
+        i += 2;
+      } else if (next && sanitize(next.b).length <= quarterCap) {
+        // 把后面短块也并进半屏页（最多再塞 1 个短的会空，所以仍只 2 高卡）
+        pair.push({ t: next.t, b: next.b, tall: true });
+        i += 2;
+      } else {
+        i += 1;
+      }
+      pageIdx += 1;
+      flush(usable.length > 2 ? `${title} (${pageIdx})` : title, pair);
+      continue;
+    }
+
+    // 短块：尽量凑满 4 格
+    const pack: Cell[] = [];
+    while (i < usable.length && pack.length < 4) {
+      const b = usable[i];
+      if (sanitize(b.b).length > quarterCap) break;
+      pack.push({ t: b.t, b: b.b });
+      i += 1;
+    }
+    if (!pack.length) {
+      // 保护：避免死循环
+      i += 1;
+      continue;
+    }
+    pageIdx += 1;
+    const needNum =
+      usable.length > 4 || pageIdx > 1 || i < usable.length;
+    flush(needNum ? `${title} (${pageIdx})` : title, pack);
+  }
+};
+
+/** 产品正文：合成单段，便于同卡展示、必要时整卡续页 */
+const buildProductBody = (prod: any): string => {
+  const lines = [
+    [
+      prod.keywordMatch ? '关键词相关' : '',
+      textOf(prod.category),
+      textOf(prod.role),
+      listOf(prod.tags).join('、'),
+    ]
+      .filter(Boolean)
+      .join(' · '),
+    textOf(prod.features) ? `功能：${textOf(prod.features)}` : '',
+    [textOf(prod.colors), textOf(prod.packaging)].filter(Boolean).length
+      ? `颜色/包装：${[textOf(prod.colors), textOf(prod.packaging)].filter(Boolean).join(' · ')}`
+      : '',
+    [textOf(prod.pitchPoint), textOf(prod.pricingStrategy)].filter(Boolean).length
+      ? `切入/定价：${[textOf(prod.pitchPoint), textOf(prod.pricingStrategy)].filter(Boolean).join(' · ')}`
+      : '',
+    textOf(prod.evidenceSnippet) ? `证据：${textOf(prod.evidenceSnippet)}` : '',
+    textOf(prod.evidenceUrl) ? `链接：${textOf(prod.evidenceUrl)}` : '',
+  ].filter(Boolean);
+  return lines.join('\n');
 };
 
 const resolveOurSkuMatches = (data: AnalysisResult): CatalogSkuClientHit[] => {
@@ -754,9 +847,10 @@ export const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
     ]);
   }
 
-  // —— 官网品类：每页最多 4 张（加高卡片完整展示类目名与子项）——
+  // —— 官网品类：每页 6 张；子项同卡展示，仅极端超长才附录续页 ——
   if (categories.length) {
-    chunk(categories, 4).forEach((page, pi, all) => {
+    const overflowCats: Array<{ name: string; rest: string }> = [];
+    chunk(categories, 6).forEach((page, pi, all) => {
       const slide = pptx.addSlide();
       paintChrome(
         pptx,
@@ -767,22 +861,22 @@ export const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
         company
       );
       page.forEach((cat, i) => {
-        const col = i % 2;
-        const row = Math.floor(i / 2);
-        const x = MX + col * 4.7;
+        const col = i % 3;
+        const row = Math.floor(i / 3);
+        const x = MX + col * 3.1;
         const y = TOP + row * 2.02;
-        card(pptx, slide, x, y, 4.5, 1.9);
+        card(pptx, slide, x, y, 2.95, 1.9);
         const price =
           textOf(cat.priceBand) ||
           (cat.priceMinCNY != null && cat.priceMaxCNY != null
             ? `¥${cat.priceMinCNY}–${cat.priceMaxCNY}`
             : '');
         slide.addText(sanitize(cat.categoryName), {
-          x: x + 0.16,
-          y: y + 0.12,
-          w: price ? 3.2 : 4.18,
-          h: 0.5,
-          fontSize: 13,
+          x: x + 0.12,
+          y: y + 0.1,
+          w: price ? 1.9 : 2.7,
+          h: 0.48,
+          fontSize: 12,
           bold: true,
           color: C.ink,
           fontFace: FONT,
@@ -790,192 +884,161 @@ export const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
           valign: 'top',
         });
         if (price) {
-          slide.addShape(pptx.ShapeType.rect, {
-            x: x + 3.45,
-            y: y + 0.14,
-            w: 0.9,
-            h: 0.28,
-            fill: C.goldSoft,
-            rectRadius: 0.06,
-          });
           slide.addText(sanitize(price), {
-            x: x + 3.45,
-            y: y + 0.14,
-            w: 0.9,
+            x: x + 2.05,
+            y: y + 0.12,
+            w: 0.78,
             h: 0.28,
             fontSize: 9,
             bold: true,
-            color: C.ink,
-            align: 'center',
-            valign: 'middle',
+            color: C.signal,
+            align: 'right',
             fontFace: FONT,
             margin: 0,
             fit: 'shrink',
           });
         }
         const itemsText = listOf(cat.items).join(' · ') || '—';
-        const itemPages = paginateText(itemsText, estimateCharCapacity(4.18, 1.05, 11));
-        slide.addText(itemPages[0] || '—', {
-          x: x + 0.16,
-          y: y + 0.7,
-          w: 4.18,
-          h: 1.05,
-          ...bodyOpts(11),
+        const cap = estimateCharCapacity(2.7, 1.1, 10);
+        const pages = paginateText(itemsText, cap);
+        slide.addText(pages[0] || '—', {
+          x: x + 0.12,
+          y: y + 0.65,
+          w: 2.7,
+          h: 1.1,
+          ...bodyOpts(10),
           color: C.muted,
         });
-        // 子项过长：单独续页完整列出
-        itemPages.slice(1).forEach((cont, ci) => {
-          addPagedBodySlides(pptx, {
-            title: `品类明细 · ${sanitize(cat.categoryName)}`,
-            company,
-            sectionLabel: `子项续 (${ci + 2}/${itemPages.length})`,
-            body: cont,
-            fontSize: 12,
-          });
-        });
+        if (pages.length > 1) {
+          overflowCats.push({ name: sanitize(cat.categoryName), rest: pages.slice(1).join('\n') });
+        }
       });
     });
+    // 把各品类溢出子项合并成附录页，避免一页一个空续页
+    if (overflowCats.length) {
+      addPagedBodySlides(pptx, {
+        title: '官网品类 · 子项附录',
+        company,
+        body: overflowCats.map((o) => `【${o.name}】\n${o.rest}`).join('\n\n'),
+      });
+    }
   }
 
-  // —— 客户产品明细：每页 1 款，字段完整展示；超长字段自动续页 ——
+  // —— 客户产品明细：默认每页 2 款；偏长独占一页；全文合成，禁止按字段拆空页 ——
   if (products.length) {
     const ordered = [...keywordProducts, ...products.filter((p) => !p.keywordMatch)];
-    ordered.forEach((prod, pi) => {
+    const dualCap = estimateCharCapacity(8.6, 1.15, 11);
+    const soloCap = estimateCharCapacity(8.6, 3.1, 12);
+
+    type ProdPack = { prod: (typeof ordered)[0]; body: string; solo: boolean };
+    const packs: ProdPack[] = ordered.map((prod) => {
+      const body = buildProductBody(prod);
+      const solo = body.length > dualCap;
+      return { prod, body, solo };
+    });
+
+    const pages: ProdPack[][] = [];
+    let buf: ProdPack[] = [];
+    const flushBuf = () => {
+      if (buf.length) pages.push(buf);
+      buf = [];
+    };
+    packs.forEach((p) => {
+      if (p.solo) {
+        flushBuf();
+        pages.push([p]);
+        return;
+      }
+      if (buf.length >= 2) flushBuf();
+      buf.push(p);
+    });
+    flushBuf();
+
+    pages.forEach((page, pi) => {
       const slide = pptx.addSlide();
       paintChrome(
         pptx,
         slide,
-        `客户产品明细 · ${products.length} (${pi + 1}/${ordered.length})`,
+        pages.length > 1
+          ? `客户产品明细 · ${products.length} (${pi + 1}/${pages.length})`
+          : `客户产品明细 · ${products.length}`,
         company
       );
-      card(pptx, slide, MX, TOP, 9.16, 4.05);
-      slide.addShape(pptx.ShapeType.rect, {
-        x: MX,
-        y: TOP,
-        w: 0.08,
-        h: 4.05,
-        fill: prod.keywordMatch ? C.gold : C.teal,
-      });
-      slide.addText(sanitize(prod.name), {
-        x: MX + 0.28,
-        y: TOP + 0.16,
-        w: 6.5,
-        h: 0.55,
-        fontSize: 16,
-        bold: true,
-        color: C.ink,
-        fontFace: FONT,
-        margin: 0,
-        valign: 'top',
-      });
-      const priceBits = [
-        textOf(prod.retailPrice),
-        prod.estimatedFOBPriceCNY ? `FOB≈¥${prod.estimatedFOBPriceCNY}` : '',
-        prod.priceMinCNY != null && prod.priceMaxCNY != null
-          ? `¥${prod.priceMinCNY}-${prod.priceMaxCNY}`
-          : '',
-      ]
-        .filter(Boolean)
-        .join(' · ');
-      if (priceBits) {
-        slide.addText(priceBits, {
-          x: MX + 6.7,
-          y: TOP + 0.18,
-          w: 2.2,
-          h: 0.5,
-          fontSize: 11,
-          bold: true,
-          color: C.signal,
-          align: 'right',
-          fontFace: FONT,
-          margin: 0,
-          valign: 'top',
+      page.forEach((pack, i) => {
+        const solo = page.length === 1;
+        const y = solo ? TOP : TOP + i * 2.05;
+        const h = solo ? 4.05 : 1.95;
+        const { prod, body } = pack;
+        card(pptx, slide, MX, y, 9.16, h);
+        slide.addShape(pptx.ShapeType.rect, {
+          x: MX,
+          y,
+          w: 0.08,
+          h,
+          fill: prod.keywordMatch ? C.gold : C.teal,
         });
-      }
-      const metaLine = [
-        prod.keywordMatch ? '关键词相关' : '',
-        textOf(prod.category),
-        textOf(prod.role),
-        listOf(prod.tags).join('、'),
-      ]
-        .filter(Boolean)
-        .join(' · ');
-      if (metaLine) {
-        slide.addText(metaLine, {
-          x: MX + 0.28,
-          y: TOP + 0.78,
-          w: 8.6,
+        const priceBits = [
+          textOf(prod.retailPrice),
+          prod.estimatedFOBPriceCNY ? `FOB≈¥${prod.estimatedFOBPriceCNY}` : '',
+          prod.priceMinCNY != null && prod.priceMaxCNY != null
+            ? `¥${prod.priceMinCNY}-${prod.priceMaxCNY}`
+            : '',
+        ]
+          .filter(Boolean)
+          .join(' · ');
+        slide.addText(sanitize(prod.name), {
+          x: MX + 0.25,
+          y: y + 0.1,
+          w: priceBits ? 6.5 : 8.6,
           h: 0.36,
-          fontSize: 11,
-          color: C.signal,
+          fontSize: solo ? 15 : 14,
+          bold: true,
+          color: C.ink,
           fontFace: FONT,
           margin: 0,
+          fit: 'shrink',
         });
-      }
-      const detailBlocks = [
-        { t: '功能 / 卖点', b: textOf(prod.features) },
-        {
-          t: '颜色 / 包装',
-          b: [textOf(prod.colors), textOf(prod.packaging)].filter(Boolean).join(' · '),
-        },
-        {
-          t: '切入 / 定价',
-          b: [textOf(prod.pitchPoint), textOf(prod.pricingStrategy)].filter(Boolean).join(' · '),
-        },
-        {
-          t: '证据',
-          b: [textOf(prod.evidenceSnippet), textOf(prod.evidenceUrl)].filter(Boolean).join('\n'),
-        },
-      ].filter((c) => c.b);
-
-      // 本页放得下的短块；放不下的字段整段续页
-      let yCursor = TOP + 1.2;
-      detailBlocks.forEach((c) => {
-        const cap = estimateCharCapacity(8.6, 0.85, 12);
-        const pages = paginateText(c.b, cap);
-        if (yCursor + 1.05 <= BOTTOM && pages[0]) {
-          slide.addText(c.t, {
-            x: MX + 0.28,
-            y: yCursor,
-            w: 8.6,
-            h: 0.22,
-            fontSize: 10,
+        if (priceBits) {
+          slide.addText(priceBits, {
+            x: MX + 6.7,
+            y: y + 0.12,
+            w: 2.2,
+            h: 0.32,
+            fontSize: 11,
             bold: true,
-            color: C.muted,
+            color: C.signal,
+            align: 'right',
             fontFace: FONT,
             margin: 0,
+            fit: 'shrink',
           });
-          slide.addText(pages[0], {
-            x: MX + 0.28,
-            y: yCursor + 0.24,
-            w: 8.6,
-            h: 0.7,
-            ...bodyOpts(12),
-          });
-          yCursor += 1.0;
-          pages.slice(1).forEach((cont, ci) => {
-            addPagedBodySlides(pptx, {
-              title: sanitize(prod.name) || '产品明细',
-              company,
-              sectionLabel: `${c.t} · 续 (${ci + 2}/${pages.length})`,
-              body: cont,
-            });
-          });
-        } else {
+        }
+        const bodyH = solo ? 3.35 : 1.35;
+        const cap = solo ? soloCap : dualCap;
+        const bodyPages = paginateText(body, cap);
+        slide.addText(bodyPages[0] || '', {
+          x: MX + 0.25,
+          y: y + 0.5,
+          w: 8.6,
+          h: bodyH,
+          ...bodyOpts(solo ? 12 : 11),
+        });
+        // 仅整卡仍装不下时续页（合并剩余，不再按字段拆）
+        if (bodyPages.length > 1) {
           addPagedBodySlides(pptx, {
-            title: sanitize(prod.name) || '产品明细',
+            title: `产品续 · ${sanitize(prod.name)}`,
             company,
-            sectionLabel: c.t,
-            body: c.b,
+            body: bodyPages.slice(1).join('\n'),
           });
         }
       });
     });
   }
 
-  // —— 我方匹配：每页 1–2 张，命中原因全文 ——
+  // —— 我方匹配：每页 3 张；原因同卡展示，溢出合并附录 ——
   if (skuHits.length) {
-    chunk(skuHits, 2).forEach((page, pi, all) => {
+    const reasonAppendix: string[] = [];
+    chunk(skuHits, 3).forEach((page, pi, all) => {
       const slide = pptx.addSlide();
       paintChrome(
         pptx,
@@ -986,8 +1049,8 @@ export const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
         company
       );
       page.forEach((hit, i) => {
-        const x = MX + i * 4.7;
-        card(pptx, slide, x, TOP, 4.5, 4.05);
+        const x = MX + i * 3.1;
+        card(pptx, slide, x, TOP, 2.98, 4.05);
         slide.addShape(pptx.ShapeType.rect, {
           x,
           y: TOP,
@@ -997,30 +1060,30 @@ export const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
         });
         const name = textOf(hit.sku.name) || textOf(hit.sku.skuCode) || 'SKU';
         slide.addText(name, {
-          x: x + 0.22,
-          y: TOP + 0.16,
-          w: 4.05,
-          h: 0.55,
-          fontSize: 14,
+          x: x + 0.18,
+          y: TOP + 0.14,
+          w: 2.6,
+          h: 0.5,
+          fontSize: 13,
           bold: true,
           color: C.ink,
           fontFace: FONT,
           margin: 0,
         });
         slide.addShape(pptx.ShapeType.rect, {
-          x: x + 0.22,
-          y: TOP + 0.8,
-          w: 0.9,
-          h: 0.36,
+          x: x + 0.18,
+          y: TOP + 0.72,
+          w: 0.85,
+          h: 0.32,
           fill: hit.score >= 80 ? C.goldSoft : 'D1FAE5',
           rectRadius: 0.06,
         });
         slide.addText(String(Math.round(hit.score)), {
-          x: x + 0.22,
-          y: TOP + 0.8,
-          w: 0.9,
-          h: 0.36,
-          fontSize: 14,
+          x: x + 0.18,
+          y: TOP + 0.72,
+          w: 0.85,
+          h: 0.32,
+          fontSize: 13,
           bold: true,
           color: C.ink,
           align: 'center',
@@ -1029,10 +1092,10 @@ export const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
           margin: 0,
         });
         slide.addText('匹配分', {
-          x: x + 1.25,
-          y: TOP + 0.85,
-          w: 2.8,
-          h: 0.28,
+          x: x + 1.15,
+          y: TOP + 0.76,
+          w: 1.5,
+          h: 0.26,
           fontSize: 11,
           color: C.muted,
           fontFace: FONT,
@@ -1046,33 +1109,35 @@ export const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
           .filter(Boolean)
           .join('\n');
         slide.addText(meta || '品类相关', {
-          x: x + 0.22,
-          y: TOP + 1.3,
-          w: 4.05,
+          x: x + 0.18,
+          y: TOP + 1.2,
+          w: 2.6,
           h: 0.7,
           ...bodyOpts(11),
           color: C.signal,
         });
-        label(slide, '命中原因', x + 0.22, TOP + 2.1, 4.05);
+        label(slide, '命中原因', x + 0.18, TOP + 2.0, 2.6);
         const reasonsFull = formatMatchReasons(hit.reasons) || '与客户品类/关键词匹配';
-        const reasonPages = paginateText(reasonsFull, estimateCharCapacity(4.05, 1.55, 11));
+        const reasonPages = paginateText(reasonsFull, estimateCharCapacity(2.6, 1.7, 11));
         slide.addText(reasonPages[0], {
-          x: x + 0.22,
-          y: TOP + 2.45,
-          w: 4.05,
-          h: 1.4,
+          x: x + 0.18,
+          y: TOP + 2.35,
+          w: 2.6,
+          h: 1.5,
           ...bodyOpts(11),
         });
-        reasonPages.slice(1).forEach((cont, ci) => {
-          addPagedBodySlides(pptx, {
-            title: name,
-            company,
-            sectionLabel: `命中原因 · 续 (${ci + 2}/${reasonPages.length})`,
-            body: cont,
-          });
-        });
+        if (reasonPages.length > 1) {
+          reasonAppendix.push(`【${name}】\n${reasonPages.slice(1).join('\n')}`);
+        }
       });
     });
+    if (reasonAppendix.length) {
+      addPagedBodySlides(pptx, {
+        title: '匹配原因附录',
+        company,
+        body: reasonAppendix.join('\n\n'),
+      });
+    }
   } else if (products.length || categories.length || hasProductSummary) {
     const tips = [
       keyword ? `关键词「${keyword}」已用于筛选客户产品与切入点。` : '',
@@ -1141,14 +1206,13 @@ export const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
         }
       );
     }
-    longBlocks.forEach((b) => {
+    if (longBlocks.length) {
       addPagedBodySlides(pptx, {
         title: '贸易情报详述',
         company,
-        sectionLabel: b.t,
-        body: b.b,
+        body: longBlocks.map((b) => `【${b.t}】\n${b.b}`).join('\n\n'),
       });
-    });
+    }
   }
 
   // —— 业务模式（全文分页）——
@@ -1187,9 +1251,9 @@ export const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
     }
   }
 
-  // —— 行动计划：全量分页 ——
+  // —— 行动计划：每页最多 7 条；超长步骤用稍高行，禁止一步一续页 ——
   if (actionPlan.length) {
-    chunk(actionPlan, 6).forEach((page, pi, all) => {
+    chunk(actionPlan, 7).forEach((page, pi, all) => {
       const slide = pptx.addSlide();
       paintChrome(
         pptx,
@@ -1197,58 +1261,51 @@ export const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
         all.length > 1 ? `建议行动计划 (${pi + 1}/${all.length})` : '建议行动计划',
         company
       );
+      const rowH = Math.min(0.55, 3.95 / Math.max(page.length, 1));
       page.forEach((step, idx) => {
-        const globalIdx = pi * 6 + idx;
-        const y = TOP + idx * 0.65;
+        const globalIdx = pi * 7 + idx;
+        const y = TOP + idx * rowH;
         slide.addShape(pptx.ShapeType.rect, {
           x: MX,
-          y,
-          w: 0.4,
-          h: 0.55,
+          y: y + 0.04,
+          w: 0.36,
+          h: Math.max(0.32, rowH - 0.1),
           fill: C.signal,
-          rectRadius: 0.08,
+          rectRadius: 0.06,
         });
         slide.addText(String(globalIdx + 1), {
           x: MX,
-          y,
-          w: 0.4,
-          h: 0.55,
+          y: y + 0.04,
+          w: 0.36,
+          h: Math.max(0.32, rowH - 0.1),
           align: 'center',
           valign: 'middle',
           color: C.white,
           bold: true,
-          fontSize: 12,
+          fontSize: 11,
           fontFace: FONT,
           margin: 0,
         });
-        card(pptx, slide, MX + 0.52, y, 8.64, 0.55);
-        const stepPages = paginateText(step, estimateCharCapacity(8.35, 0.5, 12));
-        slide.addText(stepPages[0], {
-          x: MX + 0.65,
-          y,
-          w: 8.35,
-          h: 0.55,
-          fontSize: 12,
+        card(pptx, slide, MX + 0.48, y + 0.02, 8.68, Math.max(0.36, rowH - 0.06));
+        slide.addText(step, {
+          x: MX + 0.6,
+          y: y + 0.02,
+          w: 8.4,
+          h: Math.max(0.36, rowH - 0.06),
+          fontSize: 11,
           color: C.ink,
           fontFace: FONT,
           valign: 'middle',
           margin: 0,
-        });
-        stepPages.slice(1).forEach((cont, ci) => {
-          addPagedBodySlides(pptx, {
-            title: '建议行动计划',
-            company,
-            sectionLabel: `步骤 ${globalIdx + 1} · 续 (${ci + 2}/${stepPages.length})`,
-            body: cont,
-          });
+          wrap: true,
         });
       });
     });
   }
 
-  // —— 决策人：加高卡片完整展示姓名/职位/邮箱 ——
+  // —— 决策人：3×4=12 / 页 ——
   if (dms.length) {
-    chunk(dms, 9).forEach((page, pi, all) => {
+    chunk(dms, 12).forEach((page, pi, all) => {
       const slide = pptx.addSlide();
       paintChrome(
         pptx,
@@ -1260,13 +1317,13 @@ export const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
         const col = i % 3;
         const row = Math.floor(i / 3);
         const x = MX + col * 3.1;
-        const y = TOP + row * 1.3;
-        card(pptx, slide, x, y, 2.95, 1.2);
+        const y = TOP + row * 1.0;
+        card(pptx, slide, x, y, 2.95, 0.92);
         slide.addText(textOf(dm.name, '联系人'), {
           x: x + 0.12,
           y: y + 0.08,
-          w: 1.85,
-          h: 0.28,
+          w: 1.9,
+          h: 0.24,
           fontSize: 12,
           bold: true,
           color: C.ink,
@@ -1276,10 +1333,10 @@ export const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
         });
         if (textOf(dm.type)) {
           slide.addText(textOf(dm.type), {
-            x: x + 1.95,
+            x: x + 2.0,
             y: y + 0.08,
-            w: 0.85,
-            h: 0.28,
+            w: 0.8,
+            h: 0.22,
             fontSize: 9,
             bold: true,
             color: C.signal,
@@ -1290,14 +1347,12 @@ export const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
           });
         }
         slide.addText(
-          [textOf(dm.title), textOf(dm.emailGuess), textOf(dm.phone), textOf(dm.linkedin)]
-            .filter(Boolean)
-            .join('\n') || '邮箱待补充',
+          [textOf(dm.title), textOf(dm.emailGuess)].filter(Boolean).join('\n') || '邮箱待补充',
           {
             x: x + 0.12,
-            y: y + 0.4,
+            y: y + 0.36,
             w: 2.7,
-            h: 0.7,
+            h: 0.48,
             ...bodyOpts(10),
             color: C.muted,
           }
@@ -1306,9 +1361,9 @@ export const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
     });
   }
 
-  // —— 同类 ——
+  // —— 同类：每页 6 ——
   if (similar.length) {
-    chunk(similar, 4).forEach((page, pi, all) => {
+    chunk(similar, 6).forEach((page, pi, all) => {
       const slide = pptx.addSlide();
       paintChrome(
         pptx,
@@ -1317,17 +1372,17 @@ export const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
         company
       );
       page.forEach((c, i) => {
-        const col = i % 2;
-        const row = Math.floor(i / 2);
-        const x = MX + col * 4.7;
+        const col = i % 3;
+        const row = Math.floor(i / 3);
+        const x = MX + col * 3.1;
         const y = TOP + row * 2.02;
-        card(pptx, slide, x, y, 4.5, 1.9);
+        card(pptx, slide, x, y, 2.95, 1.9);
         slide.addText(sanitize(c.name), {
-          x: x + 0.16,
-          y: y + 0.14,
-          w: 4.18,
-          h: 0.45,
-          fontSize: 13,
+          x: x + 0.12,
+          y: y + 0.12,
+          w: 2.7,
+          h: 0.48,
+          fontSize: 12,
           bold: true,
           color: C.ink,
           fontFace: FONT,
@@ -1336,10 +1391,10 @@ export const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
         const loc = [textOf(c.country), textOf(c.website)].filter(Boolean).join(' · ');
         if (loc) {
           slide.addText(loc, {
-            x: x + 0.16,
-            y: y + 0.62,
-            w: 4.18,
-            h: 0.32,
+            x: x + 0.12,
+            y: y + 0.65,
+            w: 2.7,
+            h: 0.3,
             fontSize: 10,
             color: C.signal,
             fontFace: FONT,
@@ -1348,9 +1403,9 @@ export const generateAnalysisSlides = (pptx: any, data: AnalysisResult) => {
         }
         if (textOf(c.mainProducts)) {
           slide.addText(textOf(c.mainProducts), {
-            x: x + 0.16,
+            x: x + 0.12,
             y: y + 1.0,
-            w: 4.18,
+            w: 2.7,
             h: 0.75,
             ...bodyOpts(11),
           });
