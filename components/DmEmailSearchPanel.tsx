@@ -44,10 +44,15 @@ const resultLine = (job: DmEmailSearchJob): string => {
   const upgraded = job.stats.upgraded || 0;
   const added = job.stats.added || 0;
   const verified = job.stats.verified || 0;
-  if (upgraded + added + verified === 0) return '本次无新增邮箱';
+  const credits = Number(job.stats.creditsCharged || 0);
+  const creditBit =
+    credits > 0 ? ` · 扣 ${Number.isInteger(credits) ? credits : credits.toFixed(1)} 分` : ' · 未扣分';
+  if (upgraded + added + verified === 0) {
+    return `本次无新增邮箱${creditBit}`;
+  }
   return `新增 ${added} · 更新 ${upgraded} · 验证 ${verified}${
     job.stats.reFoundAfterInvalid ? ` · 无效重查 ${job.stats.reFoundAfterInvalid}` : ''
-  }`;
+  }${creditBit}`;
 };
 
 /** 左下角：决策人邮箱后台任务（仅改 UI，不改队列逻辑） */

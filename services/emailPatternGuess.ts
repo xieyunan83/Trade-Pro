@@ -265,9 +265,10 @@ export const guessAndVerifyPersonEmail = async (opts: {
     qwen = await askQwenEmailCandidates(opts);
   }
   // 公司已验证规则优先于模型瞎猜
+  // verify-email：官方无论结果都扣约 0.2 分；默认最多试 2 个，避免空跑烧分
   const candidates = [...new Set([...heuristic, ...qwen])]
     .filter((e) => !occupied.has(e))
-    .slice(0, Math.max(1, Math.min(opts.maxVerify ?? 6, 8)));
+    .slice(0, Math.max(1, Math.min(opts.maxVerify ?? 2, 3)));
   if (!candidates.length) return null;
 
   for (let i = 0; i < candidates.length; i++) {
@@ -334,7 +335,7 @@ export const fillMissingEmailsByPatternGuess = async (
       companyName: opts.companyName,
       title: d.title,
       useQwen: opts.useQwen,
-      maxVerify: knownPatterns.length ? 6 : 5,
+      maxVerify: knownPatterns.length ? 2 : 2,
       knownPatterns,
       occupiedEmails: occupied,
     });

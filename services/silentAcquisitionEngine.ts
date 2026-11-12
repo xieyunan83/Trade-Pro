@@ -304,29 +304,50 @@ export const gatherSilentCompanyChannelIntel = async (opts: {
     }
   }
 
-  // 1c) 用本公司「已验证邮箱」规则，为领英对齐、尚无邮箱的职员猜验补邮箱（仅校验通过才写入）
+  // 1c) 缺邮箱的真实人名：走官方 person 查找（搜不到不扣分），禁止猜测+verify（verify 每次都扣）
   if (domain && out.decisionMakers.some((d) => !d.emailGuess?.includes('@'))) {
-    const hasVerified = out.decisionMakers.some(
-      (d) =>
-        d.emailGuess?.includes('@') &&
-        (!!d.isVerified || String(d.emailStatus || '').toLowerCase() === 'valid')
-    );
-    if (hasVerified) {
-      try {
-        const { fillMissingEmailsByPatternGuess } = await import('./emailPatternGuess');
-        const filled = await fillMissingEmailsByPatternGuess(out.decisionMakers, {
+    try {
+      const { findEmailWithAnymail } = await import('./geminiService');
+      let filled = 0;
+      const next = out.decisionMakers.map((d) => ({ ...d }));
+      const targets = next
+        .map((d, i) => ({ d, i }))
+        .filter(({ d }) => {
+          if (d.emailGuess?.includes('@')) return false;
+          const nm = d.name || [d.firstName, d.lastName].filter(Boolean).join(' ');
+          return !!(d.firstName || d.lastName || (nm && nm.split(/\s+/).length >= 2) || d.linkedin);
+        })
+        .slice(0, 4);
+      for (const { d, i } of targets) {
+        const nm = d.name || [d.firstName, d.lastName].filter(Boolean).join(' ');
+        const found = await findEmailWithAnymail(nm, {
+          firstName: d.firstName,
+          lastName: d.lastName,
           domain,
           companyName: name,
-          maxPeople: 6,
-          useQwen: false, // 有公司规则时优先规则+校验，少烧模型
+          linkedinUrl: d.linkedin,
         });
-        if (filled.filled > 0) {
-          out.decisionMakers = filled.decisionMakers;
-          out.intelNotes.push(`emails+${filled.filled}`);
-        }
-      } catch (e) {
-        console.warn('[silent-acq] pattern email fill skipped', e);
+        if (!found?.email) continue;
+        next[i] = {
+          ...d,
+          emailGuess: found.email,
+          emailSource: 'AnymailFinder',
+          source: d.source === 'LinkedIn' ? 'LinkedIn' : 'AnymailFinder',
+          emailStatus: 'valid',
+          isVerified: true,
+          name: found.fullName && (!d.name || /待补充|未知/i.test(d.name)) ? found.fullName : d.name,
+          title: found.title || d.title,
+          linkedin: d.linkedin || found.linkedin,
+          lastEmailCheckedAt: Date.now(),
+        };
+        filled += 1;
       }
+      if (filled > 0) {
+        out.decisionMakers = next;
+        out.intelNotes.push(`emails+${filled}`);
+      }
+    } catch (e) {
+      console.warn('[silent-acq] anymail person fill skipped', e);
     }
   }
 

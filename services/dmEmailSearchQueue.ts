@@ -204,7 +204,9 @@ const pump = async () => {
             domain: job.domain,
             existing,
             companyName: job.companyName,
-            reverifyNonAnymail: true,
+            // verify-email 无论结果都扣 0.2；默认关闭，避免「搜不到仍扣分」
+            reverifyNonAnymail: false,
+            allowPatternGuess: false,
             deepDig: !!job.deepDig,
           });
 
