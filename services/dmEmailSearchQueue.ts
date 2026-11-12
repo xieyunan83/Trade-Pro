@@ -140,18 +140,26 @@ export type EnqueueDmEmailSearchInput = {
 const onCompleteHandlers = new Map<string, EnqueueDmEmailSearchInput['onComplete']>();
 const resolveExistingHandlers = new Map<string, EnqueueDmEmailSearchInput['resolveExisting']>();
 
+/**
+ * 用户显式点的「后台搜邮箱」不能被前台冷静期拖成永远「排队中」。
+ * 仅短等让出主线程；超时仍开工（网络请求本身不堵 UI）。
+ */
+const yieldBrieflyForUi = async (): Promise<void> => {
+  try {
+    const { waitUntilWorkAllowed } = await import('./backgroundWorkScheduler');
+    await waitUntilWorkAllowed(() => shouldStop, 1_500);
+  } catch {
+    /* ignore */
+  }
+};
+
 const pump = async () => {
   if (pumping) return;
   pumping = true;
   try {
     while (!shouldStop) {
-      try {
-        const { waitUntilWorkAllowed } = await import('./backgroundWorkScheduler');
-        const ok = await waitUntilWorkAllowed(() => shouldStop, 120_000);
-        if (!ok) break;
-      } catch {
-        /* ignore */
-      }
+      await yieldBrieflyForUi();
+      if (shouldStop) break;
       failStaleRunningJobs();
       const running = jobs.filter((j) => j.status === 'running').length;
       if (running >= maxConcurrentNow()) break;
@@ -255,10 +263,24 @@ const pump = async () => {
     if (!shouldStop && queued && running < maxConcurrentNow()) {
       setTimeout(() => {
         void pump();
-      }, 0);
+      }, 250);
     }
   }
 };
+
+/** 回前台 / 冷静期结束时再踢一脚，避免历史遗留排队项醒不过来 */
+if (typeof window !== 'undefined') {
+  void import('./foregroundGuard')
+    .then((fg) => {
+      fg.subscribeForeground(() => {
+        if (shouldStop) return;
+        if (!jobs.some((j) => j.status === 'queued')) return;
+        if (fg.shouldDeferHeavyWork()) return;
+        void pump();
+      });
+    })
+    .catch(() => undefined);
+}
 
 export const enqueueDmEmailSearch = (
   input: EnqueueDmEmailSearchInput
