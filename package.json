@@ -18,6 +18,7 @@
     "@octokit/rest": "^20.0.2",
     "@supabase/supabase-js": "^2.110.0",
     "dayjs": "^1.11.21",
+    "exceljs": "^4.4.0",
     "file-saver": "^2.0.5",
     "lucide-react": "^0.454.0",
     "quill": "^2.0.3",
