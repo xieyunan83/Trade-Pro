@@ -97,6 +97,15 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
   const [roleFilter, setRoleFilter] = useState<'all' | 'Buyer' | 'CEO' | 'Other'>('all');
+  /** 任务列表状态筛选，方便看见「待发送」并操作 */
+  const [taskFilter, setTaskFilter] = useState<'all' | 'pending' | 'success' | 'failed'>('pending');
+  const [taskPage, setTaskPage] = useState(0);
+  const [showBulkImport, setShowBulkImport] = useState(false);
+  const [trialForm, setTrialForm] = useState({
+    recipientEmail: '',
+    recipientName: '',
+    companyName: '',
+  });
   const [isCreatingTemplate, setIsCreatingTemplate] = useState(false);
   const [newTemplate, setNewTemplate] = useState<EmailTemplate>({
     id: '',
@@ -289,6 +298,68 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
     return rows;
   }, [visibleCrmClients, roleFilter]);
 
+  const statusLabel = (status: EmailTask['status']) => {
+    if (status === 'success') return '已成功';
+    if (status === 'failed') return '失败';
+    if (status === 'sending') return '发送中';
+    return '待发送';
+  };
+
+  const isSendableStatus = (status: EmailTask['status']) =>
+    status === 'pending' || status === 'failed';
+
+  const taskCounts = useMemo(() => {
+    let pending = 0;
+    let success = 0;
+    let failed = 0;
+    for (const t of tasks) {
+      if (t.status === 'success') success += 1;
+      else if (t.status === 'failed') failed += 1;
+      else if (t.status === 'pending' || t.status === 'sending') pending += 1;
+    }
+    return { pending, success, failed, all: tasks.length };
+  }, [tasks]);
+
+  const filteredTasks = useMemo(() => {
+    if (taskFilter === 'all') return tasks;
+    if (taskFilter === 'pending') {
+      return tasks.filter((t) => t.status === 'pending' || t.status === 'sending');
+    }
+    return tasks.filter((t) => t.status === taskFilter);
+  }, [tasks, taskFilter]);
+
+  const PAGE_SIZE = 40;
+  const taskPageCount = Math.max(1, Math.ceil(filteredTasks.length / PAGE_SIZE));
+  const pagedTasks = useMemo(() => {
+    const page = Math.min(taskPage, taskPageCount - 1);
+    const start = page * PAGE_SIZE;
+    return filteredTasks.slice(start, start + PAGE_SIZE);
+  }, [filteredTasks, taskPage, taskPageCount]);
+
+  useEffect(() => {
+    setTaskPage(0);
+  }, [taskFilter]);
+
+  const selectedSendableCount = useMemo(() => {
+    let n = 0;
+    for (const t of tasks) {
+      if (selectedTaskIds.has(t.id) && isSendableStatus(t.status)) n += 1;
+    }
+    return n;
+  }, [tasks, selectedTaskIds]);
+
+  const ensureTemplateOrGuide = (): EmailTemplate | null => {
+    const template = templates.find((t) => t.id === selectedTemplateId);
+    if (template) return template;
+    if (!templates.length) {
+      alert('还没有邮件模板。请先到上方「邮件模板」新建一套，或从开发信档案导入。');
+      setActiveTab('templates');
+      return null;
+    }
+    alert('请先选择一个发送模板。');
+    return null;
+  };
+
   const importFromCrmByRole = () => {
     if (!importableContacts.length) {
       alert('当前岗位筛选下没有带邮箱的联系人，请先在决策人挖掘中搜索并保存到 CRM。');
@@ -456,7 +527,12 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
     return { subject, body };
   };
 
-  const onSendBatch = async (taskIds: string[], templateId: string) => {
+  const onSendBatch = async (
+    taskIds: string[],
+    templateId: string,
+    /** 刚写入尚未进 state 的任务快照（试发用） */
+    taskSnapshot?: EmailTask[]
+  ) => {
     const template = templates.find((t) => t.id === templateId);
     if (!template) {
       alert('请选择模板');
@@ -468,9 +544,12 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
       return;
     }
 
-    const targets = tasks.filter((t) => taskIds.includes(t.id) && t.status !== 'success');
+    const pool = taskSnapshot || tasks;
+    const targets = pool.filter((t) => taskIds.includes(t.id) && isSendableStatus(t.status));
     if (!targets.length) {
-      alert('没有可发送的任务（已成功的不会重复发送）');
+      alert(
+        '当前勾选里没有可发送任务。\n请勾选「待发送 / 失败」项，或点「全选可发」；已成功的不会重复发送。'
+      );
       return;
     }
 
@@ -549,10 +628,77 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
     setSelectedTaskIds(next);
   };
 
+  const selectAllSendable = () => {
+    setSelectedTaskIds(new Set(tasks.filter((t) => isSendableStatus(t.status)).map((t) => t.id)));
+  };
+
+  const clearSelection = () => setSelectedTaskIds(new Set());
+
+  /** 试发：一个邮箱 + 一个模板，加入任务列表并立即真实发送 */
+  const onTrialSend = async () => {
+    const template = ensureTemplateOrGuide();
+    if (!template) return;
+    if (!dmReady || !config) {
+      alert('请先在「接口配置」填写完整的阿里云 DirectMail 参数后再试发。');
+      setActiveTab('config');
+      return;
+    }
+    const email = trialForm.recipientEmail.trim();
+    if (!email.includes('@')) {
+      alert('请填写有效的试发收件邮箱');
+      return;
+    }
+    let snapshot = [...tasks];
+    let task = snapshot.find((t) => t.recipientEmail.toLowerCase() === email.toLowerCase());
+    if (task && task.status === 'success') {
+      if (!confirm(`「${email}」已成功发送过。是否重置为待发送并再试一封？`)) {
+        return;
+      }
+      task = {
+        ...task,
+        status: 'pending',
+        error: undefined,
+        sentAt: undefined,
+        requestId: undefined,
+      };
+      snapshot = snapshot.map((t) => (t.id === task!.id ? task! : t));
+    }
+    if (!task) {
+      task = stampOwnership({
+        id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        recipientEmail: email,
+        recipientName: trialForm.recipientName.trim() || email.split('@')[0],
+        recipientTitle: '',
+        companyName: trialForm.companyName.trim() || '',
+        status: 'pending' as const,
+        ownerUsername: currentUser.username,
+        departmentId: currentUser.departmentId,
+      });
+      snapshot = [task, ...snapshot];
+    }
+    setTasks(snapshot);
+    setTaskFilter('pending');
+    setSelectedTaskIds(new Set([task.id]));
+    setSelectedTemplateId(template.id);
+    setSendMsg(`试发准备：${email}`);
+    await onSendBatch([task.id], template.id, snapshot);
+  };
+
+  const onSendOne = async (taskId: string) => {
+    const template = ensureTemplateOrGuide();
+    if (!template) return;
+    await onSendBatch([taskId], template.id);
+  };
+
   return (
     <div className="w-full space-y-4 sm:space-y-8 animate-fade-in">
-      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-bold text-slate-600">
-        数据隔离：员工仅见自己导入/添加的收件人；主管仅见本部门；跨部门不可见。CRM 导入范围与客户管理一致。产品匹配生成的开发信会自动进入「邮件模板」。
+      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-bold text-slate-600 space-y-1">
+        <p>
+          怎么用：①「邮件模板」准备内容 → ②「试发一封」填邮箱测通 → ③ 在任务列表勾选后群发。接口需先在「接口配置」填好。
+        </p>
+        <p className="text-slate-500">
+          数据隔离：员工仅见自己的收件人；主管见本部门。产品匹配/开发策略生成的开发信会进入「邮件模板」。
+        </p>
       </div>
       {gtmImportHint ? (
         <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-bold text-emerald-900">
@@ -583,230 +729,423 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
 
       {activeTab === 'tasks' && (
         <div className="space-y-4 sm:space-y-6">
-          <div className="bg-white p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm space-y-4">
-            <div className="flex flex-col lg:flex-row lg:justify-between lg:items-center gap-4">
-              <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 w-full lg:w-auto">
-                <h3 className="text-base sm:text-lg font-black text-slate-800">
-                  待发送列表 ({tasks.length})
+          {/* ① 试发：一邮箱 + 一模板，最清晰的上手路径 */}
+          <div className="rounded-2xl sm:rounded-3xl border-2 border-cyan-200 bg-gradient-to-br from-cyan-50 to-white p-4 sm:p-6 shadow-sm space-y-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base sm:text-lg font-black text-slate-900 flex items-center gap-2">
+                  <Send size={18} className="text-cyan-600" /> 试发一封（推荐先走这里）
                 </h3>
-                <select
-                  value={selectedTemplateId}
-                  onChange={(e) => setSelectedTemplateId(e.target.value)}
-                  className="w-full sm:w-auto px-4 py-2 rounded-xl border border-slate-200 text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none"
-                >
-                  <option value="">选择发送模板...</option>
-                  {templates.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}
-                    </option>
-                  ))}
-                </select>
+                <p className="text-xs font-bold text-slate-500 mt-1">
+                  填写一个收件邮箱、选一套模板，点「试发」即可真实发出。成功后会出现在下方任务列表。
+                </p>
               </div>
-              <button
-                disabled={
-                  sending || selectedTaskIds.size === 0 || !selectedTemplateId || !dmReady
-                }
-                onClick={() => onSendBatch(Array.from(selectedTaskIds), selectedTemplateId)}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-6 sm:px-8 py-3 rounded-xl font-black shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 w-full lg:w-auto touch-manipulation"
-                title={!dmReady ? '请先完成接口配置' : undefined}
+              {!templates.length ? (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('templates')}
+                  className="text-xs font-black text-cyan-700 underline"
+                >
+                  还没有模板？去新建 →
+                </button>
+              ) : null}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <input
+                value={trialForm.recipientEmail}
+                onChange={(e) => setTrialForm((f) => ({ ...f, recipientEmail: e.target.value }))}
+                placeholder="收件邮箱 *（必填）"
+                className="px-3 py-2.5 rounded-xl border border-cyan-200 bg-white text-sm font-bold"
+              />
+              <input
+                value={trialForm.recipientName}
+                onChange={(e) => setTrialForm((f) => ({ ...f, recipientName: e.target.value }))}
+                placeholder="收件人姓名（可选）"
+                className="px-3 py-2.5 rounded-xl border border-cyan-200 bg-white text-sm font-bold"
+              />
+              <input
+                value={trialForm.companyName}
+                onChange={(e) => setTrialForm((f) => ({ ...f, companyName: e.target.value }))}
+                placeholder="公司名（可选）"
+                className="px-3 py-2.5 rounded-xl border border-cyan-200 bg-white text-sm font-bold"
+              />
+              <select
+                value={selectedTemplateId}
+                onChange={(e) => setSelectedTemplateId(e.target.value)}
+                className="px-3 py-2.5 rounded-xl border border-cyan-200 bg-white text-sm font-bold"
               >
-                {sending ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
-                {sending ? '发送中…' : `真实群发 (${selectedTaskIds.size})`}
+                <option value="">选择邮件模板 *</option>
+                {templates.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                disabled={sending || !dmReady}
+                onClick={() => void onTrialSend()}
+                className="inline-flex items-center justify-center gap-2 bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 text-white px-6 py-3 rounded-xl text-sm font-black shadow-md"
+              >
+                {sending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+                {sending ? '发送中…' : '试发一封'}
               </button>
-            </div>
-            {!dmReady && (
-              <p className="text-xs font-bold text-rose-600">
-                DirectMail 未配置：请到「接口配置」填写 AccessKey 与发信地址。未配置时不会发送任何邮件。
-              </p>
-            )}
-            {sendMsg && <p className="text-xs font-bold text-emerald-700">{sendMsg}</p>}
-
-            <div className="rounded-2xl border border-emerald-100 bg-emerald-50/60 p-4 space-y-3">
-              <div className="flex items-center gap-2 text-sm font-black text-emerald-800">
-                <Plus size={16} /> 手动添加收件人
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                <input
-                  value={manualForm.recipientEmail}
-                  onChange={(e) => setManualForm((f) => ({ ...f, recipientEmail: e.target.value }))}
-                  placeholder="邮箱 *（必填）"
-                  className="px-3 py-2.5 rounded-xl border border-emerald-200 bg-white text-sm font-bold"
-                />
-                <input
-                  value={manualForm.recipientName}
-                  onChange={(e) => setManualForm((f) => ({ ...f, recipientName: e.target.value }))}
-                  placeholder="姓名"
-                  className="px-3 py-2.5 rounded-xl border border-emerald-200 bg-white text-sm font-bold"
-                />
-                <input
-                  value={manualForm.recipientTitle}
-                  onChange={(e) => setManualForm((f) => ({ ...f, recipientTitle: e.target.value }))}
-                  placeholder="岗位"
-                  className="px-3 py-2.5 rounded-xl border border-emerald-200 bg-white text-sm font-bold"
-                />
-                <input
-                  value={manualForm.companyName}
-                  onChange={(e) => setManualForm((f) => ({ ...f, companyName: e.target.value }))}
-                  placeholder="公司名"
-                  className="px-3 py-2.5 rounded-xl border border-emerald-200 bg-white text-sm font-bold"
-                />
-                <select
-                  value={manualForm.clientId}
-                  onChange={(e) => {
-                    const id = e.target.value;
-                    const c = visibleCrmClients.find((x) => x.id === id);
-                    setManualForm((f) => ({
-                      ...f,
-                      clientId: id,
-                      companyName: f.companyName || c?.name || '',
-                    }));
-                  }}
-                  className="px-3 py-2.5 rounded-xl border border-emerald-200 bg-white text-sm font-bold"
-                >
-                  <option value="">关联 CRM 客户（可选，仅你可见范围内）</option>
-                  {visibleCrmClients.slice(0, 300).map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
+              {!dmReady ? (
                 <button
                   type="button"
-                  onClick={addManualRecipient}
-                  className="inline-flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl text-sm font-black"
+                  onClick={() => setActiveTab('config')}
+                  className="text-xs font-bold text-rose-600 underline"
                 >
-                  <Plus size={16} /> 加入待发送
+                  接口未配置，先去填写 DirectMail →
                 </button>
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-violet-100 bg-violet-50/60 p-4 space-y-3">
-              <div className="flex items-center gap-2 text-sm font-black text-violet-800">
-                <Briefcase size={16} /> 按岗位从 CRM 导入收件人
-              </div>
-              <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
-                <select
-                  value={roleFilter}
-                  onChange={(e) => setRoleFilter(e.target.value as typeof roleFilter)}
-                  className="w-full sm:w-56 px-4 py-2.5 rounded-xl border border-violet-200 bg-white text-sm font-bold"
-                >
-                  <option value="all">全部岗位（有邮箱）</option>
-                  <option value="Buyer">采购相关</option>
-                  <option value="CEO">CEO / 老板</option>
-                  <option value="Other">其他岗位</option>
-                </select>
-                <span className="text-xs font-bold text-violet-600">
-                  可导入 {importableContacts.length} 人
-                </span>
-                <button
-                  type="button"
-                  onClick={importFromCrmByRole}
-                  className="sm:ml-auto inline-flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 text-white px-5 py-2.5 rounded-xl text-sm font-black"
-                >
-                  <Plus size={16} /> 按岗位导入
-                </button>
-              </div>
+              ) : (
+                <span className="text-[11px] font-bold text-slate-500">将真实发出，请先用自己的邮箱测试</span>
+              )}
+              {sendMsg ? <span className="text-xs font-bold text-emerald-700">{sendMsg}</span> : null}
             </div>
           </div>
 
-          <div className="bg-white rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-slate-50 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">
-                  <th className="px-6 py-4 w-12">
-                    <input
-                      type="checkbox"
-                      onChange={(e) => {
-                        if (e.target.checked) setSelectedTaskIds(new Set(tasks.map((t) => t.id)));
-                        else setSelectedTaskIds(new Set());
-                      }}
-                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                    />
-                  </th>
-                  <th className="px-6 py-4">收件人信息</th>
-                  <th className="px-6 py-4">岗位</th>
-                  <th className="px-6 py-4">所属公司</th>
-                  <th className="px-6 py-4">状态</th>
-                  <th className="px-6 py-4">发送时间</th>
-                  <th className="px-6 py-4 w-16">操作</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50">
-                {tasks.length === 0 ? (
-                  <tr>
-                    <td colSpan={7} className="px-6 py-12 text-center text-slate-400 font-bold">
-                      暂无发送任务，可手动添加或从 CRM 导入
-                    </td>
+          {/* ② 任务列表：可筛选、可勾选、可单发 */}
+          <div className="bg-white p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm space-y-4">
+            <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
+              <div>
+                <h3 className="text-base sm:text-lg font-black text-slate-800">发送任务列表</h3>
+                <p className="text-[11px] font-bold text-slate-500 mt-0.5">
+                  共 {taskCounts.all} 条 · 待发送 {taskCounts.pending} · 已成功 {taskCounts.success} ·
+                  失败 {taskCounts.failed}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {(
+                  [
+                    ['pending', `待发送 ${taskCounts.pending}`],
+                    ['failed', `失败 ${taskCounts.failed}`],
+                    ['success', `已成功 ${taskCounts.success}`],
+                    ['all', `全部 ${taskCounts.all}`],
+                  ] as const
+                ).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setTaskFilter(key)}
+                    className={`px-3 py-1.5 rounded-lg text-[11px] font-black border transition-colors ${
+                      taskFilter === key
+                        ? 'bg-slate-900 text-white border-slate-900'
+                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex flex-col lg:flex-row lg:items-center gap-3">
+              <select
+                value={selectedTemplateId}
+                onChange={(e) => setSelectedTemplateId(e.target.value)}
+                className="w-full lg:w-64 px-4 py-2 rounded-xl border border-slate-200 text-sm font-bold"
+              >
+                <option value="">群发所用模板…</option>
+                {templates.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={selectAllSendable}
+                className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-black text-slate-700 hover:bg-slate-50"
+              >
+                全选可发
+              </button>
+              <button
+                type="button"
+                onClick={clearSelection}
+                className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-black text-slate-500 hover:bg-slate-50"
+              >
+                清空勾选
+              </button>
+              <button
+                disabled={sending || selectedSendableCount === 0 || !selectedTemplateId || !dmReady}
+                onClick={() => onSendBatch(Array.from(selectedTaskIds), selectedTemplateId)}
+                className="lg:ml-auto bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl font-black shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                title={!dmReady ? '请先完成接口配置' : undefined}
+              >
+                {sending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+                {sending ? '发送中…' : `群发可发项 (${selectedSendableCount})`}
+              </button>
+            </div>
+
+            <div className="rounded-2xl border border-slate-100 overflow-x-auto">
+              <table className="w-full text-left border-collapse min-w-[720px]">
+                <thead>
+                  <tr className="bg-slate-50 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">
+                    <th className="px-4 py-3 w-10">
+                      <input
+                        type="checkbox"
+                        checked={
+                          pagedTasks.filter((t) => isSendableStatus(t.status)).length > 0 &&
+                          pagedTasks
+                            .filter((t) => isSendableStatus(t.status))
+                            .every((t) => selectedTaskIds.has(t.id))
+                        }
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            const next = new Set(selectedTaskIds);
+                            pagedTasks.forEach((t) => {
+                              if (isSendableStatus(t.status)) next.add(t.id);
+                            });
+                            setSelectedTaskIds(next);
+                          } else {
+                            const drop = new Set(pagedTasks.map((t) => t.id));
+                            setSelectedTaskIds(
+                              new Set([...selectedTaskIds].filter((id) => !drop.has(id)))
+                            );
+                          }
+                        }}
+                        className="rounded border-slate-300 text-blue-600"
+                      />
+                    </th>
+                    <th className="px-4 py-3">收件人</th>
+                    <th className="px-4 py-3">岗位</th>
+                    <th className="px-4 py-3">公司</th>
+                    <th className="px-4 py-3">状态</th>
+                    <th className="px-4 py-3">发送时间</th>
+                    <th className="px-4 py-3 w-28">操作</th>
                   </tr>
-                ) : (
-                  tasks.map((task) => (
-                    <tr key={task.id} className="hover:bg-slate-50/50 transition-colors">
-                      <td className="px-6 py-4">
-                        <input
-                          type="checkbox"
-                          checked={selectedTaskIds.has(task.id)}
-                          onChange={() => toggleTask(task.id)}
-                          className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                        />
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="font-bold text-slate-800">{task.recipientName}</div>
-                        <div className="text-[10px] text-slate-400 font-bold">
-                          {task.recipientEmail}
-                        </div>
-                        {task.error && (
-                          <div className="text-[10px] text-rose-500 font-bold mt-1">{task.error}</div>
-                        )}
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="text-xs font-bold text-slate-600">
-                          {task.recipientTitle || '—'}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="text-sm font-bold text-slate-600">{task.companyName}</div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div
-                          className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-tighter ${
-                            task.status === 'success'
-                              ? 'bg-green-100 text-green-600'
-                              : task.status === 'failed'
-                                ? 'bg-red-100 text-red-600'
-                                : task.status === 'sending'
-                                  ? 'bg-blue-100 text-blue-600'
-                                  : 'bg-slate-100 text-slate-400'
-                          }`}
-                        >
-                          {task.status === 'sending' ? (
-                            <Loader2 className="animate-spin" size={10} />
-                          ) : null}
-                          {task.status === 'success' ? <CheckCircle2 size={10} /> : null}
-                          {task.status === 'failed' ? <AlertTriangle size={10} /> : null}
-                          {task.status === 'pending' ? <Clock size={10} /> : null}
-                          {task.status}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="text-xs font-bold text-slate-400">
-                          {task.sentAt ? new Date(task.sentAt).toLocaleString() : '-'}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <button
-                          type="button"
-                          onClick={() => removeTask(task.id)}
-                          className="p-2 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg"
-                          title="移除"
-                        >
-                          <Trash2 size={16} />
-                        </button>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {filteredTasks.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="px-6 py-14 text-center">
+                        <p className="text-slate-500 font-bold text-sm">
+                          {tasks.length === 0
+                            ? '还没有发送任务。请用上方「试发一封」，或展开下方批量导入。'
+                            : '当前筛选下没有任务，可切换「全部 / 待发送」。'}
+                        </p>
                       </td>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+                  ) : (
+                    pagedTasks.map((task) => (
+                      <tr key={task.id} className="hover:bg-slate-50/60">
+                        <td className="px-4 py-3">
+                          <input
+                            type="checkbox"
+                            checked={selectedTaskIds.has(task.id)}
+                            disabled={task.status === 'success' || task.status === 'sending'}
+                            onChange={() => toggleTask(task.id)}
+                            className="rounded border-slate-300 text-blue-600 disabled:opacity-40"
+                          />
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="font-bold text-slate-800 text-sm">{task.recipientName}</div>
+                          <div className="text-[10px] text-slate-400 font-bold">{task.recipientEmail}</div>
+                          {task.error ? (
+                            <div className="text-[10px] text-rose-500 font-bold mt-1">{task.error}</div>
+                          ) : null}
+                        </td>
+                        <td className="px-4 py-3 text-xs font-bold text-slate-600">
+                          {task.recipientTitle || '—'}
+                        </td>
+                        <td className="px-4 py-3 text-sm font-bold text-slate-600">
+                          {task.companyName || '—'}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span
+                            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black ${
+                              task.status === 'success'
+                                ? 'bg-green-100 text-green-700'
+                                : task.status === 'failed'
+                                  ? 'bg-red-100 text-red-600'
+                                  : task.status === 'sending'
+                                    ? 'bg-blue-100 text-blue-600'
+                                    : 'bg-amber-50 text-amber-700'
+                            }`}
+                          >
+                            {task.status === 'sending' ? (
+                              <Loader2 className="animate-spin" size={10} />
+                            ) : null}
+                            {task.status === 'success' ? <CheckCircle2 size={10} /> : null}
+                            {task.status === 'failed' ? <AlertTriangle size={10} /> : null}
+                            {task.status === 'pending' ? <Clock size={10} /> : null}
+                            {statusLabel(task.status)}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-xs font-bold text-slate-400">
+                          {task.sentAt ? new Date(task.sentAt).toLocaleString() : '—'}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-1">
+                            {isSendableStatus(task.status) ? (
+                              <button
+                                type="button"
+                                disabled={sending || !dmReady || !selectedTemplateId}
+                                onClick={() => void onSendOne(task.id)}
+                                className="px-2 py-1 rounded-lg text-[10px] font-black text-cyan-700 bg-cyan-50 hover:bg-cyan-100 disabled:opacity-40"
+                                title={!selectedTemplateId ? '请先选择模板' : '单封发送'}
+                              >
+                                发送
+                              </button>
+                            ) : null}
+                            <button
+                              type="button"
+                              onClick={() => removeTask(task.id)}
+                              className="p-1.5 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg"
+                              title="移除"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {filteredTasks.length > PAGE_SIZE ? (
+              <div className="flex items-center justify-between gap-3 text-xs font-bold text-slate-500">
+                <span>
+                  第 {Math.min(taskPage, taskPageCount - 1) + 1} / {taskPageCount} 页（每页 {PAGE_SIZE}{' '}
+                  条）
+                </span>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={taskPage <= 0}
+                    onClick={() => setTaskPage((p) => Math.max(0, p - 1))}
+                    className="px-3 py-1.5 rounded-lg border border-slate-200 disabled:opacity-40"
+                  >
+                    上一页
+                  </button>
+                  <button
+                    type="button"
+                    disabled={taskPage >= taskPageCount - 1}
+                    onClick={() => setTaskPage((p) => Math.min(taskPageCount - 1, p + 1))}
+                    className="px-3 py-1.5 rounded-lg border border-slate-200 disabled:opacity-40"
+                  >
+                    下一页
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          {/* ③ 批量加任务：默认收起，避免盖住试发与列表 */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setShowBulkImport((v) => !v)}
+              className="w-full flex items-center justify-between px-4 sm:px-6 py-3 text-left hover:bg-slate-50"
+            >
+              <span className="text-sm font-black text-slate-800 flex items-center gap-2">
+                <Plus size={16} /> 批量添加任务（手动 / CRM 导入）
+              </span>
+              <span className="text-[11px] font-bold text-slate-400">
+                {showBulkImport ? '收起' : '展开'}
+              </span>
+            </button>
+            {showBulkImport ? (
+              <div className="px-4 sm:px-6 pb-5 space-y-4 border-t border-slate-100 pt-4">
+                <div className="rounded-2xl border border-emerald-100 bg-emerald-50/60 p-4 space-y-3">
+                  <div className="text-sm font-black text-emerald-800">手动加入待发送（不立刻发）</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                    <input
+                      value={manualForm.recipientEmail}
+                      onChange={(e) =>
+                        setManualForm((f) => ({ ...f, recipientEmail: e.target.value }))
+                      }
+                      placeholder="邮箱 *（必填）"
+                      className="px-3 py-2.5 rounded-xl border border-emerald-200 bg-white text-sm font-bold"
+                    />
+                    <input
+                      value={manualForm.recipientName}
+                      onChange={(e) =>
+                        setManualForm((f) => ({ ...f, recipientName: e.target.value }))
+                      }
+                      placeholder="姓名"
+                      className="px-3 py-2.5 rounded-xl border border-emerald-200 bg-white text-sm font-bold"
+                    />
+                    <input
+                      value={manualForm.recipientTitle}
+                      onChange={(e) =>
+                        setManualForm((f) => ({ ...f, recipientTitle: e.target.value }))
+                      }
+                      placeholder="岗位"
+                      className="px-3 py-2.5 rounded-xl border border-emerald-200 bg-white text-sm font-bold"
+                    />
+                    <input
+                      value={manualForm.companyName}
+                      onChange={(e) =>
+                        setManualForm((f) => ({ ...f, companyName: e.target.value }))
+                      }
+                      placeholder="公司名"
+                      className="px-3 py-2.5 rounded-xl border border-emerald-200 bg-white text-sm font-bold"
+                    />
+                    <select
+                      value={manualForm.clientId}
+                      onChange={(e) => {
+                        const id = e.target.value;
+                        const c = visibleCrmClients.find((x) => x.id === id);
+                        setManualForm((f) => ({
+                          ...f,
+                          clientId: id,
+                          companyName: f.companyName || c?.name || '',
+                        }));
+                      }}
+                      className="px-3 py-2.5 rounded-xl border border-emerald-200 bg-white text-sm font-bold"
+                    >
+                      <option value="">关联 CRM 客户（可选）</option>
+                      {visibleCrmClients.slice(0, 300).map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={addManualRecipient}
+                      className="inline-flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl text-sm font-black"
+                    >
+                      <Plus size={16} /> 加入列表
+                    </button>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-violet-100 bg-violet-50/60 p-4 space-y-3">
+                  <div className="flex items-center gap-2 text-sm font-black text-violet-800">
+                    <Briefcase size={16} /> 按岗位从 CRM 导入
+                  </div>
+                  <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
+                    <select
+                      value={roleFilter}
+                      onChange={(e) => setRoleFilter(e.target.value as typeof roleFilter)}
+                      className="w-full sm:w-56 px-4 py-2.5 rounded-xl border border-violet-200 bg-white text-sm font-bold"
+                    >
+                      <option value="all">全部岗位（有邮箱）</option>
+                      <option value="Buyer">采购相关</option>
+                      <option value="CEO">CEO / 老板</option>
+                      <option value="Other">其他岗位</option>
+                    </select>
+                    <span className="text-xs font-bold text-violet-600">
+                      可导入 {importableContacts.length} 人
+                    </span>
+                    <button
+                      type="button"
+                      onClick={importFromCrmByRole}
+                      className="sm:ml-auto inline-flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 text-white px-5 py-2.5 rounded-xl text-sm font-black"
+                    >
+                      <Plus size={16} /> 按岗位导入
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
       )}
