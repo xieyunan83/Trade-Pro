@@ -6615,6 +6615,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                   <ErrorBoundary label="今日看板">
                     <ModuleLandingHub
                       currentUser={currentUser}
+                      history={history}
                       syncStatus={workspaceSyncStatus}
                       syncing={workspaceSyncing}
                       onEnterWorkspace={() => navigateModule(ModuleType.DISCOVERY)}

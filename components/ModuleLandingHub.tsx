@@ -38,6 +38,8 @@ import {
   LANDING_INTEL_NAV,
   type IntelNavCategory,
 } from '../services/landingIntelNav';
+import { LandingOpsPulse } from './LandingOpsPulse';
+import type { HistoryItem } from '../types';
 
 type Props = {
   currentUser: User;
@@ -49,6 +51,8 @@ type Props = {
   /** @deprecated 任务流已迁至「智能任务」菜单，保留仅用于顶栏作业计数 */
   onStartPlaybook?: (playbookId: string) => void;
   journeyProgress?: JourneyProgressHint;
+  /** 用于今日操作日志汇总背调/决策人 */
+  history?: HistoryItem[];
 };
 
 const initialLanding = (): LandingPayload =>
@@ -81,6 +85,7 @@ export const ModuleLandingHub: React.FC<Props> = ({
   onEnterWorkspace,
   onNavigateModule,
   journeyProgress,
+  history = [],
 }) => {
   const [data, setData] = useState<LandingPayload>(initialLanding);
   const [loading, setLoading] = useState(() => !loadLandingCache());
@@ -195,6 +200,12 @@ export const ModuleLandingHub: React.FC<Props> = ({
           部分情报暂未刷新，可点「刷新」；或进入客户搜索 / 智能任务。
         </div>
       )}
+
+      <LandingOpsPulse
+        currentUser={currentUser}
+        history={history}
+        onNavigateModule={onNavigateModule}
+      />
 
       {/* 全球市场雷达：深色控制台，四通道列表，非卡片堆叠 */}
       <section className="tp-hub-radar overflow-hidden">

@@ -59,6 +59,7 @@ import {
   type DirectMailStatRow,
   type DirectMailDeliveryDetail,
 } from '../services/directMailService';
+import { trackOpsEvent } from '../services/userOpsLog';
 import { filterOwnedRecords } from '../services/permissions';
 import {
   loadStrategyMailDraft,
@@ -977,6 +978,18 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
     }
 
     if (crmWrites.length && onEmailsSent) onEmailsSent(crmWrites);
+    if (okCount) {
+      trackOpsEvent(currentUser.username, 'email_ok', '邮件推送成功', {
+        ok: true,
+        count: okCount,
+      });
+    }
+    if (failCount) {
+      trackOpsEvent(currentUser.username, 'email_fail', '邮件推送失败', {
+        ok: false,
+        count: failCount,
+      });
+    }
     setSendMsg(
       `完成：成功 ${okCount}，失败 ${failCount}${
         skippedInvalid ? `，跳过无效 ${skippedInvalid}` : ''
