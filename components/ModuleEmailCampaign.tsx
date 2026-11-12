@@ -32,6 +32,9 @@ import {
   Clock,
   X,
   Briefcase,
+  Search,
+  Pencil,
+  RotateCcw,
 } from 'lucide-react';
 import {
   loadEmailCampaignStoreForUser,
@@ -101,6 +104,18 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
   const [taskFilter, setTaskFilter] = useState<'all' | 'pending' | 'success' | 'failed'>('pending');
   const [taskPage, setTaskPage] = useState(0);
   const [showBulkImport, setShowBulkImport] = useState(false);
+  const [taskSearch, setTaskSearch] = useState('');
+  const [taskModal, setTaskModal] = useState<null | {
+    mode: 'create' | 'edit';
+    taskId?: string;
+  }>(null);
+  const [taskForm, setTaskForm] = useState({
+    recipientEmail: '',
+    recipientName: '',
+    recipientTitle: '',
+    companyName: '',
+    clientId: '',
+  });
   const [trialForm, setTrialForm] = useState({
     recipientEmail: '',
     recipientName: '',
@@ -321,12 +336,28 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
   }, [tasks]);
 
   const filteredTasks = useMemo(() => {
-    if (taskFilter === 'all') return tasks;
+    const q = taskSearch.trim().toLowerCase();
+    let list = tasks;
     if (taskFilter === 'pending') {
-      return tasks.filter((t) => t.status === 'pending' || t.status === 'sending');
+      list = list.filter((t) => t.status === 'pending' || t.status === 'sending');
+    } else if (taskFilter !== 'all') {
+      list = list.filter((t) => t.status === taskFilter);
     }
-    return tasks.filter((t) => t.status === taskFilter);
-  }, [tasks, taskFilter]);
+    if (!q) return list;
+    return list.filter((t) => {
+      const blob = [
+        t.recipientEmail,
+        t.recipientName,
+        t.recipientTitle,
+        t.companyName,
+        t.error,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return blob.includes(q);
+    });
+  }, [tasks, taskFilter, taskSearch]);
 
   const PAGE_SIZE = 40;
   const taskPageCount = Math.max(1, Math.ceil(filteredTasks.length / PAGE_SIZE));
@@ -338,7 +369,147 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
 
   useEffect(() => {
     setTaskPage(0);
-  }, [taskFilter]);
+  }, [taskFilter, taskSearch]);
+
+  const emptyTaskForm = () => ({
+    recipientEmail: '',
+    recipientName: '',
+    recipientTitle: '',
+    companyName: '',
+    clientId: '',
+  });
+
+  const openCreateTask = () => {
+    setTaskForm(emptyTaskForm());
+    setTaskModal({ mode: 'create' });
+  };
+
+  const openEditTask = (task: EmailTask) => {
+    setTaskForm({
+      recipientEmail: task.recipientEmail || '',
+      recipientName: task.recipientName || '',
+      recipientTitle: task.recipientTitle || '',
+      companyName: task.companyName || '',
+      clientId: task.clientId || '',
+    });
+    setTaskModal({ mode: 'edit', taskId: task.id });
+  };
+
+  const closeTaskModal = () => {
+    setTaskModal(null);
+    setTaskForm(emptyTaskForm());
+  };
+
+  const saveTaskModal = () => {
+    const email = taskForm.recipientEmail.trim();
+    if (!email.includes('@')) {
+      alert('请填写有效的收件人邮箱');
+      return;
+    }
+    const linked = taskForm.clientId
+      ? visibleCrmClients.find((c) => c.id === taskForm.clientId)
+      : undefined;
+    const name = taskForm.recipientName.trim() || email.split('@')[0];
+    const title = taskForm.recipientTitle.trim();
+    const company = taskForm.companyName.trim() || linked?.name || '';
+
+    if (taskModal?.mode === 'edit' && taskModal.taskId) {
+      const dup = tasks.some(
+        (t) =>
+          t.id !== taskModal.taskId &&
+          t.recipientEmail.toLowerCase() === email.toLowerCase()
+      );
+      if (dup) {
+        alert('该邮箱已在其它任务中');
+        return;
+      }
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === taskModal.taskId
+            ? {
+                ...t,
+                recipientEmail: email,
+                recipientName: name,
+                recipientTitle: title,
+                companyName: company,
+                clientId: linked?.id || taskForm.clientId || undefined,
+              }
+            : t
+        )
+      );
+      setSendMsg(`已更新任务：${email}`);
+      closeTaskModal();
+      return;
+    }
+
+    if (tasks.some((t) => t.recipientEmail.toLowerCase() === email.toLowerCase())) {
+      alert('该邮箱已在任务列表中');
+      return;
+    }
+    const task = stampOwnership({
+      id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      recipientEmail: email,
+      recipientName: name,
+      recipientTitle: title,
+      companyName: company,
+      clientId: linked?.id || taskForm.clientId || undefined,
+      status: 'pending' as const,
+      ownerUsername: linked?.ownerUsername || currentUser.username,
+      departmentId: linked?.departmentId || currentUser.departmentId,
+    });
+    setTasks((prev) => [task, ...prev]);
+    setTaskFilter('pending');
+    setSelectedTaskIds(new Set([task.id]));
+    setSendMsg(`已新建任务：${email}`);
+    closeTaskModal();
+  };
+
+  const deleteSelectedTasks = () => {
+    if (!selectedTaskIds.size) {
+      alert('请先勾选要删除的任务');
+      return;
+    }
+    if (!confirm(`确定删除已勾选的 ${selectedTaskIds.size} 条任务？此操作不可恢复。`)) return;
+    setTasks((prev) => prev.filter((t) => !selectedTaskIds.has(t.id)));
+    setSelectedTaskIds(new Set());
+    setSendMsg(`已删除 ${selectedTaskIds.size} 条任务`);
+  };
+
+  const resetSelectedToPending = () => {
+    const ids = [...selectedTaskIds];
+    if (!ids.length) {
+      alert('请先勾选要重置的任务');
+      return;
+    }
+    if (!confirm(`将勾选的 ${ids.length} 条重置为「待发送」，可再次群发。继续？`)) return;
+    setTasks((prev) =>
+      prev.map((t) =>
+        ids.includes(t.id)
+          ? {
+              ...t,
+              status: 'pending',
+              error: undefined,
+              sentAt: undefined,
+              requestId: undefined,
+            }
+          : t
+      )
+    );
+    setTaskFilter('pending');
+    setSendMsg(`已重置 ${ids.length} 条为待发送`);
+  };
+
+  const clearSuccessTasks = () => {
+    const n = tasks.filter((t) => t.status === 'success').length;
+    if (!n) {
+      alert('没有已成功的任务可清理');
+      return;
+    }
+    if (!confirm(`清理全部 ${n} 条「已成功」任务记录？不影响真实邮箱已发出的邮件。`)) return;
+    setTasks((prev) => prev.filter((t) => t.status !== 'success'));
+    setSelectedTaskIds(new Set());
+    setSendMsg(`已清理 ${n} 条成功记录`);
+  };
 
   const selectedSendableCount = useMemo(() => {
     let n = 0;
@@ -694,7 +865,7 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
     <div className="w-full space-y-4 sm:space-y-8 animate-fade-in">
       <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-bold text-slate-600 space-y-1">
         <p>
-          怎么用：①「邮件模板」准备内容 → ②「试发一封」填邮箱测通 → ③ 在任务列表勾选后群发。接口需先在「接口配置」填好。
+          怎么用：①「邮件模板」准备内容 → ②「新建任务」或「试发一封」→ ③ 在「任务管理」里编辑/勾选/群发。接口需先在「接口配置」填好。
         </p>
         <p className="text-slate-500">
           数据隔离：员工仅见自己的收件人；主管见本部门。产品匹配/开发策略生成的开发信会进入「邮件模板」。
@@ -807,17 +978,24 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
             </div>
           </div>
 
-          {/* ② 任务列表：可筛选、可勾选、可单发 */}
+          {/* ② 任务管理：新建 / 编辑 / 筛选 / 群发 */}
           <div className="bg-white p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm space-y-4">
             <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
               <div>
-                <h3 className="text-base sm:text-lg font-black text-slate-800">发送任务列表</h3>
+                <h3 className="text-base sm:text-lg font-black text-slate-800">任务管理</h3>
                 <p className="text-[11px] font-bold text-slate-500 mt-0.5">
                   共 {taskCounts.all} 条 · 待发送 {taskCounts.pending} · 已成功 {taskCounts.success} ·
                   失败 {taskCounts.failed}
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={openCreateTask}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black shadow-sm"
+                >
+                  <Plus size={14} /> 新建任务
+                </button>
                 {(
                   [
                     ['pending', `待发送 ${taskCounts.pending}`],
@@ -842,7 +1020,20 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
               </div>
             </div>
 
-            <div className="flex flex-col lg:flex-row lg:items-center gap-3">
+            <div className="relative">
+              <Search
+                size={14}
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"
+              />
+              <input
+                value={taskSearch}
+                onChange={(e) => setTaskSearch(e.target.value)}
+                placeholder="搜索邮箱 / 姓名 / 公司 / 岗位…"
+                className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-200 text-sm font-bold"
+              />
+            </div>
+
+            <div className="flex flex-col lg:flex-row lg:items-center gap-3 flex-wrap">
               <select
                 value={selectedTemplateId}
                 onChange={(e) => setSelectedTemplateId(e.target.value)}
@@ -868,6 +1059,27 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
                 className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-black text-slate-500 hover:bg-slate-50"
               >
                 清空勾选
+              </button>
+              <button
+                type="button"
+                onClick={resetSelectedToPending}
+                className="px-3 py-2 rounded-xl border border-amber-200 text-xs font-black text-amber-700 hover:bg-amber-50 inline-flex items-center gap-1"
+              >
+                <RotateCcw size={12} /> 重置为待发送
+              </button>
+              <button
+                type="button"
+                onClick={deleteSelectedTasks}
+                className="px-3 py-2 rounded-xl border border-rose-200 text-xs font-black text-rose-600 hover:bg-rose-50"
+              >
+                删除勾选
+              </button>
+              <button
+                type="button"
+                onClick={clearSuccessTasks}
+                className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-black text-slate-500 hover:bg-slate-50"
+              >
+                清理已成功
               </button>
               <button
                 disabled={sending || selectedSendableCount === 0 || !selectedTemplateId || !dmReady}
@@ -924,9 +1136,18 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
                       <td colSpan={7} className="px-6 py-14 text-center">
                         <p className="text-slate-500 font-bold text-sm">
                           {tasks.length === 0
-                            ? '还没有发送任务。请用上方「试发一封」，或展开下方批量导入。'
-                            : '当前筛选下没有任务，可切换「全部 / 待发送」。'}
+                            ? '还没有发送任务。请点「新建任务」，或用上方「试发一封」。'
+                            : '当前筛选/搜索下没有任务，可切换「全部」或清空搜索。'}
                         </p>
+                        {tasks.length === 0 ? (
+                          <button
+                            type="button"
+                            onClick={openCreateTask}
+                            className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-black"
+                          >
+                            <Plus size={14} /> 新建任务
+                          </button>
+                        ) : null}
                       </td>
                     </tr>
                   ) : (
@@ -993,9 +1214,17 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
                             ) : null}
                             <button
                               type="button"
+                              onClick={() => openEditTask(task)}
+                              className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg"
+                              title="编辑任务"
+                            >
+                              <Pencil size={14} />
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => removeTask(task.id)}
                               className="p-1.5 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg"
-                              title="移除"
+                              title="删除任务"
                             >
                               <Trash2 size={14} />
                             </button>
@@ -1461,6 +1690,97 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
           </div>
         </div>
       )}
+
+      {/* 新建 / 编辑任务弹层 */}
+      {taskModal ? (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-slate-900/45 backdrop-blur-[2px]">
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="w-full max-w-lg rounded-2xl bg-white border border-slate-200 shadow-2xl overflow-hidden"
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+              <h3 className="text-base font-black text-slate-900">
+                {taskModal.mode === 'edit' ? '编辑任务' : '新建发送任务'}
+              </h3>
+              <button
+                type="button"
+                onClick={closeTaskModal}
+                className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                aria-label="关闭"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <p className="text-[11px] font-bold text-slate-500">
+                新建后进入「待发送」列表，可单发或勾选后群发。试发请用页面上方「试发一封」。
+              </p>
+              <input
+                value={taskForm.recipientEmail}
+                onChange={(e) => setTaskForm((f) => ({ ...f, recipientEmail: e.target.value }))}
+                placeholder="收件邮箱 *（必填）"
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm font-bold"
+                autoFocus
+              />
+              <input
+                value={taskForm.recipientName}
+                onChange={(e) => setTaskForm((f) => ({ ...f, recipientName: e.target.value }))}
+                placeholder="收件人姓名"
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm font-bold"
+              />
+              <input
+                value={taskForm.recipientTitle}
+                onChange={(e) => setTaskForm((f) => ({ ...f, recipientTitle: e.target.value }))}
+                placeholder="岗位 / 职位"
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm font-bold"
+              />
+              <input
+                value={taskForm.companyName}
+                onChange={(e) => setTaskForm((f) => ({ ...f, companyName: e.target.value }))}
+                placeholder="公司名"
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm font-bold"
+              />
+              <select
+                value={taskForm.clientId}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  const c = visibleCrmClients.find((x) => x.id === id);
+                  setTaskForm((f) => ({
+                    ...f,
+                    clientId: id,
+                    companyName: f.companyName || c?.name || '',
+                  }));
+                }}
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm font-bold"
+              >
+                <option value="">关联 CRM 客户（可选）</option>
+                {visibleCrmClients.slice(0, 400).map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="px-5 py-4 border-t border-slate-100 flex flex-wrap gap-2 justify-end">
+              <button
+                type="button"
+                onClick={closeTaskModal}
+                className="px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-black text-slate-600 hover:bg-slate-50"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={saveTaskModal}
+                className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-black"
+              >
+                {taskModal.mode === 'edit' ? '保存修改' : '创建并加入列表'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 };
