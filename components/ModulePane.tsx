@@ -1,6 +1,7 @@
 import React, { Suspense, useLayoutEffect, useSyncExternalStore } from 'react';
 import { Loader2 } from 'lucide-react';
 import {
+  MODULE_KEEP_ALIVE_BUDGET,
   getKeepAliveSnapshot,
   isKeepAliveMounted,
   subscribeKeepAlive,
@@ -30,7 +31,7 @@ type Props = {
 export const ModulePane: React.FC<Props> = ({
   activeId,
   id,
-  maxAlive = 8,
+  maxAlive = MODULE_KEEP_ALIVE_BUDGET,
   label,
   loadingText = '片刻…',
   children,

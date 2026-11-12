@@ -9,6 +9,7 @@ import {
   findSectionByModule,
 } from '../services/platformSections';
 import { ALWAYS_ACTIVE_MODULES } from '../services/moduleNav';
+import { prefetchModule, prefetchSection } from '../services/modulePrefetch';
 import { XiaoYuanAssistant } from './XiaoYuanAssistant';
 
 export type SphereNavPhase = 'start' | 'sections' | 'submenu';
@@ -84,9 +85,10 @@ export const SphereNav: React.FC<Props> = ({
   };
 
   const pickSection = (sec: PlatformSection) => {
-    // 同步切换相位（必须立刻反馈）；禁止后台预取其它模块
+    // 同步切换相位（必须立刻反馈）；预热放 idle，不抢点击
     setSectionId(sec.id);
     setPhase('submenu');
+    prefetchSection(sec.id);
     // 指挥舱：点板块默认进今日看板，侧栏仍可切「智能任务」
     if (sec.id === 'home' && sec.items[0]) {
       onSelectModule(sec.items[0].id);
@@ -99,11 +101,13 @@ export const SphereNav: React.FC<Props> = ({
       alert('请先完成客户搜索或背调，再进入该模块。');
       return;
     }
+    prefetchModule(mod);
     onSelectModule(mod);
   };
 
-  const warmModule = (_mod: ModuleType) => {
-    /* 禁止悬停预取 */
+  /** 悬停/焦点预热：点开前把 chunk 拉进缓存 */
+  const warmModule = (mod: ModuleType) => {
+    prefetchModule(mod);
   };
 
   const backToSections = () => setPhase('sections');
@@ -177,6 +181,8 @@ export const SphereNav: React.FC<Props> = ({
                         // 已由 pointerdown 处理，避免双触发
                         e.preventDefault();
                       }}
+                      onMouseEnter={() => prefetchSection(sec.id)}
+                      onFocus={() => prefetchSection(sec.id)}
                       className={`tp-sphere tp-sphere-section ${isHot ? 'is-hot' : ''}`}
                       style={
                         {

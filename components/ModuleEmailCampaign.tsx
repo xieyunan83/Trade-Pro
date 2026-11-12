@@ -9,10 +9,13 @@ import React, {
 } from 'react';
 import { Client, EmailTask, EmailTemplate, AliyunConfig, User, Department } from '../types';
 
-import 'react-quill/dist/quill.snow.css';
-
-/** 编辑器 JS 按需加载：打开邮件营销主界面不再等 quill 大包 */
-const ReactQuill = lazy(() => import('react-quill'));
+/** 编辑器 JS 按需加载：打开邮件营销主界面不再等 quill 大包（样式随编辑器一并注入） */
+const ReactQuill = lazy(async () => {
+  // @ts-expect-error Vite 动态 CSS，无专用类型声明
+  await import('react-quill/dist/quill.snow.css');
+  const mod = await import('react-quill');
+  return { default: mod.default };
+});
 import {
   Mail,
   Send,

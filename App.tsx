@@ -200,11 +200,16 @@ import { ModuleComingSoon } from './components/ModuleComingSoon';
 import { ModuleLandingHub } from './components/ModuleLandingHub';
 import { TradeJourneyPanel } from './components/TradeJourneyPanel';
 import { ModulePane } from './components/ModulePane';
+import { MODULE_KEEP_ALIVE_BUDGET } from './services/moduleKeepAlive';
+import { prefetchCoreModules, prefetchModule } from './services/modulePrefetch';
 import { loadCatalogSkus } from './services/productCatalogTypes';
 import { setPreferredAcquisitionCategories } from './services/acquisitionMethods';
 import type { PlatformAcquisitionSearchRequest } from './components/AcquisitionMethodsPanel';
 import type { SphereNavPhase } from './components/SphereNav';
 import { lazyWithRetry } from './utils/lazyWithRetry';
+
+/** 模块保活预算：提高后切换像本机多标签，而非网站整页重挂 */
+const KA = MODULE_KEEP_ALIVE_BUDGET;
 
 /** 同域名客户合并：邮件任务 clientId 重映射 + 云端删除被合并行 */
 const applyCrmDomainDedupe = (
@@ -372,7 +377,8 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
    */
   const navigateModule = useCallback((m: ModuleType) => {
     setActiveModule(m);
-    // 禁止切换时预取其它模块 chunk（录屏/操作时抢网抢 CPU）
+    // 同步切页；目标模块 chunk 走 idle 预热，不抢点击
+    prefetchModule(m);
   }, []);
   const openRecordsPanel = useCallback(() => setHistoryOpen((v) => !v), []);
   const closeMobileMenu = useCallback(() => setMobileMenuOpen(false), []);
@@ -1046,6 +1052,12 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       setUsageScope(bootUser.username);
     }
   }, [currentUser, bootUser]);
+
+  // 进站后阶梯预热高频模块 chunk（idle，不抢首屏点击）
+  useEffect(() => {
+    if (!currentUser) return;
+    prefetchCoreModules();
+  }, [currentUser?.username]);
 
   useEffect(() => {
     const checkKey = async () => {
@@ -6599,7 +6611,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
 
           {!loading && !errorMsg && (
             <>
-                <ModulePane id={ModuleType.HOME} activeId={activeModule} maxAlive={2} label="今日看板">
+                <ModulePane id={ModuleType.HOME} activeId={activeModule} maxAlive={KA} label="今日看板">
                   <ErrorBoundary label="今日看板">
                     <ModuleLandingHub
                       currentUser={currentUser}
@@ -6635,7 +6647,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                     />
                   </ErrorBoundary>
                 </ModulePane>
-                <ModulePane id={ModuleType.SMART_TASKS} activeId={activeModule} maxAlive={2}>
+                <ModulePane id={ModuleType.SMART_TASKS} activeId={activeModule} maxAlive={KA}>
                   <ErrorBoundary label="智能任务">
                     <div className="w-full max-w-none min-w-0 space-y-3">
                       <div className="rounded-2xl border border-cyan-100 bg-cyan-50/50 px-4 py-3">
@@ -6678,7 +6690,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                     </div>
                   </ErrorBoundary>
                 </ModulePane>
-                <ModulePane id={ModuleType.DISCOVERY} activeId={activeModule} maxAlive={2}>
+                <ModulePane id={ModuleType.DISCOVERY} activeId={activeModule} maxAlive={KA}>
                     <ClientFinder 
                         state={discoveryState} 
                         onStateChange={handleDiscoveryStateChange}
@@ -6733,7 +6745,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                         onAutoSearchConsumed={() => setDiscoveryAutoSearchNonce(0)}
                     />
                 </ModulePane>
-                <ModulePane id={ModuleType.CLIENT_CRM} activeId={activeModule} maxAlive={2}>
+                <ModulePane id={ModuleType.CLIENT_CRM} activeId={activeModule} maxAlive={KA}>
                     <ModuleClientCRM 
                         clients={crmClients} 
                         setClients={setCrmClients} 
@@ -6761,7 +6773,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                         onNavOrderChange={setCrmNavOrder}
                     />
                 </ModulePane>
-                <ModulePane id={ModuleType.PRODUCT_MATCH} activeId={activeModule} maxAlive={2} label="产品匹配">
+                <ModulePane id={ModuleType.PRODUCT_MATCH} activeId={activeModule} maxAlive={KA} label="产品匹配">
                     <ModuleProductMatch
                         history={history}
                         crmClients={crmClients}
@@ -6778,7 +6790,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                 <ModulePane
                   id={ModuleType.EMAIL_CAMPAIGN}
                   activeId={activeModule}
-                  maxAlive={2}
+                  maxAlive={KA}
                   label="邮件营销"
                   loadingText="邮件营销加载中…"
                 >
@@ -6818,48 +6830,48 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                           }}
                         />
                 </ModulePane>
-                <ModulePane id={ModuleType.IMAGE_GENERATOR} activeId={activeModule} maxAlive={2} label="生图">
+                <ModulePane id={ModuleType.IMAGE_GENERATOR} activeId={activeModule} maxAlive={KA} label="生图">
                     <ModuleImageGenerator />
                 </ModulePane>
                 {currentUser && (
                   <>
-                    <ModulePane id={ModuleType.PRODUCT_CATALOG} activeId={activeModule} maxAlive={2} label="产品库">
+                    <ModulePane id={ModuleType.PRODUCT_CATALOG} activeId={activeModule} maxAlive={KA} label="产品库">
                       <ModuleProductCatalog currentUser={currentUser} />
                     </ModulePane>
-                    <ModulePane id={ModuleType.PRODUCT_QUOTE} activeId={activeModule} maxAlive={2} label="报价选品">
+                    <ModulePane id={ModuleType.PRODUCT_QUOTE} activeId={activeModule} maxAlive={KA} label="报价选品">
                       <ModuleProductQuote currentUser={currentUser} />
                     </ModulePane>
-                    <ModulePane id={ModuleType.PRODUCT_DESIGN_2D} activeId={activeModule} maxAlive={2}>
+                    <ModulePane id={ModuleType.PRODUCT_DESIGN_2D} activeId={activeModule} maxAlive={KA}>
                       <ModuleProductDesign2D
                         currentUser={currentUser}
                         onNavigateModule={navigateModule}
                       />
                     </ModulePane>
-                    <ModulePane id={ModuleType.PRODUCT_DESIGN_3D} activeId={activeModule} maxAlive={2}>
+                    <ModulePane id={ModuleType.PRODUCT_DESIGN_3D} activeId={activeModule} maxAlive={KA}>
                       <ModuleProductDesign3D
                         currentUser={currentUser}
                         onNavigateModule={navigateModule}
                       />
                     </ModulePane>
-                    <ModulePane id={ModuleType.PRODUCT_AI_VIDEO} activeId={activeModule} maxAlive={2}>
+                    <ModulePane id={ModuleType.PRODUCT_AI_VIDEO} activeId={activeModule} maxAlive={KA}>
                       <ModuleProductAiVideo
                         currentUser={currentUser}
                         onNavigateModule={navigateModule}
                       />
                     </ModulePane>
-                    <ModulePane id={ModuleType.PRODUCT_PACKAGING} activeId={activeModule} maxAlive={2}>
+                    <ModulePane id={ModuleType.PRODUCT_PACKAGING} activeId={activeModule} maxAlive={KA}>
                       <ModuleProductPackaging
                         currentUser={currentUser}
                         onNavigateModule={navigateModule}
                       />
                     </ModulePane>
-                    <ModulePane id={ModuleType.SITE_BUILDER} activeId={activeModule} maxAlive={2}>
+                    <ModulePane id={ModuleType.SITE_BUILDER} activeId={activeModule} maxAlive={KA}>
                       <ModuleSiteBuilder currentUser={currentUser} />
                     </ModulePane>
-                    <ModulePane id={ModuleType.SOCIAL_CONTENT} activeId={activeModule} maxAlive={2}>
+                    <ModulePane id={ModuleType.SOCIAL_CONTENT} activeId={activeModule} maxAlive={KA}>
                       <ModuleSocialContent currentUser={currentUser} />
                     </ModulePane>
-                    <ModulePane id={ModuleType.WHATSAPP} activeId={activeModule} maxAlive={2}>
+                    <ModulePane id={ModuleType.WHATSAPP} activeId={activeModule} maxAlive={KA}>
                       <ModuleContactTools currentUser={currentUser} crmClients={crmClients} />
                     </ModulePane>
                   </>
@@ -6874,7 +6886,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                     ModuleType.ECO_DELIVERY,
                   ] as ModuleType[]
                 ).includes(activeModule) && <ModuleComingSoon module={activeModule} />}
-                <ModulePane id={ModuleType.PROMO_GENERATOR} activeId={activeModule} maxAlive={2}>
+                <ModulePane id={ModuleType.PROMO_GENERATOR} activeId={activeModule} maxAlive={KA}>
                     <ModulePromoGenerator 
                         onStartAutomation={handleStartQueueGeneration} 
                         onPlatformAcquisitionSearch={handlePlatformAcquisitionSearch}
@@ -6916,7 +6928,7 @@ crmClients={crmClients}
                         canViewEmails={canViewFullDecisionMakerEmails(currentUser)}
                     />
                 </ModulePane>
-                <ModulePane id={ModuleType.STRATEGY} activeId={activeModule} maxAlive={2}>
+                <ModulePane id={ModuleType.STRATEGY} activeId={activeModule} maxAlive={KA}>
                     <div className="animate-fade-in w-full pb-10">
                         {analysisData && (
                             <div className="mb-3 flex flex-wrap items-center justify-between gap-2 bg-white px-3 py-2 rounded-2xl border border-slate-200 shadow-sm">

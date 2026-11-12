@@ -1,8 +1,13 @@
 /**
- * 空闲 / 悬停时预拉取模块 chunk，切换时几乎零等待。
+ * 空闲 / 悬停 / 进板块时预拉取模块 chunk，切换时接近零等待。
+ * 全部走 idle 调度，禁止抢点击主线程。
  */
 import { ModuleType } from '../types';
-import { isChunkLoadError } from '../utils/lazyWithRetry';
+import {
+  PLATFORM_SECTIONS,
+  type PlatformSectionId,
+} from './platformSections';
+import { hardReloadApp, isChunkLoadError } from '../utils/lazyWithRetry';
 
 const loaders: Partial<Record<ModuleType, () => Promise<unknown>>> = {
   [ModuleType.DISCOVERY]: () => import('../components/ClientFinder'),
@@ -23,46 +28,94 @@ const loaders: Partial<Record<ModuleType, () => Promise<unknown>>> = {
 };
 
 const warmed = new Set<ModuleType>();
+const inflight = new Set<ModuleType>();
 
-export const prefetchModule = (mod: ModuleType): void => {
-  if (warmed.has(mod)) return;
-  const load = loaders[mod];
-  if (!load) return;
-  warmed.add(mod);
-  void load().catch((err) => {
-    warmed.delete(mod);
-    if (typeof window !== 'undefined' && isChunkLoadError(err)) {
-      const flag = 'tp_chunk_reload_prefetch';
-      if (!sessionStorage.getItem(flag)) {
-        sessionStorage.setItem(flag, '1');
-        window.location.reload();
-      }
-    }
-  });
+const runIdle = (fn: () => void, timeout = 2_500): void => {
+  if (typeof window === 'undefined') return;
+  const ric = window.requestIdleCallback;
+  if (typeof ric === 'function') {
+    ric(() => fn(), { timeout });
+  } else {
+    window.setTimeout(fn, 120);
+  }
 };
 
-/** 进入工作台后很晚再预热；禁止进站前几秒抢主线程 */
+/** 悬停 / 焦点：立刻排队预取（仍不阻塞当前点击） */
+export const prefetchModule = (mod: ModuleType): void => {
+  if (!mod || warmed.has(mod) || inflight.has(mod)) return;
+  const load = loaders[mod];
+  if (!load) return;
+  inflight.add(mod);
+  runIdle(() => {
+    void load()
+      .then(() => {
+        warmed.add(mod);
+      })
+      .catch((err) => {
+        if (typeof window !== 'undefined' && isChunkLoadError(err)) {
+          const flag = 'tp_chunk_reload_prefetch';
+          if (!sessionStorage.getItem(flag)) {
+            sessionStorage.setItem(flag, '1');
+            hardReloadApp();
+          }
+        }
+      })
+      .finally(() => {
+        inflight.delete(mod);
+      });
+  }, 1_500);
+};
+
+/** 进入某板块：阶梯预热该板块全部可加载子模块 */
+export const prefetchSection = (sectionId: PlatformSectionId | null | undefined): void => {
+  if (!sectionId) return;
+  const sec = PLATFORM_SECTIONS.find((s) => s.id === sectionId);
+  if (!sec) return;
+  const mods = sec.items.filter((it) => !it.comingSoon && loaders[it.id]).map((it) => it.id);
+  let i = 0;
+  const step = () => {
+    if (i >= mods.length) return;
+    prefetchModule(mods[i++]);
+    window.setTimeout(step, 280);
+  };
+  runIdle(step, 3_000);
+};
+
+/**
+ * 进站后阶梯预热高频模块，再扫一遍其余。
+ * 禁止进站前几秒抢主线程。
+ */
 export const prefetchCoreModules = (): void => {
-  const run = () => {
-    const mods: ModuleType[] = [
-      ModuleType.DISCOVERY,
-      ModuleType.CLIENT_CRM,
-      ModuleType.PROMO_GENERATOR,
-    ];
+  const hot: ModuleType[] = [
+    ModuleType.DISCOVERY,
+    ModuleType.CLIENT_CRM,
+    ModuleType.PROMO_GENERATOR,
+    ModuleType.PRODUCT_CATALOG,
+    ModuleType.PRODUCT_MATCH,
+    ModuleType.EMAIL_CAMPAIGN,
+  ];
+  const rest = (Object.keys(loaders) as ModuleType[]).filter((m) => !hot.includes(m));
+
+  const runQueue = (mods: ModuleType[], gapMs: number, done?: () => void) => {
     let i = 0;
     const step = () => {
-      if (i >= mods.length) return;
+      if (i >= mods.length) {
+        done?.();
+        return;
+      }
       prefetchModule(mods[i++]);
-      window.setTimeout(step, 800);
+      window.setTimeout(step, gapMs);
     };
     step();
   };
-  // 进站至少 6 秒后再预热，把 CPU 留给菜单点击
+
   window.setTimeout(() => {
-    if (typeof requestIdleCallback === 'function') {
-      requestIdleCallback(() => run(), { timeout: 20_000 });
-    } else {
-      run();
-    }
-  }, 6000);
+    runIdle(() => {
+      runQueue(hot, 450, () => {
+        runIdle(() => runQueue(rest, 700), 8_000);
+      });
+    }, 12_000);
+  }, 2_500);
 };
+
+export const isModulePrefetched = (mod: ModuleType): boolean => warmed.has(mod);
