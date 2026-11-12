@@ -35,12 +35,30 @@ import {
   Search,
   Pencil,
   RotateCcw,
+  BarChart3,
+  Ban,
+  RefreshCw,
 } from 'lucide-react';
 import {
   loadEmailCampaignStoreForUser,
   saveEmailCampaignStoreForUser,
 } from '../services/emailCampaignStore';
-import { isDirectMailConfigured, sendDirectMail } from '../services/directMailService';
+import {
+  isDirectMailConfigured,
+  sendDirectMail,
+  fetchAccountSummary,
+  queryInvalidAddresses,
+  deleteInvalidAddress,
+  loadInvalidAddressSet,
+  fetchSenderStatistics,
+  fetchDeliveryDetails,
+  userStatusLabel,
+  looksLikeInvalidAddressError,
+  type DirectMailAccountSummary,
+  type DirectMailInvalidAddress,
+  type DirectMailStatRow,
+  type DirectMailDeliveryDetail,
+} from '../services/directMailService';
 import { filterOwnedRecords } from '../services/permissions';
 import {
   loadStrategyMailDraft,
@@ -96,7 +114,9 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
   const [tasks, setTasks] = useState<EmailTask[]>(initial.tasks);
   const [templates, setTemplates] = useState<EmailTemplate[]>(initial.templates);
   const [config, setConfig] = useState<AliyunConfig | null>(initial.config);
-  const [activeTab, setActiveTab] = useState<'tasks' | 'templates' | 'config'>('tasks');
+  const [activeTab, setActiveTab] = useState<
+    'tasks' | 'templates' | 'invalid' | 'stats' | 'config'
+  >('tasks');
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
   const [roleFilter, setRoleFilter] = useState<'all' | 'Buyer' | 'CEO' | 'Other'>('all');
@@ -138,6 +158,24 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
     companyName: '',
     clientId: '',
   });
+  const [accountSummary, setAccountSummary] = useState<DirectMailAccountSummary | null>(null);
+  const [accountSummaryError, setAccountSummaryError] = useState('');
+  const [accountSummaryLoading, setAccountSummaryLoading] = useState(false);
+  const [invalidKeyword, setInvalidKeyword] = useState('');
+  const [invalidItems, setInvalidItems] = useState<DirectMailInvalidAddress[]>([]);
+  const [invalidTotal, setInvalidTotal] = useState(0);
+  const [invalidLoading, setInvalidLoading] = useState(false);
+  const [invalidError, setInvalidError] = useState('');
+  const [invalidNextStart, setInvalidNextStart] = useState<string | undefined>();
+  const [statsRows, setStatsRows] = useState<DirectMailStatRow[]>([]);
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [statsError, setStatsError] = useState('');
+  const [detailItems, setDetailItems] = useState<DirectMailDeliveryDetail[]>([]);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState('');
+  const [detailStatus, setDetailStatus] = useState<'' | 0 | 2 | 3 | 4>('');
+  const [detailToAddress, setDetailToAddress] = useState('');
+  const [detailNextStart, setDetailNextStart] = useState<string | undefined>();
   const quillRef = useRef<{ getEditor: () => { getSelection: (b?: boolean) => { index: number }; insertText: (i: number, t: string) => void; insertEmbed: (i: number, t: string, v: string) => void } } | null>(null);
   /** 切换用户后跳过一次保存，避免用上一用户的 state 写穿 */
   const skipNextSaveRef = useRef(false);
@@ -154,6 +192,115 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
   const macros = ['{{company_name}}', '{{contact_name}}'];
   const dmReady = isDirectMailConfigured(config);
   const [gtmImportHint, setGtmImportHint] = useState('');
+
+  const refreshAccountSummary = useCallback(async () => {
+    if (!config || !isDirectMailConfigured(config)) {
+      setAccountSummary(null);
+      setAccountSummaryError('');
+      return;
+    }
+    setAccountSummaryLoading(true);
+    setAccountSummaryError('');
+    const res = await fetchAccountSummary(config);
+    setAccountSummaryLoading(false);
+    if (res.ok === false) {
+      setAccountSummary(null);
+      setAccountSummaryError(res.error || '无法读取发信额度');
+      return;
+    }
+    setAccountSummary(res.summary);
+  }, [config]);
+
+  const refreshInvalidAddresses = useCallback(
+    async (opts?: { append?: boolean; nextStart?: string; keyWord?: string }) => {
+      if (!config || !isDirectMailConfigured(config)) {
+        setInvalidItems([]);
+        setInvalidError('请先完成接口配置');
+        return;
+      }
+      setInvalidLoading(true);
+      setInvalidError('');
+      const res = await queryInvalidAddresses(config, {
+        keyWord: opts?.keyWord ?? invalidKeyword,
+        length: 50,
+        nextStart: opts?.nextStart,
+      });
+      setInvalidLoading(false);
+      if (res.ok === false) {
+        if (!opts?.append) setInvalidItems([]);
+        setInvalidError(res.error || '无法查询无效地址');
+        return;
+      }
+      setInvalidTotal(res.totalCount);
+      setInvalidNextStart(res.nextStart);
+      setInvalidItems((prev) => (opts?.append ? [...prev, ...res.items] : res.items));
+    },
+    [config, invalidKeyword]
+  );
+
+  const refreshStatsAndDetails = useCallback(
+    async (opts?: { appendDetails?: boolean; nextStart?: string }) => {
+      if (!config || !isDirectMailConfigured(config)) {
+        setStatsRows([]);
+        setDetailItems([]);
+        setStatsError('请先完成接口配置');
+        return;
+      }
+      if (!opts?.appendDetails) {
+        setStatsLoading(true);
+        setStatsError('');
+        const statsRes = await fetchSenderStatistics(config, { days: 7 });
+        setStatsLoading(false);
+        if (statsRes.ok === false) {
+          setStatsRows([]);
+          setStatsError(statsRes.error || '无法读取发送数据');
+        } else {
+          setStatsRows(statsRes.rows);
+        }
+      }
+
+      setDetailLoading(true);
+      setDetailError('');
+      const detailRes = await fetchDeliveryDetails(config, {
+        days: 7,
+        status: detailStatus,
+        toAddress: detailToAddress.trim() || undefined,
+        length: 50,
+        nextStart: opts?.nextStart,
+      });
+      setDetailLoading(false);
+      if (detailRes.ok === false) {
+        if (!opts?.appendDetails) setDetailItems([]);
+        setDetailError(detailRes.error || '无法读取投递详情');
+        return;
+      }
+      setDetailNextStart(detailRes.nextStart);
+      setDetailItems((prev) =>
+        opts?.appendDetails ? [...prev, ...detailRes.items] : detailRes.items
+      );
+    },
+    [config, detailStatus, detailToAddress]
+  );
+
+  useEffect(() => {
+    if (!dmReady) {
+      setAccountSummary(null);
+      return;
+    }
+    void refreshAccountSummary();
+  }, [dmReady, refreshAccountSummary]);
+
+  useEffect(() => {
+    if (activeTab === 'invalid' && dmReady) {
+      void refreshInvalidAddresses();
+    }
+  }, [activeTab, dmReady]); // eslint-disable-line react-hooks/exhaustive-deps -- 仅切 tab 时自动拉一次
+
+  useEffect(() => {
+    if (activeTab === 'stats' && dmReady) {
+      void refreshStatsAndDetails();
+    }
+  }, [activeTab, dmReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const stampOwnership = useCallback(
     <T extends { ownerUsername?: string; departmentId?: string }>(item: T): T => ({
@@ -710,13 +857,13 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
       return;
     }
     if (!dmReady || !config) {
-      alert('请先在「接口配置」填写完整的阿里云 DirectMail 参数后再发送。');
+      alert('请先在「接口配置」填写完整的发信参数后再发送。');
       setActiveTab('config');
       return;
     }
 
     const pool = taskSnapshot || tasks;
-    const targets = pool.filter((t) => taskIds.includes(t.id) && isSendableStatus(t.status));
+    let targets = pool.filter((t) => taskIds.includes(t.id) && isSendableStatus(t.status));
     if (!targets.length) {
       alert(
         '当前勾选里没有可发送任务。\n请勾选「待发送 / 失败」项，或点「全选可发」；已成功的不会重复发送。'
@@ -724,16 +871,52 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
       return;
     }
 
+    // 发信前过滤无效地址库
+    let skippedInvalid = 0;
+    const invalidProbe = await loadInvalidAddressSet(config, 5, 100);
+    if (invalidProbe.ok && invalidProbe.emails.size) {
+      const blocked = targets.filter((t) =>
+        invalidProbe.emails.has(t.recipientEmail.toLowerCase())
+      );
+      if (blocked.length) {
+        skippedInvalid = blocked.length;
+        const blockedIds = new Set(blocked.map((t) => t.id));
+        setTasks((prev) =>
+          prev.map((t) =>
+            blockedIds.has(t.id)
+              ? {
+                  ...t,
+                  status: 'failed',
+                  error: '命中无效地址库，已跳过发送。可在「无效地址」中移除后再发。',
+                }
+              : t
+          )
+        );
+        targets = targets.filter((t) => !blockedIds.has(t.id));
+      }
+    }
+
+    if (!targets.length) {
+      alert(
+        skippedInvalid
+          ? `所选收件人均在无效地址库中（${skippedInvalid}），已全部跳过。请到「无效地址」核对。`
+          : '没有可发送的收件人。'
+      );
+      return;
+    }
+
     if (
       !confirm(
-        `将通过阿里云 DirectMail 真实发送 ${targets.length} 封邮件。\n仅成功投递后会回写 CRM「最近发信」。\n确认继续？`
+        `将真实发送 ${targets.length} 封邮件${
+          skippedInvalid ? `（另跳过无效地址 ${skippedInvalid}）` : ''
+        }。\n仅成功投递后会回写 CRM「最近发信」。\n确认继续？`
       )
     ) {
       return;
     }
 
     setSending(true);
-    setSendMsg('');
+    setSendMsg(skippedInvalid ? `已跳过无效地址 ${skippedInvalid}，开始发送…` : '');
     const crmWrites: Array<{ companyName: string; clientId?: string; to: string; subject: string }> =
       [];
     let okCount = 0;
@@ -774,10 +957,17 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
         );
       } else {
         failCount += 1;
+        const err = result.error || '发送失败';
         setTasks((prev) =>
           prev.map((t) =>
             t.id === task.id
-              ? { ...t, status: 'failed', error: result.error || '发送失败' }
+              ? {
+                  ...t,
+                  status: 'failed',
+                  error: looksLikeInvalidAddressError(err)
+                    ? `${err}（疑似无效地址，系统可能已自动入库）`
+                    : err,
+                }
               : t
           )
         );
@@ -787,9 +977,14 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
     }
 
     if (crmWrites.length && onEmailsSent) onEmailsSent(crmWrites);
-    setSendMsg(`完成：成功 ${okCount}，失败 ${failCount}`);
+    setSendMsg(
+      `完成：成功 ${okCount}，失败 ${failCount}${
+        skippedInvalid ? `，跳过无效 ${skippedInvalid}` : ''
+      }`
+    );
     setSending(false);
     setSelectedTaskIds(new Set());
+    void refreshAccountSummary();
   };
 
   const toggleTask = (id: string) => {
@@ -810,7 +1005,7 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
     const template = ensureTemplateOrGuide();
     if (!template) return;
     if (!dmReady || !config) {
-      alert('请先在「接口配置」填写完整的阿里云 DirectMail 参数后再试发。');
+      alert('请先在「接口配置」填写完整的发信参数后再试发。');
       setActiveTab('config');
       return;
     }
@@ -865,7 +1060,7 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
     <div className="w-full space-y-4 sm:space-y-8 animate-fade-in">
       <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-bold text-slate-600 space-y-1">
         <p>
-          怎么用：①「邮件模板」准备内容 → ②「新建任务」或「试发一封」→ ③ 在「任务管理」里编辑/勾选/群发。接口需先在「接口配置」填好。
+          怎么用：①「邮件模板」准备内容 → ②「新建任务」或「试发一封」→ ③ 在「任务管理」里编辑/勾选/群发。可在「无效地址」「投递数据」查看发信防护与效果。
         </p>
         <p className="text-slate-500">
           数据隔离：员工仅见自己的收件人；主管见本部门。产品匹配/开发策略生成的开发信会进入「邮件模板」。
@@ -891,12 +1086,81 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
           <Layout size={16} /> 邮件模板
         </button>
         <button
+          onClick={() => setActiveTab('invalid')}
+          className={`flex-1 sm:flex-none px-4 sm:px-6 py-2 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center justify-center gap-2 touch-manipulation ${activeTab === 'invalid' ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'}`}
+        >
+          <Ban size={16} /> 无效地址
+        </button>
+        <button
+          onClick={() => setActiveTab('stats')}
+          className={`flex-1 sm:flex-none px-4 sm:px-6 py-2 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center justify-center gap-2 touch-manipulation ${activeTab === 'stats' ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'}`}
+        >
+          <BarChart3 size={16} /> 投递数据
+        </button>
+        <button
           onClick={() => setActiveTab('config')}
           className={`flex-1 sm:flex-none px-4 sm:px-6 py-2 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center justify-center gap-2 touch-manipulation ${activeTab === 'config' ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-500 hover:bg-slate-50'}`}
         >
           <Settings size={16} /> 接口配置 {dmReady ? '✓' : ''}
         </button>
       </div>
+
+      {/* 发信额度条：任务/无效/投递页可见 */}
+      {dmReady && (activeTab === 'tasks' || activeTab === 'invalid' || activeTab === 'stats') ? (
+        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm flex flex-wrap items-center gap-3 justify-between">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-bold text-slate-600">
+            {accountSummaryLoading ? (
+              <span className="inline-flex items-center gap-1.5 text-slate-400">
+                <Loader2 size={12} className="animate-spin" /> 读取发信额度…
+              </span>
+            ) : accountSummary ? (
+              <>
+                <span>
+                  账户状态{' '}
+                  <span
+                    className={
+                      accountSummary.userStatus === 0 ? 'text-emerald-600' : 'text-amber-600'
+                    }
+                  >
+                    {userStatusLabel(accountSummary.userStatus)}
+                  </span>
+                </span>
+                <span>
+                  日额度{' '}
+                  <span className="text-slate-900">{accountSummary.dailyQuota.toLocaleString()}</span>
+                </span>
+                <span>
+                  月额度{' '}
+                  <span className="text-slate-900">{accountSummary.monthQuota.toLocaleString()}</span>
+                </span>
+                <span>
+                  免费额度余{' '}
+                  <span className="text-slate-900">
+                    {accountSummary.remainFreeQuota.toLocaleString()}
+                  </span>
+                </span>
+                <span>
+                  信誉等级{' '}
+                  <span className="text-slate-900">
+                    {accountSummary.quotaLevel}/{accountSummary.maxQuotaLevel}
+                  </span>
+                </span>
+              </>
+            ) : (
+              <span className="text-slate-400">
+                {accountSummaryError || '暂无额度信息'}
+              </span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => void refreshAccountSummary()}
+            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 text-[11px] font-black text-slate-500 hover:bg-slate-50"
+          >
+            <RefreshCw size={12} /> 刷新
+          </button>
+        </div>
+      ) : null}
 
       {activeTab === 'tasks' && (
         <div className="space-y-4 sm:space-y-6">
@@ -1373,6 +1637,369 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
                     </button>
                   </div>
                 </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'invalid' && (
+        <div className="bg-white p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              <h3 className="text-base sm:text-lg font-black text-slate-800">无效地址</h3>
+              <p className="text-[11px] font-bold text-slate-500 mt-0.5">
+                群发前会自动跳过库内地址。投递失败判定为无效时，云端通常会自动入库。
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void refreshInvalidAddresses()}
+              disabled={invalidLoading || !dmReady}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 text-xs font-black text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+            >
+              {invalidLoading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+              刷新
+            </button>
+          </div>
+
+          {!dmReady ? (
+            <p className="text-sm font-bold text-amber-700">请先在「接口配置」完成发信参数。</p>
+          ) : (
+            <>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <div className="relative flex-1">
+                  <Search
+                    size={14}
+                    className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"
+                  />
+                  <input
+                    value={invalidKeyword}
+                    onChange={(e) => setInvalidKeyword(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void refreshInvalidAddresses({ keyWord: invalidKeyword });
+                    }}
+                    placeholder="按邮箱关键词查询…"
+                    className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-200 text-sm font-bold"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void refreshInvalidAddresses({ keyWord: invalidKeyword })}
+                  disabled={invalidLoading}
+                  className="px-4 py-2.5 rounded-xl bg-slate-900 text-white text-xs font-black disabled:opacity-40"
+                >
+                  查询
+                </button>
+              </div>
+
+              {invalidError ? (
+                <p className="text-xs font-bold text-rose-600">{invalidError}</p>
+              ) : null}
+
+              <div className="rounded-2xl border border-slate-100 overflow-x-auto">
+                <table className="w-full text-left border-collapse min-w-[520px]">
+                  <thead>
+                    <tr className="bg-slate-50 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">
+                      <th className="px-4 py-3">邮箱地址</th>
+                      <th className="px-4 py-3">最近更新</th>
+                      <th className="px-4 py-3 w-24">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {invalidLoading && invalidItems.length === 0 ? (
+                      <tr>
+                        <td colSpan={3} className="px-6 py-12 text-center text-slate-400 font-bold text-sm">
+                          <Loader2 className="inline animate-spin mr-2" size={14} />
+                          加载中…
+                        </td>
+                      </tr>
+                    ) : invalidItems.length === 0 ? (
+                      <tr>
+                        <td colSpan={3} className="px-6 py-12 text-center text-slate-500 font-bold text-sm">
+                          暂无无效地址记录
+                        </td>
+                      </tr>
+                    ) : (
+                      invalidItems.map((row) => (
+                        <tr key={row.toAddress} className="hover:bg-slate-50/60">
+                          <td className="px-4 py-3 text-sm font-bold text-slate-800">
+                            {row.toAddress}
+                          </td>
+                          <td className="px-4 py-3 text-xs font-bold text-slate-500">
+                            {row.lastUpdateTime ||
+                              (row.utcLastUpdateTime
+                                ? new Date(row.utcLastUpdateTime * 1000).toLocaleString()
+                                : '—')}
+                          </td>
+                          <td className="px-4 py-3">
+                            <button
+                              type="button"
+                              className="text-[11px] font-black text-rose-600 hover:underline"
+                              onClick={async () => {
+                                if (!config) return;
+                                if (!confirm(`从无效地址库移除「${row.toAddress}」？`)) return;
+                                const res = await deleteInvalidAddress(config, row.toAddress);
+                                if (!res.ok) {
+                                  alert(res.error || '移除失败');
+                                  return;
+                                }
+                                setInvalidItems((prev) =>
+                                  prev.filter((x) => x.toAddress !== row.toAddress)
+                                );
+                                setInvalidTotal((n) => Math.max(0, n - 1));
+                              }}
+                            >
+                              移除
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="flex items-center justify-between gap-3 text-xs font-bold text-slate-500">
+                <span>共约 {invalidTotal} 条 · 当前显示 {invalidItems.length}</span>
+                {invalidNextStart ? (
+                  <button
+                    type="button"
+                    disabled={invalidLoading}
+                    onClick={() =>
+                      void refreshInvalidAddresses({
+                        append: true,
+                        nextStart: invalidNextStart,
+                        keyWord: invalidKeyword,
+                      })
+                    }
+                    className="px-3 py-1.5 rounded-lg border border-slate-200 disabled:opacity-40"
+                  >
+                    加载更多
+                  </button>
+                ) : null}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'stats' && (
+        <div className="space-y-4 sm:space-y-6">
+          <div className="bg-white p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div>
+                <h3 className="text-base sm:text-lg font-black text-slate-800">发送概览（近 7 日）</h3>
+                <p className="text-[11px] font-bold text-slate-500 mt-0.5">
+                  按日汇总请求数、成功、失败与无效地址。
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void refreshStatsAndDetails()}
+                disabled={statsLoading || detailLoading || !dmReady}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 text-xs font-black text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+              >
+                {statsLoading || detailLoading ? (
+                  <Loader2 size={12} className="animate-spin" />
+                ) : (
+                  <RefreshCw size={12} />
+                )}
+                刷新
+              </button>
+            </div>
+
+            {!dmReady ? (
+              <p className="text-sm font-bold text-amber-700">请先在「接口配置」完成发信参数。</p>
+            ) : statsError && !statsRows.length ? (
+              <p className="text-xs font-bold text-rose-600">{statsError}</p>
+            ) : (
+              <div className="rounded-2xl border border-slate-100 overflow-x-auto">
+                <table className="w-full text-left border-collapse min-w-[640px]">
+                  <thead>
+                    <tr className="bg-slate-50 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">
+                      <th className="px-4 py-3">日期</th>
+                      <th className="px-4 py-3">总数</th>
+                      <th className="px-4 py-3">成功</th>
+                      <th className="px-4 py-3">失败</th>
+                      <th className="px-4 py-3">无效</th>
+                      <th className="px-4 py-3">成功率</th>
+                      <th className="px-4 py-3">无效率</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {statsLoading && statsRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="px-6 py-10 text-center text-slate-400 font-bold text-sm">
+                          <Loader2 className="inline animate-spin mr-2" size={14} />
+                          加载中…
+                        </td>
+                      </tr>
+                    ) : statsRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="px-6 py-10 text-center text-slate-500 font-bold text-sm">
+                          近 7 日暂无发送数据
+                        </td>
+                      </tr>
+                    ) : (
+                      statsRows.map((row) => (
+                        <tr key={row.createTime} className="hover:bg-slate-50/60">
+                          <td className="px-4 py-3 text-sm font-bold text-slate-800">
+                            {row.createTime}
+                          </td>
+                          <td className="px-4 py-3 text-sm font-bold text-slate-700">
+                            {row.requestCount}
+                          </td>
+                          <td className="px-4 py-3 text-sm font-bold text-emerald-700">
+                            {row.successCount}
+                          </td>
+                          <td className="px-4 py-3 text-sm font-bold text-rose-600">
+                            {row.failedCount}
+                          </td>
+                          <td className="px-4 py-3 text-sm font-bold text-amber-700">
+                            {row.unavailableCount}
+                          </td>
+                          <td className="px-4 py-3 text-xs font-bold text-slate-600">
+                            {row.succeededPercent}
+                          </td>
+                          <td className="px-4 py-3 text-xs font-bold text-slate-600">
+                            {row.unavailablePercent}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div className="bg-white p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-200 shadow-sm space-y-4">
+            <div>
+              <h3 className="text-base sm:text-lg font-black text-slate-800">投递详情</h3>
+              <p className="text-[11px] font-bold text-slate-500 mt-0.5">
+                按收件人查看近 7 日投递结果，可按状态筛选。
+              </p>
+            </div>
+            <div className="flex flex-col lg:flex-row gap-2 flex-wrap">
+              <select
+                value={detailStatus === '' ? '' : String(detailStatus)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setDetailStatus(v === '' ? '' : (Number(v) as 0 | 2 | 3 | 4));
+                }}
+                className="px-3 py-2.5 rounded-xl border border-slate-200 text-sm font-bold"
+              >
+                <option value="">全部投递结果</option>
+                <option value="0">成功</option>
+                <option value="2">无效地址</option>
+                <option value="3">垃圾举报</option>
+                <option value="4">失败</option>
+              </select>
+              <input
+                value={detailToAddress}
+                onChange={(e) => setDetailToAddress(e.target.value)}
+                placeholder="按收件邮箱精确查询（可选）"
+                className="flex-1 min-w-[200px] px-3 py-2.5 rounded-xl border border-slate-200 text-sm font-bold"
+              />
+              <button
+                type="button"
+                onClick={() => void refreshStatsAndDetails()}
+                disabled={detailLoading || !dmReady}
+                className="px-4 py-2.5 rounded-xl bg-slate-900 text-white text-xs font-black disabled:opacity-40"
+              >
+                查询
+              </button>
+            </div>
+
+            {detailError ? (
+              <p className="text-xs font-bold text-rose-600">{detailError}</p>
+            ) : null}
+
+            <div className="rounded-2xl border border-slate-100 overflow-x-auto">
+              <table className="w-full text-left border-collapse min-w-[720px]">
+                <thead>
+                  <tr className="bg-slate-50 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">
+                    <th className="px-4 py-3">时间</th>
+                    <th className="px-4 py-3">主题</th>
+                    <th className="px-4 py-3">发信地址</th>
+                    <th className="px-4 py-3">收件地址</th>
+                    <th className="px-4 py-3">状态</th>
+                    <th className="px-4 py-3">详情</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {detailLoading && detailItems.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="px-6 py-10 text-center text-slate-400 font-bold text-sm">
+                        <Loader2 className="inline animate-spin mr-2" size={14} />
+                        加载中…
+                      </td>
+                    </tr>
+                  ) : detailItems.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="px-6 py-10 text-center text-slate-500 font-bold text-sm">
+                        暂无投递详情
+                      </td>
+                    </tr>
+                  ) : (
+                    detailItems.map((row, idx) => (
+                      <tr
+                        key={`${row.toAddress}-${row.lastUpdateTime}-${idx}`}
+                        className="hover:bg-slate-50/60"
+                      >
+                        <td className="px-4 py-3 text-xs font-bold text-slate-500">
+                          {row.lastUpdateTime || '—'}
+                        </td>
+                        <td className="px-4 py-3 text-sm font-bold text-slate-800 max-w-[200px] truncate">
+                          {row.subject || '—'}
+                        </td>
+                        <td className="px-4 py-3 text-xs font-bold text-slate-600">
+                          {row.accountName || '—'}
+                        </td>
+                        <td className="px-4 py-3 text-xs font-bold text-slate-700">
+                          {row.toAddress || '—'}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span
+                            className={`inline-flex px-2 py-1 rounded-full text-[10px] font-black ${
+                              row.status === 0
+                                ? 'bg-green-100 text-green-700'
+                                : row.status === 2
+                                  ? 'bg-amber-100 text-amber-700'
+                                  : 'bg-rose-100 text-rose-600'
+                            }`}
+                          >
+                            {row.statusLabel}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-[10px] font-bold text-slate-500 max-w-[220px] truncate"
+                          title={row.message || row.errorClassification || ''}
+                        >
+                          {row.message || row.errorClassification || '—'}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {detailNextStart ? (
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  disabled={detailLoading}
+                  onClick={() =>
+                    void refreshStatsAndDetails({
+                      appendDetails: true,
+                      nextStart: detailNextStart,
+                    })
+                  }
+                  className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-slate-600 disabled:opacity-40"
+                >
+                  加载更多
+                </button>
               </div>
             ) : null}
           </div>
