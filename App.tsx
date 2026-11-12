@@ -3222,6 +3222,43 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       return touched;
   };
 
+  /**
+   * 后台背调写完历史后：若用户正打开同一公司报告，立即替换 analysisData。
+   * 旧逻辑只写 history/队列、不刷新当前页 → 看起来像「没完成」，强制刷新后才看见新资料。
+   */
+  const refreshOpenReportIfMatching = (saved: HistoryItem, analysis: AnalysisResult): boolean => {
+    const cleanHost = (url?: string | null) =>
+      (url || '')
+        .toLowerCase()
+        .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
+        .split('/')[0]
+        .trim();
+    const doneHost = cleanHost(saved.domain || analysis.companyInfo?.website);
+    const doneName = (analysis.companyInfo?.name || saved.data?.companyInfo?.name || '')
+      .trim()
+      .toLowerCase();
+    const open = analysisDataRef.current;
+    if (!open) return false;
+    const openHost = cleanHost(open.companyInfo?.website);
+    const openName = (open.companyInfo?.name || '').trim().toLowerCase();
+    const inputHost = cleanHost(domainInput);
+    const sameCompany =
+      (!!doneHost && !!openHost && doneHost === openHost) ||
+      (!!doneName && !!openName && doneName === openName) ||
+      (!!doneHost && !!inputHost && doneHost === inputHost);
+    if (!sameCompany) return false;
+
+    const next = enrichAnalysisDecisionMakers(normalizeAnalysisResult(analysis), {
+      historyItem: saved,
+    });
+    analysisDataRef.current = next;
+    viewingHistoryIdRef.current = saved.id;
+    setAnalysisData(next);
+    setViewingHistoryId(saved.id);
+    console.info('[report] refreshed open report after background save', doneHost || doneName);
+    return true;
+  };
+
   /** 批量/单次分析完成后写入历史（IndexedDB + Supabase） */
   const saveAnalysisToHistory = async (result: AnalysisResult, source = 'batch'): Promise<HistoryItem> => {
       const domain = result.companyInfo?.website || result.companyInfo?.name || 'unknown';
@@ -3277,6 +3314,8 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
         ownerUsername: historyItem.ownerUsername,
         departmentId: historyItem.departmentId,
       }).catch((e) => console.warn('[productCatalog] index after history save failed', e));
+      // 再次背调等后台完成后，当前报告页立刻换成新结果（不必关客户端强刷）
+      refreshOpenReportIfMatching(historyItem, historyItem.data);
       console.log(`[History] saved (${source}):`, domain, 'keyword=', keyword, 'dms=', enriched.decisionMakers?.length || 0);
       return historyItem;
   };
@@ -3582,6 +3621,8 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                 );
                 setHistory(historyRef.current);
                 await persistHistoryItem(nextHist).catch(() => undefined);
+                // 静默补全后同样刷新当前打开的报告（否则社媒/联系人仍停在旧页）
+                refreshOpenReportIfMatching(nextHist, nextHist.data);
               }
             }
             syncAutomationResults((prev) => {
