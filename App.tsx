@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useRef, useCallback, useMemo, startTransition, Suspense } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, startTransition } from 'react';
 import { analyzeCompany, hasApiKeyConfigured, checkApiKeyAvailability, hydrateApiConfigsFromCloud, searchPotentialClients, enableTavilyGeminiQwenCascade, enableGeminiQwenParallelMerge, synthesizeInsightsFallback } from './services/geminiService';
 import {
   withRateLimitRetry,
@@ -6598,16 +6598,8 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
           )}
 
           {!loading && !errorMsg && (
-            <Suspense
-              fallback={
-                <div className="flex items-center justify-center py-16 text-slate-400 gap-2">
-                  <Loader2 className="animate-spin text-cyan-600" size={20} />
-                  <span className="text-xs font-bold">片刻…</span>
-                </div>
-              }
-            >
             <>
-                <ModulePane id={ModuleType.HOME} activeId={activeModule} maxAlive={2}>
+                <ModulePane id={ModuleType.HOME} activeId={activeModule} maxAlive={2} label="今日看板">
                   <ErrorBoundary label="今日看板">
                     <ModuleLandingHub
                       currentUser={currentUser}
@@ -6769,7 +6761,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                         onNavOrderChange={setCrmNavOrder}
                     />
                 </ModulePane>
-                <ModulePane id={ModuleType.PRODUCT_MATCH} activeId={activeModule} maxAlive={2}>
+                <ModulePane id={ModuleType.PRODUCT_MATCH} activeId={activeModule} maxAlive={2} label="产品匹配">
                     <ModuleProductMatch
                         history={history}
                         crmClients={crmClients}
@@ -6783,17 +6775,13 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                         onBackToReport={() => navigateModule(ModuleType.BACKGROUND)}
                     />
                 </ModulePane>
-                <ModulePane id={ModuleType.EMAIL_CAMPAIGN} activeId={activeModule} maxAlive={2}>
-                    {/* 独立 Suspense：避免加载邮件 chunk/编辑器时整页主区被共用 fallback 挡住 */}
-                    <Suspense
-                      fallback={
-                        <div className="flex items-center justify-center py-16 text-slate-400 gap-2">
-                          <Loader2 className="animate-spin text-cyan-600" size={20} />
-                          <span className="text-xs font-bold">邮件营销加载中…</span>
-                        </div>
-                      }
-                    >
-                      <ErrorBoundary label="邮件营销">
+                <ModulePane
+                  id={ModuleType.EMAIL_CAMPAIGN}
+                  activeId={activeModule}
+                  maxAlive={2}
+                  label="邮件营销"
+                  loadingText="邮件营销加载中…"
+                >
                         <ModuleEmailCampaign
                           crmClients={crmClients}
                           onAddClients={handleAddClients}
@@ -6829,18 +6817,16 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                             });
                           }}
                         />
-                      </ErrorBoundary>
-                    </Suspense>
                 </ModulePane>
-                <ModulePane id={ModuleType.IMAGE_GENERATOR} activeId={activeModule} maxAlive={2}>
+                <ModulePane id={ModuleType.IMAGE_GENERATOR} activeId={activeModule} maxAlive={2} label="生图">
                     <ModuleImageGenerator />
                 </ModulePane>
                 {currentUser && (
                   <>
-                    <ModulePane id={ModuleType.PRODUCT_CATALOG} activeId={activeModule} maxAlive={2}>
+                    <ModulePane id={ModuleType.PRODUCT_CATALOG} activeId={activeModule} maxAlive={2} label="产品库">
                       <ModuleProductCatalog currentUser={currentUser} />
                     </ModulePane>
-                    <ModulePane id={ModuleType.PRODUCT_QUOTE} activeId={activeModule} maxAlive={2}>
+                    <ModulePane id={ModuleType.PRODUCT_QUOTE} activeId={activeModule} maxAlive={2} label="报价选品">
                       <ModuleProductQuote currentUser={currentUser} />
                     </ModulePane>
                     <ModulePane id={ModuleType.PRODUCT_DESIGN_2D} activeId={activeModule} maxAlive={2}>
@@ -7274,7 +7260,6 @@ crmClients={crmClients}
                     </ErrorBoundary>
                 )}
             </>
-            </Suspense>
           )}
         </div>
       </main>
