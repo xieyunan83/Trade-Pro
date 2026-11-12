@@ -1,7 +1,7 @@
 /**
- * Vercel Serverless：同域转发 Hunter.io（零外部 import）
+ * Vercel Serverless：同域转发 Hunter.io
+ * 【硬约束】禁止外部 import，避免 FUNCTION_INVOCATION_FAILED。
  */
-import { enforceApiRateLimit } from './_firewall';
 export const config = {
   runtime: 'nodejs',
   maxDuration: 30,
@@ -30,6 +30,40 @@ const resolveUpstreamPath = (req: any): string => {
   return '/v2/account';
 };
 
+type Bucket = { count: number; resetAt: number };
+const buckets = new Map<string, Bucket>();
+const checkLocalRate = (key: string, max = 90): { ok: boolean; retryAfterSec: number } => {
+  const now = Date.now();
+  const cur = buckets.get(key);
+  if (!cur || now >= cur.resetAt) {
+    buckets.set(key, { count: 1, resetAt: now + 60_000 });
+    return { ok: true, retryAfterSec: 0 };
+  }
+  if (cur.count >= max) {
+    return { ok: false, retryAfterSec: Math.max(1, Math.ceil((cur.resetAt - now) / 1000)) };
+  }
+  cur.count += 1;
+  return { ok: true, retryAfterSec: 0 };
+};
+
+const clientKey = (req: any): string => {
+  const xf = req.headers?.['x-forwarded-for'];
+  const ip =
+    typeof xf === 'string' && xf.trim()
+      ? xf.split(',')[0].trim()
+      : Array.isArray(xf) && xf[0]
+        ? String(xf[0])
+        : 'unknown';
+  const apiKey = String(req.query?.api_key || '').trim();
+  if (!apiKey) return `hunter:ip:${ip}`;
+  let h = 2166136261;
+  for (let i = 0; i < apiKey.length; i++) {
+    h ^= apiKey.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return `hunter:k:${(h >>> 0).toString(16)}`;
+};
+
 export default async function handler(req: any, res: any) {
   try {
     applyCors(res);
@@ -37,7 +71,18 @@ export default async function handler(req: any, res: any) {
       res.status(204).end();
       return;
     }
-    if (!enforceApiRateLimit(req, res, 'hunter')) return;
+
+    const rl = checkLocalRate(clientKey(req), 90);
+    if (!rl.ok) {
+      res.setHeader('Retry-After', String(rl.retryAfterSec));
+      res.setHeader('Cache-Control', 'no-store');
+      res.status(429).json({
+        error: `请求过于频繁，请 ${rl.retryAfterSec} 秒后再试`,
+        retryAfterSec: rl.retryAfterSec,
+        route: 'hunter',
+      });
+      return;
+    }
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
@@ -59,11 +104,14 @@ export default async function handler(req: any, res: any) {
       });
 
       const text = await upstream.text();
+      applyCors(res);
       res.status(upstream.status);
+      res.setHeader('Cache-Control', 'no-store');
       const ct = upstream.headers.get('content-type');
       if (ct) res.setHeader('Content-Type', ct);
       res.send(text);
     } catch (e: any) {
+      applyCors(res);
       const aborted = e?.name === 'AbortError';
       res.status(aborted ? 504 : 502).json({
         errors: [
@@ -80,9 +128,10 @@ export default async function handler(req: any, res: any) {
     }
   } catch (e: any) {
     try {
+      applyCors(res);
       if (!res.headersSent) res.status(500).json({ error: e?.message || 'hunter proxy crashed' });
     } catch {
       /* ignore */
     }
   }
-}
+};

@@ -1,7 +1,7 @@
 /**
- * Vercel Serverless：同域转发 Anymail Finder（零外部 import）
+ * Vercel Serverless：同域转发 Anymail Finder
+ * 【硬约束】禁止外部 import，避免 FUNCTION_INVOCATION_FAILED（与 tavily/landing 一致）。
  */
-import { enforceApiRateLimit } from './_firewall';
 export const config = {
   runtime: 'nodejs',
   maxDuration: 180,
@@ -59,6 +59,43 @@ const resolveUpstreamPath = (req: any): string => {
 const normalizeAnymailAuth = (auth: string): string =>
   String(auth).replace(/^Bearer\s+/i, '').trim();
 
+/** 本函数内轻量限流（禁止 import _firewall） */
+type Bucket = { count: number; resetAt: number };
+const buckets = new Map<string, Bucket>();
+const checkLocalRate = (key: string, max = 120): { ok: boolean; retryAfterSec: number } => {
+  const now = Date.now();
+  const cur = buckets.get(key);
+  if (!cur || now >= cur.resetAt) {
+    buckets.set(key, { count: 1, resetAt: now + 60_000 });
+    return { ok: true, retryAfterSec: 0 };
+  }
+  if (cur.count >= max) {
+    return { ok: false, retryAfterSec: Math.max(1, Math.ceil((cur.resetAt - now) / 1000)) };
+  }
+  cur.count += 1;
+  return { ok: true, retryAfterSec: 0 };
+};
+
+const clientKey = (req: any): string => {
+  const xf = req.headers?.['x-forwarded-for'];
+  const ip =
+    typeof xf === 'string' && xf.trim()
+      ? xf.split(',')[0].trim()
+      : Array.isArray(xf) && xf[0]
+        ? String(xf[0])
+        : 'unknown';
+  const auth = String(req.headers?.authorization || req.headers?.['x-upstream-authorization'] || '')
+    .replace(/^Bearer\s+/i, '')
+    .trim();
+  if (!auth) return `anymail:ip:${ip}`;
+  let h = 2166136261;
+  for (let i = 0; i < auth.length; i++) {
+    h ^= auth.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return `anymail:k:${(h >>> 0).toString(16)}`;
+};
+
 export default async function handler(req: any, res: any) {
   try {
     applyCors(res);
@@ -66,7 +103,18 @@ export default async function handler(req: any, res: any) {
       res.status(204).end();
       return;
     }
-    if (!enforceApiRateLimit(req, res, 'anymail')) return;
+
+    const rl = checkLocalRate(clientKey(req), 120);
+    if (!rl.ok) {
+      res.setHeader('Retry-After', String(rl.retryAfterSec));
+      res.setHeader('Cache-Control', 'no-store');
+      res.status(429).json({
+        error: `请求过于频繁，请 ${rl.retryAfterSec} 秒后再试`,
+        retryAfterSec: rl.retryAfterSec,
+        route: 'anymail',
+      });
+      return;
+    }
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
@@ -118,4 +166,4 @@ export default async function handler(req: any, res: any) {
       /* ignore */
     }
   }
-}
+};
