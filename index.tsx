@@ -12,6 +12,8 @@ declare global {
     bwDesktop?: {
       reportBootOk?: () => void;
       openExternal?: (url: string) => void;
+      retryBoot?: () => void;
+      hardRefresh?: () => void;
       saveBytes?: (payload: {
         filename: string;
         base64: string;

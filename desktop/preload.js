@@ -28,6 +28,14 @@ contextBridge.exposeInMainWorld('bwDesktop', {
       /* ignore */
     }
   },
+  /** 模块 chunk 过期/超时：清 Chromium 缓存后带 _boot 重载站点 */
+  hardRefresh: () => {
+    try {
+      ipcRenderer.send('bw-hard-refresh');
+    } catch {
+      /* ignore */
+    }
+  },
   /** 另存为：把 blob→base64 传来写盘（不阻塞主进程同步） */
   saveBytes: (payload) => {
     try {

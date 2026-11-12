@@ -578,6 +578,25 @@ ipcMain.on('bw-boot-retry', () => {
   void loadAppShell({ forceBust: true });
 });
 
+/** 页面「强制刷新」：清缓存 + bust，解决发版后旧 chunk 超时/404 */
+ipcMain.on('bw-hard-refresh', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  showingError = false;
+  bootOk = false;
+  bootAttempt = 0;
+  clearLoadWatchdog();
+  const ses = mainWindow.webContents.session || session.defaultSession;
+  void wipeChromiumCaches(ses)
+    .catch(() => undefined)
+    .finally(() => {
+      try {
+        void loadAppShell({ forceBust: true });
+      } catch (e) {
+        console.error('[hard-refresh] reload failed', e);
+      }
+    });
+});
+
 /**
  * 桌面端另存为：渲染进程把 blob→base64 传来，弹出系统保存对话框写入磁盘。
  * 解决 Windows 上 <a download> / blob URL 经常无反应的问题。不碰网页 IndexedDB 素材库。

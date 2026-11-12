@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box,
   Upload,
@@ -70,9 +70,13 @@ import { CreativePipelineBar, CreativeRefPicker } from './CreativeRefPicker';
 import { MODEL3D_SKILLS, type Model3dSkillId } from '../services/creativeSkills/model3dSkills';
 import { UNIVERSAL_3D_NEGATIVES, mergeNegatives } from '../services/creativeQualityKit';
 import { Model3dOrbitViewer } from './Model3dOrbitViewer';
-import { Model3dPartsViewer } from './Model3dPartsViewer';
 import { CreativeStorageBadge } from './CreativeStorageBadge';
 import { VaultImg, useVaultUrl } from './VaultMedia';
+
+/** three.js 很重：仅进入「分件预览」时再拉，避免拖垮整个 3D 设计模块首屏 chunk */
+const Model3dPartsViewer = lazy(() =>
+  import('./Model3dPartsViewer').then((m) => ({ default: m.Model3dPartsViewer }))
+);
 
 type Props = {
   currentUser: User;
@@ -2097,34 +2101,43 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
               </div>
             ) : active?.status === 'ready' && (rawPreviewUrl || rawDownloadUrl) ? (
               previewMode === 'parts' && hasSegmentResult ? (
-                <Model3dPartsViewer
-                  key={`parts-${active.id}-${active.segmentTaskId || active.providerTaskId || ''}`}
-                  src={(
-                    pickLocalOrRemoteModelUrl(active, 'current') ||
-                    rawPreviewUrl ||
-                    rawDownloadUrl ||
-                    ''
-                  ).trim()}
-                  className="w-full h-full min-h-0"
-                  explode={0.22}
-                  onPartsFound={(names) => {
-                    setPartNames((prev) =>
-                      prev.length === names.length && prev.every((n, i) => n === names[i])
-                        ? prev
-                        : names
-                    );
-                    // 拆分「成功」但网格仍是一整块：明确提示，避免误以为炸开坏了
-                    if (names.length < 2) {
-                      setMsgTone('error');
-                      setMsg(
-                        '分件网格仍是 1 块，炸开不会散开。请点「重新拆分」并选「精细」；须挂首次生成任务（勿清素材）。'
+                <Suspense
+                  fallback={
+                    <div className="flex-1 flex flex-col items-center justify-center gap-2 text-slate-400">
+                      <Loader2 className="animate-spin text-indigo-400" size={28} />
+                      <span className="text-xs font-bold">分件预览加载中…</span>
+                    </div>
+                  }
+                >
+                  <Model3dPartsViewer
+                    key={`parts-${active.id}-${active.segmentTaskId || active.providerTaskId || ''}`}
+                    src={(
+                      pickLocalOrRemoteModelUrl(active, 'current') ||
+                      rawPreviewUrl ||
+                      rawDownloadUrl ||
+                      ''
+                    ).trim()}
+                    className="w-full h-full min-h-0"
+                    explode={0.22}
+                    onPartsFound={(names) => {
+                      setPartNames((prev) =>
+                        prev.length === names.length && prev.every((n, i) => n === names[i])
+                          ? prev
+                          : names
                       );
-                    } else {
-                      setMsgTone('ok');
-                      setMsg(`部件预览：共 ${names.length} 件，可拖转并调节炸开`);
-                    }
-                  }}
-                />
+                      // 拆分「成功」但网格仍是一整块：明确提示，避免误以为炸开坏了
+                      if (names.length < 2) {
+                        setMsgTone('error');
+                        setMsg(
+                          '分件网格仍是 1 块，炸开不会散开。请点「重新拆分」并选「精细」；须挂首次生成任务（勿清素材）。'
+                        );
+                      } else {
+                        setMsgTone('ok');
+                        setMsg(`部件预览：共 ${names.length} 件，可拖转并调节炸开`);
+                      }
+                    }}
+                  />
+                </Suspense>
               ) : (
               <Model3dOrbitViewer
                 // 直接传 vault:/https，由预览组件本机秒开；勿等 useVaultUrl 异步，否则会空转半小时
