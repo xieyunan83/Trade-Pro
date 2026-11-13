@@ -60,9 +60,13 @@ export const MULTI_ANGLE_VIEWS: Array<{ id: string; label: string; prompt: strin
 
 export const listCatalogRefItems = (limit = 80): CreativeRefItem[] => {
   const out: CreativeRefItem[] = [];
-  for (const sku of loadCatalogSkus().slice(0, limit)) {
+  const skus = loadCatalogSkus()
+    .slice()
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  for (const sku of skus) {
     (sku.images || []).forEach((url, i) => {
       if (!url?.trim()) return;
+      if (/toysbear\.net/i.test(url)) return;
       out.push({
         id: `cat_${sku.id}_${i}`,
         url,
@@ -73,8 +77,9 @@ export const listCatalogRefItems = (limit = 80): CreativeRefItem[] => {
         createdAt: sku.updatedAt,
       });
     });
+    if (out.length >= limit) break;
   }
-  return out;
+  return out.slice(0, limit);
 };
 
 export const listDesignRefItems = (limit = 60): CreativeRefItem[] => {

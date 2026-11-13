@@ -33,7 +33,10 @@ export const CreativeRefPicker: React.FC<Props> = ({
   title = '选用已有素材',
   onSkuMeta,
 }) => {
-  const [tab, setTab] = useState<'design' | 'catalog'>('design');
+  // 标题含「产品库」时默认打开产品库页签，方便多品拼版直接多选 SKU 图
+  const [tab, setTab] = useState<'design' | 'catalog'>(() =>
+    /产品库/.test(title) ? 'catalog' : 'design'
+  );
   const [tick, setTick] = useState(0);
   const designItems = useMemo(() => listDesignRefItems(48), [tick]);
   const catalogItems = useMemo(() => listCatalogRefItems(60), [tick]);
@@ -113,7 +116,7 @@ export const CreativeRefPicker: React.FC<Props> = ({
             : '产品库暂无图片。请先在产品库上传或导入带图 SKU。'}
         </p>
       ) : (
-        <div className="grid grid-cols-4 gap-1.5 max-h-36 overflow-y-auto custom-scrollbar">
+        <div className="grid grid-cols-4 gap-1.5 max-h-48 overflow-y-auto custom-scrollbar">
           {items.map((item) => {
             const selected = value.includes(item.url);
             return (

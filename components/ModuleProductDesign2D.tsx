@@ -64,7 +64,7 @@ import {
   secondaryFieldsHaveEdits,
   type SecondaryCreationFields,
 } from '../services/secondaryCreationBrief';
-import { CreativePipelineBar } from './CreativeRefPicker';
+import { CreativePipelineBar, CreativeRefPicker } from './CreativeRefPicker';
 import { DesignConstraintCardPanel } from './DesignConstraintCardPanel';
 import { CreativeStorageBadge } from './CreativeStorageBadge';
 import { EnterpriseDesignPackPanel } from './EnterpriseDesignPackPanel';
@@ -1558,16 +1558,27 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
               当前是改已有产品。要写整段新提示词请点上方「从0创作」。
             </div>
           )}
-          <div>
+          <div className="space-y-2">
             <label className="text-[10px] font-black text-slate-400 uppercase flex items-center gap-1">
-              <Package size={10} /> ① 产品库挑图（或下方上传）
+              <Package size={10} /> ① 产品库挑图（可多选）
             </label>
             <select
-              className="w-full mt-1 rounded-xl border border-slate-200 px-2.5 py-2 text-xs"
+              className="w-full rounded-xl border border-slate-200 px-2.5 py-2 text-xs"
               value={skuPick}
-              onChange={(e) => setSkuPick(e.target.value)}
+              onChange={(e) => {
+                const id = e.target.value;
+                setSkuPick(id);
+                const s = skus.find((x) => x.id === id);
+                const img0 = s?.images?.[0];
+                if (img0 && !/toysbear\.net/i.test(img0)) {
+                  setRefUploads((prev) => {
+                    if (prev.includes(img0)) return prev;
+                    return [img0, ...prev].slice(0, MAX_DESIGN_REF_IMAGES);
+                  });
+                }
+              }}
             >
-              <option value="">不绑定 · 请上传参考图</option>
+              <option value="">不绑定单一货号 · 可下方多选产品图</option>
               {skus.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.skuCode} · {s.name}
@@ -1575,26 +1586,28 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
                 </option>
               ))}
             </select>
-            {(() => {
-              const s = skus.find((x) => x.id === skuPick);
-              const img0 = s?.images?.[0];
-              if (!img0 || /toysbear\.net/i.test(img0)) return null;
-              return (
-                <div className="mt-2 flex items-center gap-2">
-                  <img
-                    src={img0}
-                    alt=""
-                    className="w-12 h-12 rounded-lg object-cover border border-emerald-200"
-                    onError={(e) => {
-                      (e.currentTarget as HTMLImageElement).style.display = 'none';
-                    }}
-                  />
-                  <span className="text-[10px] font-bold text-emerald-800">
-                    将以此产品图为身份锁，做局部再设计
-                  </span>
-                </div>
-              );
-            })()}
+            <CreativeRefPicker
+              value={refUploads}
+              onChange={setRefUploads}
+              multiple
+              max={MAX_DESIGN_REF_IMAGES}
+              accent="violet"
+              title={
+                skillId === 'multi_product_poster'
+                  ? '多品拼版：从产品库多选各 SKU 主图'
+                  : '从产品库 / 平面资产多选参考图'
+              }
+              onSkuMeta={(meta) => {
+                if (!meta?.skuCode) return;
+                const hit = skus.find((s) => s.skuCode === meta.skuCode);
+                if (hit) setSkuPick(hit.id);
+              }}
+            />
+            {skillId === 'multi_product_poster' && (
+              <p className="text-[10px] font-bold text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-2 py-1.5 leading-snug">
+                多品海报请在上方「产品库」页签勾选多张不同货号主图；每张都会作为独立产品入画。
+              </p>
+            )}
           </div>
           <div>
             <label className="text-[10px] font-black text-slate-400 uppercase">当前 Skill</label>
@@ -1615,7 +1628,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
           </div>
           <div>
             <label className="text-[10px] font-black text-slate-400 uppercase flex items-center gap-1">
-              <ImagePlus size={10} /> ② 参考图（最多 {MAX_DESIGN_REF_IMAGES} 张）
+              <ImagePlus size={10} /> ② 本机上传补充（最多 {MAX_DESIGN_REF_IMAGES} 张）
             </label>
             {!isCreateFromScratch && canvasProductRefUrls.length > 0 && (
               <div className="mt-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-[10px] font-bold text-emerald-800">
@@ -1635,7 +1648,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             )}
             {isCreateFromScratch && (
               <p className="mt-1.5 text-[10px] font-medium text-violet-700 leading-snug">
-                从0创作默认不使用画布旧图；若要参考，请点下方「上传」。
+                从0创作默认不使用画布旧图；若要参考，请点下方「上传」或上方产品库多选。
               </p>
             )}
             <input
@@ -1646,49 +1659,21 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
               className="hidden"
               onChange={(e) => void onPickRefFiles(e.target.files)}
             />
-            <div className="mt-1.5 flex flex-wrap gap-2">
-              {refUploads.map((src, i) => {
-                const isLayout =
-                  effectiveLastIsLayout &&
-                  refUploads.length >= 2 &&
-                  i === refUploads.length - 1;
-                return (
-                  <div
-                    key={`${i}-${src.slice(-24)}`}
-                    className={`relative w-14 h-14 rounded-lg overflow-hidden border bg-slate-50 ${
-                      isLayout ? 'border-amber-400 ring-1 ring-amber-200' : 'border-violet-200'
-                    }`}
-                  >
-                    <img src={src} alt="" className="w-full h-full object-contain" />
-                    <span className="absolute bottom-0 left-0 right-0 text-[7px] font-black text-center text-white bg-slate-900/75 py-0.5">
-                      {isLayout ? '版式' : `产品${i + 1}`}
-                    </span>
-                    <button
-                      type="button"
-                      aria-label="移除参考图"
-                      onClick={() => {
-                        const removed = refUploads[i];
-                        setRefUploads((prev) => prev.filter((_, j) => j !== i));
-                        if (removed) void purgeDeletedCreativeMedia([removed]);
-                      }}
-                      className="absolute top-0.5 right-0.5 rounded-full bg-slate-900/80 text-white p-0.5"
-                    >
-                      <X size={10} />
-                    </button>
-                  </div>
-                );
-              })}
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
               {refUploads.length < MAX_DESIGN_REF_IMAGES && (
                 <button
                   type="button"
                   disabled={refBusy || loading}
                   onClick={() => refInputRef.current?.click()}
-                  className="w-14 h-14 rounded-lg border border-dashed border-violet-300 text-violet-600 hover:bg-violet-50 flex flex-col items-center justify-center gap-0.5 disabled:opacity-50"
+                  className="h-10 px-3 rounded-lg border border-dashed border-violet-300 text-violet-600 hover:bg-violet-50 inline-flex items-center justify-center gap-1.5 text-[10px] font-black disabled:opacity-50"
                 >
                   {refBusy ? <Loader2 size={14} className="animate-spin" /> : <ImagePlus size={14} />}
-                  <span className="text-[8px] font-black">上传</span>
+                  上传本地图片
                 </button>
               )}
+              <span className="text-[10px] text-slate-400 font-medium">
+                已选 {refUploads.length}/{MAX_DESIGN_REF_IMAGES}（上方可移除）
+              </span>
             </div>
             {!isCreateFromScratch && (
             <label className="mt-2 flex items-start gap-2 text-[10px] font-medium text-slate-600 cursor-pointer">
@@ -1707,7 +1692,7 @@ export const ModuleProductDesign2D: React.FC<Props> = ({ currentUser, onNavigate
             </label>
             )}
             <p className="text-[9px] text-slate-400 font-medium mt-1 leading-relaxed">
-              多品整合：默认每张上传图都是产品且必须入画；仅有独立版式图时再勾选末张为模板。
+              多品整合：默认每张参考图都是产品且必须入画；仅有独立版式图时再勾选末张为模板。
             </p>
           </div>
 

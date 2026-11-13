@@ -108,6 +108,24 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
   const [activeId, setActiveId] = useState<string | null>(null);
   const [provider, setProvider] = useState(() => getModel3dProviderStatus());
   const [hydrating, setHydrating] = useState(true);
+  /** 记住上次打开的项目，客户端重进直接预览，避免空白一直转圈 */
+  const LS_ACTIVE_3D = 'trade_pro_model3d_active_id_v1';
+  const jobHasPreviewableModel = (j: Model3dJob) =>
+    !!(j.modelUrl || j.pbrModelUrl || j.baseModelUrl || j.originalModelUrl);
+  const pickDefaultModel3dJobId = (
+    list: Model3dJob[],
+    preferred?: string | null
+  ): string | null => {
+    if (preferred) {
+      const hit = list.find(
+        (j) => j.id === preferred && j.status === 'ready' && jobHasPreviewableModel(j)
+      );
+      if (hit) return hit.id;
+    }
+    const sorted = [...list].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    const ready = sorted.find((j) => j.status === 'ready' && jobHasPreviewableModel(j));
+    return ready?.id || sorted[0]?.id || null;
+  };
   const [quickKey, setQuickKey] = useState('');
   const [savingKey, setSavingKey] = useState(false);
   /** 制造工作台当前工具 */
@@ -167,7 +185,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     });
   };
 
-  // 切换 / 打开任务：本机原模优先；原模仅远程且当前已有本机 GLB 时默认看当前，避免演示卡在过期链
+  // 切换 / 打开任务：优先预览「当前/最后生成」本机 GLB，避免卡在过期原模链或一直转圈
   useEffect(() => {
     if (!active) {
       setPreviewMode('current');
@@ -178,19 +196,27 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
       !!u && (isVaultRef(u) || u.startsWith('blob:') || u.startsWith('data:'));
     const origCand = [active.originalModelUrl, active.baseModelUrl].filter(Boolean) as string[];
     const localOrig = origCand.find(isLocal);
-    const remoteOrig = origCand.find((u) => /^https?:\/\//i.test(u));
     const curLocal = [active.modelUrl, active.pbrModelUrl].find(isLocal);
-    if (localOrig) {
-      setPreviewMode('original');
-    } else if (remoteOrig && curLocal) {
+    if (curLocal) {
       setPreviewMode('current');
-    } else if (origCand.length) {
+    } else if (localOrig) {
+      setPreviewMode('original');
+    } else if (origCand.length && !hasSegmentResult) {
       setPreviewMode('original');
     } else {
       setPreviewMode('current');
     }
     setPartNames([]);
   }, [active?.id]);
+
+  useEffect(() => {
+    if (!activeId) return;
+    try {
+      localStorage.setItem(LS_ACTIVE_3D, activeId);
+    } catch {
+      /* ignore */
+    }
+  }, [activeId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -212,7 +238,13 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
       const cleaned = sanitizeModel3dJobs(loadModel3dJobs());
       saveModel3dJobs(cleaned);
       setJobs(cleaned);
-      setActiveId((id) => id || cleaned[0]?.id || null);
+      let preferred: string | null = null;
+      try {
+        preferred = localStorage.getItem(LS_ACTIVE_3D);
+      } catch {
+        preferred = null;
+      }
+      setActiveId((id) => id || pickDefaultModel3dJobId(cleaned, preferred));
       const stuck = cleaned.filter((j) => j.status === 'failed' && (j.error || '').includes('中断'));
       if (stuck.length) {
         setMsgTone('error');
@@ -239,8 +271,15 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         if (revived.length) {
           setMsgTone('ok');
           setMsg(`已从云端恢复 ${revived.length} 个 3D 模型，可预览/下载`);
-          setActiveId(revived[0].id);
         }
+        setActiveId((id) => {
+          try {
+            preferred = localStorage.getItem(LS_ACTIVE_3D);
+          } catch {
+            /* keep */
+          }
+          return pickDefaultModel3dJobId(recovered, id || preferred);
+        });
 
         // 仅对仍是远程链的 ready 任务后台落库；已 vault/blob 的跳过，避免进模块就串行重下
         void (async () => {
@@ -2467,7 +2506,9 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
             项目库 ({jobs.length})
           </div>
           <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
-            {jobs.map((j) => (
+            {[...jobs]
+              .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+              .map((j) => (
               <button
                 key={j.id}
                 type="button"

@@ -1,5 +1,16 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { Plus, Trash2, Warehouse, Upload, Download, Loader2, Image as ImageIcon, Sparkles } from 'lucide-react';
+import {
+  Plus,
+  Trash2,
+  Warehouse,
+  Upload,
+  Download,
+  Loader2,
+  Image as ImageIcon,
+  Sparkles,
+  Eye,
+  X,
+} from 'lucide-react';
 import type { User } from '../types';
 import {
   type CatalogSku,
@@ -43,6 +54,9 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
   /** 列表行补图：当前待写入图片的 SKU id */
   const rowImgRef = useRef<HTMLInputElement>(null);
   const [rowImgTargetId, setRowImgTargetId] = useState<string | null>(null);
+  /** 产品大图预览 */
+  const [previewSku, setPreviewSku] = useState<CatalogSku | null>(null);
+  const [previewIdx, setPreviewIdx] = useState(0);
   const journey0 = loadTradeJourney();
   const [fitMarket, setFitMarket] = useState(
     () => journey0.targetMarket || MARKET_PICK_OPTIONS[0].label
@@ -634,14 +648,14 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
               {filtered.length} / {rows.length}
             </span>
             <span className="text-[10px] font-bold text-violet-700 bg-violet-50 border border-violet-100 px-2 py-1 rounded-lg">
-              点左侧「图」可为已有 SKU 补图 / 换图
+              点缩略图可预览大图；「换图」单独补图
             </span>
           </div>
           <div className="overflow-x-auto max-h-[32rem]">
             <table className="w-full text-left text-sm">
               <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-wider text-slate-500 sticky top-0">
                 <tr>
-                  <th className="px-3 py-2 w-16">图</th>
+                  <th className="px-3 py-2 w-24">图</th>
                   <th className="px-3 py-2">货号</th>
                   <th className="px-3 py-2">品名</th>
                   <th className="px-3 py-2">品类</th>
@@ -654,28 +668,45 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
                 {filtered.map((r) => (
                   <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50/80">
                     <td className="px-3 py-2">
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => openRowImagePicker(r.id)}
-                        title={r.images?.[0] ? '点击更换产品图' : '点击上传产品图'}
-                        className="group relative w-11 h-11 rounded-lg overflow-hidden border border-slate-200 bg-slate-50 hover:border-violet-400 hover:ring-2 hover:ring-violet-100 disabled:opacity-50"
-                      >
-                        {r.images?.[0] && !/toysbear\.net/i.test(r.images[0]) ? (
-                          <img
-                            src={r.images[0]}
-                            alt=""
-                            className="w-full h-full object-cover bg-white"
-                          />
-                        ) : (
-                          <span className="w-full h-full flex flex-col items-center justify-center text-slate-300 gap-0.5">
-                            <ImageIcon size={14} />
-                          </span>
-                        )}
-                        <span className="absolute inset-0 bg-slate-900/55 text-white text-[8px] font-black opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          disabled={busy || !r.images?.[0] || /toysbear\.net/i.test(r.images[0])}
+                          onClick={() => {
+                            if (!r.images?.[0] || /toysbear\.net/i.test(r.images[0])) return;
+                            setPreviewSku(r);
+                            setPreviewIdx(0);
+                          }}
+                          title={r.images?.[0] ? '预览产品大图' : '暂无图片'}
+                          className="group relative w-11 h-11 rounded-lg overflow-hidden border border-slate-200 bg-slate-50 hover:border-violet-400 hover:ring-2 hover:ring-violet-100 disabled:opacity-50 disabled:hover:ring-0"
+                        >
+                          {r.images?.[0] && !/toysbear\.net/i.test(r.images[0]) ? (
+                            <img
+                              src={r.images[0]}
+                              alt=""
+                              className="w-full h-full object-cover bg-white"
+                            />
+                          ) : (
+                            <span className="w-full h-full flex flex-col items-center justify-center text-slate-300 gap-0.5">
+                              <ImageIcon size={14} />
+                            </span>
+                          )}
+                          {r.images?.[0] && !/toysbear\.net/i.test(r.images[0]) ? (
+                            <span className="absolute inset-0 bg-slate-900/50 text-white opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                              <Eye size={14} />
+                            </span>
+                          ) : null}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => openRowImagePicker(r.id)}
+                          title={r.images?.[0] ? '更换产品图' : '上传产品图'}
+                          className="text-[9px] font-black text-violet-700 hover:text-violet-900 px-1.5 py-1 rounded-md border border-violet-100 bg-violet-50 hover:bg-violet-100 disabled:opacity-50"
+                        >
                           {r.images?.[0] ? '换图' : '上传'}
-                        </span>
-                      </button>
+                        </button>
+                      </div>
                     </td>
                     <td className="px-3 py-2 font-mono text-xs font-bold">{r.skuCode}</td>
                     <td className="px-3 py-2 font-medium">
@@ -727,6 +758,80 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
           </div>
         </div>
       </div>
+
+      {previewSku && previewSku.images?.[previewIdx] ? (
+        <div
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/70 p-4"
+          onClick={() => setPreviewSku(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="产品大图预览"
+        >
+          <div
+            className="relative bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-hidden flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-black text-slate-900 truncate">
+                  {previewSku.skuCode} · {previewSku.name}
+                </div>
+                <div className="text-[10px] font-bold text-slate-400 mt-0.5">
+                  产品大图预览
+                  {previewSku.images.length > 1
+                    ? ` · ${previewIdx + 1}/${previewSku.images.length}`
+                    : ''}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPreviewSku(null)}
+                className="rounded-lg p-2 text-slate-400 hover:text-slate-800 hover:bg-slate-100"
+                aria-label="关闭"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="flex-1 min-h-[16rem] bg-slate-50 flex items-center justify-center p-4">
+              <img
+                src={previewSku.images[previewIdx]}
+                alt=""
+                className="max-h-[min(70vh,36rem)] max-w-full object-contain rounded-xl"
+              />
+            </div>
+            <div className="px-4 py-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap gap-1.5">
+                {(previewSku.images || []).map((src, i) => (
+                  <button
+                    key={`${previewSku.id}_p_${i}`}
+                    type="button"
+                    onClick={() => setPreviewIdx(i)}
+                    className={`w-12 h-12 rounded-lg overflow-hidden border ${
+                      i === previewIdx
+                        ? 'border-violet-500 ring-2 ring-violet-200'
+                        : 'border-slate-200'
+                    }`}
+                  >
+                    <img src={src} alt="" className="w-full h-full object-cover" />
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  const id = previewSku.id;
+                  setPreviewSku(null);
+                  openRowImagePicker(id);
+                }}
+                className="rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-xs font-black px-3 py-2"
+              >
+                换图 / 补图
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 };
