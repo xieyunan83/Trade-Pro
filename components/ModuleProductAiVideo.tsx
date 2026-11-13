@@ -998,7 +998,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
           <div
             className={`flex items-center justify-center p-3 ${
               active?.aspect === '9:16'
-                ? 'min-h-[18rem]'
+                ? 'py-4'
                 : active?.aspect === '1:1'
                   ? 'min-h-[16rem]'
                   : 'aspect-video max-h-[min(22rem,48vh)] min-h-[12rem]'
@@ -1016,24 +1016,35 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
                 </div>
               </div>
             ) : playUrl ? (
-              <div className="w-full h-full flex flex-col items-center justify-center gap-1.5">
-                <video
-                  key={playUrl}
-                  src={playUrl}
-                  controls
-                  playsInline
-                  autoPlay
-                  muted
-                  className={`rounded-xl bg-black object-contain ${
+              <div className="w-full flex flex-col items-center justify-center gap-1.5">
+                {/* 按成片画幅预览：9:16 手机竖框 / 1:1 方框 / 16:9 横框 */}
+                <div
+                  className={`rounded-xl bg-black overflow-hidden shadow-lg shadow-black/40 ${
                     active?.aspect === '9:16'
-                      ? 'h-[min(22rem,48vh)] w-auto max-w-full'
+                      ? 'aspect-[9/16] h-[min(24rem,56vh)] w-auto max-w-[min(14rem,42%)]'
                       : active?.aspect === '1:1'
-                        ? 'h-[min(18rem,42vh)] w-auto max-w-full'
-                        : 'w-full h-full max-h-[min(20rem,46vh)]'
+                        ? 'aspect-square h-[min(18rem,42vh)] w-auto'
+                        : 'aspect-video w-full max-h-[min(20rem,46vh)]'
                   }`}
-                />
+                >
+                  <video
+                    key={playUrl}
+                    src={playUrl}
+                    controls
+                    playsInline
+                    autoPlay
+                    muted
+                    className="w-full h-full object-contain bg-black"
+                  />
+                </div>
                 <p className="text-[10px] font-bold text-slate-400">
-                  {active?.status === 'ready' ? '正片预览' : '样片预览'} · 可点下方下载
+                  {active?.status === 'ready' ? '正片预览' : '样片预览'}
+                  {active?.aspect === '9:16'
+                    ? ' · 竖屏 9:16'
+                    : active?.aspect === '1:1'
+                      ? ' · 方形 1:1'
+                      : ' · 横屏 16:9'}
+                  {' · '}可点下方下载
                 </p>
               </div>
             ) : hasVideoAsset ? (
@@ -1048,10 +1059,10 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
               <div
                 className={`relative bg-gradient-to-br from-rose-600/30 to-amber-500/20 border border-white/10 rounded-xl flex items-center justify-center ${
                   active.aspect === '9:16'
-                    ? 'w-36 h-64'
+                    ? 'aspect-[9/16] h-[min(20rem,48vh)] w-auto'
                     : active.aspect === '1:1'
-                      ? 'w-52 h-52'
-                      : 'w-full h-full aspect-video max-h-[12rem]'
+                      ? 'aspect-square w-52'
+                      : 'w-full aspect-video max-h-[12rem]'
                 }`}
               >
                 {active.sourceImages[0] ? (
