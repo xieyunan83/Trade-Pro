@@ -91,6 +91,12 @@ export const model3dOriginalVaultIdForJob = (jobId: string): string =>
   `mesh_${jobId}_orig`;
 
 /**
+ * 彩色 PBR 成片专用槽：与主槽 / 分件网格永久隔离。
+ * 商用硬约束：拆分、灰模回填绝不能写进此槽。
+ */
+export const model3dPbrVaultIdForJob = (jobId: string): string => `mesh_${jobId}_pbr`;
+
+/**
  * 粗检 GLB 是否内嵌贴图。无贴图的 base / 分件色块常被误标成「彩色原模」。
  */
 export const glbBlobLikelyHasTextures = async (blob: Blob): Promise<boolean> => {
@@ -138,6 +144,7 @@ export const findBestLocalTexturedModel3dForJob = async (job: {
 }): Promise<string | null> => {
   const meshId = model3dVaultIdForJob(job.id);
   const origId = model3dOriginalVaultIdForJob(job.id);
+  const pbrSlotId = model3dPbrVaultIdForJob(job.id);
   const segmented = !!(job.segmentTaskId || '').trim();
   const hints = [job.sourceTaskId, job.providerTaskId, job.id]
     .map((s) => (s || '').trim())
@@ -165,6 +172,7 @@ export const findBestLocalTexturedModel3dForJob = async (job: {
     if (/^https?:\/\//i.test(s) || s.startsWith('blob:') || s.startsWith('data:')) return;
     candidates.push(s);
   };
+  pushId(pbrSlotId);
   pushId(origId);
   pushId(job.originalModelUrl);
   // 拆分后：仅当 pbr 不是分件主槽时才纳入
@@ -198,6 +206,7 @@ export const findBestLocalTexturedModel3dForJob = async (job: {
     if (hasTex) score += 200;
     else score -= 60;
     if (related) score += 80;
+    if (id === pbrSlotId || bag.endsWith('_pbr') || bag.includes('_pbr')) score += 140;
     if (id === origId || bag.endsWith('_orig') || bag.includes('_orig')) score += 120;
     if (bag.includes('pbr')) score += 90;
     if (bag.includes('base') || id === (job.baseModelUrl || '').replace(/^vault:/, '')) {
@@ -371,8 +380,17 @@ export const preserveOriginalModel3dInVault = async (job: {
       return `${VAULT_PREFIX}${origId}`;
     }
     if (/^https?:\/\//i.test(url) || url.startsWith('blob:') || url.startsWith('data:')) {
-      // 已有备份时仍尝试用更优远程源覆盖（tryPersist 会写入同 id）
+      // 已有备份时仍尝试用更优远程源覆盖（tryPersist 会写入同 id；putBlob 会拒灰模盖彩模）
       if (existingSize > 0 && url === job.baseModelUrl && (job.pbrModelUrl || job.originalModelUrl)) {
+        continue;
+      }
+      // 已有带贴图 _orig 时，跳过明显的 base 灰模链
+      if (
+        existingSize > 0 &&
+        existingOrig?.blob &&
+        (await glbBlobLikelyHasTextures(existingOrig.blob)) &&
+        url === job.baseModelUrl
+      ) {
         continue;
       }
       const saved = await tryPersistMediaUrl(url, 'model3d', hint, { id: origId });
@@ -666,6 +684,8 @@ export const putBlobInVault = async (opts: {
   id?: string;
   sourceHint?: string;
   mime?: string;
+  /** 默认 true：禁止用无贴图 GLB 覆盖已有带贴图文件（商用防赔付） */
+  protectTextured?: boolean;
 }): Promise<string> => {
   if (opts.blob.size > MAX_SINGLE_BYTES) {
     throw new Error(
@@ -674,6 +694,29 @@ export const putBlobInVault = async (opts: {
   }
   // 不再因总库软上限自动删旧文件
   const id = opts.id || `va_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const protect = opts.protectTextured !== false;
+  if (protect && opts.kind === 'model3d') {
+    try {
+      const existing = await getRow(id);
+      if (existing?.blob && existing.blob.size > 1024) {
+        const oldHas = await glbBlobLikelyHasTextures(existing.blob);
+        if (oldHas) {
+          const nextHas = await glbBlobLikelyHasTextures(opts.blob);
+          if (!nextHas) {
+            // 保留彩色副本，拒绝灰模/分件色块覆盖
+            void touchAccess(id);
+            console.warn(
+              '[vault] refused overwrite textured model3d with untextured blob',
+              id
+            );
+            return `${VAULT_PREFIX}${id}`;
+          }
+        }
+      }
+    } catch {
+      /* 探测失败则继续写入 */
+    }
+  }
   const now = Date.now();
   const mime = opts.mime || opts.blob.type || guessMime(opts.kind, '', '');
   await putRow({

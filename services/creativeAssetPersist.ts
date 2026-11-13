@@ -12,12 +12,18 @@ import { loadEnterprisePacks } from './enterpriseDesignPacks';
 import {
   findModel3dVaultRefForJob,
   findOriginalModel3dVaultRefForJob,
+  getRowBlobForVaultId,
+  glbBlobLikelyHasTextures,
   isVaultRef,
+  model3dOriginalVaultIdForJob,
+  model3dPbrVaultIdForJob,
   model3dVaultIdForJob,
   preserveOriginalModel3dInVault,
   purgeMediaUrls,
+  putBlobInVault,
   resolveMediaUrl,
   tryPersistMediaUrl,
+  vaultIdFromRef,
   type VaultKind,
 } from './creativeAssetVault';
 
@@ -87,9 +93,11 @@ export const persistPackagingAssets = async (
 };
 
 /**
- * 3D 落库：主网格 → mesh_${id}；拆分前原模单独 → mesh_${id}_orig。
- * 必须先固化原模再写主槽，否则拆分结果会冲掉「原模」指向的同一 vault。
- * 远程 403 过期时，若本机已有对应槽则回挂。
+ * 3D 落库：
+ * - 主网格 → mesh_${id}（拆分后会变成分件，可被覆盖）
+ * - 彩色成片 → mesh_${id}_pbr（永久隔离，灰模不得覆盖）
+ * - 拆分前原模 → mesh_${id}_orig
+ * 商用硬约束：彩色槽与分件主槽分离，防止「突然变灰」赔付风险。
  */
 export const persistModel3dJob = async (job: Model3dJob): Promise<Model3dJob> => {
   // 先固化原模到 _orig（即使主槽已有文件也要做，防止后续覆盖）
@@ -102,10 +110,13 @@ export const persistModel3dJob = async (job: Model3dJob): Promise<Model3dJob> =>
   const primary =
     (
       segmented
-        ? job.modelUrl || job.pbrModelUrl || job.baseModelUrl
+        ? job.modelUrl || job.baseModelUrl
         : job.pbrModelUrl || job.modelUrl || job.baseModelUrl
     )?.trim() || undefined;
   const meshId = model3dVaultIdForJob(job.id);
+  const pbrId = model3dPbrVaultIdForJob(job.id);
+  const origId = model3dOriginalVaultIdForJob(job.id);
+  const pbrRef = `vault:${pbrId}`;
   const hint = job.segmentTaskId || job.providerTaskId || job.sourceTaskId || job.id;
   const primaryIsLocal = !!(
     primary &&
@@ -113,6 +124,64 @@ export const persistModel3dJob = async (job: Model3dJob): Promise<Model3dJob> =>
   );
   /** 拆分/后处理返回的新 https 链：绝不能被「旧的本机主槽」短路掉，否则原模/分件对调 */
   const primaryIsRemote = !!(primary && /^https?:\/\//i.test(primary));
+
+  const isPrimarySlot = (u?: string) =>
+    !!u &&
+    (u === `vault:${meshId}` ||
+      (isVaultRef(u) && vaultIdFromRef(u) === meshId) ||
+      u === job.modelUrl);
+
+  /** 彩色成片单独落 _pbr：优先 https/pbr 字段，永不跟分件主槽混写 */
+  const persistPbrSlot = async (): Promise<string | undefined> => {
+    const existingPbr = await getRowBlobForVaultId(pbrId);
+    if (existingPbr && (await glbBlobLikelyHasTextures(existingPbr))) {
+      return pbrRef;
+    }
+    const candidates = [
+      job.cloudPbrModelUrl,
+      job.pbrModelUrl,
+      !segmented ? job.modelUrl : undefined,
+      job.originalModelUrl,
+    ]
+      .map((u) => (u || '').trim())
+      .filter(Boolean)
+      .filter((u) => !isPrimarySlot(u) || !segmented);
+
+    for (const u of candidates) {
+      if (isVaultRef(u)) {
+        const id = vaultIdFromRef(u);
+        if (id === pbrId) return pbrRef;
+        if (segmented && id === meshId) continue;
+        const blob = await getRowBlobForVaultId(id);
+        if (!blob) continue;
+        if (!(await glbBlobLikelyHasTextures(blob))) continue;
+        return putBlobInVault({
+          blob,
+          kind: 'model3d',
+          id: pbrId,
+          sourceHint: `${hint || job.id}_pbr`,
+          mime: blob.type || 'model/gltf-binary',
+        });
+      }
+      if (/^https?:\/\//i.test(u) || u.startsWith('blob:') || u.startsWith('data:')) {
+        if (u === job.baseModelUrl) continue;
+        const saved = await tryPersistMediaUrl(u, 'model3d', `${hint || job.id}_pbr`, {
+          id: pbrId,
+        });
+        if (saved && isVaultRef(saved)) {
+          const blob = await getRowBlobForVaultId(pbrId);
+          if (blob && (await glbBlobLikelyHasTextures(blob))) return saved;
+          // 写入的是灰模：protect 可能拒写或写了无色，继续试下一个
+          if (blob && !(await glbBlobLikelyHasTextures(blob))) continue;
+          return saved;
+        }
+      }
+    }
+    if (existingPbr) return pbrRef;
+    return undefined;
+  };
+
+  const preservedPbr = await persistPbrSlot();
 
   const existingLocal = await findModel3dVaultRefForJob(job);
   // 仅当没有新的远程主网格时，才用本机主槽短路
@@ -123,23 +192,28 @@ export const persistModel3dJob = async (job: Model3dJob): Promise<Model3dJob> =>
       job.originalModelUrl !== existingLocal
         ? job.originalModelUrl
         : undefined);
+    const safePbr =
+      preservedPbr ||
+      (isVaultRef(job.pbrModelUrl) && !isPrimarySlot(job.pbrModelUrl)
+        ? job.pbrModelUrl
+        : undefined) ||
+      orig;
     return {
       ...job,
       modelUrl: isVaultRef(job.modelUrl) ? job.modelUrl : existingLocal,
-      pbrModelUrl: isVaultRef(job.pbrModelUrl) ? job.pbrModelUrl : existingLocal,
+      // 严禁把主槽（可能已是分件灰模）写进 pbrModelUrl
+      pbrModelUrl: safePbr || job.pbrModelUrl,
       baseModelUrl: isVaultRef(job.baseModelUrl)
         ? job.baseModelUrl
         : preservedOrig || job.baseModelUrl,
-      // 禁止把主槽冒充原模（拆分后主槽可能已是分件结果）
-      originalModelUrl: orig || preservedOrig || job.originalModelUrl,
+      originalModelUrl: orig || preservedOrig || preservedPbr || job.originalModelUrl,
       previewHint: job.previewHint?.includes('本机')
         ? job.previewHint
         : '模型已就绪 · 已存本机 · 可拖动环视',
     };
   }
 
-  const originalRaw = (job.originalModelUrl || preservedOrig || '').trim();
-  const origId = `${meshId}_orig`;
+  const originalRaw = (job.originalModelUrl || preservedOrig || preservedPbr || '').trim();
   const [sourceImage, sourceImages, primaryVault, previewImageUrl, originalVault] =
     await Promise.all([
       persistUrlField(job.sourceImage, 'image'),
@@ -161,27 +235,42 @@ export const persistModel3dJob = async (job: Model3dJob): Promise<Model3dJob> =>
     ]);
 
   let modelUrl = job.modelUrl;
-  let pbrModelUrl = job.pbrModelUrl;
+  let pbrModelUrl = preservedPbr || job.pbrModelUrl;
   let baseModelUrl = job.baseModelUrl;
-  let originalModelUrl = preservedOrig || job.originalModelUrl;
+  let originalModelUrl = preservedOrig || preservedPbr || job.originalModelUrl;
   if (primary && primaryVault && isVaultRef(primaryVault)) {
-    if (job.pbrModelUrl === primary) pbrModelUrl = primaryVault;
-    else if (job.modelUrl === primary) modelUrl = primaryVault;
-    else if (job.baseModelUrl === primary) baseModelUrl = primaryVault;
+    // 未拆分时主槽可以是彩色；已拆分时主槽只表示分件，绝不能反写 pbr
+    if (!segmented && job.pbrModelUrl === primary) {
+      pbrModelUrl = preservedPbr || primaryVault;
+    } else if (job.modelUrl === primary) {
+      modelUrl = primaryVault;
+    } else if (job.baseModelUrl === primary) {
+      baseModelUrl = primaryVault;
+    }
     if (!modelUrl || modelUrl === primary || !isVaultRef(modelUrl)) modelUrl = primaryVault;
   }
+  if (preservedPbr) pbrModelUrl = preservedPbr;
   if (originalVault && isVaultRef(originalVault)) {
     originalModelUrl = originalVault;
     if (!baseModelUrl || baseModelUrl === originalRaw || baseModelUrl === job.originalModelUrl) {
-      baseModelUrl = originalVault;
+      // base 仅作几何兜底；有彩色原模时不要把 base 指到彩色槽以免语义混乱
+      if (!job.baseModelUrl) baseModelUrl = originalVault;
     }
-  } else if (originalRaw && primaryVault && originalRaw === primary && isVaultRef(primaryVault)) {
-    // 尚未拆分：主网格即原模，同时写一份 _orig 备份
-    originalModelUrl = (await preserveOriginalModel3dInVault({
-      ...job,
-      originalModelUrl: primaryVault,
-      modelUrl: primaryVault,
-    })) || primaryVault;
+  } else if (
+    !segmented &&
+    originalRaw &&
+    primaryVault &&
+    originalRaw === primary &&
+    isVaultRef(primaryVault)
+  ) {
+    // 尚未拆分：主网格即原模，同时写一份 _orig / _pbr 备份
+    originalModelUrl =
+      (await preserveOriginalModel3dInVault({
+        ...job,
+        originalModelUrl: primaryVault,
+        modelUrl: primaryVault,
+        pbrModelUrl: preservedPbr || primaryVault,
+      })) || primaryVault;
   }
 
   // 落本机前先备份仍有效的 https 链，避免「只剩 vault: 引用、库被清就全丢」
@@ -192,6 +281,15 @@ export const persistModel3dJob = async (job: Model3dJob): Promise<Model3dJob> =>
     return p && /^https?:\/\//i.test(p) ? p : prev;
   };
 
+  // 彩色云端链：优先真实 pbr https，拆分后绝不用分件 modelUrl 覆盖
+  const cloudPbrNext = segmented
+    ? keepCloud(
+        job.cloudPbrModelUrl ||
+          (job.pbrModelUrl && !isPrimarySlot(job.pbrModelUrl) ? job.pbrModelUrl : undefined),
+        job.cloudPbrModelUrl
+      )
+    : keepCloud(job.pbrModelUrl || job.modelUrl, job.cloudPbrModelUrl);
+
   return {
     ...job,
     sourceImage: sourceImage || job.sourceImage,
@@ -199,16 +297,10 @@ export const persistModel3dJob = async (job: Model3dJob): Promise<Model3dJob> =>
     modelUrl,
     pbrModelUrl,
     baseModelUrl,
-    originalModelUrl: originalModelUrl || job.originalModelUrl,
+    originalModelUrl: originalModelUrl || preservedPbr || job.originalModelUrl,
     previewImageUrl: previewImageUrl || job.previewImageUrl,
     cloudModelUrl: keepCloud(job.modelUrl, job.cloudModelUrl),
-    // 拆分后 pbrModelUrl 可能仍指向旧成片，也可能已被误写成分件：cloudPbr 只升不降，禁止用分件链覆盖彩色备份
-    cloudPbrModelUrl: segmented
-      ? keepCloud(
-          job.pbrModelUrl && job.pbrModelUrl !== primary ? job.pbrModelUrl : undefined,
-          job.cloudPbrModelUrl
-        )
-      : keepCloud(job.pbrModelUrl, job.cloudPbrModelUrl),
+    cloudPbrModelUrl: cloudPbrNext,
     cloudBaseModelUrl: keepCloud(job.baseModelUrl || job.originalModelUrl, job.cloudBaseModelUrl),
   };
 };

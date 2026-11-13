@@ -62,6 +62,7 @@ import {
   findOriginalModel3dVaultRefForJob,
   glbBlobLikelyHasTextures,
   isVaultRef,
+  model3dPbrVaultIdForJob,
   model3dVaultIdForJob,
   preserveOriginalModel3dInVault,
   putBlobInVault,
@@ -646,9 +647,10 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         providerTaskId: result.taskId,
         sourceTaskId: result.sourceTaskId || result.taskId,
         modelUrl: result.modelUrl,
-        pbrModelUrl: result.pbrModelUrl,
+        pbrModelUrl: result.pbrModelUrl || result.modelUrl,
         baseModelUrl: result.baseModelUrl,
-        originalModelUrl: result.modelUrl,
+        // 原模优先彩色 PBR，禁止一开始就绑成灰模 base
+        originalModelUrl: result.pbrModelUrl || result.modelUrl,
         originalPreviewImageUrl: result.previewImageUrl,
         previewImageUrl: result.previewImageUrl,
         previewHint: '模型已就绪 · 可拖动环视 · 正在写入本机缓存…',
@@ -1246,10 +1248,18 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
               job.originalModelUrl,
               // 仅当 pbr 仍指向独立彩色槽时才用（勿等于分件主槽）
               job.pbrModelUrl && !isSegmentSlot(job.pbrModelUrl) ? job.pbrModelUrl : undefined,
+              // 固定彩色槽 mesh_*_pbr
+              `vault:${model3dPbrVaultIdForJob(job.id)}`,
               job.cloudPbrModelUrl,
               job.baseModelUrl,
             ]
-          : [job.originalModelUrl, job.pbrModelUrl, job.modelUrl, job.baseModelUrl]
+          : [
+              job.originalModelUrl,
+              job.pbrModelUrl,
+              `vault:${model3dPbrVaultIdForJob(job.id)}`,
+              job.modelUrl,
+              job.baseModelUrl,
+            ]
       )
         .filter(Boolean)
         .filter((u) => {

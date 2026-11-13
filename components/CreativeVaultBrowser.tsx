@@ -326,7 +326,7 @@ export const CreativeVaultBrowser: React.FC<Props> = ({
         </div>
 
         <div className="px-3 py-2 border-t border-slate-100 text-[9px] font-medium text-slate-500 leading-relaxed">
-          优先选标注「疑似有贴图」的 3D 设为原模，可零额度恢复彩色预览。勿点「清空」除非确认要删光。
+          优先选「疑似有贴图」的 3D 设为原模（零额度）。若列表里全是灰模，说明彩色副本曾被拆分/回填覆盖且云端临时链已过期，只能重新贴图或重新生成——请勿点「清空」。
         </div>
       </div>
     </div>
