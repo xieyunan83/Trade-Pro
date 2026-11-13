@@ -91,7 +91,39 @@ export const model3dOriginalVaultIdForJob = (jobId: string): string =>
   `mesh_${jobId}_orig`;
 
 /**
- * 为本机任务挑选「最可能带贴图」的 GLB：按体积择优（有色 PBR 通常明显大于灰模 base）。
+ * 粗检 GLB 是否内嵌贴图。无贴图的 base / 分件色块常被误标成「彩色原模」。
+ */
+export const glbBlobLikelyHasTextures = async (blob: Blob): Promise<boolean> => {
+  try {
+    const slice = blob.slice(0, Math.min(blob.size, 2_500_000));
+    const bytes = new Uint8Array(await slice.arrayBuffer());
+    const head = new TextDecoder('latin1').decode(bytes);
+    if (/KHR_texture_basisu|image\/png|image\/jpeg|image\/webp|mimeType"\s*:\s*"image/i.test(head)) {
+      return true;
+    }
+    for (let i = 0; i < bytes.length - 4; i++) {
+      // PNG
+      if (
+        bytes[i] === 0x89 &&
+        bytes[i + 1] === 0x50 &&
+        bytes[i + 2] === 0x4e &&
+        bytes[i + 3] === 0x47
+      ) {
+        return true;
+      }
+      // JPEG
+      if (bytes[i] === 0xff && bytes[i + 1] === 0xd8 && bytes[i + 2] === 0xff) {
+        return true;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * 为本机任务挑选「最可能带贴图」的 GLB：贴图标记优先，体积只作同分决胜。
  * 不访问云端、不耗生成额度。
  */
 export const findBestLocalTexturedModel3dForJob = async (job: {
@@ -110,6 +142,16 @@ export const findBestLocalTexturedModel3dForJob = async (job: {
   const hints = [job.sourceTaskId, job.providerTaskId, job.id]
     .map((s) => (s || '').trim())
     .filter(Boolean);
+  const modelId = (job.modelUrl || '').trim()
+    ? isVaultRef(job.modelUrl!)
+      ? vaultIdFromRef(job.modelUrl!)
+      : ''
+    : '';
+  const pbrId = (job.pbrModelUrl || '').trim()
+    ? isVaultRef(job.pbrModelUrl!)
+      ? vaultIdFromRef(job.pbrModelUrl!)
+      : ''
+    : '';
 
   const candidates: string[] = [];
   const pushId = (id?: string | null) => {
@@ -119,12 +161,17 @@ export const findBestLocalTexturedModel3dForJob = async (job: {
       candidates.push(vaultIdFromRef(s));
       return;
     }
+    // 仅接受 vault id / 已知槽名，跳过 https
+    if (/^https?:\/\//i.test(s) || s.startsWith('blob:') || s.startsWith('data:')) return;
     candidates.push(s);
   };
   pushId(origId);
   pushId(job.originalModelUrl);
-  pushId(job.pbrModelUrl);
-  // 未拆分时主槽通常就是彩色成片；已拆分则主槽多半是灰分件，跳过
+  // 拆分后：仅当 pbr 不是分件主槽时才纳入
+  if (!segmented || (pbrId && pbrId !== meshId && pbrId !== modelId)) {
+    pushId(job.pbrModelUrl);
+  }
+  // 未拆分时主槽通常就是彩色成片；已拆分则主槽多半是分件，跳过
   if (!segmented) {
     pushId(meshId);
     pushId(job.modelUrl);
@@ -140,33 +187,42 @@ export const findBestLocalTexturedModel3dForJob = async (job: {
 
   /**
    * 体积大 ≠ 有色：Tripo base 灰模常比带贴图 PBR 更大。
-   * 评分：_orig / pbr 优先，base 与主槽分件垫底，体积只作同分决胜。
+   * 评分：内嵌贴图 >> _orig / pbr，base 与主槽分件垫底。
    */
-  const scoreId = (id: string, size: number): number => {
+  const scoreId = (id: string, size: number, hasTex: boolean): number => {
     const bag = id.toLowerCase();
     let score = Math.min(size / 1_000_000, 40); // 体积最多贡献 40
+    if (hasTex) score += 200;
+    else score -= 60;
     if (id === origId || bag.endsWith('_orig') || bag.includes('_orig')) score += 120;
     if (bag.includes('pbr')) score += 90;
     if (bag.includes('base') || id === (job.baseModelUrl || '').replace(/^vault:/, '')) {
       score -= 80;
     }
-    if (segmented && id === meshId) score -= 100;
+    if (segmented && (id === meshId || id === modelId)) score -= 160;
     return score;
   };
 
-  let best: { id: string; score: number } | null = null;
+  let best: { id: string; score: number; hasTex: boolean } | null = null;
   const seen = new Set<string>();
   for (const id of candidates) {
     if (!id || seen.has(id)) continue;
     seen.add(id);
-    if (segmented && id === meshId) continue;
+    if (segmented && (id === meshId || id === modelId)) continue;
     const row = await getRow(id);
     const size = row?.blob?.size || 0;
     if (size < 1024) continue;
-    const score = scoreId(id, size);
-    if (!best || score > best.score) best = { id, score };
+    const hasTex = row?.blob ? await glbBlobLikelyHasTextures(row.blob) : false;
+    const score = scoreId(id, size, hasTex);
+    if (!best || score > best.score) best = { id, score, hasTex };
   }
+  // 有带贴图候选才返回；全是无贴图灰模则返回 null，逼上层走备份链 / 云端补拉
   if (!best) return null;
+  if (!best.hasTex) {
+    // 仍返回最高分（可能是唯一可用），但调用方应结合 hasTex 文案降级
+    void touchAccess(best.id);
+    return `${VAULT_PREFIX}${best.id}`;
+  }
   void touchAccess(best.id);
   return `${VAULT_PREFIX}${best.id}`;
 };
@@ -254,8 +310,16 @@ export const preserveOriginalModel3dInVault = async (job: {
   // 不再「已有 _orig 就直接返回」：允许用更大/带贴图的源升级灰模备份
   const candidates = (
     alreadySegmented
-      ? // 拆分后 pbr/model 常已被分件结果占用，勿写回 _orig
-        [job.originalModelUrl, job.baseModelUrl]
+      ? // 拆分后：原模槽 + 仍独立的 pbr（勿等于主槽）+ base；禁止用分件 model 回写
+        [
+          job.originalModelUrl,
+          job.pbrModelUrl &&
+          job.pbrModelUrl !== job.modelUrl &&
+          !(isVaultRef(job.pbrModelUrl) && vaultIdFromRef(job.pbrModelUrl) === meshId)
+            ? job.pbrModelUrl
+            : undefined,
+          job.baseModelUrl,
+        ]
       : [job.originalModelUrl, job.pbrModelUrl, job.modelUrl, job.baseModelUrl]
   )
     .map((u) => (u || '').trim())
@@ -272,8 +336,19 @@ export const preserveOriginalModel3dInVault = async (job: {
       if (id === origId) return `${VAULT_PREFIX}${origId}`;
       // 已拆分且候选仍指向主槽 → 主槽已是分件，跳过
       if (alreadySegmented && id === meshId) continue;
-      // 已有原模备份：仅当新候选明显更大（多半含贴图）时升级，避免灰模永远占坑
-      if (existingSize > 0 && row.blob.size < existingSize * 1.08) {
+      const candidateHasTex = await glbBlobLikelyHasTextures(row.blob);
+      const existingHasTex =
+        existingSize > 0 && existingOrig?.blob
+          ? await glbBlobLikelyHasTextures(existingOrig.blob)
+          : false;
+      // 已有带贴图原模时，禁止用无贴图灰模/分件「升级」覆盖
+      if (existingHasTex && !candidateHasTex) continue;
+      // 已有原模备份：仅当新候选明显更大或新候选有贴图而旧的没有时升级
+      if (
+        existingSize > 0 &&
+        existingHasTex === candidateHasTex &&
+        row.blob.size < existingSize * 1.08
+      ) {
         continue;
       }
       await putBlobInVault({

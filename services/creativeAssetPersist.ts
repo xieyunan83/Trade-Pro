@@ -202,7 +202,13 @@ export const persistModel3dJob = async (job: Model3dJob): Promise<Model3dJob> =>
     originalModelUrl: originalModelUrl || job.originalModelUrl,
     previewImageUrl: previewImageUrl || job.previewImageUrl,
     cloudModelUrl: keepCloud(job.modelUrl, job.cloudModelUrl),
-    cloudPbrModelUrl: keepCloud(job.pbrModelUrl, job.cloudPbrModelUrl),
+    // 拆分后 pbrModelUrl 可能仍指向旧成片，也可能已被误写成分件：cloudPbr 只升不降，禁止用分件链覆盖彩色备份
+    cloudPbrModelUrl: segmented
+      ? keepCloud(
+          job.pbrModelUrl && job.pbrModelUrl !== primary ? job.pbrModelUrl : undefined,
+          job.cloudPbrModelUrl
+        )
+      : keepCloud(job.pbrModelUrl, job.cloudPbrModelUrl),
     cloudBaseModelUrl: keepCloud(job.baseModelUrl || job.originalModelUrl, job.cloudBaseModelUrl),
   };
 };

@@ -219,6 +219,32 @@ const parseOnce = (
     reject(new Error('无可加载的模型数据'));
   });
 
+const sceneHasColorMaps = (root: THREE.Object3D): boolean => {
+  let hit = false;
+  root.traverse((o) => {
+    if (hit) return;
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.material) return;
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const mat of mats) {
+      const std = mat as THREE.MeshStandardMaterial;
+      if (std?.map || (std as any)?.emissiveMap) {
+        hit = true;
+        return;
+      }
+    }
+  });
+  return hit;
+};
+
+const bufferLikelyHasKtx2 = (buf?: ArrayBuffer): boolean => {
+  if (!buf || buf.byteLength < 32) return false;
+  const head = new TextDecoder('latin1').decode(
+    new Uint8Array(buf, 0, Math.min(buf.byteLength, 1_500_000))
+  );
+  return /KHR_texture_basisu|basisu/i.test(head);
+};
+
 export const loadGlbFromSource = async (
   source: GlbSource,
   onProgress?: (pct: number) => void,
@@ -230,7 +256,24 @@ export const loadGlbFromSource = async (
   };
 
   try {
-    return await tryLoad(0);
+    const gltf = await tryLoad(0);
+    // KTX2 失败时常「静默变灰」而不抛错：有压缩贴图标记却无 map → 换 transcoder 再解
+    if (
+      renderer &&
+      bufferLikelyHasKtx2(source.buffer) &&
+      !sceneHasColorMaps(gltf.scene)
+    ) {
+      try {
+        resetKtx2Loader();
+        const again = await tryLoad(1);
+        if (sceneHasColorMaps(again.scene) || !sceneHasColorMaps(gltf.scene)) {
+          return again;
+        }
+      } catch {
+        /* 仍返回首次结果 */
+      }
+    }
+    return gltf;
   } catch (e) {
     const msg = String((e as any)?.message || e || '');
     // 同源 basis 半截失败时换备用路径再解一次

@@ -18,7 +18,12 @@ const PART_PALETTE = [
   0x06b6d4, 0x84cc16, 0xa855f7, 0xfb7185,
 ];
 
-const tintMaterial = (mat: THREE.Material, color: THREE.Color): THREE.Material => {
+/** 有贴图时只轻微染色；无贴图时半透明叠色，禁止整片霓虹盖掉外形（否则拆分「面目全非」） */
+const tintMaterial = (
+  mat: THREE.Material,
+  color: THREE.Color,
+  softOnly: boolean
+): THREE.Material => {
   try {
     const clone =
       typeof (mat as THREE.MeshStandardMaterial).clone === 'function'
@@ -26,10 +31,17 @@ const tintMaterial = (mat: THREE.Material, color: THREE.Color): THREE.Material =
         : new THREE.MeshStandardMaterial();
     if ((clone as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
       const std = clone as THREE.MeshStandardMaterial;
-      std.color.copy(color);
-      std.emissive.copy(color).multiplyScalar(0.06);
-      std.metalness = Math.min(0.35, std.metalness || 0.2);
-      std.roughness = Math.max(0.45, std.roughness || 0.55);
+      const hasMap = !!(std.map || (std as any).emissiveMap);
+      if (hasMap || softOnly) {
+        std.color.lerp(color, hasMap ? 0.18 : 0.38);
+        std.emissive.copy(color).multiplyScalar(hasMap ? 0.03 : 0.05);
+      } else {
+        std.color.lerp(color, 0.72);
+        std.emissive.copy(color).multiplyScalar(0.05);
+        std.metalness = Math.min(0.35, std.metalness || 0.2);
+        std.roughness = Math.max(0.45, std.roughness || 0.55);
+      }
+      std.needsUpdate = true;
       return std;
     }
     return clone;
@@ -40,6 +52,32 @@ const tintMaterial = (mat: THREE.Material, color: THREE.Color): THREE.Material =
       roughness: 0.55,
     });
   }
+};
+
+/** 部件材质本身已明显分色时，不再强行换成调色板（避免「面目全非」） */
+const partsAlreadyDistinct = (units: THREE.Object3D[]): boolean => {
+  if (units.length < 2) return false;
+  const hues: number[] = [];
+  for (const unit of units) {
+    let sample: THREE.Color | null = null;
+    unit.traverse((o) => {
+      if (sample) return;
+      const m = o as THREE.Mesh;
+      if (!m.isMesh || !m.material) return;
+      const mat = (Array.isArray(m.material) ? m.material[0] : m.material) as
+        | THREE.MeshStandardMaterial
+        | undefined;
+      if (mat && (mat as any).color) sample = (mat as any).color.clone();
+    });
+    if (sample) {
+      const hsl = { h: 0, s: 0, l: 0 };
+      sample.getHSL(hsl);
+      if (hsl.s > 0.12 && hsl.l > 0.08 && hsl.l < 0.92) hues.push(hsl.h);
+    }
+  }
+  if (hues.length < 2) return false;
+  const unique = new Set(hues.map((h) => Math.round(h * 12)));
+  return unique.size >= Math.min(3, Math.ceil(units.length * 0.35));
 };
 
 /**
@@ -328,19 +366,20 @@ export const Model3dPartsViewer: React.FC<Props> = ({
         const size0 = new THREE.Vector3();
         whole.getCenter(center);
         whole.getSize(size0);
-        // 固定炸开半径：相对原模对角线，绝不每帧重算
-        explodeScaleRef.current = Math.max(size0.x, size0.y, size0.z, 0.15) * 0.45;
+        // 炸开半径要克制：过大像「零件散架面目全非」；滑条仍可加大
+        explodeScaleRef.current = Math.max(size0.x, size0.y, size0.z, 0.15) * 0.22;
 
         const names: string[] = [];
+        const softOnly = partsAlreadyDistinct(units);
         units.forEach((unit, i) => {
           const color = new THREE.Color(PART_PALETTE[i % PART_PALETTE.length]);
           unit.traverse((o) => {
             const m = o as THREE.Mesh;
             if (!m.isMesh) return;
             if (Array.isArray(m.material)) {
-              m.material = m.material.map((mat) => tintMaterial(mat, color));
+              m.material = m.material.map((mat) => tintMaterial(mat, color, softOnly));
             } else if (m.material) {
-              m.material = tintMaterial(m.material, color);
+              m.material = tintMaterial(m.material, color, softOnly);
             }
           });
           const ub = new THREE.Box3().setFromObject(unit);
