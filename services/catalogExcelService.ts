@@ -19,8 +19,34 @@ import {
   resolveLegacyCategoryId,
 } from '../data/productTaxonomy';
 
-declare const XLSX: any;
-declare const JSZip: any;
+/** 优先 npm 打包（不受 CSP 拦 CDN）；兼容旧版全局注入 */
+type XlsxLike = {
+  utils: any;
+  read: (...args: any[]) => any;
+  writeFile: (...args: any[]) => any;
+};
+let xlsxMod: XlsxLike | null = null;
+let jszipCtor: any = null;
+
+const loadXlsx = async (): Promise<XlsxLike> => {
+  const g = (typeof window !== 'undefined' ? (window as any).XLSX : undefined) as
+    | XlsxLike
+    | undefined;
+  if (g?.utils) return g;
+  if (xlsxMod) return xlsxMod;
+  const mod: any = await import('xlsx');
+  xlsxMod = (mod?.default || mod) as XlsxLike;
+  return xlsxMod;
+};
+
+const loadJSZip = async (): Promise<any> => {
+  const g = typeof window !== 'undefined' ? (window as any).JSZip : undefined;
+  if (typeof g === 'function') return g;
+  if (jszipCtor) return jszipCtor;
+  const mod: any = await import('jszip');
+  jszipCtor = mod?.default || mod;
+  return jszipCtor;
+};
 
 const TEMPLATE_HEADERS = [
   '品名',
@@ -70,14 +96,6 @@ const SAMPLE = [
   },
 ];
 
-const ensureXlsx = () => {
-  if (typeof XLSX === 'undefined') throw new Error('Excel 引擎未加载，请刷新页面');
-};
-
-const ensureZip = () => {
-  if (typeof JSZip === 'undefined') throw new Error('压缩库未加载，请刷新页面');
-};
-
 const taxonomyOptionLabel = (id: string, zh: string, en: string) => `${zh} · ${en} [${id}]`;
 
 /** 解析单元格中的官方类目：支持纯 ID，或「中文 · 英文 [id]」 */
@@ -100,8 +118,9 @@ export const resolveTaxonomyCell = (
 };
 
 /** 下载可填写的产品资料模板（对齐工厂报价表 + 官方类目必选） */
-export const downloadCatalogExcelTemplate = () => {
-  ensureXlsx();
+export const downloadCatalogExcelTemplate = async () => {
+  const XLSX = await loadXlsx();
+  if (!XLSX?.utils) throw new Error('Excel 引擎加载失败，请检查网络后重试');
   const ws = XLSX.utils.json_to_sheet(SAMPLE, { header: [...TEMPLATE_HEADERS] });
   ws['!cols'] = TEMPLATE_HEADERS.map((h) => ({
     wch: Math.min(36, Math.max(12, h.length + 6)),
@@ -409,8 +428,10 @@ export type CatalogExcelImportResult = {
  * 解析产品资料 Excel（工厂报价表或标准模板），提取 SKU + 嵌入图
  */
 export const parseCatalogExcelFile = async (file: File): Promise<CatalogExcelImportResult> => {
-  ensureXlsx();
-  ensureZip();
+  const XLSX = await loadXlsx();
+  const JSZip = await loadJSZip();
+  if (!XLSX?.utils) throw new Error('Excel 引擎加载失败，请检查网络后重试');
+  if (typeof JSZip !== 'function') throw new Error('压缩库加载失败，请检查网络后重试');
   const buf = await file.arrayBuffer();
   const wb = XLSX.read(buf, { type: 'array' });
   const sheetName =

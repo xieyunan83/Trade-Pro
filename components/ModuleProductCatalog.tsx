@@ -427,11 +427,13 @@ export const ModuleProductCatalog: React.FC<Props> = ({ currentUser }) => {
           <button
             type="button"
             onClick={() => {
-              try {
-                downloadCatalogExcelTemplate();
-              } catch (e: any) {
-                setMsg(e?.message || '下载失败');
-              }
+              void (async () => {
+                try {
+                  await downloadCatalogExcelTemplate();
+                } catch (e: any) {
+                  setMsg(e?.message || '下载失败');
+                }
+              })();
             }}
             className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white text-slate-800 text-xs font-black px-3 py-2.5"
           >
