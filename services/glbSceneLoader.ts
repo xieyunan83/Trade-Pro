@@ -34,10 +34,21 @@ const BASIS_PATHS = () => [
 ];
 
 const getKtx2Loader = (renderer: THREE.WebGLRenderer, pathIndex = 0): KTX2Loader => {
+  // pathIndex 变化时必须重建，否则备用 CDN 路径永远不生效
+  if (sharedKtx2 && (sharedKtx2 as any).__basisPathIndex !== pathIndex) {
+    try {
+      sharedKtx2.dispose?.();
+    } catch {
+      /* ignore */
+    }
+    sharedKtx2 = null;
+    ktx2SupportRenderer = null;
+  }
   if (!sharedKtx2) {
     const ktx2 = new KTX2Loader();
     const paths = BASIS_PATHS();
     ktx2.setTranscoderPath(paths[Math.min(pathIndex, paths.length - 1)]);
+    (ktx2 as any).__basisPathIndex = pathIndex;
     sharedKtx2 = ktx2;
   }
   if (ktx2SupportRenderer !== renderer) {
@@ -74,7 +85,13 @@ export const createGlbLoader = async (
   }
   if (renderer) {
     try {
-      loader.setKTX2Loader(getKtx2Loader(renderer, basisPathIndex));
+      const ktx2 = getKtx2Loader(renderer, basisPathIndex);
+      // 先拉起 Basis worker；否则首帧贴图常静默丢失 → 一片灰
+      const initFn = (ktx2 as { init?: () => Promise<unknown> }).init;
+      if (typeof initFn === 'function') {
+        await initFn.call(ktx2);
+      }
+      loader.setKTX2Loader(ktx2);
     } catch (e) {
       console.warn('[glb] KTX2Loader init failed; textured models may appear grey', e);
     }
@@ -219,7 +236,7 @@ const parseOnce = (
     reject(new Error('无可加载的模型数据'));
   });
 
-const sceneHasColorMaps = (root: THREE.Object3D): boolean => {
+export const sceneHasColorMaps = (root: THREE.Object3D): boolean => {
   let hit = false;
   root.traverse((o) => {
     if (hit) return;
@@ -237,13 +254,17 @@ const sceneHasColorMaps = (root: THREE.Object3D): boolean => {
   return hit;
 };
 
-const bufferLikelyHasKtx2 = (buf?: ArrayBuffer): boolean => {
+export const bufferLikelyHasKtx2 = (buf?: ArrayBuffer): boolean => {
   if (!buf || buf.byteLength < 32) return false;
   const head = new TextDecoder('latin1').decode(
     new Uint8Array(buf, 0, Math.min(buf.byteLength, 1_500_000))
   );
   return /KHR_texture_basisu|basisu/i.test(head);
 };
+
+/** 供预览层判断：文件内嵌了压缩贴图但场景无 map → 应回退 model-viewer */
+export const glbTextureDecodeFailed = (source: GlbSource, root: THREE.Object3D): boolean =>
+  bufferLikelyHasKtx2(source.buffer) && !sceneHasColorMaps(root);
 
 export const loadGlbFromSource = async (
   source: GlbSource,

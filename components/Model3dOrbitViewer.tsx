@@ -4,7 +4,11 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { isVaultRef } from '../services/creativeAssetVault';
-import { loadGlbFromSource, resolveGlbSource } from '../services/glbSceneLoader';
+import {
+  glbTextureDecodeFailed,
+  loadGlbFromSource,
+  resolveGlbSource,
+} from '../services/glbSceneLoader';
 
 type Props = {
   /** GLB / GLTF 地址：vault: / blob: / https 均可 */
@@ -34,9 +38,31 @@ const isLocalSrc = (u: string) =>
     isVaultRef(u) ||
     u.startsWith('vault:'));
 
+declare global {
+  namespace JSX {
+    interface IntrinsicElements {
+      'model-viewer': React.DetailedHTMLProps<
+        React.HTMLAttributes<HTMLElement> & {
+          src?: string;
+          poster?: string;
+          alt?: string;
+          exposure?: string;
+          'camera-controls'?: boolean;
+          'touch-action'?: string;
+          'auto-rotate'?: boolean;
+          'shadow-intensity'?: string;
+          'environment-image'?: string;
+          style?: React.CSSProperties;
+        },
+        HTMLElement
+      >;
+    }
+  }
+}
+
 /**
- * 可拖动环视的真实 3D 预览（Three.js + Draco）。
- * 本机 vault 走 ArrayBuffer 解析，避免 blob URL / 压缩网格导致黑屏失败。
+ * 可拖动环视的真实 3D 预览（Three.js + Draco / KTX2）。
+ * 压缩贴图解码失败时自动回退 model-viewer，避免「云端彩色文件也一片灰」。
  */
 export const Model3dOrbitViewer: React.FC<Props> = ({
   src,
@@ -58,12 +84,15 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
   const homeRef = useRef<{ pos: THREE.Vector3; target: THREE.Vector3 } | null>(null);
   const autoRotateRef = useRef(autoRotate);
   autoRotateRef.current = autoRotate;
+  const mvObjectUrlRef = useRef<string | null>(null);
 
   const [ready, setReady] = useState(false);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [pullPct, setPullPct] = useState(0);
   const [phase, setPhase] = useState<'resolve' | 'pull' | 'viewer' | 'done' | 'error'>('resolve');
   const [retryTick, setRetryTick] = useState(0);
+  /** Three 贴图解码失败时用 model-viewer 保色 */
+  const [mvSrc, setMvSrc] = useState<string | null>(null);
 
   const srcTrim = (src || '').trim();
   const loadKey = [
@@ -79,6 +108,7 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
       setPhase('resolve');
       setReady(false);
       setLoadErr(null);
+      setMvSrc(null);
       return;
     }
 
@@ -86,8 +116,17 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
     let raf = 0;
     setReady(false);
     setLoadErr(null);
+    setMvSrc(null);
     setPullPct(0);
     setPhase(isLocalSrc(srcTrim) ? 'resolve' : 'pull');
+    if (mvObjectUrlRef.current) {
+      try {
+        URL.revokeObjectURL(mvObjectUrlRef.current);
+      } catch {
+        /* ignore */
+      }
+      mvObjectUrlRef.current = null;
+    }
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0b1220);
@@ -211,6 +250,37 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
         );
         if (disposed) return;
 
+        // 文件含 KTX2 但 Three 没解出贴图 → 回退 model-viewer（自带 Basis，能出彩）
+        if (glbTextureDecodeFailed(source, gltf.scene)) {
+          const blob =
+            source.blob ||
+            (source.buffer
+              ? new Blob([source.buffer], { type: 'model/gltf-binary' })
+              : null);
+          if (blob) {
+            try {
+              await import('@google/model-viewer');
+            } catch {
+              /* 无 model-viewer 时继续用灰模 Three 预览 */
+            }
+            if (disposed) return;
+            const objUrl = URL.createObjectURL(blob);
+            mvObjectUrlRef.current = objUrl;
+            window.clearInterval(watchdog);
+            setMvSrc(objUrl);
+            setReady(true);
+            setPhase('done');
+            setLoadErr(null);
+            // 清掉空转的 WebGL 画布，避免挡住 model-viewer
+            try {
+              host.innerHTML = '';
+            } catch {
+              /* ignore */
+            }
+            return;
+          }
+        }
+
         const root = gltf.scene;
         scene.add(root);
         root.updateMatrixWorld(true);
@@ -285,6 +355,14 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
         const mats = Array.isArray(m.material) ? m.material : [m.material];
         mats.forEach((x) => x?.dispose?.());
       });
+      if (mvObjectUrlRef.current) {
+        try {
+          URL.revokeObjectURL(mvObjectUrlRef.current);
+        } catch {
+          /* ignore */
+        }
+        mvObjectUrlRef.current = null;
+      }
       host.innerHTML = '';
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -309,7 +387,26 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
 
   return (
     <div className={`relative w-full h-full min-h-[280px] ${className}`}>
-      <div ref={hostRef} className="absolute inset-0" />
+      <div ref={hostRef} className={`absolute inset-0 ${mvSrc ? 'hidden' : ''}`} />
+      {mvSrc ? (
+        <model-viewer
+          src={mvSrc}
+          poster={poster || undefined}
+          alt="3D 模型预览"
+          camera-controls
+          touch-action="pan-y"
+          auto-rotate={autoRotate || undefined}
+          shadow-intensity="0.6"
+          exposure="1.05"
+          style={{
+            position: 'absolute',
+            inset: 0,
+            width: '100%',
+            height: '100%',
+            backgroundColor: '#0b1220',
+          }}
+        />
+      ) : null}
       {showSpinner && (
         <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-slate-950/75 pointer-events-none px-4">
           {poster ? (
@@ -369,15 +466,18 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
         <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between gap-2 pointer-events-none z-10">
           <span className="inline-flex items-center gap-1 rounded-lg bg-black/55 text-[10px] font-bold text-slate-200 px-2 py-1">
             <Move3d size={12} /> 拖动旋转 · 滚轮缩放
+            {mvSrc ? ' · 彩色保真预览' : ''}
           </span>
-          <button
-            type="button"
-            onClick={resetCamera}
-            className="pointer-events-auto inline-flex items-center gap-1 rounded-lg bg-white/10 hover:bg-white/20 text-[10px] font-bold text-white px-2 py-1"
-            title="重置视角"
-          >
-            <RotateCcw size={12} /> 重置
-          </button>
+          {!mvSrc ? (
+            <button
+              type="button"
+              onClick={resetCamera}
+              className="pointer-events-auto inline-flex items-center gap-1 rounded-lg bg-white/10 hover:bg-white/20 text-[10px] font-bold text-white px-2 py-1"
+              title="重置视角"
+            >
+              <RotateCcw size={12} /> 重置
+            </button>
+          ) : null}
         </div>
       )}
     </div>

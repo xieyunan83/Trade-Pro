@@ -1343,10 +1343,50 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         return;
       }
 
-      const tid = (active.sourceTaskId || active.providerTaskId || '').trim();
+      // 云端补拉：先试仍有效的彩色备份 https（不重新计费），再查生成任务；永不把 base/分件当彩色
+      const preferHttps = [
+        active.cloudPbrModelUrl,
+        active.cloudModelUrl,
+        active.pbrModelUrl,
+      ]
+        .map((u) => (u || '').trim())
+        .filter(
+          (u) =>
+            /^https?:\/\//i.test(u) &&
+            u !== (active.modelUrl || '').trim() &&
+            u !== (active.baseModelUrl || '').trim()
+        );
+
+      for (const https of preferHttps) {
+        try {
+          const saved =
+            (await tryPersistMediaUrl(https, 'model3d', `${active.id}_orig`, {
+              id: `${model3dVaultIdForJob(active.id)}_orig`,
+            })) || https;
+          const blob = await resolveMediaBlob(saved);
+          if (blob && (await glbBlobLikelyHasTextures(blob))) {
+            useLocalOriginal(saved, '已从彩色备份链补拉并写入本机');
+            return;
+          }
+        } catch {
+          /* 链过期则继续查任务 */
+        }
+      }
+
+      const tidCandidates = [
+        active.sourceTaskId,
+        active.officialTaskId,
+        active.providerTaskId,
+      ]
+        .map((t) => (t || '').trim())
+        .filter(Boolean)
+        .filter((t) => t !== (active.segmentTaskId || '').trim());
+      const tid = tidCandidates[0] || '';
       if (!tid) {
         setMsgTone('error');
-        setMsg('没有可查询的生成任务。请重新生成 3D，或用「设为当前任务原模」绑定本机 GLB。');
+        setMsg(
+          '没有可查询的生成任务。请到「贴图」为当前网格上色，或用「设为当前任务原模」绑定彩色 GLB。'
+        );
         return;
       }
       let result =
@@ -1356,16 +1396,42 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
       if (!result?.modelUrl && active.provider !== 'tripo') {
         result = (await fetchTripoTaskOnce(tid)) || result;
       }
-      const textured =
-        result?.pbrModelUrl || result?.modelUrl || result?.baseModelUrl || '';
-      if (!textured) {
-        throw new Error('云端原模已过期。请用「贴图」上色或重新生成（勿清空本机素材）。');
+      // 只要彩色：pbr > model；明确排除 base
+      const texturedCandidates = [result?.pbrModelUrl, result?.modelUrl]
+        .map((u) => (u || '').trim())
+        .filter(Boolean)
+        .filter((u) => u !== (result?.baseModelUrl || '').trim());
+      let textured = '';
+      for (const u of texturedCandidates) {
+        try {
+          const savedTry =
+            (await tryPersistMediaUrl(u, 'model3d', `${tid}_orig`, {
+              id: `${model3dVaultIdForJob(active.id)}_orig`,
+            })) || u;
+          const blob = await resolveMediaBlob(savedTry);
+          if (blob && (await glbBlobLikelyHasTextures(blob))) {
+            textured = savedTry;
+            break;
+          }
+          if (!textured) textured = savedTry;
+        } catch {
+          if (!textured) textured = u;
+        }
       }
-      const saved =
-        (await tryPersistMediaUrl(textured, 'model3d', `${tid}_orig`, {
-          id: `${model3dVaultIdForJob(active.id)}_orig`,
-        })) || textured;
-      useLocalOriginal(saved, '已从云端补拉并写入本机；以后打开不再依赖云端');
+      if (!textured) {
+        throw new Error(
+          '云端只返回了无贴图灰模或链接已过期。请点制造台「贴图」重新上色，或重新生成（勿清空本机素材）。'
+        );
+      }
+      const blobFinal = await resolveMediaBlob(textured);
+      const hasTex = blobFinal ? await glbBlobLikelyHasTextures(blobFinal) : false;
+      useLocalOriginal(
+        textured,
+        hasTex
+          ? '已从云端补拉彩色原模并写入本机；以后打开不再依赖云端'
+          : '已写入云端原模，但文件疑似无贴图。请到「贴图」上色后再预览'
+      );
+      if (!hasTex) setMsgTone('error');
     } catch (e: any) {
       setMsgTone('error');
       setMsg(e?.message || '恢复原模失败');

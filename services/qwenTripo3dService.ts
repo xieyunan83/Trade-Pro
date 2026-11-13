@@ -270,20 +270,21 @@ const collectPartNames = (out: any, first: any): string[] | undefined => {
 const pickUrls = (out: any, taskId: string): Model3dGenerateResult => {
   const results = Array.isArray(out.results) ? out.results : [];
   const first = results[0] || out;
-  // 分割任务：优先 seg_model_url（千问文档）；勿被未分割的 pbr/base 盖住
+  const pbr = first.pbr_model_url || out.pbr_model_url || '';
+  const base = first.base_model_url || out.base_model_url || '';
+  // 分割任务：优先 seg_model_url；成片优先 pbr，base 灰模垫底
   const modelUrl =
     first.seg_model_url ||
     out.seg_model_url ||
     first.model_url ||
     out.model_url ||
-    first.pbr_model_url ||
-    first.base_model_url ||
+    pbr ||
     first.fbx_url ||
     first.obj_url ||
     first.stl_url ||
     first.gltf_url ||
     first.usdz_url ||
-    out.pbr_model_url ||
+    base ||
     '';
   const previewImageUrl =
     first.rendered_image_url ||
@@ -297,8 +298,8 @@ const pickUrls = (out: any, taskId: string): Model3dGenerateResult => {
     taskId,
     modelUrl: String(modelUrl),
     previewImageUrl: previewImageUrl ? String(previewImageUrl) : undefined,
-    pbrModelUrl: first.pbr_model_url ? String(first.pbr_model_url) : undefined,
-    baseModelUrl: first.base_model_url ? String(first.base_model_url) : undefined,
+    pbrModelUrl: pbr ? String(pbr) : undefined,
+    baseModelUrl: base ? String(base) : undefined,
     partNames: collectPartNames(out, first),
     raw: out,
   };

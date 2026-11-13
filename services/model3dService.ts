@@ -358,7 +358,19 @@ const pickUrls = (data: any): Model3dGenerateResult => {
   const out = data.output || data.result || data;
   const results = Array.isArray(out.results) ? out.results : [];
   const first = results[0] || out;
-  // 分割结果优先 seg_model；禁止未分割 pbr 盖住分件
+  const pbr =
+    first.pbr_model_url ||
+    out.pbr_model_url ||
+    first.pbr_model ||
+    out.pbr_model ||
+    '';
+  const base =
+    first.base_model_url ||
+    out.base_model_url ||
+    first.base_model ||
+    out.base_model ||
+    '';
+  // 分割结果优先 seg_model；成片优先 pbr / model_url，绝不能把 base 灰模当主下载
   const modelUrl =
     first.seg_model_url ||
     first.seg_model ||
@@ -368,8 +380,7 @@ const pickUrls = (data: any): Model3dGenerateResult => {
     out.model_url ||
     first.model ||
     out.model ||
-    out.pbr_model ||
-    out.base_model ||
+    pbr ||
     out.glb_url ||
     out.mesh_url ||
     out.fbx_url ||
@@ -377,6 +388,7 @@ const pickUrls = (data: any): Model3dGenerateResult => {
     out.stl_url ||
     out.usdz_url ||
     out.gltf_url ||
+    base ||
     '';
   const previewImageUrl =
     first.rendered_image_url ||
@@ -401,12 +413,8 @@ const pickUrls = (data: any): Model3dGenerateResult => {
     taskId: String(data.task_id || first.task_id || ''),
     modelUrl: String(modelUrl),
     previewImageUrl: previewImageUrl ? String(previewImageUrl) : undefined,
-    pbrModelUrl: out.pbr_model || first.pbr_model_url
-      ? String(out.pbr_model || first.pbr_model_url)
-      : undefined,
-    baseModelUrl: out.base_model || first.base_model_url
-      ? String(out.base_model || first.base_model_url)
-      : undefined,
+    pbrModelUrl: pbr ? String(pbr) : undefined,
+    baseModelUrl: base ? String(base) : undefined,
     partNames,
     raw: data,
   };
