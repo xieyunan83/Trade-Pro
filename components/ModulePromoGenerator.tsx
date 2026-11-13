@@ -31,6 +31,10 @@ import {
 } from 'lucide-react';
 import { ContinentCountryMultiSelect } from './ContinentCountryMultiSelect';
 import { findCountryByEn } from '../data/countriesByContinent';
+import {
+  countryMatchesFilter,
+  uniqueNormalizedCountriesZh,
+} from '../utils/countryNormalize';
 import { exportAutomationResultsToExcel } from '../services/exportService';
 import { formatBackgroundCheckTime } from '../utils/crmHistory';
 import { IndustryMultiSelect } from './IndustryMultiSelect';
@@ -241,8 +245,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   const officialCrmCount = alignStats.officialCrmCount;
 
   const countryOptions = useMemo(
-    () =>
-      Array.from(new Set(allRows.map((r) => r.country).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    () => uniqueNormalizedCountriesZh(allRows.map((r) => r.country)),
     [allRows]
   );
 
@@ -277,7 +280,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
         return false;
       }
       if (filterMode !== 'all' && (row.mode || 'economy') !== filterMode) return false;
-      if (filterCountry !== 'all' && row.country !== filterCountry) return false;
+      if (filterCountry !== 'all' && !countryMatchesFilter(row.country, filterCountry)) return false;
       if (filterOwner !== 'all' && row.owner !== filterOwner) return false;
       if (filterKeyword !== 'all' && !row.keywords.includes(filterKeyword)) return false;
       if (filterIndustry !== 'all' && row.industry !== filterIndustry) return false;

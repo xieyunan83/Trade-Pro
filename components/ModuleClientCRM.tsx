@@ -37,6 +37,11 @@ import { isDesignSignalQueueBusy } from '../services/designSignalQueue';
 import { useCrmClients } from '../services/crmStoreHooks';
 import { useHistoryItems } from '../services/historyStoreHooks';
 import { replaceCrmClients, updateCrmClients } from '../services/crmStore';
+import {
+  canonicalizeCountryField,
+  countryMatchesFilter,
+  uniqueNormalizedCountriesZh,
+} from '../utils/countryNormalize';
 
 interface ModuleClientCRMProps {
   /** @deprecated 改订 crmStore；保留兼容 */
@@ -445,23 +450,43 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
     return map;
   }, [clients, historyIndex]);
 
+  // 打开客户库时把脏国名（中英重复 / 城市 / 推测备注）写回标准中文国名
+  useEffect(() => {
+    if (!clients.length) return;
+    let dirty = 0;
+    const next = clients.map((c) => {
+      const canon = canonicalizeCountryField(c.country);
+      if (!canon || canon === (c.country || '').trim()) return c;
+      dirty += 1;
+      return { ...c, country: canon };
+    });
+    if (!dirty) return;
+    replaceCrmClients(next);
+  }, [clients]);
+
   const filterOptions = useMemo(() => {
-    const countries = new Set<string>();
     const productTypes = new Set<string>();
     const owners = new Set<string>();
     for (const c of clients) {
-      if (c.country) countries.add(c.country);
       const pt = (c.productType || '').trim();
       if (pt && pt !== 'N/A') productTypes.add(pt);
       const owner = resolveOwner(c, intelById.get(c.id)?.historyItem);
       if (owner) owners.add(owner);
     }
     return {
-      countries: [...countries].sort((a, b) => a.localeCompare(b, 'zh-CN')),
+      countries: uniqueNormalizedCountriesZh(clients.map((c) => c.country)),
       productTypes: [...productTypes].sort((a, b) => a.localeCompare(b, 'zh-CN')),
       owners: [...owners].sort((a, b) => a.localeCompare(b, 'zh-CN')),
     };
   }, [clients, intelById, resolveOwner]);
+
+  // 旧筛选项（英文/脏值）已不在列表时，回落到「所有国家」
+  useEffect(() => {
+    if (filterCountry === 'all') return;
+    if (!filterOptions.countries.includes(filterCountry)) {
+      setFilterCountry('all');
+    }
+  }, [filterCountry, filterOptions.countries]);
 
   const dateFromMs = filterDateFrom ? new Date(filterDateFrom).getTime() : undefined;
   const dateToMs = filterDateTo
@@ -487,7 +512,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
           owner.includes(q);
         if (!hit) return false;
       }
-      if (filterCountry !== 'all' && client.country !== filterCountry) return false;
+      if (filterCountry !== 'all' && !countryMatchesFilter(client.country, filterCountry)) return false;
       if (filterType !== 'all' && client.type !== filterType) return false;
       if (filterProductType !== 'all') {
         const pt = (client.productType || '').trim();

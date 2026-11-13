@@ -8,6 +8,19 @@ import {
   subscribeForeground,
 } from './foregroundGuard';
 import { mergeSaveCrmClients, saveAllCrmClients } from '../utils/workspaceScope';
+import { canonicalizeCountryField } from '../utils/countryNormalize';
+
+/** 写入前统一国家字段，消除中英/城市/备注造成的重复筛选项 */
+const sanitizeClientsCountries = (list: Client[]): Client[] => {
+  let changed = false;
+  const next = list.map((c) => {
+    const canon = canonicalizeCountryField(c.country);
+    if (!canon || canon === (c.country || '').trim()) return c;
+    changed = true;
+    return { ...c, country: canon };
+  });
+  return changed ? next : list;
+};
 
 type Listener = () => void;
 
@@ -142,7 +155,7 @@ const scheduleIdlePersist = () => {
 };
 
 const commit = (next: Client[], opts?: { persist?: boolean }) => {
-  clients = Array.isArray(next) ? next : [];
+  clients = sanitizeClientsCountries(Array.isArray(next) ? next : []);
   version += 1;
   if (opts?.persist !== false) scheduleIdlePersist();
   if (shouldDeferHeavyWork()) {

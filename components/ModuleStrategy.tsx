@@ -15,6 +15,10 @@ import { compressImageBase64, filterTextKnowledgeFiles } from '../utils/aiContex
 import { getCustomKeywords, getCustomCountries } from '../services/taxonomyStore';
 import { formatBackgroundCheckTime } from '../utils/crmHistory';
 import {
+  countryMatchesFilter,
+  uniqueNormalizedCountriesZh,
+} from '../utils/countryNormalize';
+import {
   getStrategyLlmStatus,
   listStrategyOfferAssets,
   pickDefaultStrategyOfferIds,
@@ -233,17 +237,17 @@ export const ModuleStrategy: React.FC<Props> = ({
   }, [history, discoveryArchives]);
 
   const countryOptions = useMemo(() => {
-    const set = new Set<string>();
-    for (const c of getCustomCountries()) if (c.trim()) set.add(c.trim());
+    const raws: string[] = [];
+    for (const c of getCustomCountries()) if (c.trim()) raws.push(c.trim());
     for (const h of history) {
       const c = (h.country || h.data?.searchCountry || '').trim();
-      if (c && !/^(global|worldwide|国际|全球|不限)$/i.test(c)) set.add(c);
+      if (c) raws.push(c);
     }
     for (const a of discoveryArchives) {
-      for (const c of a.countries || []) if (c?.trim()) set.add(c.trim());
-      if (a.country?.trim()) set.add(a.country.trim());
+      for (const c of a.countries || []) if (c?.trim()) raws.push(c.trim());
+      if (a.country?.trim()) raws.push(a.country.trim());
     }
-    return Array.from(set).sort((a, b) => a.localeCompare(b, 'zh'));
+    return uniqueNormalizedCountriesZh(raws);
   }, [history, discoveryArchives]);
 
   const marketLeads = useMemo(() => {
@@ -260,9 +264,7 @@ export const ModuleStrategy: React.FC<Props> = ({
         const country = (r.searchCountry || r.country || '').trim();
         const countryHit =
           !selectedCountries.length ||
-          selectedCountries.some(
-            (c) => country.toLowerCase().includes(c.toLowerCase()) || c.toLowerCase().includes(country.toLowerCase())
-          );
+          selectedCountries.some((c) => countryMatchesFilter(country, c));
         if (!countryHit && selectedCountries.length) continue;
         const key = (r.website || r.name || '').toLowerCase();
         if (!key || seen.has(key)) continue;

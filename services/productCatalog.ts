@@ -32,6 +32,7 @@ import {
 } from './categoryTaxonomy';
 import { TAXONOMY_ALIAS_RULES, TOY_ROOT_ID } from '../data/productTaxonomy';
 import type { CategoryEvidenceRef } from '../types';
+import { normalizeCountryZh } from '../utils/countryNormalize';
 
 const domainKey = (raw?: string) =>
   (raw || '')
@@ -984,7 +985,9 @@ export const matchOurProductToProfiles = (
   ];
   const packHints = (query.packagingHints || []).map((h) => normalizeText(h)).filter(Boolean);
   const colorHints = (query.colorHints || []).map((h) => normalizeText(h)).filter(Boolean);
-  const countries = (query.countries || []).map((c) => c.trim().toLowerCase()).filter(Boolean);
+  const countries = (query.countries || [])
+    .map((c) => normalizeCountryZh(c))
+    .filter((c) => c && c !== '未分类');
 
   const hits: ProductMatchHit[] = [];
 
@@ -1000,8 +1003,8 @@ export const matchOurProductToProfiles = (
     if (!hasReal || quality < 8) continue;
 
     if (countries.length) {
-      const pc = (profile.country || '').toLowerCase();
-      if (pc && !countries.some((c) => pc.includes(c) || c.includes(pc))) continue;
+      const pc = normalizeCountryZh(profile.country);
+      if (pc === '未分类' || !countries.includes(pc)) continue;
     }
 
     let score = 0;
