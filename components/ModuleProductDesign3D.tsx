@@ -863,6 +863,29 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
               );
             }
           }
+        } else if (kind === 'texture_hd') {
+          // 贴图必须挂首次生成 / 原模，禁止喂分件 task 或分件 https
+          upstreamId = pickHealthyRootId(
+            active.sourceTaskId,
+            active.provider === 'qwen_tripo' || active.provider === 'tripo'
+              ? active.providerTaskId
+              : '',
+            active.officialTaskId
+          );
+          publicModelUrl = [
+            active.originalModelUrl,
+            active.pbrModelUrl,
+            active.baseModelUrl,
+            active.cloudPbrModelUrl,
+            active.cloudModelUrl,
+          ].find(
+            (u) =>
+              u &&
+              /^https?:\/\//i.test(u) &&
+              !/localhost|127\.0\.0\.1/i.test(u) &&
+              u !== active.modelUrl
+          );
+          if (!upstreamId && publicModelUrl) preferModelUrl = true;
         } else {
           upstreamId = pickHealthyRootId(
             active.providerTaskId,
@@ -937,7 +960,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         active.originalModelUrl ||
         (kind === 'segment'
           ? active.pbrModelUrl || active.modelUrl || active.baseModelUrl
-          : kind !== 'convert'
+          : kind !== 'convert' && kind !== 'texture_hd'
             ? active.pbrModelUrl || active.modelUrl || active.baseModelUrl
             : undefined);
       let vaultedOriginal: string | undefined;
@@ -958,7 +981,8 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         kind,
         originalTaskId: upstreamId || undefined,
         modelUrl: publicModelUrl,
-        preferModelUrl: kind === 'segment' ? preferModelUrl : undefined,
+        preferModelUrl:
+          kind === 'segment' || kind === 'texture_hd' ? preferModelUrl : undefined,
         format,
         texturePrompt: prompt.trim() || undefined,
         faceLimit: retopoFaceLimit,
@@ -1016,7 +1040,8 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
         label: result.label,
         at: Date.now(),
       };
-      if (kind !== 'convert' && kind !== 'segment') {
+      // 贴图：结果才是彩色原模，勿在写结果前用灰模去「固化」_orig
+      if (kind !== 'convert' && kind !== 'segment' && kind !== 'texture_hd') {
         try {
           vaultedOriginal =
             (await preserveOriginalModel3dInVault({
@@ -1025,6 +1050,20 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
             })) || vaultedOriginal;
         } catch {
           /* ignore */
+        }
+      }
+      let texturedOriginal: string | undefined;
+      if (kind === 'texture_hd') {
+        const colored = (result.pbrModelUrl || result.modelUrl || '').trim();
+        if (colored) {
+          try {
+            texturedOriginal =
+              (await tryPersistMediaUrl(colored, 'model3d', `${active.id}_orig`, {
+                id: `${model3dVaultIdForJob(active.id)}_orig`,
+              })) || colored;
+          } catch {
+            texturedOriginal = colored;
+          }
         }
       }
       const healedSourceId = pickHealthyRootId(
@@ -1044,7 +1083,9 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
             ? pickHealthyRootId(active.providerTaskId, healedSourceId) ||
               active.providerTaskId ||
               healedSourceId
-            : result.taskId,
+            : kind === 'texture_hd'
+              ? active.providerTaskId || healedSourceId || result.taskId
+              : result.taskId,
         officialTaskId:
           preferOfficial || !qwenEditReady
             ? result.taskId || active.officialTaskId
@@ -1054,7 +1095,13 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
             ? healedSourceId || active.sourceTaskId
             : healedSourceId || active.sourceTaskId || result.taskId,
         segmentTaskId: kind === 'segment' ? result.taskId : active.segmentTaskId,
-        modelUrl: kind === 'convert' ? active.modelUrl || result.modelUrl : result.modelUrl,
+        // 贴图且已拆分：主槽保留分件网格，彩色进 pbr/_orig
+        modelUrl:
+          kind === 'convert'
+            ? active.modelUrl || result.modelUrl
+            : kind === 'texture_hd' && active.segmentTaskId
+              ? active.modelUrl
+              : result.modelUrl,
         // 拆分：分件只进 modelUrl；pbr 保留拆分前彩色成片，禁止用分件灰/色块覆盖
         pbrModelUrl:
           kind === 'convert'
@@ -1065,17 +1112,24 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                 keepOriginal ||
                 active.originalModelUrl ||
                 active.modelUrl
-              : result.pbrModelUrl || result.modelUrl,
+              : kind === 'texture_hd'
+                ? texturedOriginal || result.pbrModelUrl || result.modelUrl
+                : result.pbrModelUrl || result.modelUrl,
         baseModelUrl:
           kind === 'convert'
             ? active.baseModelUrl
             : kind === 'segment'
               ? active.baseModelUrl || vaultedOriginal || keepOriginal
-              : result.baseModelUrl ||
-                vaultedOriginal ||
-                active.baseModelUrl ||
-                keepOriginal,
-        originalModelUrl: vaultedOriginal || keepOriginal || active.originalModelUrl,
+              : kind === 'texture_hd'
+                ? active.baseModelUrl || keepOriginal
+                : result.baseModelUrl ||
+                  vaultedOriginal ||
+                  active.baseModelUrl ||
+                  keepOriginal,
+        originalModelUrl:
+          kind === 'texture_hd'
+            ? texturedOriginal || result.pbrModelUrl || result.modelUrl || active.originalModelUrl
+            : vaultedOriginal || keepOriginal || active.originalModelUrl,
         originalPreviewImageUrl:
           active.originalPreviewImageUrl || active.previewImageUrl,
         previewImageUrl: result.previewImageUrl || active.previewImageUrl,
@@ -1110,6 +1164,10 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
             ? `部件拆分完成：API 返回 ${result.partNames.length} 个部件，已切换到分件着色 / 可炸开`
             : '部件拆分完成：已切换到分件着色。若仍是 1 块，请选「精细」再拆一次（本次已纠正上游任务）'
         );
+      } else if (kind === 'texture_hd') {
+        setPreviewMode('original');
+        setMsgTone('ok');
+        setMsg('贴图完成：已写入彩色原模，可环视；分件结果仍保留，可切「分件着色」查看');
       } else {
         setMsg(
           kind === 'convert'
@@ -1857,7 +1915,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                     <Paintbrush size={13} /> 高清贴图
                   </div>
                   <p className="text-[10px] text-teal-800/80 font-medium leading-relaxed">
-                    对当前网格重做 PBR 贴图。可用上方「描述」作贴图提示。高模请先重拓扑再贴图更稳。
+                    云端原模若已无色，点下方按钮即可对网格重做彩色贴图（会耗额度）。可用上方「描述」作贴图提示。
                   </p>
                   <button
                     type="button"
@@ -1865,7 +1923,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                     onClick={() => void runPostProcess('texture_hd')}
                     className="w-full rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-black py-2.5 disabled:opacity-50"
                   >
-                    {busy ? '贴图中…' : '生成贴图'}
+                    {busy ? '贴图中…' : '生成贴图（上色）'}
                   </button>
                 </>
               )}

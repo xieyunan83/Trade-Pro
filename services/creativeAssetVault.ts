@@ -179,21 +179,25 @@ export const findBestLocalTexturedModel3dForJob = async (job: {
   pushId(job.baseModelUrl);
 
   const meta = await listVaultMeta();
-  for (const m of meta.filter((x) => x.kind === 'model3d')) {
+  const allModels = meta.filter((x) => x.kind === 'model3d');
+  for (const m of allModels) {
     const bag = `${m.id} ${m.sourceHint || ''}`;
     if (hints.some((h) => bag.includes(h))) pushId(m.id);
     if (m.id === origId || m.id.endsWith('_orig')) pushId(m.id);
   }
+  // 任务提示对不上时：仍扫一遍本机全部 GLB，避免彩色文件躺在库里却选成灰模
+  for (const m of allModels) pushId(m.id);
 
   /**
    * 体积大 ≠ 有色：Tripo base 灰模常比带贴图 PBR 更大。
-   * 评分：内嵌贴图 >> _orig / pbr，base 与主槽分件垫底。
+   * 评分：内嵌贴图 >> 任务相关 >> _orig / pbr，base 与主槽分件垫底。
    */
-  const scoreId = (id: string, size: number, hasTex: boolean): number => {
+  const scoreId = (id: string, size: number, hasTex: boolean, related: boolean): number => {
     const bag = id.toLowerCase();
     let score = Math.min(size / 1_000_000, 40); // 体积最多贡献 40
     if (hasTex) score += 200;
     else score -= 60;
+    if (related) score += 80;
     if (id === origId || bag.endsWith('_orig') || bag.includes('_orig')) score += 120;
     if (bag.includes('pbr')) score += 90;
     if (bag.includes('base') || id === (job.baseModelUrl || '').replace(/^vault:/, '')) {
@@ -213,13 +217,19 @@ export const findBestLocalTexturedModel3dForJob = async (job: {
     const size = row?.blob?.size || 0;
     if (size < 1024) continue;
     const hasTex = row?.blob ? await glbBlobLikelyHasTextures(row.blob) : false;
-    const score = scoreId(id, size, hasTex);
+    const related =
+      id === origId ||
+      id === meshId ||
+      hints.some((h) => id.includes(h) || (row?.sourceHint || '').includes(h));
+    // 无关且无贴图的库内文件直接跳过，避免扫库误选
+    if (!related && !hasTex) continue;
+    // 无关但有贴图：仅作保底（相关无色时）
+    const score = scoreId(id, size, hasTex, related);
     if (!best || score > best.score) best = { id, score, hasTex };
   }
-  // 有带贴图候选才返回；全是无贴图灰模则返回 null，逼上层走备份链 / 云端补拉
   if (!best) return null;
+  // 优先只返回带贴图的；全库无色才回落灰模
   if (!best.hasTex) {
-    // 仍返回最高分（可能是唯一可用），但调用方应结合 hasTex 文案降级
     void touchAccess(best.id);
     return `${VAULT_PREFIX}${best.id}`;
   }
