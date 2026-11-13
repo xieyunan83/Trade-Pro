@@ -116,8 +116,12 @@
       "memory": 512
     },
     "api/landing.ts": {
-      "maxDuration": 60,
+      "maxDuration": 30,
       "memory": 512
+    },
+    "api/health.ts": {
+      "maxDuration": 10,
+      "memory": 256
     }
   },
   "rewrites": [

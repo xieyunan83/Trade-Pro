@@ -1,13 +1,11 @@
-import { enforceApiRateLimit } from './_firewall';
-import { applyStrictCors, handleCorsPreflight } from './_cors';
 /**
- * 着陆页聚合（自包含，避免跨目录 import 导致 Vercel FUNCTION_INVOCATION_FAILED）
+ * 着陆页聚合（完全自包含：不引用 _firewall/_cors，降低 Serverless 加载失败面）
  * GET /api/landing
  * Header 可选：x-industry-token
  */
 export const config = {
   runtime: 'nodejs',
-  maxDuration: 60,
+  maxDuration: 30,
   memory: 512,
 };
 
@@ -42,8 +40,7 @@ type ProductItem = {
 };
 
 const BOC_URL = 'https://www.bank-of-china.com/sourcedb/whpj/index.html';
-const UA =
-  'Mozilla/5.0 (compatible; TradeCollabHub/1.0; +https://babyworld.ltd)';
+const UA = 'Mozilla/5.0 (compatible; TradeCollabHub/1.0; +https://babyworld.ltd)';
 
 const MAJOR_FX: { name: string; code: string }[] = [
   { name: '美元', code: 'USD' },
@@ -60,22 +57,8 @@ const MAJOR_FX: { name: string; code: string }[] = [
   { name: '泰国铢', code: 'THB' },
 ];
 
-const stripHtml = (s: string) =>
-  s
-    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, ' ')
-    .trim();
-
-/** 单源拉取要短：Vercel 上外网不稳时拖满会 FUNCTION_INVOCATION_FAILED */
-const FETCH_MS = 8_000;
-/** 整包软截止，超时也必须 200 + 兜底，禁止裸 500 */
-const BUILD_BUDGET_MS = 14_000;
+const FETCH_MS = 7_000;
+const BUILD_BUDGET_MS = 12_000;
 
 const FALLBACK_FX: FxQuote[] = [
   { currency: '美元', code: 'USD', bocBuy: '718.00', bocSell: '721.00', bocMid: '719.50', publishedAt: '参考' },
@@ -133,22 +116,6 @@ const FALLBACK_NEWS: NewsItem[] = [
   },
 ];
 
-const fetchText = async (url: string, accept?: string): Promise<string> => {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), FETCH_MS);
-  try {
-    const res = await fetch(url, {
-      headers: { 'User-Agent': UA, Accept: accept || 'text/html,*/*' },
-      signal: ctrl.signal,
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.text();
-  } finally {
-    clearTimeout(t);
-  }
-};
-
-/** 带图展示样本：无令牌时直接返回，避免慢速公开页爬取拖慢首屏 */
 const SHOWCASE_PRODUCTS: ProductItem[] = [
   {
     id: 'showcase-01',
@@ -219,54 +186,34 @@ const SHOWCASE_PRODUCTS: ProductItem[] = [
       { label: '品类', value: '泡泡枪' },
     ],
   },
-  {
-    id: 'showcase-07',
-    title: '惊喜娃娃泡泡棒（4 色混装）',
-    image:
-      'https://imgs.toysbear.net/PIM/HS168007782044923/HS0000002/P17750147234029559_17750147241031993426.jpg',
-    source: '优选展区',
-    specs: [
-      { label: '长度', value: '36 CM' },
-      { label: '配色', value: '4 色混装' },
-      { label: '品类', value: '泡泡棒' },
-    ],
-  },
-  {
-    id: 'showcase-08',
-    title: '1:16 四通遥控车带灯光（敞篷款）',
-    image:
-      'https://imgs.toysbear.net/PIM/HS168310862356946/HS0000003/P17521405372312555_696214923726917.jpg',
-    source: '优选展区',
-    specs: [
-      { label: '比例', value: '1:16' },
-      { label: '通道', value: '四通遥控' },
-      { label: '功能', value: '灯光' },
-    ],
-  },
-  {
-    id: 'showcase-09',
-    title: '桌游摇摆叠叠乐 · 卡通鲨鱼平衡积木',
-    image:
-      'https://imgs.toysbear.net/PIM/HS160810544934535/HS0000003/P17148952959545773_543662067609670.jpg',
-    source: '优选展区',
-    specs: [
-      { label: '块数', value: '48 块' },
-      { label: '玩法', value: '摇摆叠叠 / 平衡' },
-      { label: '品类', value: '桌游积木' },
-    ],
-  },
-  {
-    id: 'showcase-10',
-    title: '120 毫升光棒萝卜兔泡泡棒',
-    image:
-      'https://imgs.toysbear.net/PIM/HS171775405706656/HS0000002/P17793417591565068_17793417608886878559.jpg',
-    source: '优选展区',
-    specs: [
-      { label: '容量', value: '120 ML' },
-      { label: '品类', value: '泡泡棒 / 光棒' },
-    ],
-  },
 ];
+
+const stripHtml = (s: string) =>
+  s
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .trim();
+
+const fetchText = async (url: string, accept?: string): Promise<string> => {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), FETCH_MS);
+  try {
+    const res = await fetch(url, {
+      headers: { 'User-Agent': UA, Accept: accept || 'text/html,*/*' },
+      signal: ctrl.signal,
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.text();
+  } finally {
+    clearTimeout(t);
+  }
+};
 
 const parseBoc = (html: string): FxQuote[] => {
   const pat =
@@ -322,24 +269,30 @@ const parseRss = (
   return items;
 };
 
-/** 公开汇率接口兜底（中行站不可达时）：把 1 外币兑 CNY 换成「每 100 外币」 */
-const fetchAltFxQuotes = async (): Promise<FxQuote[]> => {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), FETCH_MS);
+const softRace = async <T,>(p: Promise<T>, ms: number, fallback: T): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const res = await fetch('https://open.er-api.com/v6/latest/CNY', {
-      headers: { 'User-Agent': UA, Accept: 'application/json' },
-      signal: ctrl.signal,
-    });
-    if (!res.ok) return [];
-    const data = (await res.json()) as { rates?: Record<string, number> };
+    return await Promise.race([
+      p.catch(() => fallback),
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(fallback), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+};
+
+const fetchAltFxQuotes = async (): Promise<FxQuote[]> => {
+  try {
+    const raw = await fetchText('https://open.er-api.com/v6/latest/CNY', 'application/json');
+    const data = JSON.parse(raw) as { rates?: Record<string, number> };
     const rates = data?.rates || {};
     const out: FxQuote[] = [];
     for (const { name, code } of MAJOR_FX) {
       const perCny = rates[code];
       if (!perCny || !(perCny > 0)) continue;
-      // rates[code] = 1 CNY 可兑多少外币 → 100 外币兑多少 CNY = 100 / perCny
-      const mid = (100 / perCny).toFixed(code === 'JPY' ? 2 : 2);
+      const mid = (100 / perCny).toFixed(2);
       out.push({
         currency: name,
         code,
@@ -352,8 +305,6 @@ const fetchAltFxQuotes = async (): Promise<FxQuote[]> => {
     return out;
   } catch {
     return [];
-  } finally {
-    clearTimeout(t);
   }
 };
 
@@ -363,40 +314,18 @@ const fetchFxQuotes = async (): Promise<{ quotes: FxQuote[]; error?: string }> =
     const quotes = parseBoc(html);
     if (quotes.length) return { quotes };
   } catch {
-    /* try alt */
+    /* alt */
   }
-  try {
-    const alt = await fetchAltFxQuotes();
-    if (alt.length) return { quotes: alt, error: '中行暂不可达，已用公开市价' };
-  } catch {
-    /* fall through */
-  }
+  const alt = await fetchAltFxQuotes();
+  if (alt.length) return { quotes: alt, error: '中行暂不可达，已用公开市价' };
   return { quotes: FALLBACK_FX.slice(), error: '实时牌价暂不可用，已显示参考价' };
 };
 
 const fetchNewsFeeds = async (): Promise<{ items: NewsItem[]; error?: string }> => {
-  // 国内可访问源优先（Google RSS 在国内常不可达）
   const feeds: { url: string; region: 'cn' | 'intl'; label: string }[] = [
-    {
-      url: 'https://www.chinanews.com.cn/rss/finance.xml',
-      region: 'cn',
-      label: '国内财经',
-    },
-    {
-      url: 'https://www.people.com.cn/rss/finance.xml',
-      region: 'cn',
-      label: '国内财经·人民网',
-    },
-    {
-      url: 'https://www.chinanews.com.cn/rss/world.xml',
-      region: 'intl',
-      label: '国际要闻',
-    },
-    {
-      url: 'https://news.google.com/rss/search?q=toy+industry+OR+%22toy+fair%22&hl=en-US&gl=US&ceid=US:en',
-      region: 'intl',
-      label: '国际玩具资讯',
-    },
+    { url: 'https://www.chinanews.com.cn/rss/finance.xml', region: 'cn', label: '国内财经' },
+    { url: 'https://www.people.com.cn/rss/finance.xml', region: 'cn', label: '国内财经·人民网' },
+    { url: 'https://www.chinanews.com.cn/rss/world.xml', region: 'intl', label: '国际要闻' },
   ];
   const news: NewsItem[] = [];
   const newsErr: string[] = [];
@@ -404,7 +333,7 @@ const fetchNewsFeeds = async (): Promise<{ items: NewsItem[]; error?: string }> 
     feeds.map(async (f) => {
       try {
         const xml = await fetchText(f.url, 'application/rss+xml, application/xml, text/xml,*/*');
-        news.push(...parseRss(xml, f.region, f.label, 10));
+        news.push(...parseRss(xml, f.region, f.label, 8));
       } catch (e: any) {
         newsErr.push(`${f.label}: ${e?.message || e}`);
       }
@@ -424,105 +353,6 @@ const fetchNewsFeeds = async (): Promise<{ items: NewsItem[]; error?: string }> 
   };
 };
 
-const fetchIndustryBundle = async (
-  token: string
-): Promise<{ products: ProductItem[]; industryNews: NewsItem[]; error?: string }> => {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), FETCH_MS);
-  try {
-    const [prodRes, newsRes] = await Promise.all([
-      fetch('https://mapi.toysbear.net/product/TsbProductNew/NewProductList', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-          'User-Agent': UA,
-        },
-        body: JSON.stringify({ SkipCount: 0, MaxResultCount: 16, pageIndex: 1, pageSize: 16 }),
-        signal: ctrl.signal,
-      }),
-      fetch('https://mapi.toysbear.net/synthesis/RealTimeInfo/RealTimeInfoPage', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-          'User-Agent': UA,
-        },
-        body: JSON.stringify({ SkipCount: 0, MaxResultCount: 12, pageIndex: 1, pageSize: 12 }),
-        signal: ctrl.signal,
-      }),
-    ]);
-    let products: ProductItem[] = [];
-    let error: string | undefined;
-    try {
-      const data = await prodRes.json();
-      const list =
-        data?.result?.items || data?.result?.item?.items || data?.result?.list || data?.items || [];
-      if (Array.isArray(list) && list.length) {
-        products = list.slice(0, 16).map((row: any, i: number) => ({
-          id: `p-${row.id || i}`,
-          title: String(row.productName || row.name || '新品'),
-          image: row.imageUrl || row.imgUrl || row.mainImage || undefined,
-          url: row.url || undefined,
-          source: '优选行业新品',
-        }));
-      } else {
-        error = data?.result?.msg || '行业新品暂无数据或令牌无效';
-      }
-    } catch (e: any) {
-      error = e?.message || String(e);
-    }
-    const industryNews: NewsItem[] = [];
-    try {
-      const data = await newsRes.json();
-      const list =
-        data?.result?.items || data?.result?.item?.items || data?.result?.list || data?.items || [];
-      if (Array.isArray(list)) {
-        for (const row of list.slice(0, 12)) {
-          industryNews.push({
-            id: `ind-${row.id || industryNews.length}`,
-            title: String(row.title || row.Title || '资讯'),
-            url:
-              row.url ||
-              row.link ||
-              `https://www.toysbear.com/toyConsultationDetail/${row.id || ''}`,
-            source: '优选行业资讯',
-            publishedAt: row.publishTime || row.creationTime,
-            region: 'industry',
-          });
-        }
-      }
-    } catch {
-      /* ignore */
-    }
-    return { products, industryNews, error };
-  } catch (e: any) {
-    return { products: [], industryNews: [], error: e?.message || String(e) };
-  } finally {
-    clearTimeout(t);
-  }
-};
-
-const emptyIndustry = () => ({
-  products: [] as ProductItem[],
-  industryNews: [] as NewsItem[],
-  error: undefined as string | undefined,
-});
-
-const softRace = async <T,>(p: Promise<T>, ms: number, fallback: T): Promise<T> => {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      p.catch(() => fallback),
-      new Promise<T>((resolve) => {
-        timer = setTimeout(() => resolve(fallback), ms);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-};
-
 const buildFallbackPayload = (err?: string) => ({
   ok: true,
   fetchedAt: Date.now(),
@@ -533,11 +363,11 @@ const buildFallbackPayload = (err?: string) => ({
     error: err,
   },
   news: { items: FALLBACK_NEWS.slice(), error: err },
-  products: { items: SHOWCASE_PRODUCTS.slice(0, 10), needsCredential: false },
+  products: { items: SHOWCASE_PRODUCTS.slice(), needsCredential: false },
 });
 
-async function buildPayload(industryToken?: string) {
-  const [fxResult, newsResult, industryResult] = await Promise.all([
+async function buildPayload() {
+  const [fxResult, newsResult] = await Promise.all([
     softRace(fetchFxQuotes(), BUILD_BUDGET_MS, {
       quotes: FALLBACK_FX.slice(),
       error: '汇率拉取超时，已用参考价',
@@ -546,30 +376,10 @@ async function buildPayload(industryToken?: string) {
       items: FALLBACK_NEWS.slice(),
       error: '资讯拉取超时，已用备选摘要',
     }),
-    industryToken
-      ? softRace(fetchIndustryBundle(industryToken), 10_000, emptyIndustry())
-      : Promise.resolve(emptyIndustry()),
   ]);
 
-  let products = industryResult.products.slice();
-  let productsError = industryResult.error;
-  let needsCredential = !industryToken || products.length === 0;
-
-  if (products.length < 6) {
-    const seen = new Set(products.map((p) => p.title.toLowerCase()));
-    for (const p of SHOWCASE_PRODUCTS) {
-      if (seen.has(p.title.toLowerCase())) continue;
-      products.push(p);
-      if (products.length >= 10) break;
-    }
-    needsCredential = false;
-    productsError = undefined;
-  }
-
-  let newsItems = [...industryResult.industryNews, ...newsResult.items].slice(0, 28);
-  if (!newsItems.length) newsItems = FALLBACK_NEWS.slice();
-
   const fxQuotes = fxResult.quotes.length ? fxResult.quotes : FALLBACK_FX.slice();
+  const newsItems = newsResult.items.length ? newsResult.items : FALLBACK_NEWS.slice();
 
   return {
     ok: true,
@@ -584,37 +394,49 @@ async function buildPayload(industryToken?: string) {
       note: '买入/卖出为现汇价参考；中间价为折算价。单位：人民币 / 100 外币。仅供参考。',
       error: fxResult.error,
     },
-    news: {
-      items: newsItems,
-      error: newsResult.error || industryResult.error,
-    },
-    products: { items: products, error: productsError, needsCredential },
+    news: { items: newsItems.slice(0, 28), error: newsResult.error },
+    products: { items: SHOWCASE_PRODUCTS.slice(), needsCredential: false },
   };
 }
 
+const applyCors = (req: any, res: any) => {
+  const origin = String(req?.headers?.origin || '').trim();
+  const allowed = new Set([
+    'https://babyworld.ltd',
+    'https://www.babyworld.ltd',
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+  ]);
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'content-type, x-industry-token');
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Vary', 'Origin');
+  if (origin && allowed.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
+};
+
 export default async function handler(req: any, res: any) {
   try {
-    if (handleCorsPreflight(req, res)) return;
-    applyStrictCors(req, res);
-    if (!enforceApiRateLimit(req, res, 'landing')) return;
-    if (req.method !== 'GET') {
+    applyCors(req, res);
+    if (String(req?.method || '').toUpperCase() === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    if (String(req?.method || '').toUpperCase() !== 'GET') {
       res.status(405).json({ ok: false, error: 'GET only' });
       return;
     }
-    const tokenHdr = req.headers?.['x-industry-token'];
-    const industryToken = typeof tokenHdr === 'string' ? tokenHdr.trim() : '';
     const payload = await softRace(
-      buildPayload(industryToken || undefined),
+      buildPayload(),
       BUILD_BUDGET_MS + 2_000,
       buildFallbackPayload('看板拉取超时，已显示备选内容')
     );
     res.status(200).json(payload);
   } catch (e: any) {
-    console.error('[landing]', e);
     try {
       res.status(200).json(buildFallbackPayload(e?.message || String(e)));
     } catch {
-      /* 最后防线：连 json 都失败时仍避免未捕获崩进程 */
       res.statusCode = 200;
       res.setHeader?.('Content-Type', 'application/json');
       res.end?.(JSON.stringify(buildFallbackPayload('landing failed')));
