@@ -66,6 +66,13 @@ export type Model3dJob = {
   pbrModelUrl?: string;
   baseModelUrl?: string;
   /**
+   * 云端临时下载链备份（写入本机 vault 后仍保留）。
+   * 本机素材被清空或 IndexedDB 丢失时，可凭此或 providerTaskId 再拉取，不重复计费。
+   */
+  cloudModelUrl?: string;
+  cloudPbrModelUrl?: string;
+  cloudBaseModelUrl?: string;
+  /**
    * 首次生成/导入的原模地址（拆分前）。拆分后必须保留，可随时切回「原模」查看。
    */
   originalModelUrl?: string;

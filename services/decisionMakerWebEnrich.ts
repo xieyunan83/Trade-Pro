@@ -323,10 +323,12 @@ ${roster}
 只输出 JSON，不要 markdown。`;
 
   try {
+    // 已有网页证据则只整理；无证据才允许一次模型侧联网（禁止 forced，避免高额 MCP）
+    const needSearch = !String(evidence || '').trim();
     const text = await callQwen(prompt, {
       jsonMode: true,
-      enableSearch: true,
-      forcedSearch: true,
+      enableSearch: needSearch,
+      forcedSearch: false,
       task: 'analysis',
       timeoutMs: 120_000,
     });

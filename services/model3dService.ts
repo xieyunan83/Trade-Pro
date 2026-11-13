@@ -982,7 +982,37 @@ export const fetchTripoTaskOnce = async (taskId: string): Promise<Model3dGenerat
 };
 
 const jobHasModel = (j: Model3dJob) =>
-  !!(j.modelUrl || j.pbrModelUrl || j.baseModelUrl);
+  !!(j.modelUrl || j.pbrModelUrl || j.baseModelUrl || j.cloudModelUrl || j.originalModelUrl);
+
+const pickHttps = (...urls: Array<string | undefined>) => {
+  for (const u of urls) {
+    const s = (u || '').trim();
+    if (s && /^https?:\/\//i.test(s)) return s;
+  }
+  return undefined;
+};
+
+/** 本机 vault 引用是否还有真实 Blob（清空素材后常见「ready 但文件已空」） */
+const vaultBlobAlive = async (u?: string): Promise<boolean> => {
+  const s = (u || '').trim();
+  if (!s) return false;
+  if (/^https?:\/\//i.test(s) || s.startsWith('blob:') || s.startsWith('data:')) return true;
+  try {
+    const { isVaultRef, resolveMediaBlob } = await import('./creativeAssetVault');
+    if (!isVaultRef(s)) return !!s;
+    const blob = await resolveMediaBlob(s);
+    return !!(blob && blob.size > 64);
+  } catch {
+    return false;
+  }
+};
+
+const jobLocalMeshAlive = async (j: Model3dJob): Promise<boolean> => {
+  for (const u of [j.modelUrl, j.pbrModelUrl, j.baseModelUrl, j.originalModelUrl]) {
+    if (await vaultBlobAlive(u)) return true;
+  }
+  return false;
+};
 
 /** 同步清理：刷新后仍卡在 running@100% 的僵尸任务 */
 export const sanitizeModel3dJobs = (jobs: Model3dJob[]): Model3dJob[] => {
@@ -1016,49 +1046,110 @@ export const sanitizeModel3dJobs = (jobs: Model3dJob[]): Model3dJob[] => {
   });
 };
 
-/** 有 task_id 时尝试从云端捞回已成功的 GLB（不重复计费） */
+const fetchCloudResultForJob = async (
+  j: Model3dJob
+): Promise<Model3dGenerateResult | null> => {
+  if (!j.providerTaskId) return null;
+  let result: Model3dGenerateResult | null = null;
+  const preferOfficial = j.provider === 'tripo' && isTripoReady();
+  const preferQwen =
+    (j.provider === 'qwen_tripo' || !preferOfficial) && getQwenTripo3dProviderStatus().ready;
+  if (preferQwen) {
+    try {
+      result = await fetchQwenTripoTaskOnce(j.providerTaskId);
+    } catch (e) {
+      console.warn('[model3d] qwen recover failed', j.providerTaskId, e);
+    }
+  }
+  if (!result?.modelUrl && isTripoReady()) {
+    try {
+      result = await fetchTripoTaskOnce(j.providerTaskId);
+    } catch (e) {
+      console.warn('[model3d] tripo recover failed', j.providerTaskId, e);
+    }
+  }
+  return result;
+};
+
+/**
+ * 恢复已扣费但本机丢失的 GLB：
+ * 1) ready 但 vault 空 → 用 cloud*Url / task_id 再拉
+ * 2) running/queued 无地址 → 用 task_id 查结果（不重复计费）
+ */
 export const recoverModel3dJobs = async (jobs: Model3dJob[]): Promise<Model3dJob[]> => {
   const base = sanitizeModel3dJobs(jobs);
   const out: Model3dJob[] = [];
   for (const j of base) {
-    if (j.status === 'ready' || j.status === 'failed' || !j.providerTaskId || jobHasModel(j)) {
+    if (j.status === 'failed') {
       out.push(j);
       continue;
     }
-    let result: Model3dGenerateResult | null = null;
-    const preferOfficial = j.provider === 'tripo' && isTripoReady();
-    const preferQwen =
-      (j.provider === 'qwen_tripo' || !preferOfficial) && getQwenTripo3dProviderStatus().ready;
-    if (preferQwen) {
-      try {
-        result = await fetchQwenTripoTaskOnce(j.providerTaskId);
-      } catch (e) {
-        console.warn('[model3d] qwen recover failed', j.providerTaskId, e);
-      }
+
+    const alive = await jobLocalMeshAlive(j);
+    if (alive && j.status === 'ready') {
+      out.push(j);
+      continue;
     }
-    if (!result?.modelUrl && isTripoReady()) {
-      try {
-        result = await fetchTripoTaskOnce(j.providerTaskId);
-      } catch (e) {
-        console.warn('[model3d] tripo recover failed', j.providerTaskId, e);
-      }
-    }
-    if (result?.modelUrl) {
+
+    // 本机空了：优先用备份的 https 链（仍有效时零请求 task）
+    const cloudHttps = pickHttps(
+      j.cloudModelUrl,
+      j.cloudPbrModelUrl,
+      j.cloudBaseModelUrl,
+      j.modelUrl,
+      j.pbrModelUrl,
+      j.baseModelUrl,
+      j.originalModelUrl
+    );
+    if (!alive && cloudHttps) {
       out.push({
         ...j,
         status: 'ready',
         progress: 100,
-        provider: result.provider || j.provider,
-        modelUrl: result.modelUrl,
-        pbrModelUrl: result.pbrModelUrl || j.pbrModelUrl,
-        baseModelUrl: result.baseModelUrl || j.baseModelUrl,
-        previewImageUrl: result.previewImageUrl || j.previewImageUrl,
-        previewHint: '模型已就绪 · 已从云端恢复',
+        modelUrl: cloudHttps,
+        pbrModelUrl: j.pbrModelUrl || cloudHttps,
+        cloudModelUrl: j.cloudModelUrl || cloudHttps,
+        previewHint: '模型已就绪 · 已从备份链恢复，正在写入本机',
         error: undefined,
         updatedAt: Date.now(),
       });
       continue;
     }
+
+    if (!j.providerTaskId) {
+      out.push(j);
+      continue;
+    }
+
+    // ready 空文件 / 未完成任务：用 task_id 查云端结果（不重新生成、不重复计费）
+    if (j.status === 'ready' || j.status === 'running' || j.status === 'queued' || !alive) {
+      const result = await fetchCloudResultForJob(j);
+      if (result?.modelUrl) {
+        out.push({
+          ...j,
+          status: 'ready',
+          progress: 100,
+          provider: result.provider || j.provider,
+          modelUrl: result.modelUrl,
+          pbrModelUrl: result.pbrModelUrl || j.pbrModelUrl,
+          baseModelUrl: result.baseModelUrl || j.baseModelUrl,
+          cloudModelUrl: result.modelUrl,
+          cloudPbrModelUrl: result.pbrModelUrl || j.cloudPbrModelUrl,
+          cloudBaseModelUrl: result.baseModelUrl || j.cloudBaseModelUrl,
+          previewImageUrl: result.previewImageUrl || j.previewImageUrl,
+          previewHint: '模型已就绪 · 已从云端任务恢复（未重复计费）',
+          error: undefined,
+          updatedAt: Date.now(),
+        });
+        continue;
+      }
+    }
+
+    if (j.status === 'ready') {
+      out.push(j);
+      continue;
+    }
+
     out.push(
       sanitizeModel3dJobs([
         {

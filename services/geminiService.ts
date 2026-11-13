@@ -155,7 +155,12 @@ const formatAliyunLimitError = (
   );
 };
 
-const WEB_SEARCH_TASKS: TaskType[] = ['search', 'analysis'];
+/**
+ * 仅「客户搜索」在无外部证据时才默认打开模型侧联网。
+ * 背调(analysis) 已走 Tavily/AnySearch 取证，再开 enable_search 会在订阅套餐外
+ * 另计「联网搜索调用量」(MCP)，费用极高——默认禁止。
+ */
+const WEB_SEARCH_TASKS: TaskType[] = ['search'];
 
 export type AIEngineChoice = 'qwen' | 'gemini' | 'both';
 export type TaskAIModels = {
@@ -361,16 +366,25 @@ Do NOT use English for descriptions unless it is a proper noun (like a specific 
 Structure the report professionally in Chinese.
 `;
 
-const QWEN_SYSTEM = '你是外贸客户开发专家「外贸智慧协同」，擅长背景调查、客户搜索和开发信撰写。请使用联网搜索获取真实最新信息。所有输出使用简体中文。';
+const QWEN_SYSTEM =
+  '你是外贸客户开发专家「外贸智慧协同」，擅长背景调查、客户搜索和开发信撰写。优先依据用户提供的网页取证材料作答；仅在明确要求且无材料时再依赖实时联网。所有输出使用简体中文。';
 
-/** forced_search 会显著拖慢大任务，仅在明确要求时开启 */
+/**
+ * 千问 Token Plan 的 Credits 只覆盖「模型推理」。
+ * 一旦传 enable_search:true，平台会另计「联网搜索调用量」(账单里常显示为 MCP)，
+ * 与模型是否「支持联网」无关——套餐模型都支持，但搜索工具按次/按量另算。
+ * Standard Harness 每月仅少量免费额度，超出即进按量付费。
+ * 因此默认严禁打开；仅无外部取证（Tavily/AnySearch）时的客户搜索兜底才允许。
+ * forced_search 会强制每次检索，禁止在生产路径使用。
+ */
 const qwenSearchPayload = (
   enableSearch: boolean,
   forced = false
 ): Record<string, unknown> | undefined => {
   if (!enableSearch) return undefined;
+  // 生产路径一律不传 forced_search，避免一次请求打出多次计费检索
   if (forced) {
-    return { enable_search: true, search_options: { forced_search: true } };
+    console.warn('[Qwen] forced_search 已忽略（避免 MCP 联网搜索超额计费）');
   }
   return { enable_search: true };
 };
@@ -1306,10 +1320,12 @@ ${roster}
 只输出 JSON，不要 markdown。`;
 
   try {
+    // 已有 AnySearch 证据时禁止再开 MCP 联网；无证据才兜底一次（且不强制 forced）
+    const needSearch = !String(searchEvidence || '').trim();
     const text = await callQwen(prompt, {
       jsonMode: true,
-      enableSearch: true,
-      forcedSearch: true,
+      enableSearch: needSearch,
+      forcedSearch: false,
       task: 'analysis',
       timeoutMs: 120_000,
     });
@@ -3548,10 +3564,10 @@ ${searchKeyword ? `  Discovery source keyword: "${searchKeyword}". Tag this repo
 ${identityBlock}
 ${evidenceBlock}
 
-  You MUST use web search. Prefer official website of ${identityDomain}, LinkedIn company page for THAT domain, trade directories, exhibition pages,
+  Prefer official website of ${identityDomain}, LinkedIn company page for THAT domain, trade directories, exhibition pages,
   ImportYeti / Bill of Lading public indexes, news, certification pages.
   NEVER invent customs shipment IDs / BOL numbers / private emails — use "公开信息未找到" only for those hard facts.
-  When AnySearch evidence is present, treat official page extracts as ground truth for headquarters/city/country.
+  When WEB GROUND TRUTH evidence is present, treat it as highest priority and do NOT rely on extra live search.
 
   CRITICAL OUTPUT ORDER (fill these BEFORE long products[]):
   A) companyInfo including foundedYear, scale, nature (never leave foundedYear/scale as empty if publicly knowable)
@@ -3662,9 +3678,10 @@ ${productFocusBlock}
   }
   `;
 
-  // 1. Gemini∥千问并行取 JSON，字段级合并（单路时仅一份）
+  // 1. Gemini∥千问并行取 JSON。已有 Tavily/AnySearch 时严禁再开模型侧联网（MCP 按次计费）
   const texts = await generateContentMulti('analysis', prompt, SYSTEM_INSTRUCTION, true, [], [], {
     qwenApiKey: opts?.qwenApiKey,
+    enableSearch: !identityEvidence.trim(),
   });
   const raws = texts
     .map((t) => extractJson(t))
@@ -4321,7 +4338,10 @@ Output JSON only (omit fields that are NOT needed):
 }
 `;
 
-  const texts = await generateContentMulti('analysis', prompt, SYSTEM_INSTRUCTION, true);
+  // 补全字段：只用已有报告上下文，禁止再烧模型侧联网搜索额度
+  const texts = await generateContentMulti('analysis', prompt, SYSTEM_INSTRUCTION, true, [], [], {
+    enableSearch: false,
+  });
   const raws = texts
     .map((t) => extractJson(t))
     .filter((r) => r && typeof r === 'object' && !Array.isArray(r)) as Record<string, any>[];

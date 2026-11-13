@@ -184,6 +184,14 @@ export const persistModel3dJob = async (job: Model3dJob): Promise<Model3dJob> =>
     })) || primaryVault;
   }
 
+  // 落本机前先备份仍有效的 https 链，避免「只剩 vault: 引用、库被清就全丢」
+  const keepCloud = (u?: string, prev?: string) => {
+    const s = (u || '').trim();
+    if (s && /^https?:\/\//i.test(s)) return s;
+    const p = (prev || '').trim();
+    return p && /^https?:\/\//i.test(p) ? p : prev;
+  };
+
   return {
     ...job,
     sourceImage: sourceImage || job.sourceImage,
@@ -193,6 +201,9 @@ export const persistModel3dJob = async (job: Model3dJob): Promise<Model3dJob> =>
     baseModelUrl,
     originalModelUrl: originalModelUrl || job.originalModelUrl,
     previewImageUrl: previewImageUrl || job.previewImageUrl,
+    cloudModelUrl: keepCloud(job.modelUrl, job.cloudModelUrl),
+    cloudPbrModelUrl: keepCloud(job.pbrModelUrl, job.cloudPbrModelUrl),
+    cloudBaseModelUrl: keepCloud(job.baseModelUrl || job.originalModelUrl, job.cloudBaseModelUrl),
   };
 };
 
