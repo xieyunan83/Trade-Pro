@@ -9,7 +9,7 @@ export const VAULT_PREFIX = 'vault:';
 
 export type VaultKind = 'image' | 'model3d' | 'video' | 'other';
 
-type VaultMeta = {
+export type VaultMeta = {
   id: string;
   kind: VaultKind;
   mime: string;
@@ -604,6 +604,12 @@ const getRow = async (id: string): Promise<VaultRow | null> => {
   } finally {
     db.close();
   }
+};
+
+/** 按 vault id 取 Blob（素材浏览器贴图检测等） */
+export const getRowBlobForVaultId = async (id: string): Promise<Blob | null> => {
+  const row = await getRow((id || '').trim());
+  return row?.blob || null;
 };
 
 const deleteRow = async (id: string): Promise<void> => {

@@ -1498,6 +1498,53 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     }
   };
 
+  /** 把本机素材库里已有的 GLB 绑为当前任务原模（零额度） */
+  const onUseVaultModelAsOriginal = async (vaultRef: string) => {
+    if (!active) return;
+    if (!isVaultRef(vaultRef)) {
+      setMsgTone('error');
+      setMsg('无效的本机素材引用');
+      return;
+    }
+    setBusy(true);
+    setMsgTone('info');
+    setMsg('正在把本机库中的 GLB 设为当前任务原模…');
+    try {
+      const blob = await resolveMediaBlob(vaultRef);
+      if (!blob || blob.size < 64) {
+        throw new Error('本机库里找不到该文件或已损坏');
+      }
+      const destId = `${model3dVaultIdForJob(active.id)}_orig`;
+      const saved = await putBlobInVault({
+        blob,
+        kind: 'model3d',
+        id: destId,
+        sourceHint: `${active.sourceTaskId || active.id}_orig`,
+        mime: blob.type || 'model/gltf-binary',
+      });
+      patchJob(active.id, {
+        originalModelUrl: saved,
+        pbrModelUrl: saved,
+        updatedAt: Date.now(),
+      });
+      setPreviewMode('original');
+      setMsgTone('ok');
+      const hasTex = await glbBlobLikelyHasTextures(blob);
+      setMsg(
+        hasTex
+          ? '已从本机库绑定彩色原模（未耗额度）；可环视，分件仍保留'
+          : '已从本机库绑定原模（疑似无贴图）。可再换一个标注「有贴图」的文件，或充值后点贴图'
+      );
+      if (!hasTex) setMsgTone('error');
+    } catch (e: any) {
+      setMsgTone('error');
+      setMsg(e?.message || '绑定本机原模失败');
+      throw e;
+    } finally {
+      setBusy(false);
+    }
+  };
+
   /** 把本地 GLB 绑到「当前任务」的原模槽，不新建任务、不清除拆分 */
   const onAttachOriginalGlb = async (files: FileList | null) => {
     const file = files?.[0];
@@ -2393,7 +2440,11 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                     : '3D 环视预览 · 可拖转'
                 : '视口预览'}
             </span>
-            <CreativeStorageBadge compact className="!bg-white/10 !border-white/20 !text-slate-200" />
+            <CreativeStorageBadge
+              compact
+              className="!bg-white/10 !border-white/20 !text-slate-200"
+              onUseModel3dAsOriginal={(ref) => onUseVaultModelAsOriginal(ref)}
+            />
             {active && (
               <span className="uppercase tracking-wider text-[10px] text-indigo-300">
                 {active.status}

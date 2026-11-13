@@ -1,27 +1,36 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { HardDrive, Trash2, Loader2 } from 'lucide-react';
+import { HardDrive, Trash2, Loader2, FolderOpen } from 'lucide-react';
 import {
   enforceVaultQuota,
   formatBytes,
   getVaultStats,
   notifyVaultChanged,
+  type VaultMeta,
 } from '../services/creativeAssetVault';
 import { clearAllCreativeLocalMedia } from '../services/creativeAssetPersist';
+import { CreativeVaultBrowser } from './CreativeVaultBrowser';
 
 type Props = {
   className?: string;
   /** 紧凑一行（嵌在模块顶栏） */
   compact?: boolean;
+  /** 3D：从库内选 GLB 设为当前任务原模 */
+  onUseModel3dAsOriginal?: (vaultRef: string, meta: VaultMeta) => void | Promise<void>;
 };
 
 /**
- * 本机 IndexedDB 素材库用量；无总容量硬限制，可清理/清空。
+ * 本机 IndexedDB 素材库用量；无总容量硬限制，可浏览/清理/清空。
  */
-export const CreativeStorageBadge: React.FC<Props> = ({ className = '', compact }) => {
+export const CreativeStorageBadge: React.FC<Props> = ({
+  className = '',
+  compact,
+  onUseModel3dAsOriginal,
+}) => {
   const [bytes, setBytes] = useState(0);
   const [count, setCount] = useState(0);
   const [busy, setBusy] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
+  const [browseOpen, setBrowseOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -135,70 +144,99 @@ export const CreativeStorageBadge: React.FC<Props> = ({ className = '', compact 
     }
   };
 
+  const browser = (
+    <CreativeVaultBrowser
+      open={browseOpen}
+      onClose={() => setBrowseOpen(false)}
+      onUseModel3dAsOriginal={onUseModel3dAsOriginal}
+    />
+  );
+
   if (compact) {
     return (
+      <>
+        <div
+          className={`inline-flex flex-wrap items-center gap-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 px-2 py-1 text-[10px] font-bold ${className}`}
+          title="本机素材库，无总容量上限"
+        >
+          <HardDrive size={12} />
+          本机素材 {formatBytes(bytes)}
+          {count ? ` · ${count} 个` : ''}
+          <button
+            type="button"
+            onClick={() => setBrowseOpen(true)}
+            className="underline decoration-dotted hover:text-teal-800 text-teal-700"
+          >
+            查看
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void onTrim()}
+            className="underline decoration-dotted hover:text-slate-900 disabled:opacity-40"
+          >
+            {busy ? '…' : '清理旧文件'}
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void onClear()}
+            className="underline decoration-dotted text-rose-600 hover:text-rose-800 disabled:opacity-40"
+          >
+            清空
+          </button>
+          {hint ? <span className="text-emerald-700 font-medium">{hint}</span> : null}
+        </div>
+        {browser}
+      </>
+    );
+  }
+
+  return (
+    <>
       <div
-        className={`inline-flex flex-wrap items-center gap-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 px-2 py-1 text-[10px] font-bold ${className}`}
-        title="本机素材库，无总容量上限"
+        className={`rounded-xl border border-teal-200/70 bg-teal-50/40 px-3 py-2 flex flex-wrap items-center gap-2 text-xs font-bold text-slate-700 ${className}`}
       >
-        <HardDrive size={12} />
-        本机素材 {formatBytes(bytes)}
-        {count ? ` · ${count} 个` : ''}
+        <HardDrive size={14} className="text-teal-700 shrink-0" />
+        <div className="min-w-0 flex-1">
+          <div>
+            本机素材库 · {count} 个 · {formatBytes(bytes)}
+            <span className="text-slate-400 font-medium"> · 无总容量上限</span>
+          </div>
+          <div className="text-[10px] font-medium text-slate-500 mt-0.5 leading-snug">
+            点「查看」可浏览每个文件；「清空」会真正删除本机库。
+          </div>
+          {hint ? (
+            <div className="text-[10px] font-bold text-emerald-700 mt-0.5">{hint}</div>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          onClick={() => setBrowseOpen(true)}
+          className="inline-flex items-center gap-1 rounded-lg border border-teal-300 bg-white px-2 py-1 text-teal-800 hover:bg-teal-50"
+        >
+          <FolderOpen size={12} />
+          查看
+        </button>
         <button
           type="button"
           disabled={busy}
           onClick={() => void onTrim()}
-          className="underline decoration-dotted hover:text-slate-900 disabled:opacity-40"
+          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 hover:bg-slate-50 disabled:opacity-50"
         >
-          {busy ? '…' : '清理旧文件'}
+          {busy ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+          清理旧文件
         </button>
         <button
           type="button"
           disabled={busy}
           onClick={() => void onClear()}
-          className="underline decoration-dotted text-rose-600 hover:text-rose-800 disabled:opacity-40"
+          className="text-[10px] text-rose-600 hover:text-rose-800 underline disabled:opacity-50"
         >
-          清空
+          清空全部
         </button>
-        {hint ? <span className="text-emerald-700 font-medium">{hint}</span> : null}
       </div>
-    );
-  }
-
-  return (
-    <div
-      className={`rounded-xl border border-teal-200/70 bg-teal-50/40 px-3 py-2 flex flex-wrap items-center gap-2 text-xs font-bold text-slate-700 ${className}`}
-    >
-      <HardDrive size={14} className="text-teal-700 shrink-0" />
-      <div className="min-w-0 flex-1">
-        <div>
-          本机素材库 · {count} 个 · {formatBytes(bytes)}
-          <span className="text-slate-400 font-medium"> · 无总容量上限</span>
-        </div>
-        <div className="text-[10px] font-medium text-slate-500 mt-0.5 leading-snug">
-          点「清空」会真正删除本机库，并清掉画布/任务里的媒体引用，避免马上又被迁回来。
-        </div>
-        {hint ? (
-          <div className="text-[10px] font-bold text-emerald-700 mt-0.5">{hint}</div>
-        ) : null}
-      </div>
-      <button
-        type="button"
-        disabled={busy}
-        onClick={() => void onTrim()}
-        className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 hover:bg-slate-50 disabled:opacity-50"
-      >
-        {busy ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
-        清理旧文件
-      </button>
-      <button
-        type="button"
-        disabled={busy}
-        onClick={() => void onClear()}
-        className="text-[10px] text-rose-600 hover:text-rose-800 underline disabled:opacity-50"
-      >
-        清空全部
-      </button>
-    </div>
+      {browser}
+    </>
   );
 };
