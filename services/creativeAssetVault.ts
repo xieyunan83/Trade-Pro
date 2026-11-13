@@ -91,6 +91,70 @@ export const model3dOriginalVaultIdForJob = (jobId: string): string =>
   `mesh_${jobId}_orig`;
 
 /**
+ * 为本机任务挑选「最可能带贴图」的 GLB：按体积择优（有色 PBR 通常明显大于灰模 base）。
+ * 不访问云端、不耗生成额度。
+ */
+export const findBestLocalTexturedModel3dForJob = async (job: {
+  id: string;
+  providerTaskId?: string;
+  sourceTaskId?: string;
+  segmentTaskId?: string;
+  originalModelUrl?: string;
+  pbrModelUrl?: string;
+  modelUrl?: string;
+  baseModelUrl?: string;
+}): Promise<string | null> => {
+  const meshId = model3dVaultIdForJob(job.id);
+  const origId = model3dOriginalVaultIdForJob(job.id);
+  const segmented = !!(job.segmentTaskId || '').trim();
+  const hints = [job.sourceTaskId, job.providerTaskId, job.id]
+    .map((s) => (s || '').trim())
+    .filter(Boolean);
+
+  const candidates: string[] = [];
+  const pushId = (id?: string | null) => {
+    const s = (id || '').trim();
+    if (!s) return;
+    if (isVaultRef(s)) {
+      candidates.push(vaultIdFromRef(s));
+      return;
+    }
+    candidates.push(s);
+  };
+  pushId(origId);
+  pushId(job.originalModelUrl);
+  pushId(job.pbrModelUrl);
+  // 未拆分时主槽通常就是彩色成片；已拆分则主槽多半是灰分件，跳过
+  if (!segmented) {
+    pushId(meshId);
+    pushId(job.modelUrl);
+  }
+  pushId(job.baseModelUrl);
+
+  const meta = await listVaultMeta();
+  for (const m of meta.filter((x) => x.kind === 'model3d')) {
+    const bag = `${m.id} ${m.sourceHint || ''}`;
+    if (hints.some((h) => bag.includes(h))) pushId(m.id);
+    if (m.id === origId || m.id.endsWith('_orig')) pushId(m.id);
+  }
+
+  let best: { id: string; size: number } | null = null;
+  const seen = new Set<string>();
+  for (const id of candidates) {
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    if (segmented && id === meshId) continue;
+    const row = await getRow(id);
+    const size = row?.blob?.size || 0;
+    if (size < 1024) continue;
+    if (!best || size > best.size) best = { id, size };
+  }
+  if (!best) return null;
+  void touchAccess(best.id);
+  return `${VAULT_PREFIX}${best.id}`;
+};
+
+/**
  * 查找拆分前原模本机引用。
  * 优先 mesh_${id}_orig；再按 sourceTaskId / _orig 提示匹配。
  */
@@ -163,22 +227,25 @@ export const preserveOriginalModel3dInVault = async (job: {
   modelUrl?: string;
   pbrModelUrl?: string;
 }): Promise<string | null> => {
-  const existing = await findOriginalModel3dVaultRefForJob(job);
-  if (existing) return existing;
-
   const meshId = model3dVaultIdForJob(job.id);
   const origId = model3dOriginalVaultIdForJob(job.id);
   const hint = `${job.sourceTaskId || job.providerTaskId || job.id}_orig`;
   const alreadySegmented = !!(job.segmentTaskId || '').trim();
 
+  // 优先带贴图的 PBR / 主网格，base 几何常无颜色（灰模）放最后
   // 已拆分后：绝不能再把主槽（多半是分件结果）误拷成「原模」
+  // 不再「已有 _orig 就直接返回」：允许用更大/带贴图的源升级灰模备份
   const candidates = (
     alreadySegmented
-      ? [job.originalModelUrl, job.baseModelUrl]
-      : [job.originalModelUrl, job.baseModelUrl, job.modelUrl, job.pbrModelUrl]
+      ? // 拆分后 pbr/model 常已被分件结果占用，勿写回 _orig
+        [job.originalModelUrl, job.baseModelUrl]
+      : [job.originalModelUrl, job.pbrModelUrl, job.modelUrl, job.baseModelUrl]
   )
     .map((u) => (u || '').trim())
     .filter(Boolean);
+
+  const existingOrig = await getRow(origId);
+  const existingSize = existingOrig?.blob?.size || 0;
 
   for (const url of candidates) {
     if (isVaultRef(url)) {
@@ -188,6 +255,10 @@ export const preserveOriginalModel3dInVault = async (job: {
       if (id === origId) return `${VAULT_PREFIX}${origId}`;
       // 已拆分且候选仍指向主槽 → 主槽已是分件，跳过
       if (alreadySegmented && id === meshId) continue;
+      // 已有原模备份：仅当新候选明显更大（多半含贴图）时升级，避免灰模永远占坑
+      if (existingSize > 0 && row.blob.size < existingSize * 1.08) {
+        continue;
+      }
       await putBlobInVault({
         blob: row.blob,
         kind: 'model3d',
@@ -198,10 +269,16 @@ export const preserveOriginalModel3dInVault = async (job: {
       return `${VAULT_PREFIX}${origId}`;
     }
     if (/^https?:\/\//i.test(url) || url.startsWith('blob:') || url.startsWith('data:')) {
+      // 已有备份时仍尝试用更优远程源覆盖（tryPersist 会写入同 id）
+      if (existingSize > 0 && url === job.baseModelUrl && (job.pbrModelUrl || job.originalModelUrl)) {
+        continue;
+      }
       const saved = await tryPersistMediaUrl(url, 'model3d', hint, { id: origId });
       if (saved && isVaultRef(saved)) return saved;
     }
   }
+
+  if (existingOrig?.blob) return `${VAULT_PREFIX}${origId}`;
 
   // 仅未拆分时：主槽即原模，拷一份到 _orig
   if (!alreadySegmented) {

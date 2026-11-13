@@ -107,7 +107,13 @@ import {
   findDmPersistForCompany,
 } from './services/dmSearchPersist';
 import { mergeDecisionMakers, mergeAnalysisWithPrevious } from './services/multiModelMerge';
-import { enqueueDmEmailSearch, type DmEmailSearchJob } from './services/dmEmailSearchQueue';
+import { companyNeedsAsyncDmFill } from './services/dmEnrichPolicy';
+import { ensurePersonIdentity } from './services/personIdentity';
+import {
+  enqueueDmEmailSearch,
+  getActiveDmJobForDomain,
+  type DmEmailSearchJob,
+} from './services/dmEmailSearchQueue';
 import {
   gatherSilentCompanyChannelIntel,
   mergeSilentIntelIntoAnalysis,
@@ -2123,8 +2129,10 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
             `如需补联系人/邮箱/品类，夜间 22:00–08:00 会自动补全；也可在客户管理中单独深挖。`
         );
         if (hist?.data) {
-          setAnalysisData(enrichAnalysisDecisionMakers(hist.data, { historyItem: hist }));
+          const enriched = enrichAnalysisDecisionMakers(hist.data, { historyItem: hist });
+          setAnalysisData(enriched);
           setViewingHistoryId(hist.id);
+          maybeEnqueueLibraryFirstDmFill(enriched, hist.id);
         }
         return;
       }
@@ -2219,11 +2227,16 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       client?.contacts || [],
       ledger?.decisionMakers || [],
     ];
-    // 旧资料作底，新结果叠上去：只增改
+    const mergeOpts = { companyDomain: website };
+    // 旧资料作底，新结果叠上去：只增改（库内优先：历史/CRM/账本在前）
     let dms = mergeDecisionMakers(
-      priorPools.reduce((acc, cur) => mergeDecisionMakers(acc, cur), [] as DecisionMaker[]),
-      Array.isArray(data.decisionMakers) ? data.decisionMakers : []
-    );
+      priorPools.reduce(
+        (acc, cur) => mergeDecisionMakers(acc, cur, mergeOpts),
+        [] as DecisionMaker[]
+      ),
+      Array.isArray(data.decisionMakers) ? data.decisionMakers : [],
+      mergeOpts
+    ).map((d) => ensurePersonIdentity(d, { companyDomain: website }));
 
     const priorKey = new Set(
       priorPools
@@ -2321,6 +2334,8 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       setLoading(false);
       // 补全后写回（含恢复的决策人）
       void persistHistoryItem({ ...item, data }).catch(() => undefined);
+      // 库内优先后：仅缺邮/低置信才异步补全
+      maybeEnqueueLibraryFirstDmFill(data, item.id);
     } catch (e: any) {
       console.error('loadFromHistory failed', e);
       alert(`打开历史记录失败: ${e?.message || String(e)}`);
@@ -2364,6 +2379,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       void saveAnalysisToHistory(data, 'crm-recover').catch((e) =>
         console.warn('[crm] recover history save failed', e)
       );
+      maybeEnqueueLibraryFirstDmFill(data, null);
       return;
     }
     // 无完整报告但有 CRM 联系人：至少进入决策人页可见联系人
@@ -2383,12 +2399,14 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
         }),
         { client }
       );
-      setAnalysisData(synthesizeInsightsFallback(stub));
+      const ready = synthesizeInsightsFallback(stub);
+      setAnalysisData(ready);
       setViewingHistoryId(null);
       setDomainInput(client.website || '');
       setActiveModule(ModuleType.DECISION_MAKERS);
       setErrorMsg(null);
       setLoading(false);
+      maybeEnqueueLibraryFirstDmFill(ready, null);
       return;
     }
     alert('未找到该客户的背调报告正文（可能曾被清理）。请点「再次背调」重新生成后即可查看。');
@@ -2516,15 +2534,17 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
         );
       });
     const ledger = findDmPersistForCompany(domainKey, companyLabel);
+    const mergeOpts = { companyDomain: domainKey };
     const existingDms = mergeDecisionMakers(
-      mergeDecisionMakers(histHit?.data?.decisionMakers || [], ledger?.decisionMakers || []),
+      mergeDecisionMakers(histHit?.data?.decisionMakers || [], ledger?.decisionMakers || [], mergeOpts),
       analysisDataRef.current &&
         (cleanHost(analysisDataRef.current.companyInfo?.website) === domainKey ||
           (analysisDataRef.current.companyInfo?.name || '').trim().toLowerCase() === nameKey)
         ? analysisDataRef.current.decisionMakers || []
-        : []
+        : [],
+      mergeOpts
     );
-    const mergedDms = mergeDecisionMakers(existingDms, scopedIncoming);
+    const mergedDms = mergeDecisionMakers(existingDms, scopedIncoming, mergeOpts);
     const safePatch = { ...patch, decisionMakers: mergedDms };
 
     // 1) 先写入耐久化 ledger（刷新后可恢复，避免积分白费）
@@ -2825,7 +2845,11 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
   };
 
   /** 将当前报告的决策人邮箱搜索加入后台队列（可并行、不挡浏览） */
-  const enqueueCurrentDmEmailSearch = (fromData?: AnalysisResult | null, historyIdOverride?: string | null): { ok: boolean; message: string } => {
+  const enqueueCurrentDmEmailSearch = (
+    fromData?: AnalysisResult | null,
+    historyIdOverride?: string | null,
+    opts?: { deepDig?: boolean; quiet?: boolean }
+  ): { ok: boolean; message: string } => {
     if (!hasPermission(currentUser, 'feature.dm_email_search')) {
       return { ok: false, message: '你没有「决策人邮箱搜索」权限，请联系管理员或部门主管开通。' };
     }
@@ -2834,12 +2858,13 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
     const domain = src.companyInfo?.website || '';
     const companyName = src.companyInfo?.name || domain;
     const hid = historyIdOverride ?? viewingHistoryIdRef.current;
+    const deepDig = opts?.deepDig !== false;
 
     const res = enqueueDmEmailSearch({
       domain,
       companyName,
       historyId: hid,
-      deepDig: true,
+      deepDig,
       authorized: hasPermission(currentUser, 'feature.dm_email_search'),
       existingDecisionMakers: src.decisionMakers || [],
       resolveExisting: () => {
@@ -2878,7 +2903,39 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
     });
 
     if (res.ok === false) return { ok: false, message: res.reason };
-    return { ok: true, message: `已加入后台队列：${companyName}（可继续浏览其它客户）` };
+    return {
+      ok: true,
+      message: opts?.quiet
+        ? `已按需补全邮箱线索：${companyName}（后台进行，可继续浏览）`
+        : `已加入后台队列：${companyName}（可继续浏览其它客户）`,
+    };
+  };
+
+  /**
+   * Phase B：打开报告后库内优先；仅缺邮/低置信时异步入队补全（不挡浏览）。
+   * 不替代用户手动「深挖」；2 小时冷却，避免反复打开重复烧分。
+   */
+  const maybeEnqueueLibraryFirstDmFill = (
+    data: AnalysisResult,
+    historyId: string | null | undefined
+  ) => {
+    if (!hasPermission(currentUser, 'feature.dm_email_search')) return;
+    const domain = data.companyInfo?.website || '';
+    const host = domain
+      .toLowerCase()
+      .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
+      .split('/')[0]
+      .trim();
+    if (!host || !host.includes('.')) return;
+    if (getActiveDmJobForDomain(host)) return;
+    if (
+      !companyNeedsAsyncDmFill(data.decisionMakers || [], {
+        lastSearchAt: data.decisionMakerEmailSearchAt,
+      })
+    ) {
+      return;
+    }
+    enqueueCurrentDmEmailSearch(data, historyId ?? null, { deepDig: false, quiet: true });
   };
   const handleExportReport = () => {
     if (!hasPermission(currentUser, 'feature.export_ppt')) {

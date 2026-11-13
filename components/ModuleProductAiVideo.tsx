@@ -56,13 +56,13 @@ type Props = {
  */
 export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateModule }) => {
   const [jobs, setJobs] = useState<VideoJob[]>([]);
-  const [mode, setMode] = useState<VideoMode>('image');
-  const [videoSkillId, setVideoSkillId] = useState<VideoSkillId>('amazon_gallery');
+  const [mode, setMode] = useState<VideoMode>('text');
+  const [videoSkillId, setVideoSkillId] = useState<VideoSkillId>('free');
   const [productName, setProductName] = useState('');
   const [sellingPoints, setSellingPoints] = useState<string[]>(['', '', '']);
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState(
-    () => getVideoSkill('amazon_gallery').negativeHints
+    () => getVideoSkill('free').negativeHints
   );
   const [storyboard, setStoryboard] = useState('');
   const [durationSec, setDurationSec] = useState<VideoDurationSec>(10);
@@ -76,6 +76,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
   const lastFrameFileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [msgTone, setMsgTone] = useState<'error' | 'info' | 'ok'>('info');
   const [activeId, setActiveId] = useState<string | null>(null);
   const [provider, setProvider] = useState(() => getVideoProviderStatus());
   const fileRef = useRef<HTMLInputElement>(null);
@@ -83,14 +84,20 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
   const active = jobs.find((j) => j.id === activeId) || null;
   const activeVideoSkill = getVideoSkill(videoSkillId);
 
+  const showMsg = (text: string, tone: 'error' | 'info' | 'ok' = 'info') => {
+    setMsgTone(tone);
+    setMsg(text);
+  };
+
   const applySkill = (id: VideoSkillId) => {
     const s = getVideoSkill(id);
     setVideoSkillId(id);
     setAspect(s.defaultAspect);
     setDurationSec(s.defaultDurationSec);
-    // 自由分镜：保留用户已写长提示词，只补默认负向（若仍空）
+    // 自由分镜：保留用户已写长提示词，只补默认负向（若仍空）；默认文生，不强制产品图
     if (id === 'free') {
       if (!negativePrompt.trim()) setNegativePrompt(s.negativeHints || '');
+      if (!images.length && mode !== 'keyframes') setMode('text');
       return;
     }
     setNegativePrompt(s.negativeHints || '');
@@ -268,46 +275,47 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
 
   const createDraft = async () => {
     if (!provider.ready) {
-      setMsg(provider.detail);
+      showMsg(provider.detail, 'error');
       return;
     }
     const assembled = buildAssembled();
     if (!assembled.prompt.trim()) {
-      setMsg(
+      showMsg(
         isFreeSkill || mode === 'text'
           ? '请填写完整提示词（可粘贴长篇分镜 / 镜头描述）'
-          : '请填写提示词，或填写卖点后点场景 Skill 自动生成'
+          : '请填写提示词，或填写卖点后点场景 Skill 自动生成',
+        'error'
       );
       return;
     }
+    // 首尾帧仍须两张图；其余模式无图时降级为文生（提醒，不拦截）
+    let softHint: string | null = null;
     if (mode === 'keyframes') {
       if (!images[0]) {
-        setMsg('请上传首帧图片');
+        showMsg('请上传首帧图片', 'error');
         return;
       }
       if (!lastFrameImage) {
-        setMsg('请上传尾帧图片');
+        showMsg('请上传尾帧图片', 'error');
         return;
       }
     } else if ((mode === 'image' || mode === 'reference') && images.length === 0) {
-      setMsg(mode === 'reference' ? '请上传至少 1 张参考图（建议多角度）' : '请上传产品图');
-      return;
-    }
-    if (activeVideoSkill.preferImage && mode === 'text') {
-      setMsg('该场景建议使用产品图生成，请切换到「图生 / 首尾帧」并上传参考图');
-      return;
+      softHint =
+        '提醒：当前无参考图，已自动改用文生视频（不强制上传）。产品宣传片可稍后补图重跑。';
+    } else if (activeVideoSkill.preferImage && mode === 'text' && images.length === 0) {
+      softHint = '提醒：该场景建议有产品图，本次仍按文生继续，不拦截。';
     }
     const effectiveMode: VideoMode =
-      mode === 'text'
-        ? 'text'
-        : mode === 'keyframes'
-          ? 'keyframes'
-          : images.length > 1
+      mode === 'keyframes'
+        ? 'keyframes'
+        : mode === 'text' || images.length === 0
+          ? 'text'
+          : images.length > 1 || mode === 'reference'
             ? 'reference'
-            : mode === 'reference'
-              ? 'reference'
-              : 'image';
-    if (effectiveMode === 'reference' && mode !== 'reference' && mode !== 'keyframes') {
+            : 'image';
+    if (effectiveMode === 'text' && mode !== 'text' && mode !== 'keyframes') {
+      setMode('text');
+    } else if (effectiveMode === 'reference' && mode !== 'reference' && mode !== 'keyframes') {
       setMode('reference');
     }
     const sku = skus.find((s) => s.id === skuPick || s.skuCode === skuPick);
@@ -345,12 +353,15 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
     persist([job, ...jobs]);
     setActiveId(job.id);
     setBusy(true);
-    setMsg(
-      effectiveMode === 'keyframes'
-        ? '正在提交首尾帧样片…'
-        : effectiveMode === 'reference'
-          ? `正在提交多参考样片（${images.length} 张）…`
-          : '正在提交样片任务…'
+    showMsg(
+      softHint
+        ? `${softHint} · 正在提交样片…`
+        : effectiveMode === 'keyframes'
+          ? '正在提交首尾帧样片…'
+          : effectiveMode === 'reference'
+            ? `正在提交多参考样片（${images.length} 张）…`
+            : '正在提交样片任务…',
+      softHint ? 'info' : 'ok'
     );
 
     try {
@@ -406,7 +417,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
       const merged = [ { ...job, ...patch }, ...loadVideoJobs().filter((j) => j.id !== job.id) ];
       persist(merged);
       setActiveId(job.id);
-      setMsg('样片已完成 — 请看右侧预览台播放；确认后再出正片以控制成本');
+      showMsg('样片已完成 — 请看右侧预览台播放；确认后再出正片以控制成本', 'ok');
     } catch (e: any) {
       const errText = humanizeCreativeProviderError(e?.message || e);
       patchJob(job.id, {
@@ -416,7 +427,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
         previewHint: errText,
       });
       setBusy(false);
-      setMsg(errText);
+      showMsg(errText, 'error');
       window.alert(`视频生成失败：${errText}`);
       return;
     } finally {
@@ -427,12 +438,12 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
   const confirmFull = async () => {
     if (!active || active.status !== 'draft') return;
     if (!provider.ready) {
-      setMsg(provider.detail);
+      showMsg(provider.detail, 'error');
       return;
     }
     setBusy(true);
     patchJob(active.id, { status: 'rendering', progress: 0, previewHint: '正片渲染中…' });
-    setMsg('正在提交正片任务…');
+    showMsg('正在提交正片任务…', 'info');
 
     try {
       const skillForJob = getVideoSkill(active.skillId || videoSkillId);
@@ -484,7 +495,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
         previewHint: vaulted.previewHint,
         error: undefined,
       });
-      setMsg('正片已完成并写入本机');
+      showMsg('正片已完成并写入本机', 'ok');
     } catch (e: any) {
       const errText = humanizeCreativeProviderError(e?.message || e);
       patchJob(active.id, {
@@ -492,7 +503,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
         error: errText,
         previewHint: `${errText}（可重试正片）`,
       });
-      setMsg(errText);
+      showMsg(errText, 'error');
       window.alert(`正片生成失败：${errText}`);
     } finally {
       setBusy(false);
@@ -970,8 +981,21 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
                 : '一键生成样片'}
             </button>
             {msg && (
-              <p className="text-xs font-bold text-rose-900 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2">
+              <p
+                className={`text-xs font-bold rounded-xl px-3 py-2 border ${
+                  msgTone === 'error'
+                    ? 'text-rose-900 bg-rose-50 border-rose-100'
+                    : msgTone === 'ok'
+                      ? 'text-emerald-900 bg-emerald-50 border-emerald-100'
+                      : 'text-amber-900 bg-amber-50 border-amber-100'
+                }`}
+              >
                 {msg}
+              </p>
+            )}
+            {mode !== 'keyframes' && images.length === 0 && (
+              <p className="text-[11px] font-medium text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
+                无产品/参考图也可直接生成（文生）。需要产品外观一致时再补图。
               </p>
             )}
             {!provider.ready && (

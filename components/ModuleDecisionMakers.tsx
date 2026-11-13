@@ -1,18 +1,22 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { AnalysisResult, DecisionMaker } from '../types';
-import { Linkedin, Mail, Phone, ExternalLink, UserCheck, AlertTriangle, Download, Briefcase, ShieldCheck, ShieldAlert, RefreshCw, Loader2, Clock, Plus, Trash2, Save } from 'lucide-react';
+import { Linkedin, Mail, Phone, ExternalLink, UserCheck, AlertTriangle, Download, Briefcase, ShieldCheck, ShieldAlert, RefreshCw, Loader2, Clock, Plus, Trash2, Save, ChevronDown, ChevronUp } from 'lucide-react';
 import { exportContactsToExcel } from '../services/exportService';
 import {
   getActiveDmJobForDomain,
   subscribeDmEmailSearchJobs,
 } from '../services/dmEmailSearchQueue';
-import { maskEmailAddress, abbreviateEmailPlatform } from '../services/permissions';
-import {
-  gatherSilentCompanyChannelIntel,
-  mergeSilentIntelIntoAnalysis,
-} from '../services/silentAcquisitionEngine';
+import { maskEmailAddress } from '../services/permissions';
 import { filterDecisionMakersForCompany } from '../services/linkedinEmployeeLocator';
 import { enrichDecisionMakersTitleAndWhatsApp } from '../services/decisionMakerWebEnrich';
+import {
+  confidenceBadgeLabel,
+  ensurePersonIdentity,
+  fieldConfidencePercent,
+  formatEvidenceTime,
+  labelEvidenceSource,
+} from '../services/personIdentity';
+import { companyNeedsAsyncDmFill } from '../services/dmEnrichPolicy';
 
 interface ModuleDecisionMakersProps {
   data: AnalysisResult;
@@ -236,7 +240,10 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
     setQueueMsg(`已批量删除 ${count} 位决策人`);
   };
 
-  /** 旧客户 / 未挖邮箱：打开决策人页时静默补全公司联系人（姓名职位主页等），邮箱留给用户手动深挖 */
+  /**
+   * Phase B：打开决策人页只做库内清洗/对齐，不再一打开就联网静默扫人。
+   * 缺邮/低置信的异步补全由 App 打开报告时入队；此处仅提示并可手动深挖。
+   */
   useEffect(() => {
     const domain = (data.companyInfo?.website || '').trim();
     const companyName = (data.companyInfo?.name || '').trim();
@@ -245,57 +252,23 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
     if (!domain && !companyName) return;
 
     const existing = companyScopedDecisionMakers(data.decisionMakers || [], data);
-    const hasEmailSearch = !!data.decisionMakerEmailSearchAt;
-    const hasUsefulContacts = existing.some(
-      (d) =>
-        (!!(d.name || '').trim() &&
-          (d.name || '').trim() !== '公开信息未找到' &&
-          (!!(d.title || '').trim() || !!(d.linkedin || '').trim() || !!(d.phone || '').trim())) ||
-        !!(d.emailGuess || '').includes('@')
-    );
-    // 已挖过邮箱或已有可用联系人：不再静默补（但仍把串公司脏数据洗掉）
+    // 洗掉串公司脏数据（纯本地）
     if (existing.length !== (data.decisionMakers || []).filter(isUsableDecisionMaker).length) {
       commit(existing);
     }
-    if (hasEmailSearch || hasUsefulContacts) {
-      bootstrapKeyRef.current = key;
-      return;
-    }
-
     bootstrapKeyRef.current = key;
-    let cancelled = false;
-    setBootstrapping(true);
-    void (async () => {
-      try {
-        const intel = await gatherSilentCompanyChannelIntel({
-          domain,
-          companyName,
-          productKeyword: data.searchKeyword || data.businessScope?.coreProducts?.[0],
-          country: data.searchCountry || data.companyInfo?.headquarters,
-          existingDecisionMakers: existing,
-        });
-        if (cancelled) return;
-        const merged = mergeSilentIntelIntoAnalysis(data, intel);
-        const nextDms = companyScopedDecisionMakers(merged.decisionMakers || [], data);
-        if (nextDms.length > existing.length || nextDms.some((d) => (d.whatsapp || '').trim())) {
-          commit(nextDms);
-          const waN = nextDms.filter((d) => (d.whatsapp || '').trim()).length;
-          const miss = nextDms.filter((d) => !(d.whatsapp || '').trim()).length;
-          setQueueMsg(
-            `已对齐 ${nextDms.length} 位本公司联系人 · 公开 WhatsApp ${waN} 位${
-              miss ? `（${miss} 位暂无公开号）` : ''
-            }；邮箱请点「搜索决策人邮箱」补全`
-          );
-        }
-      } catch (e) {
-        console.warn('[dm] silent contact bootstrap failed', e);
-      } finally {
-        if (!cancelled) setBootstrapping(false);
+
+    if (
+      companyNeedsAsyncDmFill(existing, { lastSearchAt: data.decisionMakerEmailSearchAt }) &&
+      onEnqueueEmailSearch
+    ) {
+      const active = getActiveDmJobForDomain(domain);
+      if (!active) {
+        setQueueMsg('库内联系人已对齐；缺邮箱线索将在后台补全，也可手动点「搜索决策人邮箱」');
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    } else if (existing.length) {
+      setQueueMsg(`已载入库内 ${existing.length} 位联系人`);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅随公司切换触发一次
   }, [data.companyInfo?.website, data.companyInfo?.name, historyId, data.decisionMakerEmailSearchAt]);
 
@@ -674,11 +647,18 @@ const DecisionMakerCard: React.FC<{
   onToggleSelect: (index: number) => void;
   onChange: (index: number, patch: Partial<DecisionMaker>, options?: { resetEmailVerification?: boolean }) => void;
   onDelete: (index: number) => void;
-}> = ({ dm, index, selected, canViewEmails, onToggleSelect, onChange, onDelete }) => {
+}> = ({ dm: dmRaw, index, selected, canViewEmails, onToggleSelect, onChange, onDelete }) => {
+  const dm = useMemo(() => ensurePersonIdentity(dmRaw), [dmRaw]);
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState<DecisionMaker>(dm);
-  const emailPlatform = abbreviateEmailPlatform(dm.emailSource || dm.source);
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
+  const emailPlatform = labelEvidenceSource(dm.emailSource || dm.source);
   const verify = statusLabel(dm);
+  const emailConf = fieldConfidencePercent(dm, 'email');
+  const liConf = fieldConfidencePercent(dm, 'linkedin');
+  const emailBadge = confidenceBadgeLabel(emailConf);
+  const liBadge = confidenceBadgeLabel(liConf);
+  const evidenceList = dm.evidence || [];
 
   useEffect(() => { setDraft(dm); }, [dm]);
 
@@ -688,7 +668,7 @@ const DecisionMakerCard: React.FC<{
 
   const saveDraft = () => {
     const trimmedName = (draft.name || '').trim();
-    const normalized: Partial<DecisionMaker> = {
+    const normalized = ensurePersonIdentity({
       ...draft,
       name: trimmedName || '手动联系人',
       firstName: (draft.firstName || '').trim() || undefined,
@@ -706,7 +686,7 @@ const DecisionMakerCard: React.FC<{
       isVerified: !!draft.isVerified && !!draft.emailGuess?.trim(),
       confidence: typeof draft.confidence === 'number' ? draft.confidence : undefined,
       influenceScore: draft.influenceScore || undefined,
-    };
+    });
     onChange(index, normalized, { resetEmailVerification: draft.emailGuess !== dm.emailGuess });
     setIsEditing(false);
   };
@@ -765,6 +745,11 @@ const DecisionMakerCard: React.FC<{
                     : maskEmailAddress(dm.emailGuess)
                   : '待补充（可手动填写）'}
               </span>
+              {dm.emailGuess?.includes('@') && (
+                <span className={`shrink-0 px-1.5 py-0.5 rounded-md text-[9px] font-black border ${emailBadge.className}`}>
+                  {emailBadge.text}
+                </span>
+              )}
             </div>
             <div className="flex gap-2 flex-shrink-0">
               <button onClick={() => setIsEditing(true)} className="text-[10px] font-black text-slate-400 hover:text-blue-600">编辑全部</button>
@@ -912,20 +897,74 @@ const DecisionMakerCard: React.FC<{
             href={dm.linkedin.startsWith('http') ? dm.linkedin : `https://${dm.linkedin}`}
             target="_blank" 
             rel="noreferrer" 
-            className="flex items-center justify-between p-3 bg-blue-50 rounded-xl border border-blue-100 hover:bg-blue-100 transition-colors"
+            className="flex items-center justify-between p-3 bg-blue-50 rounded-xl border border-blue-100 hover:bg-blue-100 transition-colors gap-2"
           >
             <div className="flex items-center gap-2 min-w-0">
               <Linkedin size={14} className="text-blue-600 flex-shrink-0" />
               <span className="text-xs font-bold text-blue-700 truncate">个人主页</span>
+              <span className={`shrink-0 px-1.5 py-0.5 rounded-md text-[9px] font-black border ${liBadge.className}`}>
+                {liBadge.text}
+              </span>
             </div>
             <ExternalLink size={12} className="text-blue-400 flex-shrink-0" />
           </a>
         ) : null}
+
+        {(dm.emailGuess?.includes('@') || dm.linkedin || evidenceList.length > 0) && (
+          <div className="rounded-xl border border-slate-100 bg-white overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setEvidenceOpen((v) => !v)}
+              className="w-full flex items-center justify-between px-3 py-2.5 text-left hover:bg-slate-50"
+            >
+              <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                证据 {evidenceList.length ? `· ${evidenceList.length}` : ''}
+              </span>
+              {evidenceOpen ? <ChevronUp size={14} className="text-slate-400" /> : <ChevronDown size={14} className="text-slate-400" />}
+            </button>
+            {evidenceOpen && (
+              <div className="border-t border-slate-100 px-3 py-2 space-y-2">
+                {evidenceList.length === 0 ? (
+                  <div className="text-[11px] font-bold text-slate-400 py-1">暂无结构化证据，以上为汇总字段</div>
+                ) : (
+                  evidenceList.map((ev, ei) => {
+                    const when = formatEvidenceTime(ev.observedAt);
+                    const href = ev.sourceUrl?.trim();
+                    const fieldLabel =
+                      ev.field === 'email' ? '邮箱' : ev.field === 'linkedin' ? '个人主页' : ev.field === 'phone' ? '电话' : ev.field === 'title' ? '职位' : String(ev.field);
+                    return (
+                      <div key={`${ev.field}-${ei}-${ev.value}`} className="text-[11px] font-bold text-slate-600 space-y-0.5">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="text-slate-400">{fieldLabel}</span>
+                          <span className="px-1.5 py-0.5 rounded bg-slate-50 border border-slate-100 text-slate-700">
+                            {labelEvidenceSource(ev.source)}
+                          </span>
+                          <span className="text-slate-400">{Math.round((ev.confidence || 0) * 100)}%</span>
+                          {ev.status === 'found' && <span className="text-emerald-600">已确认</span>}
+                          {ev.status === 'unverified' && <span className="text-amber-600">待核</span>}
+                          {ev.status === 'not_found' && <span className="text-slate-400">未找到</span>}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 text-slate-500">
+                          {when ? <span>观测 {when}</span> : null}
+                          {href ? (
+                            <a href={href.startsWith('http') ? href : `https://${href}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-blue-600 hover:underline">
+                              来源页 <ExternalLink size={10} />
+                            </a>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
       
       <div className="mt-4 flex items-center justify-between gap-2">
         <div className="text-[10px] font-black text-slate-400 uppercase tracking-tighter truncate">
-          联系人来源: {abbreviateEmailPlatform(dm.source)}
+          联系人来源: {labelEvidenceSource(dm.source)}
           {dm.yearsActive ? ` · ${dm.yearsActive}` : ''}
           {dm.influenceScore ? ` · 影响力 ${dm.influenceScore}/5` : ''}
         </div>

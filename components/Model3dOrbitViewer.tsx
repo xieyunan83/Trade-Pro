@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Download, Loader2, Move3d, RotateCcw } from 'lucide-react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { isVaultRef } from '../services/creativeAssetVault';
 import { loadGlbFromSource, resolveGlbSource } from '../services/glbSceneLoader';
 
@@ -108,12 +109,23 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
     }
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.05;
     renderer.domElement.style.display = 'block';
     renderer.domElement.style.width = '100%';
     renderer.domElement.style.height = '100%';
     renderer.domElement.style.touchAction = 'none';
     host.innerHTML = '';
     host.appendChild(renderer.domElement);
+
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    let envRt: THREE.WebGLRenderTarget | null = null;
+    try {
+      envRt = pmrem.fromScene(new RoomEnvironment(), 0.04);
+      scene.environment = envRt.texture;
+    } catch (e) {
+      console.warn('[3d] RoomEnvironment failed', e);
+    }
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
@@ -129,13 +141,15 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
     };
     controls.addEventListener('start', stopAuto);
 
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x334155, 1.05));
-    const key = new THREE.DirectionalLight(0xffffff, 1.15);
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x334155, 0.85));
+    const key = new THREE.DirectionalLight(0xffffff, 1.35);
     key.position.set(3, 5, 2);
     scene.add(key);
-    const fill = new THREE.DirectionalLight(0xa5b4fc, 0.35);
+    const fill = new THREE.DirectionalLight(0xa5b4fc, 0.45);
     fill.position.set(-2, 1, -2);
     scene.add(fill);
+    const rim = new THREE.AmbientLight(0xffffff, 0.22);
+    scene.add(rim);
 
     const resize = () => {
       const w = Math.max(host.clientWidth || 1, 1);
@@ -187,10 +201,14 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
         setPullPct(100);
         lastProgressAt = Date.now();
 
-        const gltf = await loadGlbFromSource(source, (pct) => {
-          lastProgressAt = Date.now();
-          setPullPct(pct);
-        });
+        const gltf = await loadGlbFromSource(
+          source,
+          (pct) => {
+            lastProgressAt = Date.now();
+            setPullPct(pct);
+          },
+          renderer
+        );
         if (disposed) return;
 
         const root = gltf.scene;
@@ -256,6 +274,9 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
       controls.dispose();
       controlsRef.current = null;
       cameraRef.current = null;
+      scene.environment = null;
+      envRt?.dispose?.();
+      pmrem.dispose();
       renderer.dispose();
       scene.traverse((o) => {
         const m = o as THREE.Mesh;

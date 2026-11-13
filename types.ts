@@ -309,6 +309,28 @@ export interface AutomationPipelineConfig {
   doCrmImport: boolean;
 }
 
+/** 决策人字段级证据（来源 + 置信度；前台用中性文案展示） */
+export type FieldEvidenceField =
+  | 'email'
+  | 'phone'
+  | 'linkedin'
+  | 'title'
+  | 'whatsapp'
+  | 'name'
+  | string;
+
+export interface FieldEvidence {
+  field: FieldEvidenceField;
+  value: string;
+  /** 内部通道码或原始来源；前台勿直接展示供应商商品名 */
+  source: string;
+  sourceUrl?: string;
+  /** 0–1 */
+  confidence: number;
+  observedAt: number;
+  status?: 'found' | 'unverified' | 'not_found';
+}
+
 export interface DecisionMaker {
   name: string;
   firstName?: string;
@@ -341,6 +363,13 @@ export interface DecisionMaker {
   influenceScore?: number;
   /** 最近一次邮箱查找/校验时间 */
   lastEmailCheckedAt?: number;
+  /**
+   * 稳定身份键：normalize(email) → linkedin path → hash(domain+name)
+   * 旧数据可缺省，读取时现算
+   */
+  personId?: string;
+  /** 字段级证据链；同字段可多条，展示时按置信度择优 */
+  evidence?: FieldEvidence[];
 }
 
 export interface TradeIntelligence {

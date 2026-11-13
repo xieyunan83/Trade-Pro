@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Loader2, Layers, Maximize2 } from 'lucide-react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { loadGlbFromSource, resolveGlbSource } from '../services/glbSceneLoader';
 
 type Props = {
@@ -217,6 +218,8 @@ export const Model3dPartsViewer: React.FC<Props> = ({
     });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.05;
     // 确保画布可接收拖拽（覆盖层用 pointer-events-none）
     renderer.domElement.style.display = 'block';
     renderer.domElement.style.width = '100%';
@@ -224,6 +227,15 @@ export const Model3dPartsViewer: React.FC<Props> = ({
     renderer.domElement.style.touchAction = 'none';
     host.innerHTML = '';
     host.appendChild(renderer.domElement);
+
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    let envRt: THREE.WebGLRenderTarget | null = null;
+    try {
+      envRt = pmrem.fromScene(new RoomEnvironment(), 0.04);
+      scene.environment = envRt.texture;
+    } catch {
+      /* 环境光失败不阻断分件预览 */
+    }
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
@@ -235,8 +247,8 @@ export const Model3dPartsViewer: React.FC<Props> = ({
     controlsRef.current = controls;
     cameraRef.current = camera;
 
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x334155, 1.05));
-    const key = new THREE.DirectionalLight(0xffffff, 1.15);
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x334155, 0.85));
+    const key = new THREE.DirectionalLight(0xffffff, 1.35);
     key.position.set(3, 5, 2);
     scene.add(key);
 
@@ -289,9 +301,13 @@ export const Model3dPartsViewer: React.FC<Props> = ({
         lastProgressAt = Date.now();
         if (disposed) return;
 
-        const gltf = await loadGlbFromSource(source, () => {
-          lastProgressAt = Date.now();
-        });
+        const gltf = await loadGlbFromSource(
+          source,
+          () => {
+            lastProgressAt = Date.now();
+          },
+          renderer
+        );
         if (disposed) return;
 
         const root = gltf.scene;
@@ -387,6 +403,9 @@ export const Model3dPartsViewer: React.FC<Props> = ({
       ro.disconnect();
       controls.dispose();
       controlsRef.current = null;
+      scene.environment = null;
+      envRt?.dispose?.();
+      pmrem.dispose();
       renderer.dispose();
       scene.traverse((o) => {
         const m = o as THREE.Mesh;

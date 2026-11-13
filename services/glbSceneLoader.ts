@@ -1,27 +1,66 @@
 /**
- * GLB/GLTF 统一加载：支持 vault/blob/https，并挂 Draco（Tripo 等常见压缩）。
+ * GLB/GLTF 统一加载：支持 vault/blob/https，并挂 Draco / Meshopt / KTX2。
  * 优先 ArrayBuffer + parse，避免 blob: URL 被撤销导致「预览加载失败」。
+ * 缺 KTX2 时压缩贴图会静默丢失 → 模型一片灰（相对 model-viewer 的常见回退）。
  */
+import * as THREE from 'three';
 import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
+import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js';
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { fetchRemoteBlob, peekRemoteBlob, rememberRemoteBlob } from './fetchRemoteBlob';
 import { isVaultRef, resolveMediaBlob, resolveMediaUrl } from './creativeAssetVault';
 
+const baseUrl = () => `${(import.meta as any).env?.BASE_URL || '/'}`;
+
 let sharedDraco: DRACOLoader | null = null;
+let sharedKtx2: KTX2Loader | null = null;
+let ktx2SupportRenderer: THREE.WebGLRenderer | null = null;
 
 const getDracoLoader = (): DRACOLoader => {
   if (sharedDraco) return sharedDraco;
   const draco = new DRACOLoader();
   // 同源静态资源（public/draco），不受外链 CSP 影响
-  draco.setDecoderPath(`${(import.meta as any).env?.BASE_URL || '/'}draco/`);
+  draco.setDecoderPath(`${baseUrl()}draco/`);
   draco.setDecoderConfig({ type: 'wasm' });
   sharedDraco = draco;
   return draco;
 };
 
-export const createGlbLoader = (): GLTFLoader => {
+const getKtx2Loader = (renderer: THREE.WebGLRenderer): KTX2Loader => {
+  if (!sharedKtx2) {
+    const ktx2 = new KTX2Loader();
+    // 同源 public/basis（与 draco 同策略）
+    ktx2.setTranscoderPath(`${baseUrl()}basis/`);
+    sharedKtx2 = ktx2;
+  }
+  if (ktx2SupportRenderer !== renderer) {
+    sharedKtx2.detectSupport(renderer);
+    ktx2SupportRenderer = renderer;
+  }
+  return sharedKtx2;
+};
+
+export const createGlbLoader = async (
+  renderer?: THREE.WebGLRenderer | null
+): Promise<GLTFLoader> => {
   const loader = new GLTFLoader();
   loader.setDRACOLoader(getDracoLoader());
+  try {
+    // Meshopt 需等 wasm ready，否则几何/材质偶发异常发灰
+    const ready = (MeshoptDecoder as { ready?: Promise<unknown> }).ready;
+    if (ready) await ready;
+    loader.setMeshoptDecoder(MeshoptDecoder);
+  } catch {
+    /* Meshopt 不可用时仍可加载普通 GLB */
+  }
+  if (renderer) {
+    try {
+      loader.setKTX2Loader(getKtx2Loader(renderer));
+    } catch (e) {
+      console.warn('[glb] KTX2Loader init failed; textured models may appear grey', e);
+    }
+  }
   return loader;
 };
 
@@ -85,19 +124,58 @@ export const resolveGlbSource = async (
   return { url: resolved };
 };
 
-export const loadGlbFromSource = (
+/** 确保贴图色彩空间正确，避免看起来发灰/发白 */
+export const normalizeGltfMaterials = (root: THREE.Object3D) => {
+  root.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const mat of mats) {
+      if (!mat) continue;
+      const std = mat as THREE.MeshStandardMaterial;
+      const maps = [
+        std.map,
+        std.emissiveMap,
+        (std as any).albedoMap,
+      ].filter(Boolean) as THREE.Texture[];
+      for (const tex of maps) {
+        if (tex.colorSpace !== THREE.SRGBColorSpace) {
+          tex.colorSpace = THREE.SRGBColorSpace;
+          tex.needsUpdate = true;
+        }
+      }
+      std.needsUpdate = true;
+    }
+  });
+};
+
+export const loadGlbFromSource = async (
   source: GlbSource,
-  onProgress?: (pct: number) => void
-): Promise<GLTF> =>
-  new Promise((resolve, reject) => {
-    const loader = createGlbLoader();
+  onProgress?: (pct: number) => void,
+  renderer?: THREE.WebGLRenderer | null
+): Promise<GLTF> => {
+  const loader = await createGlbLoader(renderer);
+  return new Promise((resolve, reject) => {
     const fail = (e: unknown) => {
       const msg = String((e as any)?.message || e || 'GLB 解析失败');
       if (/DRACO|draco|KHR_draco/i.test(msg)) {
         reject(new Error('模型使用了 Draco 压缩，解码失败。请刷新页面后重试预览。'));
         return;
       }
+      if (/KTX2|Basis|transcoder/i.test(msg)) {
+        reject(new Error('模型贴图解码失败。请刷新页面后重试预览。'));
+        return;
+      }
       reject(e instanceof Error ? e : new Error(msg));
+    };
+
+    const ok = (gltf: GLTF) => {
+      try {
+        normalizeGltfMaterials(gltf.scene);
+      } catch {
+        /* ignore */
+      }
+      resolve(gltf);
     };
 
     if (source.buffer) {
@@ -105,7 +183,7 @@ export const loadGlbFromSource = (
         loader.parse(
           source.buffer,
           '',
-          (gltf) => resolve(gltf),
+          (gltf) => ok(gltf),
           (e) => fail(e)
         );
       } catch (e) {
@@ -117,7 +195,7 @@ export const loadGlbFromSource = (
     if (source.url) {
       loader.load(
         source.url,
-        (gltf) => resolve(gltf),
+        (gltf) => ok(gltf),
         (ev) => {
           if (ev.total > 0) onProgress?.(Math.min(99, Math.round((ev.loaded / ev.total) * 100)));
         },
@@ -128,3 +206,4 @@ export const loadGlbFromSource = (
 
     reject(new Error('无可加载的模型数据'));
   });
+};

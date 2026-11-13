@@ -8,6 +8,7 @@
 import type { DecisionMaker } from '../types';
 import { getEmailSearchKeys } from './env';
 import { buildAnymailFetchHeaders, resolveAnymailUrl } from './qwenProxy';
+import { attachFieldEvidence } from './personIdentity';
 
 const cleanDomain = (d: string) =>
   (d || '')
@@ -341,15 +342,28 @@ export const fillMissingEmailsByPatternGuess = async (
     });
     if (!hit) continue;
     occupied.add(hit.email.toLowerCase());
-    next[i] = {
-      ...d,
-      emailGuess: hit.email,
-      emailSource: hit.source,
-      source: d.source === 'LinkedIn' ? 'LinkedIn' : hit.source,
-      emailStatus: hit.emailStatus,
-      isVerified: hit.isVerified,
-      lastEmailCheckedAt: Date.now(),
-    };
+    const checkedAt = Date.now();
+    next[i] = attachFieldEvidence(
+      {
+        ...d,
+        emailGuess: hit.email,
+        emailSource: hit.source,
+        source: d.source === 'LinkedIn' ? 'LinkedIn' : hit.source,
+        emailStatus: hit.emailStatus,
+        isVerified: hit.isVerified,
+        lastEmailCheckedAt: checkedAt,
+        confidence: hit.isVerified ? 0.9 : 0.5,
+      },
+      {
+        field: 'email',
+        value: hit.email,
+        source: hit.source,
+        confidence: hit.isVerified ? 0.9 : 0.5,
+        observedAt: checkedAt,
+        status: hit.isVerified ? 'found' : 'unverified',
+      },
+      { companyDomain: domain }
+    );
     filled += 1;
   }
 

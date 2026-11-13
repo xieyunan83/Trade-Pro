@@ -391,7 +391,7 @@ export const VIDEO_SKILLS: VideoSkillDef[] = [
     storyboardZh: '',
     negativeHints:
       'watermark, on-screen text spam, morphing product, identity drift, extra limbs, jittery camera, flicker, melting plastics, wrong SKU redesign, blurry logo, garbled subtitles',
-    qaChecklist: ['符合你的完整提示词与分镜', '产品身份一致', '无水印乱码字幕'],
+    qaChecklist: ['符合你的完整提示词与分镜', '镜头与负向约束生效', '无水印乱码字幕'],
     aspectHint: '自定义',
     defaultAspect: '16:9',
     defaultDurationSec: 5,

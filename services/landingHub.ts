@@ -31,10 +31,15 @@ const readRawCache = (): CachedPayload | null => {
 const cacheAge = (parsed: CachedPayload) =>
   Date.now() - (parsed._cachedAt || parsed.fetchedAt || 0);
 
-/** 新鲜缓存（未过 FRESH_TTL） */
+const isHollowPayload = (p: LandingPayload | null | undefined) =>
+  !p ||
+  (!(p.news?.items?.length || 0) && !(p.fx?.quotes?.length || 0) && !(p.products?.items?.length || 0));
+
+/** 新鲜缓存（未过 FRESH_TTL）；空壳缓存不挡刷新 */
 export const loadLandingCache = (): LandingPayload | null => {
   const parsed = readRawCache();
   if (!parsed?.fetchedAt) return null;
+  if (isHollowPayload(parsed)) return null;
   if (cacheAge(parsed) > FRESH_TTL_MS) return null;
   return parsed;
 };
@@ -78,14 +83,22 @@ export const fetchLandingHub = async (opts?: {
     const fresh = loadLandingCache();
     if (fresh) return fresh;
   }
-  // 不阻塞等行业令牌（本地库读取会拖慢首请求）；有令牌时用户可点刷新
-  const res = await fetch('/api/landing', {
-    headers: { Accept: 'application/json' },
-  });
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  // 可选：带上已配置的行业源令牌（失败不影响公开资讯/汇率）
+  try {
+    const { loadDataProviderLocal } = await import('./dataProviders');
+    const tb = loadDataProviderLocal('toysbear');
+    const sky = loadDataProviderLocal('skybird');
+    const token = (tb.enabled && tb.apiKey?.trim()) || (sky.enabled && sky.apiKey?.trim()) || '';
+    if (token) headers['x-industry-token'] = token;
+  } catch {
+    /* ignore */
+  }
+  const res = await fetch('/api/landing', { headers });
   if (!res.ok) {
     throw new Error(`着陆页数据 ${res.status}`);
   }
   const data = (await res.json()) as LandingPayload;
-  if (data?.ok !== false) saveLandingCache(data);
+  if (data?.ok !== false && !isHollowPayload(data)) saveLandingCache(data);
   return data;
 };

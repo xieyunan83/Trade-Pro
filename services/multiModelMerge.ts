@@ -1,5 +1,14 @@
 import { AnalysisResult, ClientSearchResult, DecisionMaker, ProductAnalysis, SimilarCompany, WebsiteCategory } from '../types';
 import { normalizeCrmHost } from '../utils/crmHistory';
+import {
+  buildPersonId,
+  ensurePersonIdentity,
+  mergeEvidenceLists,
+  normalizeCompanyDomain,
+  normalizeEmail,
+  normalizeLinkedinPath,
+} from './personIdentity';
+import { pickStrongerEmailFields } from './dmEnrichPolicy';
 
 const PLACEHOLDER_RE =
   /^(n\/?a|na|none|null|unknown|未知|暂无|未发现|公开信息未找到|公开信息待核实|待核实|-|—|－)$/i;
@@ -123,51 +132,67 @@ export const mergeCategories = (a: any[], b: any[]): WebsiteCategory[] => {
   return [...map.values()];
 };
 
-/** 合并决策人列表（邮箱 / LinkedIn / 姓名去重）——只增改，不丢已有联系人 */
-export const mergeDecisionMakers = (a: any[], b: any[]): DecisionMaker[] => {
-  const map = new Map<string, any>();
-  const keyOf = (dm: any) => {
-    const email = asStr(dm.emailGuess).toLowerCase();
-    if (email.includes('@')) return `e:${email}`;
-    const li = asStr(dm.linkedin).toLowerCase();
+/** 合并决策人列表（personId / 邮箱 / LinkedIn 对齐）——只增改，不丢已有联系人 */
+export const mergeDecisionMakers = (
+  a: any[],
+  b: any[],
+  opts?: { companyDomain?: string | null }
+): DecisionMaker[] => {
+  const domain = normalizeCompanyDomain(opts?.companyDomain);
+  const map = new Map<string, DecisionMaker>();
+  const keyOf = (dm: DecisionMaker) => {
+    const email = normalizeEmail(dm.emailGuess);
+    if (email) return `e:${email}`;
+    const li = normalizeLinkedinPath(dm.linkedin);
     if (li) return `l:${li}`;
+    if (dm.personId && /^(e|l|h):/.test(dm.personId)) return dm.personId;
     const phone = asStr(dm.phone || dm.whatsapp);
     if (phone) return `p:${phone}`;
-    return `n:${asStr(dm.name).toLowerCase()}|${asStr(dm.title).toLowerCase()}`;
+    return buildPersonId(dm, { companyDomain: domain });
   };
-  const put = (dm: any) => {
-    if (!dm) return;
-    const name = preferString(dm.name, [dm.firstName, dm.lastName].filter(Boolean).join(' '));
-    const hasLi = /linkedin\.com\/in\//i.test(asStr(dm.linkedin));
+  const put = (raw: any) => {
+    if (!raw) return;
+    const name = preferString(raw.name, [raw.firstName, raw.lastName].filter(Boolean).join(' '));
+    const hasLi = !!normalizeLinkedinPath(raw.linkedin) || /linkedin\.com\/in\//i.test(asStr(raw.linkedin));
     // 领英占位：可无邮箱，但必须有主页或可用姓名
-    if (isEmptyPlaceholder(name) && !asStr(dm.emailGuess).includes('@') && !hasLi) return;
-    const k = keyOf({ ...dm, name });
+    if (isEmptyPlaceholder(name) && !asStr(raw.emailGuess).includes('@') && !hasLi) return;
+    const dm = ensurePersonIdentity({ ...raw, name } as DecisionMaker, { companyDomain: domain });
+    const k = keyOf(dm);
     const prev = map.get(k);
     if (!prev) {
-      map.set(k, { ...dm, name });
+      map.set(k, dm);
       return;
     }
-    // 字段级择优：禁止空值/未验证覆盖已有实锤资料
-    map.set(k, {
-      ...prev,
-      ...dm,
-      name: preferString(prev.name, name),
-      title: preferString(prev.title, dm.title),
-      emailGuess: preferString(prev.emailGuess, dm.emailGuess),
-      phone: preferString(prev.phone, dm.phone),
-      whatsapp: preferString(prev.whatsapp, dm.whatsapp),
-      linkedin: preferString(prev.linkedin, dm.linkedin),
-      department: preferString(prev.department, dm.department),
-      emailSource: preferString(prev.emailSource, dm.emailSource),
-      emailStatus: preferString(prev.emailStatus, dm.emailStatus),
-      type: preferString(prev.type, dm.type) || prev.type || dm.type,
-      source: preferString(prev.source, dm.source) || prev.source || dm.source,
-      isVerified: !!(prev.isVerified || dm.isVerified),
-      influenceScore:
-        Math.max(Number(prev.influenceScore) || 0, Number(dm.influenceScore) || 0) ||
-        prev.influenceScore ||
-        dm.influenceScore,
-    });
+    // 字段级择优：禁止空值/未验证覆盖已有实锤资料；证据链合并保留
+    const emailFields = pickStrongerEmailFields(prev, dm);
+    const merged = ensurePersonIdentity(
+      {
+        ...prev,
+        ...dm,
+        name: preferString(prev.name, name),
+        title: preferString(prev.title, dm.title),
+        ...emailFields,
+        phone: preferString(prev.phone, dm.phone),
+        whatsapp: preferString(prev.whatsapp, dm.whatsapp),
+        linkedin: preferString(prev.linkedin, dm.linkedin),
+        department: preferString(prev.department, dm.department),
+        type: (preferString(prev.type, dm.type) || prev.type || dm.type) as DecisionMaker['type'],
+        source: (preferString(prev.source, dm.source) || prev.source || dm.source) as DecisionMaker['source'],
+        influenceScore:
+          Math.max(Number(prev.influenceScore) || 0, Number(dm.influenceScore) || 0) ||
+          prev.influenceScore ||
+          dm.influenceScore,
+        lastEmailCheckedAt: Math.max(Number(prev.lastEmailCheckedAt) || 0, Number(dm.lastEmailCheckedAt) || 0) ||
+          prev.lastEmailCheckedAt ||
+          dm.lastEmailCheckedAt,
+        evidence: mergeEvidenceLists(prev.evidence, dm.evidence),
+      },
+      { companyDomain: domain }
+    );
+    // 邮箱/领英对齐后可能换到更强 personId：迁到新键，避免重复
+    const nextKey = keyOf(merged);
+    if (nextKey !== k) map.delete(k);
+    map.set(nextKey, merged);
   };
   (a || []).forEach(put);
   (b || []).forEach(put);
@@ -184,9 +209,13 @@ export const mergeAnalysisWithPrevious = (
 ): AnalysisResult => {
   if (!previous) return incoming;
   const merged = mergeAnalysisRaws(previous as any, incoming as any) as AnalysisResult;
+  const mergeDomain =
+    normalizeCompanyDomain(incoming.companyInfo?.website) ||
+    normalizeCompanyDomain(previous.companyInfo?.website);
   merged.decisionMakers = mergeDecisionMakers(
     previous.decisionMakers || [],
-    incoming.decisionMakers || []
+    incoming.decisionMakers || [],
+    { companyDomain: mergeDomain }
   );
   const prevAt = previous.decisionMakerEmailSearchAt || 0;
   const nextAt = incoming.decisionMakerEmailSearchAt || 0;
@@ -409,7 +438,13 @@ export const mergeAnalysisRaws = (...raws: Record<string, any>[]): Record<string
       },
       products: mergeProducts(a.products || [], b.products || []),
       marketTrends: preferString(a.marketTrends, b.marketTrends),
-      decisionMakers: mergeDecisionMakers(a.decisionMakers || [], b.decisionMakers || []),
+      decisionMakers: mergeDecisionMakers(a.decisionMakers || [], b.decisionMakers || [], {
+        companyDomain:
+          normalizeCompanyDomain(bCi.website) ||
+          normalizeCompanyDomain(aCi.website) ||
+          normalizeCompanyDomain(b.companyInfo?.website) ||
+          normalizeCompanyDomain(a.companyInfo?.website),
+      }),
       strategy: {
         buyingOfficeLocation: preferString(
           a.strategy?.buyingOfficeLocation,

@@ -301,7 +301,18 @@ export const ModuleLandingHub: React.FC<Props> = ({
                 <Loader2 className="animate-spin" size={14} /> 拉取中…
               </div>
             ) : news.length === 0 ? (
-              <p className="text-xs text-slate-500 font-medium p-4 text-center">资讯更新中</p>
+              <div className="flex flex-col items-center gap-2 p-4 text-center">
+                <p className="text-xs text-slate-500 font-medium">
+                  {data?.news?.error || err || '暂时拉不到资讯'}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void load(true)}
+                  className="text-[11px] font-bold text-teal-800 bg-teal-50 border border-teal-200 px-2.5 py-1 rounded-lg"
+                >
+                  重新拉取
+                </button>
+              </div>
             ) : (
               news.slice(0, 8).map((n) => (
                 <a
@@ -430,9 +441,18 @@ export const ModuleLandingHub: React.FC<Props> = ({
                 <Loader2 className="animate-spin" size={14} /> 拉取中…
               </div>
             ) : fx.length === 0 ? (
-              <p className="text-xs text-slate-500 font-medium p-3 text-center">
-                {data?.fx?.error || '暂无汇率数据'}
-              </p>
+              <div className="flex flex-col items-center gap-2 p-3 text-center">
+                <p className="text-xs text-slate-500 font-medium">
+                  {data?.fx?.error || '暂无汇率数据'}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void load(true)}
+                  className="text-[11px] font-bold text-teal-800 bg-teal-50 border border-teal-200 px-2.5 py-1 rounded-lg"
+                >
+                  重新拉取
+                </button>
+              </div>
             ) : (
               <table className="w-full text-left text-[11px]">
                 <thead className="sticky top-0 bg-slate-50/95 text-slate-500 font-bold backdrop-blur-sm">

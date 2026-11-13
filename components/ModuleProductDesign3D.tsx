@@ -57,6 +57,7 @@ import { loadDataProviderLocal, saveDataProvider } from '../services/dataProvide
 import { consumeCreativeHandoff } from '../services/creativeAssetBridge';
 import { persistModel3dJob, purgeDeletedCreativeMedia } from '../services/creativeAssetPersist';
 import {
+  findBestLocalTexturedModel3dForJob,
   findModel3dVaultRefForJob,
   findOriginalModel3dVaultRefForJob,
   isVaultRef,
@@ -185,7 +186,9 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     });
   };
 
-  // 切换 / 打开任务：优先预览「当前/最后生成」本机 GLB，避免卡在过期原模链或一直转圈
+  // 打开任务：优先本机「有色」网格，绝不默认去烧云端额度
+  // - 未拆分：看 current（pbr/成片）
+  // - 已拆分：看 original（本机 _orig 彩色原模），不要默认看灰分件
   useEffect(() => {
     if (!active) {
       setPreviewMode('current');
@@ -194,20 +197,14 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     }
     const isLocal = (u?: string) =>
       !!u && (isVaultRef(u) || u.startsWith('blob:') || u.startsWith('data:'));
-    const origCand = [active.originalModelUrl, active.baseModelUrl].filter(Boolean) as string[];
-    const localOrig = origCand.find(isLocal);
-    const curLocal = [active.modelUrl, active.pbrModelUrl].find(isLocal);
-    if (curLocal) {
-      setPreviewMode('current');
-    } else if (localOrig) {
-      setPreviewMode('original');
-    } else if (origCand.length && !hasSegmentResult) {
+    const hasLocalOrig = [active.originalModelUrl, active.baseModelUrl].some(isLocal);
+    if (hasSegmentResult && (hasLocalOrig || active.sourceTaskId)) {
       setPreviewMode('original');
     } else {
       setPreviewMode('current');
     }
     setPartNames([]);
-  }, [active?.id]);
+  }, [active?.id, hasSegmentResult]);
 
   useEffect(() => {
     if (!activeId) return;
@@ -217,6 +214,33 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
       /* ignore */
     }
   }, [activeId]);
+
+  // 打开任务时用本机最大 GLB 回填 original（不访问云端），避免灰模占坑
+  useEffect(() => {
+    if (!active || active.status !== 'ready') return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const best = await findBestLocalTexturedModel3dForJob(active);
+        if (cancelled || !best) return;
+        if (active.originalModelUrl === best) return;
+        const segmented = !!(active.segmentTaskId || '').trim();
+        patchJob(active.id, {
+          originalModelUrl: best,
+          ...(!segmented && !isVaultRef(active.pbrModelUrl)
+            ? { pbrModelUrl: best }
+            : {}),
+          updatedAt: Date.now(),
+        });
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active?.id, active?.status]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1112,13 +1136,17 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
       isVaultRef(u) && (u.endsWith('_orig') || u.includes('_orig'));
 
     if (prefer === 'original') {
-      const list = [job.originalModelUrl, job.baseModelUrl]
+      // 彩色优先：_orig → pbr → model；base 灰模永远最后。拆分后禁止用主槽分件冒充原模
+      const list = (
+        segmented
+          ? [job.originalModelUrl, job.pbrModelUrl, job.baseModelUrl]
+          : [job.originalModelUrl, job.pbrModelUrl, job.modelUrl, job.baseModelUrl]
+      )
         .filter(Boolean)
         .filter((u) => {
           const s = u as string;
           if (isOrigSlot(s)) return true;
-          // 拆分后禁止把主槽 / 当前分件链当成原模
-          if (segmented && (s === primaryRef || s === job.modelUrl || s === job.pbrModelUrl)) {
+          if (segmented && (s === primaryRef || s === job.modelUrl)) {
             return false;
           }
           return true;
@@ -1126,28 +1154,27 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
       return list.find(isLocal) || list[0];
     }
 
+    // 成片预览：PBR/主网格优先，避免落到无贴图 base
     const list = (
       segmented
         ? [job.modelUrl, job.pbrModelUrl]
-        : [job.modelUrl, job.pbrModelUrl, job.baseModelUrl, job.originalModelUrl]
+        : [job.pbrModelUrl, job.modelUrl, job.originalModelUrl, job.baseModelUrl]
     ).filter(Boolean) as string[];
     return list.find(isLocal) || list[0];
   };
 
   /**
-   * 找回拆分前原模：本机 _orig 槽 → 已声明 vault → 云端任务。
-   * 分件结果（segmentTaskId / 分件着色）一律保留，不会被冲掉。
+   * 找回拆分前原模：默认只读本机素材（不烧生成额度）。
+   * 仅当 opts.forceCloudTextured === true（用户点「云端补拉」）才访问云端。
    */
-  const recoverOriginalModel = async () => {
+  const recoverOriginalModel = async (opts?: { forceCloudTextured?: boolean }) => {
     if (!active) return;
+    const forceCloud = opts?.forceCloudTextured === true;
 
     const useLocalOriginal = (url: string, note: string) => {
       patchJob(active.id, {
         originalModelUrl: url,
-        baseModelUrl:
-          isVaultRef(active.baseModelUrl) && active.baseModelUrl !== active.modelUrl
-            ? active.baseModelUrl
-            : url,
+        // 勿把 base 误写成灰模；保留原 base 字段
         updatedAt: Date.now(),
       });
       setPreviewMode('original');
@@ -1155,38 +1182,43 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
       setMsg(note);
     };
 
-    // 已有可用本机原模（且不是被拆分结果占用的主槽）
-    if (active.originalModelUrl && isVaultRef(active.originalModelUrl)) {
-      const oid = active.originalModelUrl.replace(/^vault:/, '');
-      if (oid !== model3dVaultIdForJob(active.id)) {
-        useLocalOriginal(active.originalModelUrl, '已切回拆分前的原模预览 / 可下载');
-        return;
-      }
-    }
-
     setRecoveringOriginal(true);
     setMsgTone('info');
-    setMsg('正在从本机素材库查找拆分前原模…');
+    setMsg(forceCloud ? '正在从云端补拉彩色原模（可能耗额度）…' : '正在从本机素材库选择彩色原模…');
     try {
-      const localOrig = await findOriginalModel3dVaultRefForJob(active);
-      if (localOrig) {
-        useLocalOriginal(
-          localOrig,
-          '已从本机素材库找回原模；分件着色仍保留，可随时切换'
-        );
+      // 1) 本机优先：体积最大的候选（通常即有色 PBR / _orig）
+      const bestLocal = await findBestLocalTexturedModel3dForJob(active);
+      if (bestLocal && !forceCloud) {
+        useLocalOriginal(bestLocal, '已切回本机彩色原模（未访问云端）');
         return;
       }
+      const localOrig = await findOriginalModel3dVaultRefForJob(active);
+      if (localOrig && !forceCloud) {
+        useLocalOriginal(localOrig, '已切回本机原模备份（未访问云端）');
+        return;
+      }
+      if (active.originalModelUrl && isVaultRef(active.originalModelUrl) && !forceCloud) {
+        const oid = active.originalModelUrl.replace(/^vault:/, '');
+        if (oid !== model3dVaultIdForJob(active.id)) {
+          useLocalOriginal(active.originalModelUrl, '已切回本机原模预览（未访问云端）');
+          return;
+        }
+      }
 
-      const tid = (active.sourceTaskId || '').trim();
-      if (!tid) {
+      if (!forceCloud) {
         setMsgTone('error');
         setMsg(
-          '本机未找到原模备份。可把此前下载的 GLB 用下方「设为当前任务原模」绑定回来，不会丢掉分件。'
+          '本机没有可用的彩色原模。请勿清空素材；若必须补拉，再点「云端补拉原模」（可能耗额度）。也可到「贴图」对本机网格上色。'
         );
         return;
       }
 
-      setMsg('本机没有原模备份，正在尝试云端…');
+      const tid = (active.sourceTaskId || active.providerTaskId || '').trim();
+      if (!tid) {
+        setMsgTone('error');
+        setMsg('没有可查询的生成任务。请重新生成 3D，或用「设为当前任务原模」绑定本机 GLB。');
+        return;
+      }
       let result =
         active.provider === 'tripo'
           ? await fetchTripoTaskOnce(tid)
@@ -1194,19 +1226,16 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
       if (!result?.modelUrl && active.provider !== 'tripo') {
         result = (await fetchTripoTaskOnce(tid)) || result;
       }
-      if (!result?.modelUrl) {
-        throw new Error(
-          '云端原模已过期。请勿清空本机素材；若曾下载过 GLB，用「设为当前任务原模」绑定，分件不会丢。'
-        );
+      const textured =
+        result?.pbrModelUrl || result?.modelUrl || result?.baseModelUrl || '';
+      if (!textured) {
+        throw new Error('云端原模已过期。请用「贴图」上色或重新生成（勿清空本机素材）。');
       }
       const saved =
-        (await tryPersistMediaUrl(
-          result.modelUrl,
-          'model3d',
-          `${tid}_orig`,
-          { id: `${model3dVaultIdForJob(active.id)}_orig` }
-        )) || result.modelUrl;
-      useLocalOriginal(saved, '原模已恢复，可环视 / 下载；分件结果仍保留在「分件着色」');
+        (await tryPersistMediaUrl(textured, 'model3d', `${tid}_orig`, {
+          id: `${model3dVaultIdForJob(active.id)}_orig`,
+        })) || textured;
+      useLocalOriginal(saved, '已从云端补拉并写入本机；以后打开不再依赖云端');
     } catch (e: any) {
       setMsgTone('error');
       setMsg(e?.message || '恢复原模失败');
@@ -1267,7 +1296,8 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
     if (previewMode === 'original') {
       return (
         pickLocalOrRemoteModelUrl(active, 'original') ||
-        pickLocalOrRemoteModelUrl(active, 'current')
+        // 未拆分时 pbr 即彩色原模
+        (!hasSegmentResult ? pickLocalOrRemoteModelUrl(active, 'current') : undefined)
       );
     }
     return pickLocalOrRemoteModelUrl(active, 'current');
@@ -1551,7 +1581,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                         onClick={() => void recoverOriginalModel()}
                         className="rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-900 text-[11px] font-black py-2 disabled:opacity-50"
                       >
-                        {recoveringOriginal ? '恢复中…' : '看原模'}
+                        {recoveringOriginal ? '本机查找…' : '看原模'}
                       </button>
                     </div>
                   )}
@@ -2373,7 +2403,25 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
                           : 'bg-white/10 hover:bg-white/15'
                       } disabled:opacity-50`}
                     >
-                      {recoveringOriginal ? '恢复原模…' : '原模（拆分前）'}
+                      {recoveringOriginal ? '本机查找…' : '原模（本机）'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={recoveringOriginal}
+                      onClick={() => {
+                        if (
+                          !window.confirm(
+                            '仅在本机彩色原模丢失时使用。将访问云端任务链，可能消耗额度。确定补拉？'
+                          )
+                        ) {
+                          return;
+                        }
+                        void recoverOriginalModel({ forceCloudTextured: true });
+                      }}
+                      className="rounded-lg text-[10px] font-black px-2.5 py-1.5 bg-white/5 hover:bg-white/10 text-slate-300 disabled:opacity-50"
+                      title="本机没有彩色原模时才用；会访问云端"
+                    >
+                      云端补拉
                     </button>
                     <button
                       type="button"

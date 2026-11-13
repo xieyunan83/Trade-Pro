@@ -81,6 +81,7 @@ import {
   isEmptyPlaceholder,
   preferString,
 } from './multiModelMerge';
+import { attachFieldEvidence, ensurePersonIdentity } from './personIdentity';
 import {
   buildFallbackEvidenceFromReport,
   evidenceItemsFromTavilyResults,
@@ -1406,10 +1407,48 @@ const isAnymailVerified = (dm: DecisionMaker): boolean =>
   !!dm.isVerified &&
   (dm.emailStatus || '').toLowerCase() === 'valid';
 
-const stampChecked = (dm: DecisionMaker, at: number): DecisionMaker => ({
-  ...dm,
-  lastEmailCheckedAt: at,
-});
+const stampChecked = (dm: DecisionMaker, at: number, companyDomain?: string | null): DecisionMaker => {
+  let next: DecisionMaker = { ...dm, lastEmailCheckedAt: at };
+  const email = String(next.emailGuess || '').trim();
+  if (email.includes('@')) {
+    const status = String(next.emailStatus || '').toLowerCase();
+    next = attachFieldEvidence(
+      next,
+      {
+        field: 'email',
+        value: email,
+        source: String(next.emailSource || next.source || '线索库'),
+        confidence:
+          typeof next.confidence === 'number'
+            ? next.confidence
+            : next.isVerified || status === 'valid'
+              ? 0.9
+              : status === 'risky'
+                ? 0.55
+                : 0.45,
+        observedAt: at,
+        status: next.isVerified || status === 'valid' ? 'found' : status === 'not_found' ? 'not_found' : 'unverified',
+      },
+      { companyDomain }
+    );
+  }
+  if (next.linkedin) {
+    next = attachFieldEvidence(
+      next,
+      {
+        field: 'linkedin',
+        value: next.linkedin,
+        source: next.source === 'LinkedIn' ? 'LinkedIn' : '公开页',
+        sourceUrl: next.linkedin.startsWith('http') ? next.linkedin : undefined,
+        confidence: 0.75,
+        observedAt: at,
+        status: 'found',
+      },
+      { companyDomain }
+    );
+  }
+  return ensurePersonIdentity(next, { companyDomain });
+};
 
 export type DecisionMakerResearchStats = {
   added: number;

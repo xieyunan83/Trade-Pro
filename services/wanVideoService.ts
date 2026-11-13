@@ -347,27 +347,34 @@ export const generateProductVideo = async (input: VideoGenerateInput): Promise<V
     const imgs = [input.sourceImage, ...(input.referenceImages || [])]
       .filter(Boolean)
       .map((u) => String(u).trim()) as string[];
-    if (!imgs.length) throw new Error('请至少上传一张参考图');
+    // 无参考图时自动降级文生，避免「必须上传产品图」卡死非产品片
+    if (!imgs.length) {
+      taskInput = { prompt };
+      if (input.negativePrompt?.trim()) {
+        taskInput.negative_prompt = input.negativePrompt.trim();
+      }
+      parameters.prompt_extend = true;
+    } else {
+      input.onProgress?.(4, 'preparing');
+      const prepared: string[] = [];
+      for (const img of imgs.slice(0, input.mode === 'reference' ? 5 : 1)) {
+        prepared.push(await prepareOneVideoImage(img));
+      }
 
-    input.onProgress?.(4, 'preparing');
-    const prepared: string[] = [];
-    for (const img of imgs.slice(0, input.mode === 'reference' ? 5 : 1)) {
-      prepared.push(await prepareOneVideoImage(img));
-    }
+      // first_frame 与 reference_image 互斥，不可同请求
+      const media: MediaItem[] =
+        input.mode === 'reference'
+          ? prepared.map((url) => ({ type: 'reference_image', url }))
+          : [{ type: 'first_frame', url: prepared[0] }];
 
-    // first_frame 与 reference_image 互斥，不可同请求
-    const media: MediaItem[] =
-      input.mode === 'reference'
-        ? prepared.map((url) => ({ type: 'reference_image', url }))
-        : [{ type: 'first_frame', url: prepared[0] }];
+      if (input.mode === 'reference' && prepared.length > 1) {
+        prompt = `${prompt}\n参考图顺序：图1起保持产品外观一致；每张参考图都要发挥作用。`;
+      }
 
-    if (input.mode === 'reference' && prepared.length > 1) {
-      prompt = `${prompt}\n参考图顺序：图1起保持产品外观一致；每张参考图都要发挥作用。`;
-    }
-
-    taskInput = { prompt, media };
-    if (input.negativePrompt?.trim()) {
-      taskInput.negative_prompt = input.negativePrompt.trim();
+      taskInput = { prompt, media };
+      if (input.negativePrompt?.trim()) {
+        taskInput.negative_prompt = input.negativePrompt.trim();
+      }
     }
   }
 

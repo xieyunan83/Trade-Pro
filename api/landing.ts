@@ -72,7 +72,52 @@ const stripHtml = (s: string) =>
     .replace(/&nbsp;/g, ' ')
     .trim();
 
-const FETCH_MS = 8_000;
+const FETCH_MS = 15_000;
+
+const FALLBACK_NEWS: NewsItem[] = [
+  {
+    id: 'fb-news-1',
+    title: '全球玩具与婴童用品供应链持续向高附加值设计与合规认证倾斜',
+    url: 'https://www.chinanews.com.cn/business/',
+    source: '产业观察',
+    region: 'cn',
+  },
+  {
+    id: 'fb-news-2',
+    title: '出口企业关注目标市场安全标准与包装回收要求更新',
+    url: 'https://www.mofcom.gov.cn/',
+    source: '贸易合规',
+    region: 'cn',
+  },
+  {
+    id: 'fb-news-3',
+    title: '跨境选品：渠道热度、价带与交付周期成为报价关键变量',
+    url: 'https://www.people.com.cn/',
+    source: '市场速览',
+    region: 'cn',
+  },
+  {
+    id: 'fb-news-4',
+    title: '国际展会与线上货架仍是新品测款的主要窗口',
+    url: 'https://www.reuters.com/',
+    source: '国际零售',
+    region: 'intl',
+  },
+  {
+    id: 'fb-news-5',
+    title: '汇率波动下，建议报价单同时标注币种与有效期',
+    url: 'https://www.bank-of-china.com/sourcedb/whpj/',
+    source: '汇率提示',
+    region: 'cn',
+  },
+  {
+    id: 'fb-news-6',
+    title: '知识产权与外观专利检索应纳入开发触达前检查清单',
+    url: 'https://www.cnipa.gov.cn/',
+    source: '知产提醒',
+    region: 'cn',
+  },
+];
 
 const fetchText = async (url: string, accept?: string): Promise<string> => {
   const ctrl = new AbortController();
@@ -275,15 +320,25 @@ const fetchFxQuotes = async (): Promise<{ quotes: FxQuote[]; error?: string }> =
 };
 
 const fetchNewsFeeds = async (): Promise<{ items: NewsItem[]; error?: string }> => {
-  // 仅拉 2 路 RSS，缩短冷启动；与汇率并行
+  // 国内可访问源优先（Google RSS 在国内常不可达）
   const feeds: { url: string; region: 'cn' | 'intl'; label: string }[] = [
     {
-      url: 'https://news.google.com/rss/search?q=%E7%8E%A9%E5%85%B7%E4%BA%A7%E4%B8%9A+OR+%E7%8E%A9%E5%85%B7%E5%87%BA%E5%8F%A3&hl=zh-CN&gl=CN&ceid=CN:zh-Hans',
+      url: 'https://www.chinanews.com.cn/rss/finance.xml',
       region: 'cn',
-      label: '国内产业资讯',
+      label: '国内财经',
     },
     {
-      url: 'https://news.google.com/rss/search?q=toy+industry+OR+%22toy+fair%22+OR+toys+wholesale&hl=en-US&gl=US&ceid=US:en',
+      url: 'https://www.people.com.cn/rss/finance.xml',
+      region: 'cn',
+      label: '国内财经·人民网',
+    },
+    {
+      url: 'https://www.chinanews.com.cn/rss/world.xml',
+      region: 'intl',
+      label: '国际要闻',
+    },
+    {
+      url: 'https://news.google.com/rss/search?q=toy+industry+OR+%22toy+fair%22&hl=en-US&gl=US&ceid=US:en',
       region: 'intl',
       label: '国际玩具资讯',
     },
@@ -301,15 +356,16 @@ const fetchNewsFeeds = async (): Promise<{ items: NewsItem[]; error?: string }> 
     })
   );
   const seen = new Set<string>();
-  const items = news.filter((n) => {
+  let items = news.filter((n) => {
     const k = n.title.toLowerCase();
     if (seen.has(k)) return false;
     seen.add(k);
     return true;
-  }).slice(0, 24);
+  });
+  if (!items.length) items = FALLBACK_NEWS.slice();
   return {
-    items,
-    error: newsErr.length && !items.length ? newsErr.join('; ') : undefined,
+    items: items.slice(0, 24),
+    error: newsErr.length && !news.length ? newsErr.join('; ') : undefined,
   };
 };
 
@@ -416,7 +472,8 @@ async function buildPayload(industryToken?: string) {
     productsError = undefined;
   }
 
-  const newsItems = [...industryResult.industryNews, ...newsResult.items].slice(0, 28);
+  let newsItems = [...industryResult.industryNews, ...newsResult.items].slice(0, 28);
+  if (!newsItems.length) newsItems = FALLBACK_NEWS.slice();
 
   return {
     ok: true,
@@ -429,7 +486,7 @@ async function buildPayload(industryToken?: string) {
     },
     news: {
       items: newsItems,
-      error: newsResult.error,
+      error: newsResult.error || industryResult.error,
     },
     products: { items: products, error: productsError, needsCredential },
   };

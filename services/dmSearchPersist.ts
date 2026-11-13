@@ -69,7 +69,9 @@ export const upsertDmPersistRecord = (rec: Omit<DmPersistRecord, 'updatedAt'>): 
     // 决策人只合并不覆盖：再次背调 / 静默补全不得冲掉已挖联系人
     const prevAt = prev.searchedAt || 0;
     const nextAt = nextRec.searchedAt || 0;
-    const mergedDms = mergeDecisionMakers(prev.decisionMakers || [], nextRec.decisionMakers || []);
+    const mergedDms = mergeDecisionMakers(prev.decisionMakers || [], nextRec.decisionMakers || [], {
+      companyDomain: domain || nextRec.domain || prev.domain,
+    });
     const prevN = prev.decisionMakers?.length || 0;
     const nextN = mergedDms.length;
     if (nextAt < prevAt && nextN <= prevN) return;
@@ -224,7 +226,8 @@ export const mergeTwoHistoryItemsRich = (a: HistoryItem, b: HistoryItem): Histor
       tradeIntelligence: pa?.tradeIntelligence || baseData.tradeIntelligence,
       decisionMakers: mergeDecisionMakers(
         baseData.decisionMakers || [],
-        da?.decisionMakers || []
+        da?.decisionMakers || [],
+        { companyDomain: newerTs.domain || olderTs.domain || companyInfo?.website }
       ),
       decisionMakerEmailSearchAt: Math.max(
         da?.decisionMakerEmailSearchAt || 0,
