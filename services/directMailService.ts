@@ -95,9 +95,17 @@ const callDirectMailProxy = async (
     });
     const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     if (!res.ok || data?.ok === false) {
+      const detail = String(
+        data?.error || data?.Message || (res.status ? `发信代理异常 HTTP ${res.status}` : '发信代理异常')
+      );
+      // 本地代理未升级时常见：查询接口被当成发信 → 提示更明确
+      const hint =
+        /缺少 toAddress|Only POST|DirectMail/i.test(detail) && action !== 'SingleSendMail'
+          ? '（若在本地开发，请重启 dev 服务以加载多 Action 发信代理）'
+          : '';
       return {
         ok: false,
-        error: String(data?.error || data?.Message || `请求失败 HTTP ${res.status}`),
+        error: `${detail}${hint}`,
         RequestId: data?.RequestId ? String(data.RequestId) : undefined,
       };
     }

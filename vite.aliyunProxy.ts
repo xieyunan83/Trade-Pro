@@ -375,6 +375,16 @@ async function readReqBody(req: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+const DM_ALLOWED_ACTIONS = new Set([
+  'SingleSendMail',
+  'DescAccountSummary',
+  'QueryInvalidAddress',
+  'DeleteInvalidAddress',
+  'SenderStatisticsByTagNameAndBatchID',
+  'SenderStatisticsDetailByParam',
+]);
+
+/** 本地 DirectMail：与 api/directmail.ts 多 Action 对齐（额度/无效地址/统计/发信） */
 async function handleLocalDirectMail(
   req: IncomingMessage,
   res: ServerResponse,
@@ -395,43 +405,52 @@ async function handleLocalDirectMail(
     return;
   }
 
+  const json = (code: number, payload: Record<string, unknown>) => {
+    res.statusCode = code;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify(payload));
+  };
+
   try {
     const crypto = await import('node:crypto');
     const raw = await readReqBody(req);
-    const body = raw ? JSON.parse(raw) : {};
-    const accessKeyId = String(
-      body.accessKeyId || envKeys?.accessKeyId || process.env.ALIYUN_DM_ACCESS_KEY_ID || ''
-    ).trim();
-    const accessKeySecret = String(
-      body.accessKeySecret ||
-        envKeys?.accessKeySecret ||
-        process.env.ALIYUN_DM_ACCESS_KEY_SECRET ||
-        ''
-    ).trim();
-    const accountName = String(
-      body.accountName || envKeys?.accountName || process.env.ALIYUN_DM_ACCOUNT_NAME || ''
-    ).trim();
-    const toAddress = String(body.toAddress || '').trim();
-    const subject = String(body.subject || '').trim();
-    const htmlBody = String(body.htmlBody || body.textBody || '').trim();
-    const regionId = String(body.regionId || 'cn-hangzhou').trim();
-
-    if (!accessKeyId || !accessKeySecret || !accountName) {
-      res.statusCode = 400;
-      res.setHeader('Content-Type', 'application/json');
-      res.end(
-        JSON.stringify({
-          ok: false,
-          error:
-            '缺少 AccessKey / 发信地址。请在 .env.local 填写 REACT_APP_ALIYUN_EMAIL_*，或邮件模块「接口配置」。',
-        })
-      );
+    let body: any = {};
+    try {
+      body = raw ? JSON.parse(raw) : {};
+    } catch {
+      json(400, { ok: false, error: '请求体不是合法 JSON' });
       return;
     }
-    if (!toAddress || !subject || !htmlBody) {
-      res.statusCode = 400;
-      res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ ok: false, error: '缺少 toAddress / subject / htmlBody' }));
+    const pick = (v: unknown) => (v == null ? '' : String(v).trim());
+    const putIf = (params: Record<string, string>, key: string, value: unknown) => {
+      const s = pick(value);
+      if (s) params[key] = s;
+    };
+
+    const accessKeyId = pick(
+      body.accessKeyId || envKeys?.accessKeyId || process.env.ALIYUN_DM_ACCESS_KEY_ID
+    );
+    const accessKeySecret = pick(
+      body.accessKeySecret ||
+        envKeys?.accessKeySecret ||
+        process.env.ALIYUN_DM_ACCESS_KEY_SECRET
+    );
+    const accountName = pick(
+      body.accountName || envKeys?.accountName || process.env.ALIYUN_DM_ACCOUNT_NAME
+    );
+    const regionId = pick(body.regionId) || 'cn-hangzhou';
+    const action = pick(body.action || body.Action) || 'SingleSendMail';
+
+    if (!accessKeyId || !accessKeySecret) {
+      json(400, {
+        ok: false,
+        error:
+          '缺少 AccessKey。请在 .env.local 填写 REACT_APP_ALIYUN_EMAIL_*，或邮件模块「接口配置」。',
+      });
+      return;
+    }
+    if (!DM_ALLOWED_ACTIONS.has(action)) {
+      json(400, { ok: false, error: `不支持的 Action: ${action}` });
       return;
     }
 
@@ -443,25 +462,91 @@ async function handleLocalDirectMail(
         .replace(/\)/g, '%29')
         .replace(/\*/g, '%2A');
 
+    const apiVersion =
+      regionId.includes('singapore') || regionId === 'ap-southeast-1'
+        ? '2017-06-22'
+        : '2015-11-23';
+
     const params: Record<string, string> = {
       AccessKeyId: accessKeyId,
-      Action: 'SingleSendMail',
+      Action: action,
       Format: 'JSON',
-      Version: '2015-11-23',
+      Version: apiVersion,
       SignatureMethod: 'HMAC-SHA1',
       SignatureVersion: '1.0',
       SignatureNonce: crypto.randomUUID(),
       Timestamp: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
       RegionId: regionId,
-      AccountName: accountName,
-      AddressType: String(body.addressType === 0 ? 0 : 1),
-      ReplyToAddress: body.replyToAddress ? 'true' : 'false',
-      ToAddress: toAddress,
-      Subject: subject,
-      HtmlBody: htmlBody,
     };
-    if (body.fromAlias) params.FromAlias = String(body.fromAlias);
-    if (body.tagName) params.TagName = String(body.tagName);
+
+    if (action === 'SingleSendMail') {
+      const toAddress = pick(body.toAddress);
+      const subject = pick(body.subject);
+      const htmlBody = pick(body.htmlBody || body.textBody);
+      if (!accountName) {
+        json(400, { ok: false, error: '缺少发信地址（AccountName）' });
+        return;
+      }
+      if (!toAddress || !subject || !htmlBody) {
+        json(400, { ok: false, error: '缺少 toAddress / subject / htmlBody' });
+        return;
+      }
+      params.AccountName = accountName;
+      params.AddressType = String(body.addressType === 0 ? 0 : 1);
+      params.ReplyToAddress = body.replyToAddress ? 'true' : 'false';
+      params.ToAddress = toAddress;
+      params.Subject = subject;
+      params.HtmlBody = htmlBody;
+      putIf(params, 'FromAlias', body.fromAlias);
+      putIf(params, 'TagName', body.tagName);
+    } else if (action === 'QueryInvalidAddress') {
+      putIf(params, 'StartTime', body.startTime || body.StartTime);
+      putIf(params, 'EndTime', body.endTime || body.EndTime);
+      putIf(params, 'KeyWord', body.keyWord || body.KeyWord);
+      putIf(params, 'Length', body.length ?? body.Length);
+      putIf(params, 'NextStart', body.nextStart || body.NextStart);
+    } else if (action === 'DeleteInvalidAddress') {
+      putIf(params, 'ToAddress', body.toAddress || body.ToAddress);
+      if (!params.ToAddress) {
+        json(400, { ok: false, error: '缺少 ToAddress' });
+        return;
+      }
+    } else if (action === 'SenderStatisticsByTagNameAndBatchID') {
+      const startTime = pick(body.startTime || body.StartTime);
+      const endTime = pick(body.endTime || body.EndTime);
+      if (!startTime || !endTime) {
+        json(400, { ok: false, error: '缺少 StartTime / EndTime' });
+        return;
+      }
+      params.StartTime = startTime;
+      params.EndTime = endTime;
+      putIf(params, 'AccountName', body.accountNameFilter || body.AccountName || accountName);
+      putIf(params, 'TagName', body.tagName || body.TagName);
+      putIf(params, 'Domain', body.domain || body.Domain);
+    } else if (action === 'SenderStatisticsDetailByParam') {
+      const detailAccount = pick(body.accountNameFilter || body.AccountName);
+      const detailTag = pick(body.tagName || body.TagName);
+      const detailTo = pick(body.toAddress || body.ToAddress);
+      if ([detailAccount, detailTag, detailTo].filter(Boolean).length > 1) {
+        json(400, {
+          ok: false,
+          error: '发信详情查询中 AccountName / TagName / ToAddress 只能任选其一',
+        });
+        return;
+      }
+      putIf(params, 'AccountName', detailAccount);
+      putIf(params, 'TagName', detailTag);
+      putIf(params, 'ToAddress', detailTo);
+      putIf(params, 'StartTime', body.startTime || body.StartTime);
+      putIf(params, 'EndTime', body.endTime || body.EndTime);
+      if (body.status !== undefined && body.status !== null && body.status !== '') {
+        params.Status = String(body.status);
+      } else if (body.Status !== undefined && body.Status !== null && body.Status !== '') {
+        params.Status = String(body.Status);
+      }
+      putIf(params, 'Length', body.length ?? body.Length ?? '50');
+      putIf(params, 'NextStart', body.nextStart || body.NextStart);
+    }
 
     const sorted = Object.keys(params)
       .sort()
@@ -495,23 +580,24 @@ async function handleLocalDirectMail(
       data = { raw: text };
     }
     if (data.Code) {
-      res.statusCode = 400;
-      res.setHeader('Content-Type', 'application/json');
-      res.end(
-        JSON.stringify({
-          ok: false,
-          error: `${data.Code}: ${data.Message || ''}`,
-          RequestId: data.RequestId,
-        })
-      );
+      json(400, {
+        ok: false,
+        error: `${data.Code}: ${data.Message || ''}`,
+        RequestId: data.RequestId,
+        action,
+      });
       return;
     }
-    res.statusCode = 200;
-    res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({ ok: true, RequestId: data.RequestId, ...data }));
+    if (!upstream.ok) {
+      json(upstream.status >= 400 ? upstream.status : 502, {
+        ok: false,
+        error: data?.Message || data?.raw || `上游 HTTP ${upstream.status}`,
+        action,
+      });
+      return;
+    }
+    json(200, { ok: true, action, RequestId: data.RequestId, ...data });
   } catch (e: any) {
-    res.statusCode = 500;
-    res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({ ok: false, error: e?.message || 'DirectMail local proxy failed' }));
+    json(500, { ok: false, error: e?.message || 'DirectMail local proxy failed' });
   }
 }

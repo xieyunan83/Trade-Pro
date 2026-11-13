@@ -74,7 +74,18 @@ export default async function handler(req: any, res: any) {
       return;
     }
 
-    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+    let body: any = {};
+    try {
+      body =
+        typeof req.body === 'string'
+          ? JSON.parse(req.body || '{}')
+          : req.body && typeof req.body === 'object'
+            ? req.body
+            : {};
+    } catch {
+      res.status(400).json({ ok: false, error: '请求体不是合法 JSON' });
+      return;
+    }
     const accessKeyId = pickStr(
       body.accessKeyId ||
         process.env.ALIYUN_DM_ACCESS_KEY_ID ||

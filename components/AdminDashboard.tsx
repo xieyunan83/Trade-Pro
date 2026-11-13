@@ -46,6 +46,7 @@ import {
   isConvertibleKbFile,
 } from '../services/kbMarkdownConvert';
 import { DataProvidersPanel } from './DataProvidersPanel';
+import { AdminProviderQuotaPanel } from './AdminProviderQuotaPanel';
 import { downloadDesktopSeedJson } from '../services/desktopSeedExport';
 import {
   formatWorkspaceSyncReport,
@@ -1262,6 +1263,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             )}
             {activeTab === 'api' && (
               <div className="space-y-8 animate-fade-in">
+                <AdminProviderQuotaPanel currentUser={currentUser} />
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                   <div>
                     <h3 className="text-xl sm:text-2xl font-black text-slate-800 flex items-center gap-2">
