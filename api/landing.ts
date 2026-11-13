@@ -72,7 +72,21 @@ const stripHtml = (s: string) =>
     .replace(/&nbsp;/g, ' ')
     .trim();
 
-const FETCH_MS = 15_000;
+/** 单源拉取要短：Vercel 上外网不稳时拖满会 FUNCTION_INVOCATION_FAILED */
+const FETCH_MS = 8_000;
+/** 整包软截止，超时也必须 200 + 兜底，禁止裸 500 */
+const BUILD_BUDGET_MS = 14_000;
+
+const FALLBACK_FX: FxQuote[] = [
+  { currency: '美元', code: 'USD', bocBuy: '718.00', bocSell: '721.00', bocMid: '719.50', publishedAt: '参考' },
+  { currency: '欧元', code: 'EUR', bocBuy: '780.00', bocSell: '786.00', bocMid: '783.00', publishedAt: '参考' },
+  { currency: '英镑', code: 'GBP', bocBuy: '910.00', bocSell: '918.00', bocMid: '914.00', publishedAt: '参考' },
+  { currency: '日元', code: 'JPY', bocBuy: '4.70', bocSell: '4.78', bocMid: '4.74', publishedAt: '参考' },
+  { currency: '港币', code: 'HKD', bocBuy: '92.00', bocSell: '92.60', bocMid: '92.30', publishedAt: '参考' },
+  { currency: '澳大利亚元', code: 'AUD', bocBuy: '460.00', bocSell: '465.00', bocMid: '462.50', publishedAt: '参考' },
+  { currency: '加拿大元', code: 'CAD', bocBuy: '510.00', bocSell: '515.00', bocMid: '512.50', publishedAt: '参考' },
+  { currency: '新加坡元', code: 'SGD', bocBuy: '530.00', bocSell: '535.00', bocMid: '532.50', publishedAt: '参考' },
+];
 
 const FALLBACK_NEWS: NewsItem[] = [
   {
@@ -308,15 +322,56 @@ const parseRss = (
   return items;
 };
 
+/** 公开汇率接口兜底（中行站不可达时）：把 1 外币兑 CNY 换成「每 100 外币」 */
+const fetchAltFxQuotes = async (): Promise<FxQuote[]> => {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), FETCH_MS);
+  try {
+    const res = await fetch('https://open.er-api.com/v6/latest/CNY', {
+      headers: { 'User-Agent': UA, Accept: 'application/json' },
+      signal: ctrl.signal,
+    });
+    if (!res.ok) return [];
+    const data = (await res.json()) as { rates?: Record<string, number> };
+    const rates = data?.rates || {};
+    const out: FxQuote[] = [];
+    for (const { name, code } of MAJOR_FX) {
+      const perCny = rates[code];
+      if (!perCny || !(perCny > 0)) continue;
+      // rates[code] = 1 CNY 可兑多少外币 → 100 外币兑多少 CNY = 100 / perCny
+      const mid = (100 / perCny).toFixed(code === 'JPY' ? 2 : 2);
+      out.push({
+        currency: name,
+        code,
+        bocBuy: mid,
+        bocSell: mid,
+        bocMid: mid,
+        publishedAt: '公开市价',
+      });
+    }
+    return out;
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(t);
+  }
+};
+
 const fetchFxQuotes = async (): Promise<{ quotes: FxQuote[]; error?: string }> => {
   try {
     const html = await fetchText(BOC_URL, 'text/html');
     const quotes = parseBoc(html);
-    if (!quotes.length) return { quotes: [], error: '未能解析中行牌价' };
-    return { quotes };
-  } catch (e: any) {
-    return { quotes: [], error: e?.message || String(e) };
+    if (quotes.length) return { quotes };
+  } catch {
+    /* try alt */
   }
+  try {
+    const alt = await fetchAltFxQuotes();
+    if (alt.length) return { quotes: alt, error: '中行暂不可达，已用公开市价' };
+  } catch {
+    /* fall through */
+  }
+  return { quotes: FALLBACK_FX.slice(), error: '实时牌价暂不可用，已显示参考价' };
 };
 
 const fetchNewsFeeds = async (): Promise<{ items: NewsItem[]; error?: string }> => {
@@ -448,16 +503,55 @@ const fetchIndustryBundle = async (
   }
 };
 
+const emptyIndustry = () => ({
+  products: [] as ProductItem[],
+  industryNews: [] as NewsItem[],
+  error: undefined as string | undefined,
+});
+
+const softRace = async <T,>(p: Promise<T>, ms: number, fallback: T): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      p.catch(() => fallback),
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(fallback), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+};
+
+const buildFallbackPayload = (err?: string) => ({
+  ok: true,
+  fetchedAt: Date.now(),
+  fx: {
+    quotes: FALLBACK_FX.slice(),
+    source: '参考汇率',
+    note: '实时牌价暂不可用，已显示参考价。单位：人民币 / 100 外币。仅供参考。',
+    error: err,
+  },
+  news: { items: FALLBACK_NEWS.slice(), error: err },
+  products: { items: SHOWCASE_PRODUCTS.slice(0, 10), needsCredential: false },
+});
+
 async function buildPayload(industryToken?: string) {
   const [fxResult, newsResult, industryResult] = await Promise.all([
-    fetchFxQuotes(),
-    fetchNewsFeeds(),
+    softRace(fetchFxQuotes(), BUILD_BUDGET_MS, {
+      quotes: FALLBACK_FX.slice(),
+      error: '汇率拉取超时，已用参考价',
+    }),
+    softRace(fetchNewsFeeds(), BUILD_BUDGET_MS, {
+      items: FALLBACK_NEWS.slice(),
+      error: '资讯拉取超时，已用备选摘要',
+    }),
     industryToken
-      ? fetchIndustryBundle(industryToken)
-      : Promise.resolve({ products: [] as ProductItem[], industryNews: [] as NewsItem[] }),
+      ? softRace(fetchIndustryBundle(industryToken), 10_000, emptyIndustry())
+      : Promise.resolve(emptyIndustry()),
   ]);
 
-  let products = industryResult.products;
+  let products = industryResult.products.slice();
   let productsError = industryResult.error;
   let needsCredential = !industryToken || products.length === 0;
 
@@ -475,13 +569,19 @@ async function buildPayload(industryToken?: string) {
   let newsItems = [...industryResult.industryNews, ...newsResult.items].slice(0, 28);
   if (!newsItems.length) newsItems = FALLBACK_NEWS.slice();
 
+  const fxQuotes = fxResult.quotes.length ? fxResult.quotes : FALLBACK_FX.slice();
+
   return {
     ok: true,
     fetchedAt: Date.now(),
     fx: {
-      quotes: fxResult.quotes,
-      source: '中国银行外汇牌价',
-      note: '买入/卖出为中行现汇价；中间价列为中行折算价。单位：人民币 / 100 外币。仅供参考。',
+      quotes: fxQuotes,
+      source: fxResult.error?.includes('公开市价')
+        ? '公开市价'
+        : fxResult.error?.includes('参考')
+          ? '参考汇率'
+          : '中国银行外汇牌价',
+      note: '买入/卖出为现汇价参考；中间价为折算价。单位：人民币 / 100 外币。仅供参考。',
       error: fxResult.error,
     },
     news: {
@@ -503,22 +603,21 @@ export default async function handler(req: any, res: any) {
     }
     const tokenHdr = req.headers?.['x-industry-token'];
     const industryToken = typeof tokenHdr === 'string' ? tokenHdr.trim() : '';
-    const payload = await buildPayload(industryToken || undefined);
+    const payload = await softRace(
+      buildPayload(industryToken || undefined),
+      BUILD_BUDGET_MS + 2_000,
+      buildFallbackPayload('看板拉取超时，已显示备选内容')
+    );
     res.status(200).json(payload);
   } catch (e: any) {
     console.error('[landing]', e);
-    res.status(200).json({
-      ok: false,
-      error: e?.message || String(e),
-      fetchedAt: Date.now(),
-      fx: {
-        quotes: [],
-        source: '中国银行外汇牌价',
-        note: '',
-        error: e?.message || 'failed',
-      },
-      news: { items: [], error: e?.message || 'failed' },
-      products: { items: [], needsCredential: true, error: e?.message || 'failed' },
-    });
+    try {
+      res.status(200).json(buildFallbackPayload(e?.message || String(e)));
+    } catch {
+      /* 最后防线：连 json 都失败时仍避免未捕获崩进程 */
+      res.statusCode = 200;
+      res.setHeader?.('Content-Type', 'application/json');
+      res.end?.(JSON.stringify(buildFallbackPayload('landing failed')));
+    }
   }
 }

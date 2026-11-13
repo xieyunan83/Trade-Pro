@@ -1137,6 +1137,11 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
 
     if (prefer === 'original') {
       // 彩色优先：_orig → pbr → model；base 灰模永远最后。拆分后禁止用主槽分件冒充原模
+      const isBaseSlot = (u: string) =>
+        !!u &&
+        (u === job.baseModelUrl ||
+          (isVaultRef(u) && /base/i.test(u)) ||
+          u.endsWith('_base'));
       const list = (
         segmented
           ? [job.originalModelUrl, job.pbrModelUrl, job.baseModelUrl]
@@ -1151,7 +1156,10 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
           }
           return true;
         }) as string[];
-      return list.find(isLocal) || list[0];
+      // 有非 base 候选时绝不回落灰模
+      const nonBase = list.filter((u) => !isBaseSlot(u));
+      const pool = nonBase.length ? nonBase : list;
+      return pool.find(isLocal) || pool[0];
     }
 
     // 成片预览：PBR/主网格优先，避免落到无贴图 base

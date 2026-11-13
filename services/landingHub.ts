@@ -1,7 +1,11 @@
 /**
  * 着陆页客户端：拉取聚合接口 + stale-while-revalidate 缓存
  */
-import type { LandingPayload } from './landingDataCore';
+import {
+  LANDING_FALLBACK_FX,
+  LANDING_FALLBACK_NEWS,
+  type LandingPayload,
+} from './landingDataCore';
 
 const CACHE_KEY = 'trade_scout_landing_hub_v3';
 /** 新鲜期内直接用缓存，不打接口 */
@@ -94,11 +98,46 @@ export const fetchLandingHub = async (opts?: {
   } catch {
     /* ignore */
   }
-  const res = await fetch('/api/landing', { headers });
-  if (!res.ok) {
-    throw new Error(`着陆页数据 ${res.status}`);
+  const offlineFallback = (hint: string): LandingPayload => {
+    const stale = loadLandingCacheAllowStale();
+    if (stale && !isHollowPayload(stale)) return stale;
+    return {
+      ok: true,
+      fetchedAt: Date.now(),
+      fx: {
+        quotes: LANDING_FALLBACK_FX.slice(),
+        source: '参考汇率',
+        note: '实时牌价暂不可用，已显示参考价。单位：人民币 / 100 外币。仅供参考。',
+        error: hint,
+      },
+      news: { items: LANDING_FALLBACK_NEWS.slice(), error: hint },
+      products: { items: [], needsCredential: false },
+    };
+  };
+
+  try {
+    const res = await fetch('/api/landing', { headers });
+    if (!res.ok) {
+      return offlineFallback(`着陆页数据 ${res.status}`);
+    }
+    const data = (await res.json()) as LandingPayload;
+    // 接口偶发空壳：补上本机兜底，避免「暂无」
+    if (!data.news?.items?.length) {
+      data.news = { ...(data.news || {}), items: LANDING_FALLBACK_NEWS.slice() };
+    }
+    if (!data.fx?.quotes?.length) {
+      data.fx = {
+        ...(data.fx || { source: '参考汇率', note: '' }),
+        quotes: LANDING_FALLBACK_FX.slice(),
+        source: data.fx?.source || '参考汇率',
+        note:
+          data.fx?.note ||
+          '实时牌价暂不可用，已显示参考价。单位：人民币 / 100 外币。仅供参考。',
+      };
+    }
+    if (data?.ok !== false && !isHollowPayload(data)) saveLandingCache(data);
+    return data;
+  } catch (e: any) {
+    return offlineFallback(e?.message || String(e) || '网络异常');
   }
-  const data = (await res.json()) as LandingPayload;
-  if (data?.ok !== false && !isHollowPayload(data)) saveLandingCache(data);
-  return data;
 };

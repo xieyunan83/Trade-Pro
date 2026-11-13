@@ -27,11 +27,17 @@ const getDracoLoader = (): DRACOLoader => {
   return draco;
 };
 
-const getKtx2Loader = (renderer: THREE.WebGLRenderer): KTX2Loader => {
+/** 同源优先；弱网下同源 basis.js 半截失败时回退 jsDelivr（CSP 已放行） */
+const BASIS_PATHS = () => [
+  `${baseUrl()}basis/`,
+  'https://cdn.jsdelivr.net/npm/three@0.183.2/examples/jsm/libs/basis/',
+];
+
+const getKtx2Loader = (renderer: THREE.WebGLRenderer, pathIndex = 0): KTX2Loader => {
   if (!sharedKtx2) {
     const ktx2 = new KTX2Loader();
-    // 同源 public/basis（与 draco 同策略）
-    ktx2.setTranscoderPath(`${baseUrl()}basis/`);
+    const paths = BASIS_PATHS();
+    ktx2.setTranscoderPath(paths[Math.min(pathIndex, paths.length - 1)]);
     sharedKtx2 = ktx2;
   }
   if (ktx2SupportRenderer !== renderer) {
@@ -41,8 +47,20 @@ const getKtx2Loader = (renderer: THREE.WebGLRenderer): KTX2Loader => {
   return sharedKtx2;
 };
 
+/** 贴图解码失败时换备用 transcoder 路径再试一次 */
+export const resetKtx2Loader = () => {
+  try {
+    sharedKtx2?.dispose?.();
+  } catch {
+    /* ignore */
+  }
+  sharedKtx2 = null;
+  ktx2SupportRenderer = null;
+};
+
 export const createGlbLoader = async (
-  renderer?: THREE.WebGLRenderer | null
+  renderer?: THREE.WebGLRenderer | null,
+  basisPathIndex = 0
 ): Promise<GLTFLoader> => {
   const loader = new GLTFLoader();
   loader.setDRACOLoader(getDracoLoader());
@@ -56,7 +74,7 @@ export const createGlbLoader = async (
   }
   if (renderer) {
     try {
-      loader.setKTX2Loader(getKtx2Loader(renderer));
+      loader.setKTX2Loader(getKtx2Loader(renderer, basisPathIndex));
     } catch (e) {
       console.warn('[glb] KTX2Loader init failed; textured models may appear grey', e);
     }
@@ -149,13 +167,12 @@ export const normalizeGltfMaterials = (root: THREE.Object3D) => {
   });
 };
 
-export const loadGlbFromSource = async (
+const parseOnce = (
+  loader: GLTFLoader,
   source: GlbSource,
-  onProgress?: (pct: number) => void,
-  renderer?: THREE.WebGLRenderer | null
-): Promise<GLTF> => {
-  const loader = await createGlbLoader(renderer);
-  return new Promise((resolve, reject) => {
+  onProgress?: (pct: number) => void
+): Promise<GLTF> =>
+  new Promise((resolve, reject) => {
     const fail = (e: unknown) => {
       const msg = String((e as any)?.message || e || 'GLB 解析失败');
       if (/DRACO|draco|KHR_draco/i.test(msg)) {
@@ -180,12 +197,7 @@ export const loadGlbFromSource = async (
 
     if (source.buffer) {
       try {
-        loader.parse(
-          source.buffer,
-          '',
-          (gltf) => ok(gltf),
-          (e) => fail(e)
-        );
+        loader.parse(source.buffer, '', (gltf) => ok(gltf), (e) => fail(e));
       } catch (e) {
         fail(e);
       }
@@ -206,4 +218,30 @@ export const loadGlbFromSource = async (
 
     reject(new Error('无可加载的模型数据'));
   });
+
+export const loadGlbFromSource = async (
+  source: GlbSource,
+  onProgress?: (pct: number) => void,
+  renderer?: THREE.WebGLRenderer | null
+): Promise<GLTF> => {
+  const tryLoad = async (basisIdx: number) => {
+    const loader = await createGlbLoader(renderer, basisIdx);
+    return parseOnce(loader, source, onProgress);
+  };
+
+  try {
+    return await tryLoad(0);
+  } catch (e) {
+    const msg = String((e as any)?.message || e || '');
+    // 同源 basis 半截失败时换备用路径再解一次
+    if (renderer && /贴图解码|KTX2|Basis|transcoder|fetch/i.test(msg)) {
+      try {
+        resetKtx2Loader();
+        return await tryLoad(1);
+      } catch {
+        /* fall through */
+      }
+    }
+    throw e;
+  }
 };

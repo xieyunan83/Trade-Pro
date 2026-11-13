@@ -138,7 +138,23 @@ export const findBestLocalTexturedModel3dForJob = async (job: {
     if (m.id === origId || m.id.endsWith('_orig')) pushId(m.id);
   }
 
-  let best: { id: string; size: number } | null = null;
+  /**
+   * 体积大 ≠ 有色：Tripo base 灰模常比带贴图 PBR 更大。
+   * 评分：_orig / pbr 优先，base 与主槽分件垫底，体积只作同分决胜。
+   */
+  const scoreId = (id: string, size: number): number => {
+    const bag = id.toLowerCase();
+    let score = Math.min(size / 1_000_000, 40); // 体积最多贡献 40
+    if (id === origId || bag.endsWith('_orig') || bag.includes('_orig')) score += 120;
+    if (bag.includes('pbr')) score += 90;
+    if (bag.includes('base') || id === (job.baseModelUrl || '').replace(/^vault:/, '')) {
+      score -= 80;
+    }
+    if (segmented && id === meshId) score -= 100;
+    return score;
+  };
+
+  let best: { id: string; score: number } | null = null;
   const seen = new Set<string>();
   for (const id of candidates) {
     if (!id || seen.has(id)) continue;
@@ -147,7 +163,8 @@ export const findBestLocalTexturedModel3dForJob = async (job: {
     const row = await getRow(id);
     const size = row?.blob?.size || 0;
     if (size < 1024) continue;
-    if (!best || size > best.size) best = { id, size };
+    const score = scoreId(id, size);
+    if (!best || score > best.score) best = { id, score };
   }
   if (!best) return null;
   void touchAccess(best.id);

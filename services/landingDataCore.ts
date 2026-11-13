@@ -73,7 +73,7 @@ const MAJOR_FX: { name: string; code: string }[] = [
 const UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
-const FETCH_MS = 15_000;
+const FETCH_MS = 8_000;
 
 /** 外网 RSS 不可达时的中性兜底（避免看板永久「资讯更新中」） */
 export const LANDING_FALLBACK_NEWS: LandingNewsItem[] = [
@@ -203,15 +203,69 @@ export const parseBocFxHtml = (html: string): FxQuote[] => {
   return ordered;
 };
 
+/** 中行/公开市价都失败时的参考价（每 100 外币兑人民币） */
+export const LANDING_FALLBACK_FX: FxQuote[] = [
+  { currency: '美元', code: 'USD', bocBuy: '718.00', bocSell: '721.00', bocMid: '719.50', publishedAt: '参考' },
+  { currency: '欧元', code: 'EUR', bocBuy: '780.00', bocSell: '786.00', bocMid: '783.00', publishedAt: '参考' },
+  { currency: '英镑', code: 'GBP', bocBuy: '910.00', bocSell: '918.00', bocMid: '914.00', publishedAt: '参考' },
+  { currency: '日元', code: 'JPY', bocBuy: '4.70', bocSell: '4.78', bocMid: '4.74', publishedAt: '参考' },
+  { currency: '港币', code: 'HKD', bocBuy: '92.00', bocSell: '92.60', bocMid: '92.30', publishedAt: '参考' },
+  { currency: '澳大利亚元', code: 'AUD', bocBuy: '460.00', bocSell: '465.00', bocMid: '462.50', publishedAt: '参考' },
+  { currency: '加拿大元', code: 'CAD', bocBuy: '510.00', bocSell: '515.00', bocMid: '512.50', publishedAt: '参考' },
+  { currency: '新加坡元', code: 'SGD', bocBuy: '530.00', bocSell: '535.00', bocMid: '532.50', publishedAt: '参考' },
+];
+
+const fetchAltFxQuotes = async (): Promise<FxQuote[]> => {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), FETCH_MS);
+  try {
+    const res = await fetch('https://open.er-api.com/v6/latest/CNY', {
+      headers: { 'User-Agent': UA, Accept: 'application/json' },
+      signal: ctrl.signal,
+    });
+    if (!res.ok) return [];
+    const data = (await res.json()) as { rates?: Record<string, number> };
+    const rates = data?.rates || {};
+    const out: FxQuote[] = [];
+    for (const { name, code } of MAJOR_FX) {
+      const perCny = rates[code];
+      if (!perCny || !(perCny > 0)) continue;
+      const mid = (100 / perCny).toFixed(2);
+      out.push({
+        currency: name,
+        code,
+        bocBuy: mid,
+        bocSell: mid,
+        bocMid: mid,
+        publishedAt: '公开市价',
+      });
+    }
+    return out;
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
 export const fetchBocFx = async (): Promise<{ quotes: FxQuote[]; error?: string }> => {
   try {
     const html = await fetchText(BOC_URL, 'text/html');
     const quotes = parseBocFxHtml(html);
-    if (!quotes.length) return { quotes: [], error: '未能解析中行牌价表格' };
-    return { quotes };
-  } catch (e: any) {
-    return { quotes: [], error: e?.message || String(e) };
+    if (quotes.length) return { quotes };
+  } catch {
+    /* try alt */
   }
+  try {
+    const alt = await fetchAltFxQuotes();
+    if (alt.length) return { quotes: alt, error: '中行暂不可达，已用公开市价' };
+  } catch {
+    /* fall through */
+  }
+  return {
+    quotes: LANDING_FALLBACK_FX.slice(),
+    error: '实时牌价暂不可用，已显示参考价',
+  };
 };
 
 const parseRssItems = (
@@ -477,13 +531,19 @@ export const buildLandingPayload = async (
     newsItems = LANDING_FALLBACK_NEWS.slice();
   }
 
+  const fxQuotes = fx.quotes.length ? fx.quotes : LANDING_FALLBACK_FX.slice();
+
   return {
     ok: true,
     fetchedAt: Date.now(),
     fx: {
-      quotes: fx.quotes,
-      source: '中国银行外汇牌价',
-      note: '买入/卖出为中行现汇价；中间价列为中行折算价。单位：人民币 / 100 外币。仅供参考，成交以银行柜台为准。',
+      quotes: fxQuotes,
+      source: fx.error?.includes('公开市价')
+        ? '公开市价'
+        : fx.error?.includes('参考')
+          ? '参考汇率'
+          : '中国银行外汇牌价',
+      note: '买入/卖出为现汇价参考；中间价为折算价。单位：人民币 / 100 外币。仅供参考，成交以银行柜台为准。',
       error: fx.error,
     },
     news: {

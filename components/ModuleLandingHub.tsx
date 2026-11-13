@@ -107,6 +107,9 @@ export const ModuleLandingHub: React.FC<Props> = ({
     try {
       const payload = await fetchLandingHub({ force });
       setData(payload);
+      // 接口已内置兜底，不再把「着陆页数据 500」刷成整栏空错
+      const soft = payload?.fx?.error || payload?.news?.error;
+      setErr(soft && !(payload.news?.items?.length || payload.fx?.quotes?.length) ? soft : null);
     } catch (e: any) {
       setErr(e?.message || String(e));
     } finally {
