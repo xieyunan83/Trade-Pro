@@ -2284,7 +2284,7 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
               </p>
             )}
           </div>
-          {active?.status === 'ready' && downloadUrl && (
+          {active?.status === 'ready' && (rawDownloadUrl || downloadUrl) && (
             <div className="px-4 py-3 border-t border-white/10 space-y-2">
               <div className="flex flex-wrap gap-2 items-center">
                 <button

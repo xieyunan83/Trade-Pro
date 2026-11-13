@@ -584,6 +584,27 @@ export const tryPersistMediaUrl = async (
   }
 };
 
+/** vault: → Blob（不建 object URL，供 GLB ArrayBuffer 解析） */
+export const resolveMediaBlob = async (url: string | undefined | null): Promise<Blob | null> => {
+  const raw = (url || '').trim();
+  if (!raw) return null;
+  if (raw.startsWith('blob:') || raw.startsWith('data:')) {
+    try {
+      const res = await fetch(raw);
+      if (!res.ok) return null;
+      return await res.blob();
+    } catch {
+      return null;
+    }
+  }
+  if (!isVaultRef(raw)) return null;
+  const id = vaultIdFromRef(raw);
+  const row = await getRow(id);
+  if (!row?.blob) return null;
+  void touchAccess(id);
+  return row.blob;
+};
+
 /** vault: → blob:；其它原样。会刷新 lastAccessAt */
 export const resolveMediaUrl = async (url: string | undefined | null): Promise<string> => {
   const raw = (url || '').trim();

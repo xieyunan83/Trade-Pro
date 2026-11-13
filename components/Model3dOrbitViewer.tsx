@@ -1,10 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Download, Loader2, Move3d, RotateCcw } from 'lucide-react';
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { fetchRemoteBlob, peekRemoteBlob, rememberRemoteBlob } from '../services/fetchRemoteBlob';
-import { isVaultRef, resolveMediaUrl } from '../services/creativeAssetVault';
+import { isVaultRef } from '../services/creativeAssetVault';
+import { loadGlbFromSource, resolveGlbSource } from '../services/glbSceneLoader';
 
 type Props = {
   /** GLB / GLTF 地址：vault: / blob: / https 均可 */
@@ -34,34 +33,9 @@ const isLocalSrc = (u: string) =>
     isVaultRef(u) ||
     u.startsWith('vault:'));
 
-const resolveToObjectUrl = async (
-  raw: string
-): Promise<{ url: string; owned: boolean; blob?: Blob }> => {
-  const u = (raw || '').trim();
-  if (!u) throw new Error('无模型地址');
-  if (u.startsWith('blob:') || u.startsWith('data:')) return { url: u, owned: false };
-  if (isVaultRef(u)) {
-    const resolved = await resolveMediaUrl(u);
-    if (!resolved || resolved.startsWith('vault:')) {
-      throw new Error('本机素材库里找不到该 GLB，请重新生成或导入');
-    }
-    return { url: resolved, owned: false };
-  }
-  if (/^https?:\/\//i.test(u)) {
-    const peeked = peekRemoteBlob(u);
-    if (peeked) {
-      return { url: URL.createObjectURL(peeked), owned: true, blob: peeked };
-    }
-    const blob = await fetchRemoteBlob(u, { timeoutMs: 180_000 });
-    rememberRemoteBlob(u, blob);
-    return { url: URL.createObjectURL(blob), owned: true, blob };
-  }
-  throw new Error('不支持的模型地址');
-};
-
 /**
- * 可拖动环视的真实 3D 预览（Three.js + GLTFLoader）。
- * 不再依赖 model-viewer（Electron / 严格 CSP 下常只剩平面海报）。
+ * 可拖动环视的真实 3D 预览（Three.js + Draco）。
+ * 本机 vault 走 ArrayBuffer 解析，避免 blob URL / 压缩网格导致黑屏失败。
  */
 export const Model3dOrbitViewer: React.FC<Props> = ({
   src,
@@ -108,12 +82,11 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
     }
 
     let disposed = false;
-    let ownedUrl: string | null = null;
     let raf = 0;
     setReady(false);
     setLoadErr(null);
     setPullPct(0);
-    setPhase('resolve');
+    setPhase(isLocalSrc(srcTrim) ? 'resolve' : 'pull');
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0b1220);
@@ -121,11 +94,18 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
     camera.position.set(1.6, 1.2, 1.8);
     cameraRef.current = camera;
 
-    const renderer = new THREE.WebGLRenderer({
-      antialias: true,
-      alpha: false,
-      powerPreference: 'high-performance',
-    });
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        alpha: false,
+        powerPreference: 'high-performance',
+      });
+    } catch (e: any) {
+      setPhase('error');
+      setLoadErr(`WebGL 不可用：${e?.message || e}。请换用支持硬件加速的浏览器/客户端。`);
+      return;
+    }
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.domElement.style.display = 'block';
@@ -144,8 +124,6 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
     controls.autoRotateSpeed = 0.9;
     controls.dampingFactor = 0.08;
     controlsRef.current = controls;
-
-    // 用户一拖就接管，停止自转
     const stopAuto = () => {
       controls.autoRotate = false;
     };
@@ -160,8 +138,8 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
     scene.add(fill);
 
     const resize = () => {
-      const w = host.clientWidth || 1;
-      const h = host.clientHeight || 1;
+      const w = Math.max(host.clientWidth || 1, 1);
+      const h = Math.max(host.clientHeight || 1, 1);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h, false);
@@ -180,29 +158,26 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
     let lastProgressAt = Date.now();
     const watchdog = window.setInterval(() => {
       if (disposed) return;
-      if (Date.now() - lastProgressAt < 90_000) return;
+      if (Date.now() - lastProgressAt < 120_000) return;
       window.clearInterval(watchdog);
-      setLoadErr('预览较慢。模型多半已在本机，请点「立即下载 GLB」或「重试预览」。');
+      setLoadErr('预览超时。请点「重试预览」或「立即下载 GLB」用本地查看器打开。');
       setPhase('error');
       setReady(false);
     }, 2500);
 
     (async () => {
       try {
-        const remote = /^https?:\/\//i.test(srcTrim);
-        if (remote && !peekRemoteBlob(srcTrim)) setPhase('pull');
-        else setPhase('resolve');
+        const source = await resolveGlbSource(srcTrim, (pct) => {
+          if (disposed) return;
+          lastProgressAt = Date.now();
+          setPullPct(pct);
+          if (pct < 100) setPhase('pull');
+        });
+        if (disposed) return;
 
-        const resolved = await resolveToObjectUrl(srcTrim);
-        lastProgressAt = Date.now();
-        if (disposed) {
-          if (resolved.owned) URL.revokeObjectURL(resolved.url);
-          return;
-        }
-        if (resolved.owned) ownedUrl = resolved.url;
-        if (resolved.blob && remote) {
+        if (source.blob && source.remoteUrl) {
           try {
-            onBlobRef.current?.(resolved.blob, srcTrim);
+            onBlobRef.current?.(source.blob, source.remoteUrl);
           } catch {
             /* ignore */
           }
@@ -210,23 +185,15 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
 
         setPhase('viewer');
         setPullPct(100);
+        lastProgressAt = Date.now();
 
-        const gltf = await new Promise<THREE.Group>((resolve, reject) => {
-          new GLTFLoader().load(
-            resolved.url,
-            (g) => resolve(g.scene),
-            (ev) => {
-              lastProgressAt = Date.now();
-              if (ev.total > 0) {
-                setPullPct(Math.min(99, Math.round((ev.loaded / ev.total) * 100)));
-              }
-            },
-            (e) => reject(e instanceof Error ? e : new Error('GLB 解析失败'))
-          );
+        const gltf = await loadGlbFromSource(source, (pct) => {
+          lastProgressAt = Date.now();
+          setPullPct(pct);
         });
         if (disposed) return;
 
-        const root = gltf;
+        const root = gltf.scene;
         scene.add(root);
         root.updateMatrixWorld(true);
         const box = new THREE.Box3().setFromObject(root);
@@ -250,6 +217,9 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
           target: controls.target.clone(),
         };
 
+        // 布局可能尚未算出尺寸，再刷一次
+        requestAnimationFrame(resize);
+
         window.clearInterval(watchdog);
         setReady(true);
         setPhase('done');
@@ -271,10 +241,8 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
         setReady(false);
         setLoadErr(
           expired
-            ? '远程临时链已过期。正在尝试从本机素材库回挂；若仍失败请点「重试预览」，或重新生成 / 导入本地 GLB。'
-            : /GLB|解析|模型/i.test(msg)
-              ? `${msg}。请点「下载 GLB」保存——模型已生成，不会白费。`
-              : '模型预览加载失败。请立即下载 GLB 保存（模型已在云端生成成功，未白费）。'
+            ? '远程临时链已过期。正在尝试从本机素材库回挂；若仍失败请点「重试预览」。'
+            : `${msg || '模型预览加载失败'}。可点「下载 GLB」保存——模型已生成，不会白费。`
         );
       }
     })();
@@ -296,13 +264,6 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
         const mats = Array.isArray(m.material) ? m.material : [m.material];
         mats.forEach((x) => x?.dispose?.());
       });
-      if (ownedUrl) {
-        try {
-          URL.revokeObjectURL(ownedUrl);
-        } catch {
-          /* ignore */
-        }
-      }
       host.innerHTML = '';
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -327,7 +288,6 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
 
   return (
     <div className={`relative w-full h-full min-h-[280px] ${className}`}>
-      {/* 画布单独挂载，避免 React 覆盖层被 innerHTML 清掉 */}
       <div ref={hostRef} className="absolute inset-0" />
       {showSpinner && (
         <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-slate-950/75 pointer-events-none px-4">
@@ -344,7 +304,7 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
               ? `正在下载模型到本机预览… ${pullPct}%`
               : phase === 'resolve'
                 ? '正在从本机素材库打开模型…'
-                : '加载可旋转 3D 模型…'}
+                : '解析可旋转 3D 网格…'}
           </p>
           {phase === 'pull' ? (
             <div className="w-48 h-1.5 rounded-full bg-white/10 overflow-hidden">
@@ -352,7 +312,7 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
             </div>
           ) : null}
           <p className="text-[10px] text-slate-500 font-medium text-center max-w-xs">
-            模型已生成成功。加载完成后可拖动旋转；平面图仅为加载提示。
+            加载完成后可拖动旋转；上方平面图仅为提示，不是最终预览。
           </p>
         </div>
       )}

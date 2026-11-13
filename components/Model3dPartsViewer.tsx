@@ -1,10 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Loader2, Layers, Maximize2 } from 'lucide-react';
 import * as THREE from 'three';
-import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { fetchRemoteBlob, peekRemoteBlob, rememberRemoteBlob } from '../services/fetchRemoteBlob';
-import { isVaultRef, resolveMediaUrl } from '../services/creativeAssetVault';
+import { loadGlbFromSource, resolveGlbSource } from '../services/glbSceneLoader';
 
 type Props = {
   src: string;
@@ -18,25 +16,6 @@ const PART_PALETTE = [
   0xf43f5e, 0xf97316, 0xeab308, 0x22c55e, 0x14b8a6, 0x3b82f6, 0x8b5cf6, 0xec4899,
   0x06b6d4, 0x84cc16, 0xa855f7, 0xfb7185,
 ];
-
-const resolveToObjectUrl = async (raw: string): Promise<{ url: string; owned: boolean }> => {
-  const u = (raw || '').trim();
-  if (!u) throw new Error('无模型地址');
-  if (u.startsWith('blob:') || u.startsWith('data:')) return { url: u, owned: false };
-  if (isVaultRef(u)) {
-    const resolved = await resolveMediaUrl(u);
-    if (!resolved) throw new Error('本机素材库找不到模型');
-    return { url: resolved, owned: false };
-  }
-  if (/^https?:\/\//i.test(u)) {
-    const peeked = peekRemoteBlob(u);
-    if (peeked) return { url: URL.createObjectURL(peeked), owned: true };
-    const blob = await fetchRemoteBlob(u, { timeoutMs: 90_000 });
-    rememberRemoteBlob(u, blob);
-    return { url: URL.createObjectURL(blob), owned: true };
-  }
-  throw new Error('不支持的模型地址');
-};
 
 const tintMaterial = (mat: THREE.Material, color: THREE.Color): THREE.Material => {
   try {
@@ -226,7 +205,6 @@ export const Model3dPartsViewer: React.FC<Props> = ({
     if (!host || !srcTrim) return;
 
     let disposed = false;
-    let ownedUrl: string | null = null;
     let raf = 0;
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0b1220);
@@ -307,23 +285,12 @@ export const Model3dPartsViewer: React.FC<Props> = ({
 
     (async () => {
       try {
-        const resolved = await resolveToObjectUrl(srcTrim);
+        const source = await resolveGlbSource(srcTrim);
         lastProgressAt = Date.now();
-        if (disposed) {
-          if (resolved.owned) URL.revokeObjectURL(resolved.url);
-          return;
-        }
-        if (resolved.owned) ownedUrl = resolved.url;
+        if (disposed) return;
 
-        const gltf = await new Promise<GLTF>((resolve, reject) => {
-          new GLTFLoader().load(
-            resolved.url,
-            resolve,
-            () => {
-              lastProgressAt = Date.now();
-            },
-            (e) => reject(e instanceof Error ? e : new Error('GLB 解析失败'))
-          );
+        const gltf = await loadGlbFromSource(source, () => {
+          lastProgressAt = Date.now();
         });
         if (disposed) return;
 
@@ -428,13 +395,6 @@ export const Model3dPartsViewer: React.FC<Props> = ({
         const mats = Array.isArray(m.material) ? m.material : [m.material];
         mats.forEach((x) => x?.dispose?.());
       });
-      if (ownedUrl) {
-        try {
-          URL.revokeObjectURL(ownedUrl);
-        } catch {
-          /* ignore */
-        }
-      }
       host.innerHTML = '';
     };
   }, [src]);
