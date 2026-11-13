@@ -699,8 +699,8 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
         }
       />
 
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-3 min-h-[32rem]">
-        <aside className="xl:col-span-3 rounded-2xl border border-slate-200 bg-white flex flex-col min-h-[20rem] overflow-hidden">
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-3 xl:items-start">
+        <aside className="xl:col-span-3 rounded-2xl border border-slate-200 bg-white flex flex-col max-h-[min(36rem,78vh)] overflow-hidden self-start xl:sticky xl:top-3">
           <div className="flex border-b border-slate-100">
             {(
               [
@@ -796,7 +796,7 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
           </div>
         </aside>
 
-        <section className="xl:col-span-6 rounded-2xl border border-slate-200 bg-slate-50/80 flex flex-col min-h-[22rem] overflow-hidden">
+        <section className="xl:col-span-6 rounded-2xl border border-slate-200 bg-slate-50/80 flex flex-col overflow-hidden self-start min-h-0">
           <div className="px-3 py-2 border-b border-slate-200/80 bg-white/80 flex flex-wrap items-center justify-between gap-2">
             <div className="text-xs font-black text-slate-700 truncate">
               {active ? `画布 · ${active.title}` : '画布 · 新建或选择项目'}
@@ -806,11 +806,11 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
               <div className="text-[10px] font-bold text-slate-400">{canvasAssets.length} 张</div>
             </div>
           </div>
-          <div className="flex-1 overflow-y-auto p-3 custom-scrollbar">
+          <div className="p-3 custom-scrollbar max-h-[min(34rem,72vh)] overflow-y-auto">
             {canvasAssets.length === 0 ? (
-              <div className="h-full min-h-[16rem] flex flex-col items-center justify-center text-center px-6">
-                <div className="h-14 w-14 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center mb-3">
-                  <PackageOpen size={24} />
+              <div className="min-h-[12rem] flex flex-col items-center justify-center text-center px-6 py-8">
+                <div className="h-12 w-12 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center mb-2.5">
+                  <PackageOpen size={22} />
                 </div>
                 <p className="text-sm font-black text-slate-700">空画布</p>
                 <p className="text-xs text-slate-500 font-medium mt-1 max-w-sm leading-relaxed">
@@ -818,13 +818,23 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
                 </p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div
+                className={`grid gap-3 ${
+                  canvasAssets.length === 1
+                    ? 'grid-cols-1 max-w-xl mx-auto'
+                    : 'grid-cols-1 sm:grid-cols-2'
+                }`}
+              >
                 {canvasAssets.map((a, i) => (
                   <div
                     key={a.id}
                     className="rounded-xl overflow-hidden border border-white shadow-sm bg-white group relative"
                   >
-                    <VaultImg src={a.url} alt="" className="w-full aspect-square object-contain bg-slate-50" />
+                    <VaultImg
+                      src={a.url}
+                      alt=""
+                      className="w-full max-h-[min(22rem,48vh)] aspect-[4/3] object-contain bg-slate-50"
+                    />
                     {a.viewKind && a.viewKind !== 'general' && (
                       <div className="absolute top-2 left-2 rounded-md bg-slate-900/80 text-amber-100 text-[10px] font-black px-1.5 py-0.5">
                         {packagingViewLabel(a.viewKind)}
@@ -854,7 +864,7 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
             )}
           </div>
           {active && active.messages.length > 0 && (
-            <div className="border-t border-slate-200 bg-white/90 max-h-28 overflow-y-auto px-3 py-2 space-y-1">
+            <div className="border-t border-slate-200 bg-white/90 max-h-24 overflow-y-auto px-3 py-2 space-y-1">
               {active.messages.slice(-4).map((m) => (
                 <div
                   key={m.id}
@@ -870,7 +880,7 @@ export const ModuleProductPackaging: React.FC<Props> = ({ currentUser, onNavigat
           )}
         </section>
 
-        <aside className="xl:col-span-3 rounded-2xl border border-slate-200 bg-white p-3 sm:p-4 flex flex-col gap-3">
+        <aside className="xl:col-span-3 rounded-2xl border border-slate-200 bg-white p-3 sm:p-4 flex flex-col gap-3 self-start xl:sticky xl:top-3 max-h-[min(36rem,78vh)] overflow-y-auto custom-scrollbar">
           <div className="text-xs font-black text-slate-800">向包装 Agent 下指令</div>
           <div className="rounded-xl border border-amber-100 bg-amber-50/60 px-2.5 py-2 space-y-1">
             <div className="text-[10px] font-black text-amber-900 uppercase">当前 Skill</div>

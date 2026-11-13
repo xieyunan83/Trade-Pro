@@ -555,7 +555,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
         </div>
       </div>
 
-      <div className="grid lg:grid-cols-12 gap-4">
+      <div className="grid lg:grid-cols-12 gap-4 lg:items-start">
         <div className="lg:col-span-4 space-y-3">
           <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
             <div className="grid grid-cols-4 gap-1.5">
@@ -586,7 +586,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
               <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5 inline-flex items-center gap-1">
                 <Sparkles size={10} /> 一键场景 Skills
               </div>
-              <div className="space-y-1.5 max-h-56 overflow-y-auto custom-scrollbar pr-0.5">
+              <div className="space-y-1.5 max-h-40 overflow-y-auto custom-scrollbar pr-0.5">
                 {VIDEO_SKILLS.map((s) => (
                   <button
                     key={s.id}
@@ -982,8 +982,8 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
           </div>
         </div>
 
-        <div className="lg:col-span-5 rounded-2xl border border-slate-200 bg-slate-950 overflow-hidden min-h-[360px] flex flex-col">
-          <div className="px-4 py-2.5 border-b border-white/10 flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-slate-300">
+        <div className="lg:col-span-5 rounded-2xl border border-slate-200 bg-slate-950 overflow-hidden flex flex-col self-start lg:sticky lg:top-3">
+          <div className="px-3 py-2 border-b border-white/10 flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-slate-300">
             <span>预览台</span>
             <CreativeStorageBadge compact className="!bg-white/10 !border-white/20 !text-slate-200" />
             {active && (
@@ -995,7 +995,15 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
               </span>
             )}
           </div>
-          <div className="flex-1 flex items-center justify-center p-4 sm:p-6 min-h-[16rem]">
+          <div
+            className={`flex items-center justify-center p-3 ${
+              active?.aspect === '9:16'
+                ? 'min-h-[18rem]'
+                : active?.aspect === '1:1'
+                  ? 'min-h-[16rem]'
+                  : 'aspect-video max-h-[min(22rem,48vh)] min-h-[12rem]'
+            }`}
+          >
             {active?.status === 'rendering' ? (
               <div className="text-center space-y-3">
                 <Loader2 className="mx-auto animate-spin text-rose-400" size={36} />
@@ -1008,7 +1016,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
                 </div>
               </div>
             ) : playUrl ? (
-              <div className="w-full flex flex-col items-center gap-2">
+              <div className="w-full h-full flex flex-col items-center justify-center gap-1.5">
                 <video
                   key={playUrl}
                   src={playUrl}
@@ -1016,12 +1024,12 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
                   playsInline
                   autoPlay
                   muted
-                  className={`rounded-2xl bg-black max-h-[min(28rem,55vh)] ${
+                  className={`rounded-xl bg-black object-contain ${
                     active?.aspect === '9:16'
-                      ? 'w-44'
+                      ? 'h-[min(22rem,48vh)] w-auto max-w-full'
                       : active?.aspect === '1:1'
-                        ? 'w-64'
-                        : 'w-full max-w-xl'
+                        ? 'h-[min(18rem,42vh)] w-auto max-w-full'
+                        : 'w-full h-full max-h-[min(20rem,46vh)]'
                   }`}
                 />
                 <p className="text-[10px] font-bold text-slate-400">
@@ -1038,19 +1046,19 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
               </div>
             ) : active ? (
               <div
-                className={`relative bg-gradient-to-br from-rose-600/30 to-amber-500/20 border border-white/10 rounded-2xl flex items-center justify-center ${
+                className={`relative bg-gradient-to-br from-rose-600/30 to-amber-500/20 border border-white/10 rounded-xl flex items-center justify-center ${
                   active.aspect === '9:16'
-                    ? 'w-40 h-72'
+                    ? 'w-36 h-64'
                     : active.aspect === '1:1'
-                      ? 'w-56 h-56'
-                      : 'w-full max-w-lg aspect-video'
+                      ? 'w-52 h-52'
+                      : 'w-full h-full aspect-video max-h-[12rem]'
                 }`}
               >
                 {active.sourceImages[0] ? (
                   <VaultImg
                     src={active.sourceImages[0]}
                     alt=""
-                    className="absolute inset-0 w-full h-full object-cover rounded-2xl opacity-50"
+                    className="absolute inset-0 w-full h-full object-cover rounded-xl opacity-50"
                   />
                 ) : null}
                 <div className="relative z-10 text-center px-4">
@@ -1124,7 +1132,7 @@ export const ModuleProductAiVideo: React.FC<Props> = ({ currentUser, onNavigateM
           )}
         </div>
 
-        <div className="lg:col-span-3 rounded-2xl border border-slate-200 bg-white overflow-hidden max-h-[32rem] flex flex-col">
+        <div className="lg:col-span-3 rounded-2xl border border-slate-200 bg-white overflow-hidden max-h-[min(28rem,70vh)] flex flex-col self-start lg:sticky lg:top-3">
           <div className="px-3 py-2.5 border-b border-slate-100 text-xs font-black text-slate-700">
             成片库 ({jobs.length})
           </div>

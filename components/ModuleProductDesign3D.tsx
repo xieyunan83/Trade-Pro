@@ -2142,7 +2142,15 @@ export const ModuleProductDesign3D: React.FC<Props> = ({ currentUser, onNavigate
               <Model3dOrbitViewer
                 // 直接传 vault:/https，由预览组件本机秒开；勿等 useVaultUrl 异步，否则会空转半小时
                 src={(rawPreviewUrl || rawDownloadUrl || '').trim()}
-                stableKey={`${active.id}|${previewMode}|${active.segmentTaskId || ''}|${active.originalModelUrl || ''}|${active.providerTaskId || ''}|${active.updatedAt || 0}`}
+                // 勿把 updatedAt / 签名 URL 查询串塞进 stableKey：否则 patchJob 或换签会反复卸载本机预览
+                stableKey={`${active.id}|${previewMode}|${active.segmentTaskId || ''}|${
+                  (() => {
+                    const u = (rawPreviewUrl || rawDownloadUrl || '').trim();
+                    if (!u) return 'empty';
+                    if (isVaultRef(u) || u.startsWith('blob:') || u.startsWith('data:')) return u;
+                    return active.providerTaskId || 'remote';
+                  })()
+                }`}
                 poster={previewPoster || undefined}
                 className="w-full h-full min-h-0"
                 downloadHref={downloadUrl || previewUrl || undefined}

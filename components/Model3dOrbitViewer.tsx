@@ -202,8 +202,9 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
   }, [loadKey]);
 
   // 命令式挂载 model-viewer：避免 React 每次 render 拆掉已解析的 WebGL 场景
+  // 注意：不要把 phase 放进依赖，否则 load→done 会拆监听并重启超时计时
   useEffect(() => {
-    if (!libOk || !hostRef.current || !viewSrc || phase === 'pull' || phase === 'resolve') {
+    if (!libOk || !hostRef.current || !viewSrc) {
       return;
     }
     const host = hostRef.current;
@@ -217,6 +218,8 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
       el.setAttribute('shadow-intensity', '1');
       el.setAttribute('exposure', '1');
       el.setAttribute('environment-image', 'neutral');
+      el.setAttribute('reveal', 'auto');
+      el.setAttribute('loading', 'eager');
       if (autoRotate) el.setAttribute('auto-rotate', '');
       el.style.width = '100%';
       el.style.height = '100%';
@@ -235,6 +238,9 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
     if (poster) el.setAttribute('poster', poster);
     else el.removeAttribute('poster');
 
+    let softRetried = false;
+    let lastProgressAt = Date.now();
+
     const onLoad = () => {
       readyRef.current = true;
       setReady(true);
@@ -247,36 +253,58 @@ export const Model3dOrbitViewer: React.FC<Props> = ({
       setLoadErr('模型预览加载失败。请立即下载 GLB 保存（模型已在云端生成成功，未白费）。');
       setPhase('error');
     };
+    const onProgress = () => {
+      lastProgressAt = Date.now();
+    };
 
     el.addEventListener('load', onLoad);
     el.addEventListener('error', onError);
+    el.addEventListener('progress', onProgress);
 
     const prev = el.getAttribute('src');
     if (prev !== viewSrc) {
       readyRef.current = false;
       setReady(false);
+      setPhase('viewer');
       el.setAttribute('src', viewSrc);
     } else if ((el as any).loaded) {
       onLoad();
     }
 
-    // 本机 blob 应很快；远程解析可稍长。超时后停转圈，保留下载入口
-    const timeoutMs = viewSrc.startsWith('blob:') || viewSrc.startsWith('data:') ? 45_000 : 120_000;
-    const timer = window.setTimeout(() => {
-      if (!readyRef.current) {
-        setLoadErr(
-          '预览超时。模型文件多半已在本机，请点「立即下载 GLB」保存后用本地查看器打开；也可点下方重试预览。'
-        );
-        setPhase('error');
+    // 本机大 GLB 解析可能超过 45s；有 progress 就续命，避免误报超时黑屏
+    const isLocalBlob = viewSrc.startsWith('blob:') || viewSrc.startsWith('data:');
+    const idleLimitMs = isLocalBlob ? 90_000 : 120_000;
+    const timer = window.setInterval(() => {
+      if (readyRef.current) return;
+      const idle = Date.now() - lastProgressAt;
+      if (idle < idleLimitMs) return;
+      // 先软重试一次再报错（model-viewer 偶发不触发 load）
+      if (!softRetried && el) {
+        softRetried = true;
+        lastProgressAt = Date.now();
+        try {
+          el.removeAttribute('src');
+          el.setAttribute('src', viewSrc);
+        } catch {
+          /* ignore */
+        }
+        return;
       }
-    }, timeoutMs);
+      // 软失败：保留 viewer，不拆掉已解析场景；仅提示可下载/重试
+      setLoadErr(
+        '预览较慢或未出画面。模型文件多半已在本机，请点「立即下载 GLB」或「重试预览」。'
+      );
+      setPhase('error');
+      window.clearInterval(timer);
+    }, 2000);
 
     return () => {
       el?.removeEventListener('load', onLoad);
       el?.removeEventListener('error', onError);
-      window.clearTimeout(timer);
+      el?.removeEventListener('progress', onProgress);
+      window.clearInterval(timer);
     };
-  }, [libOk, viewSrc, phase, poster, autoRotate]);
+  }, [libOk, viewSrc, poster, autoRotate]);
 
   useEffect(() => {
     return () => {

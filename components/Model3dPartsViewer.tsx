@@ -293,18 +293,22 @@ export const Model3dPartsViewer: React.FC<Props> = ({
     setErr(null);
     rootsRef.current = [];
 
-    const watchdog = window.setTimeout(() => {
+    let lastProgressAt = Date.now();
+    const watchdog = window.setInterval(() => {
       if (disposed) return;
+      if (Date.now() - lastProgressAt < 90_000) return;
+      window.clearInterval(watchdog);
       setLoading((prev) => {
         if (!prev) return prev;
-        setErr('部件预览超时。请点「整体环视」或「原模」查看。');
+        setErr('部件预览较慢。请点「整体环视」或「原模」查看；文件仍在本机可下载。');
         return false;
       });
-    }, 45_000);
+    }, 2000);
 
     (async () => {
       try {
         const resolved = await resolveToObjectUrl(srcTrim);
+        lastProgressAt = Date.now();
         if (disposed) {
           if (resolved.owned) URL.revokeObjectURL(resolved.url);
           return;
@@ -315,7 +319,9 @@ export const Model3dPartsViewer: React.FC<Props> = ({
           new GLTFLoader().load(
             resolved.url,
             resolve,
-            undefined,
+            () => {
+              lastProgressAt = Date.now();
+            },
             (e) => reject(e instanceof Error ? e : new Error('GLB 解析失败'))
           );
         });
@@ -396,11 +402,11 @@ export const Model3dPartsViewer: React.FC<Props> = ({
         }
 
         setLoading(false);
-        window.clearTimeout(watchdog);
+        window.clearInterval(watchdog);
         tick();
       } catch (e: any) {
         if (!disposed) {
-          window.clearTimeout(watchdog);
+          window.clearInterval(watchdog);
           setErr(e?.message || '部件预览加载失败，请改用「整体环视」或「原模」');
           setLoading(false);
         }
@@ -409,7 +415,7 @@ export const Model3dPartsViewer: React.FC<Props> = ({
 
     return () => {
       disposed = true;
-      window.clearTimeout(watchdog);
+      window.clearInterval(watchdog);
       cancelAnimationFrame(raf);
       ro.disconnect();
       controls.dispose();
