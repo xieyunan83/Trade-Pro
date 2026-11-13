@@ -1,3 +1,4 @@
+import { applyStrictCors, handleCorsPreflight } from './_cors';
 /**
  * Vercel Serverless：同域转发 Hunter.io
  * 【硬约束】禁止外部 import，避免 FUNCTION_INVOCATION_FAILED。
@@ -9,12 +10,6 @@ export const config = {
 
 const ORIGIN = 'https://api.hunter.io';
 const UPSTREAM_TIMEOUT_MS = 25_000;
-
-const applyCors = (res: { setHeader: (k: string, v: string) => void }) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'authorization, content-type');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-};
 
 const resolveUpstreamPath = (req: any): string => {
   const raw = req.query?.__upstream;
@@ -66,11 +61,8 @@ const clientKey = (req: any): string => {
 
 export default async function handler(req: any, res: any) {
   try {
-    applyCors(res);
-    if (req.method === 'OPTIONS') {
-      res.status(204).end();
-      return;
-    }
+    if (handleCorsPreflight(req, res)) return;
+    applyStrictCors(req, res);
 
     const rl = checkLocalRate(clientKey(req), 90);
     if (!rl.ok) {
@@ -104,14 +96,14 @@ export default async function handler(req: any, res: any) {
       });
 
       const text = await upstream.text();
-      applyCors(res);
+      applyStrictCors(req, res);
       res.status(upstream.status);
       res.setHeader('Cache-Control', 'no-store');
       const ct = upstream.headers.get('content-type');
       if (ct) res.setHeader('Content-Type', ct);
       res.send(text);
     } catch (e: any) {
-      applyCors(res);
+      applyStrictCors(req, res);
       const aborted = e?.name === 'AbortError';
       res.status(aborted ? 504 : 502).json({
         errors: [
@@ -128,7 +120,7 @@ export default async function handler(req: any, res: any) {
     }
   } catch (e: any) {
     try {
-      applyCors(res);
+      applyStrictCors(req, res);
       if (!res.headersSent) res.status(500).json({ error: e?.message || 'hunter proxy crashed' });
     } catch {
       /* ignore */

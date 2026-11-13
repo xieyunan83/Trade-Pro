@@ -1,3 +1,5 @@
+import { enforceApiRateLimit } from './_firewall';
+import { applyStrictCors, handleCorsPreflight } from './_cors';
 /**
  * 着陆页聚合（自包含，避免跨目录 import 导致 Vercel FUNCTION_INVOCATION_FAILED）
  * GET /api/landing
@@ -57,16 +59,6 @@ const MAJOR_FX: { name: string; code: string }[] = [
   { name: '新西兰元', code: 'NZD' },
   { name: '泰国铢', code: 'THB' },
 ];
-
-const applyCors = (res: any) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader(
-    'Access-Control-Allow-Headers',
-    'content-type, x-industry-token, authorization'
-  );
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
-  res.setHeader('Cache-Control', 'public, s-maxage=180, stale-while-revalidate=600');
-};
 
 const stripHtml = (s: string) =>
   s
@@ -445,11 +437,9 @@ async function buildPayload(industryToken?: string) {
 
 export default async function handler(req: any, res: any) {
   try {
-    applyCors(res);
-    if (req.method === 'OPTIONS') {
-      res.status(204).end();
-      return;
-    }
+    if (handleCorsPreflight(req, res)) return;
+    applyStrictCors(req, res);
+    if (!enforceApiRateLimit(req, res, 'landing')) return;
     if (req.method !== 'GET') {
       res.status(405).json({ ok: false, error: 'GET only' });
       return;

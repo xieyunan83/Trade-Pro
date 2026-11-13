@@ -1,3 +1,4 @@
+import { applyStrictCors, handleCorsPreflight } from './_cors';
 /**
  * Vercel Serverless：同域转发 Anymail Finder
  * 【硬约束】禁止外部 import，避免 FUNCTION_INVOCATION_FAILED（与 tavily/landing 一致）。
@@ -9,15 +10,6 @@ export const config = {
 
 const ORIGIN = 'https://api.anymailfinder.com';
 const UPSTREAM_TIMEOUT_MS = 170_000;
-
-const applyCors = (res: { setHeader: (k: string, v: string) => void }) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader(
-    'Access-Control-Allow-Headers',
-    'authorization, content-type, x-qwen-origin, x-upstream-authorization, x-upstream-path, apikey'
-  );
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-};
 
 const readBody = (req: { method?: string; body?: unknown }): string | undefined => {
   if (req.method === 'GET' || req.method === 'HEAD') return undefined;
@@ -98,11 +90,8 @@ const clientKey = (req: any): string => {
 
 export default async function handler(req: any, res: any) {
   try {
-    applyCors(res);
-    if (req.method === 'OPTIONS') {
-      res.status(204).end();
-      return;
-    }
+    if (handleCorsPreflight(req, res)) return;
+    applyStrictCors(req, res);
 
     const rl = checkLocalRate(clientKey(req), 120);
     if (!rl.ok) {
@@ -140,7 +129,7 @@ export default async function handler(req: any, res: any) {
       });
 
       const text = await upstream.text();
-      applyCors(res);
+      applyStrictCors(req, res);
       res.status(upstream.status);
       res.setHeader('X-Proxied-To', ORIGIN);
       res.setHeader('Cache-Control', 'no-store');
@@ -148,7 +137,7 @@ export default async function handler(req: any, res: any) {
       if (uct) res.setHeader('Content-Type', uct);
       res.send(text);
     } catch (e: any) {
-      applyCors(res);
+      applyStrictCors(req, res);
       const aborted = e?.name === 'AbortError' || /aborted|timeout/i.test(String(e?.message || e));
       res.status(aborted ? 504 : 502).json({
         error: aborted
@@ -160,7 +149,7 @@ export default async function handler(req: any, res: any) {
     }
   } catch (e: any) {
     try {
-      applyCors(res);
+      applyStrictCors(req, res);
       if (!res.headersSent) res.status(500).json({ error: e?.message || 'anymail proxy crashed' });
     } catch {
       /* ignore */

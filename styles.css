@@ -226,3 +226,66 @@ body {
   --shadow-panel: 0 1px 0 rgba(255, 255, 255, 0.78) inset, 0 16px 40px -18px rgba(15, 23, 42, 0.2),
     0 0 0 1px rgba(15, 23, 42, 0.04);
 }
+
+/* —— 客户端防护：水印 + 敏感区禁选（.tp-allow-copy / 输入框不受影响） —— */
+.tp-client-watermark {
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  overflow: hidden;
+  opacity: 0.065;
+  background-image: repeating-linear-gradient(
+    -28deg,
+    transparent 0,
+    transparent 72px,
+    rgba(15, 23, 42, 0.04) 72px,
+    rgba(15, 23, 42, 0.04) 144px
+  );
+}
+.tp-client-watermark::before {
+  content: attr(data-label);
+  position: absolute;
+  inset: -40% -20%;
+  width: 140%;
+  height: 180%;
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 4.2rem;
+  color: #0f172a;
+  white-space: pre-wrap;
+  word-break: break-all;
+  transform: rotate(-28deg);
+  /* 用重复文本铺满：靠超长 data-label 由 JS 写入；此处再叠一层淡纹 */
+  background-image: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 3.6rem,
+    rgba(15, 23, 42, 0.02) 3.6rem,
+    rgba(15, 23, 42, 0.02) 3.8rem
+  );
+}
+.tp-shield-on .tp-shield-content,
+.tp-shield-on [data-tp-shield='1'] {
+  -webkit-user-select: none;
+  user-select: none;
+}
+.tp-shield-on .tp-shield-content input,
+.tp-shield-on .tp-shield-content textarea,
+.tp-shield-on .tp-shield-content [contenteditable='true'],
+.tp-shield-on .tp-shield-content .tp-allow-copy,
+.tp-shield-on .tp-shield-content .ql-editor,
+.tp-shield-on [data-tp-shield='1'] input,
+.tp-shield-on [data-tp-shield='1'] textarea,
+.tp-shield-on [data-tp-shield='1'] [contenteditable='true'],
+.tp-shield-on [data-tp-shield='1'] .tp-allow-copy,
+.tp-shield-on [data-tp-shield='1'] .ql-editor {
+  -webkit-user-select: text;
+  user-select: text;
+}
+.tp-shield-desktop img {
+  -webkit-user-drag: none;
+  user-drag: none;
+}

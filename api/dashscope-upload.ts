@@ -4,6 +4,7 @@
  * Header: Authorization: Bearer <apiKey>
  */
 import { enforceApiRateLimit } from './_firewall';
+import { applyStrictCors, handleCorsPreflight } from './_cors';
 export const config = {
   runtime: 'nodejs',
   maxDuration: 60,
@@ -11,12 +12,6 @@ export const config = {
 };
 
 const DEFAULT_ORIGIN = 'https://dashscope.aliyuncs.com';
-
-const applyCors = (res: { setHeader: (k: string, v: string) => void }) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'authorization, content-type');
-  res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS');
-};
 
 const sanitizeKey = (k: string) =>
   String(k || '')
@@ -27,11 +22,8 @@ const sanitizeKey = (k: string) =>
 
 export default async function handler(req: any, res: any) {
   try {
-    applyCors(res);
-    if (req.method === 'OPTIONS') {
-      res.status(204).end();
-      return;
-    }
+    if (handleCorsPreflight(req, res)) return;
+    applyStrictCors(req, res);
     if (!enforceApiRateLimit(req, res, 'dashscope')) return;
     if (req.method !== 'POST') {
       res.status(405).json({ error: 'Only POST' });
@@ -113,7 +105,7 @@ export default async function handler(req: any, res: any) {
 
     res.status(502).json({ error: lastErr || 'upload failed' });
   } catch (e: any) {
-    applyCors(res);
+    applyStrictCors(req, res);
     if (!res.headersSent) res.status(500).json({ error: e?.message || 'upload crashed' });
   }
 }

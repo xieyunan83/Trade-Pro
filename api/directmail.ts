@@ -5,6 +5,7 @@
 import crypto from 'crypto';
 
 import { enforceApiRateLimit } from './_firewall';
+import { applyStrictCors, handleCorsPreflight } from './_cors';
 export const config = {
   runtime: 'nodejs',
   maxDuration: 30,
@@ -18,12 +19,6 @@ const ALLOWED_ACTIONS = new Set([
   'SenderStatisticsByTagNameAndBatchID',
   'SenderStatisticsDetailByParam',
 ]);
-
-const applyCors = (res: { setHeader: (k: string, v: string) => void }) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'content-type');
-  res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS');
-};
 
 const percentEncode = (s: string): string =>
   encodeURIComponent(s)
@@ -63,11 +58,8 @@ const putIf = (params: Record<string, string>, key: string, value: unknown) => {
 
 export default async function handler(req: any, res: any) {
   try {
-    applyCors(res);
-    if (req.method === 'OPTIONS') {
-      res.status(204).end();
-      return;
-    }
+    if (handleCorsPreflight(req, res)) return;
+    applyStrictCors(req, res);
     if (!enforceApiRateLimit(req, res, 'directmail')) return;
     if (req.method !== 'POST') {
       res.status(405).json({ ok: false, error: 'Only POST' });

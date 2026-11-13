@@ -1,3 +1,5 @@
+import { applyStrictCors, handleCorsPreflight } from './_cors';
+import { enforceApiRateLimit } from './_firewall';
 /**
  * Vercel Serverless：同域转发 Tavily API
  * 【硬约束】禁止外部 import，避免 FUNCTION_INVOCATION_FAILED。
@@ -10,15 +12,6 @@ export const config = {
 
 const ORIGIN = 'https://api.tavily.com';
 const UPSTREAM_TIMEOUT_MS = 45_000;
-
-const applyCors = (res: { setHeader: (k: string, v: string) => void }) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader(
-    'Access-Control-Allow-Headers',
-    'authorization, content-type, x-upstream-authorization, x-upstream-path'
-  );
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-};
 
 const readBody = (req: { method?: string; body?: unknown }): string | undefined => {
   if (req.method === 'GET' || req.method === 'HEAD') return undefined;
@@ -51,11 +44,9 @@ const resolveUpstreamPath = (req: any): string => {
 
 export default async function handler(req: any, res: any) {
   try {
-    applyCors(res);
-    if (req.method === 'OPTIONS') {
-      res.status(204).end();
-      return;
-    }
+    if (handleCorsPreflight(req, res)) return;
+    applyStrictCors(req, res);
+    if (!enforceApiRateLimit(req, res, 'tavily')) return;
     if (req.method !== 'POST') {
       res.status(405).json({ error: 'Tavily proxy only accepts POST' });
       return;
@@ -92,7 +83,7 @@ export default async function handler(req: any, res: any) {
         signal: controller.signal,
       });
       const text = await upstream.text();
-      applyCors(res);
+      applyStrictCors(req, res);
       res.status(upstream.status);
       res.setHeader('X-Proxied-To', ORIGIN);
       res.setHeader('Cache-Control', 'no-store');
@@ -100,7 +91,7 @@ export default async function handler(req: any, res: any) {
       if (uct) res.setHeader('Content-Type', uct);
       res.send(text);
     } catch (e: any) {
-      applyCors(res);
+      applyStrictCors(req, res);
       const aborted = e?.name === 'AbortError' || /aborted|timeout/i.test(String(e?.message || e));
       res.status(aborted ? 504 : 502).json({
         error: aborted ? `检索上游超时（${UPSTREAM_TIMEOUT_MS / 1000}s）` : e?.message || String(e),
@@ -110,7 +101,7 @@ export default async function handler(req: any, res: any) {
     }
   } catch (e: any) {
     try {
-      applyCors(res);
+      applyStrictCors(req, res);
       if (!res.headersSent) res.status(500).json({ error: e?.message || 'tavily proxy crashed' });
     } catch {
       /* ignore */

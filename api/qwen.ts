@@ -3,12 +3,13 @@
  * - 默认：阿里云千问（Authorization / X-Qwen-Origin）
  * - 若带 x-goog-api-key：转发 Google Gemini（禁止 Authorization，兼容 AIza / AQ.）
  *
- * 【硬约束】本文件禁止任何相对/绝对 import。
- * 历史上引入 ./_firewall 等共享模块会导致打包漏文件 → FUNCTION_INVOCATION_FAILED → HTTP 500。
+ * 【硬约束】本文件禁止任何相对/绝对 import（Vercel 打包易漏文件 → HTTP 500）。
+ * CORS 允许列表内联，与 api/_cors.ts 保持同步。
  * 用法：
  *   /api/qwen?__upstream=/compatible-mode/v1/chat/completions
  *   /api/gemini?__upstream=/v1beta/models/...:generateContent  （rewrite → 本函数）
  */
+
 export const config = {
   runtime: 'nodejs',
   maxDuration: 300,
@@ -62,13 +63,35 @@ const softRateLimit = (req: any, res: any): boolean => {
   }
 };
 
-const applyCors = (res: { setHeader: (k: string, v: string) => void }) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+const QWEN_CORS_ALLOWED = new Set([
+  'https://babyworld.ltd',
+  'https://www.babyworld.ltd',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+]);
+
+const applyCors = (req: any, res: { setHeader: (k: string, v: string) => void }): boolean => {
+  const origin = String(req?.headers?.origin || '').trim().replace(/\/$/, '');
   res.setHeader(
     'Access-Control-Allow-Headers',
     'authorization, content-type, x-qwen-origin, x-upstream-authorization, x-upstream-path, apikey, x-goog-api-key, x-dashscope-async, x-dashscope-ossresourceresolve'
   );
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'no-store');
+  if (!origin) return true;
+  const extra = String(process.env.ALLOWED_ORIGINS || '')
+    .split(/[,;\s]+/)
+    .map((s) => s.trim().replace(/\/$/, ''))
+    .filter(Boolean);
+  if (QWEN_CORS_ALLOWED.has(origin) || extra.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    return true;
+  }
+  return false;
 };
 
 const readBody = (req: { method?: string; body?: unknown }): string | undefined => {
@@ -120,9 +143,16 @@ const extractGoogKey = (req: any): string => {
 
 export default async function handler(req: any, res: any) {
   try {
-    applyCors(res);
-    if (req.method === 'OPTIONS') {
+    if (String(req.method || '').toUpperCase() === 'OPTIONS') {
+      if (!applyCors(req, res)) {
+        res.status(403).json({ error: 'Origin not allowed' });
+        return;
+      }
       res.status(204).end();
+      return;
+    }
+    if (!applyCors(req, res)) {
+      res.status(403).json({ error: 'Origin not allowed' });
       return;
     }
     if (!softRateLimit(req, res)) return;
@@ -202,7 +232,7 @@ export default async function handler(req: any, res: any) {
       });
 
       const text = await upstream.text();
-      applyCors(res);
+      applyCors(req, res);
       res.status(upstream.status);
       res.setHeader('X-Proxied-To', target.origin);
       res.setHeader('X-Proxy-Mode', geminiMode ? 'gemini' : 'qwen');
@@ -211,7 +241,7 @@ export default async function handler(req: any, res: any) {
       if (uct) res.setHeader('Content-Type', uct);
       res.send(text);
     } catch (e: any) {
-      applyCors(res);
+      applyCors(req, res);
       const aborted = e?.name === 'AbortError' || /aborted|timeout/i.test(String(e?.message || e));
       res.status(aborted ? 504 : 502).json({
         error: aborted
@@ -225,7 +255,7 @@ export default async function handler(req: any, res: any) {
     }
   } catch (e: any) {
     try {
-      applyCors(res);
+      applyCors(req, res);
       if (!res.headersSent) {
         res.status(500).json({ error: e?.message || 'qwen proxy crashed' });
       }

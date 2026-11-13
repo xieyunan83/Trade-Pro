@@ -183,19 +183,10 @@ function buildMenu() {
         },
         { type: 'separator' },
         { role: 'togglefullscreen' },
-        ...(!app.isPackaged
-          ? [{ type: 'separator' }, { role: 'toggleDevTools' }]
-          : [
-              {
-                label: '诊断工具',
-                accelerator: 'CmdOrCtrl+Shift+I',
-                click: () => {
-                  if (mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.webContents.openDevTools({ mode: 'detach' });
-                  }
-                },
-              },
-            ]),
+        // 打包版默认关闭诊断（防扒站/藏真实地址）；仅 TRADE_DEBUG=1 或未打包时可开
+        ...(!app.isPackaged || process.env.TRADE_DEBUG === '1'
+          ? [{ type: 'separator' }, { role: 'toggleDevTools', label: '诊断工具（调试）' }]
+          : []),
       ],
     },
     {
@@ -248,10 +239,10 @@ function showBootError(reason, errMsg = '') {
   } catch {
     /* ignore */
   }
+  // 错误页不展示真实站点 Origin，避免客户从客户端抄走地址
   const q = new URLSearchParams({
-    origin: APP_ORIGIN,
     reason: String(reason || 'network'),
-    err: String(errMsg || '').slice(0, 180),
+    err: String(errMsg || '').slice(0, 120),
   });
   const file = bootErrorPath();
   void mainWindow
@@ -261,8 +252,8 @@ function showBootError(reason, errMsg = '') {
         `<!DOCTYPE html><meta charset="utf-8"/><title>无法连接</title>
          <body style="margin:0;background:#070b14;color:#e2e8f0;font-family:system-ui;display:flex;min-height:100vh;align-items:center;justify-content:center;flex-direction:column;gap:12px;padding:24px;text-align:center">
          <h1 style="margin:0;font-size:18px">无法打开登录界面</h1>
-         <p style="color:#94a3b8;max-width:400px;line-height:1.5">请检查网络后重开客户端，或在浏览器打开 ${APP_ORIGIN}</p>
-         <p style="font-size:11px;color:#64748b">${reason}: ${errMsg}</p></body>`
+         <p style="color:#94a3b8;max-width:400px;line-height:1.5">请检查网络后重新打开客户端。如持续失败，请联系管理员（勿向他人转发安装包）。</p>
+         <p style="font-size:11px;color:#64748b">错误码：${reason}</p></body>`
       );
       void mainWindow.loadURL(`data:text/html;charset=utf-8,${html}`);
     });
@@ -350,12 +341,18 @@ function loadAppShell(opts = {}) {
   // 先落盘「启动中」：若随后原生崩溃，下次启动能强制清缓存，避免黑屏死循环
   markBootInProgress();
   armLoadWatchdog(BOOT_LOAD_TIMEOUT_MS);
-  const baseUa = mainWindow.webContents.getUserAgent().replace(/Electron\/\S+\s*/i, '');
+  const baseUa = mainWindow.webContents
+    .getUserAgent()
+    .replace(/Electron\/\S+\s*/i, '')
+    .replace(/\s*TradeCollabClient\/\S+/gi, '')
+    .replace(/\s*BabyWorldClient\/\S+/gi, '');
   // 强制 bust、或本轮任意重试都走 _boot，避免啃到发版后已删的旧 /assets
   const forceBust = !!opts.forceBust || attempt > 1;
+  // UA 仅保留通用壳标记，不暴露品牌通道名；版本号缩短
+  const shellTag = `TradeShell/${String(app.getVersion()).replace(/[^\d.]/g, '').slice(0, 12)}`;
   mainWindow
     .loadURL(startUrl(forceBust), {
-      userAgent: `${baseUa} TradeCollabClient/${app.getVersion()} BabyWorldClient/${app.getVersion()}`,
+      userAgent: `${baseUa} ${shellTag}`.trim(),
     })
     .catch((e) => {
       if (bootAttempt < MAX_BOOT_ATTEMPTS) {
@@ -390,12 +387,22 @@ function createWindow() {
       // 不用持久化 code cache：损坏的 Code Cache 会在 V8 编译期 SIGSEGV，表现为深蓝空窗后「意外退出」
       v8CacheOptions: 'none',
       enableBlinkFeatures: 'CSSBackdropFilter',
-      // 打包后仍允许诊断（菜单打开），便于排查白屏
-      devTools: true,
+      // 打包版默认关闭 DevTools，防止客户从客户端窥探真实站点与接口
+      devTools: !app.isPackaged || process.env.TRADE_DEBUG === '1',
     },
   });
 
   buildMenu();
+
+  // 隐藏地址类信息：标题固定；禁止把完整 URL 写进窗口标题
+  mainWindow.webContents.on('did-navigate', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.setTitle('外贸智慧协同');
+  });
+  mainWindow.webContents.on('did-navigate-in-page', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.setTitle('外贸智慧协同');
+  });
 
   // 尽快露脸：最大化占满屏，避免排他全屏切换卡顿
   const showSoon = () => {
@@ -511,12 +518,23 @@ function createWindow() {
     console.info('[renderer] responsive again');
   });
 
-  // 拦截 F5（菜单已接管 Cmd/Ctrl+R）
+  // F5 刷新确认；打包版拦截 DevTools 快捷键
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return;
     if (input.key === 'F5') {
       event.preventDefault();
       confirmReload();
+      return;
+    }
+    if (app.isPackaged && process.env.TRADE_DEBUG !== '1') {
+      const key = String(input.key || '').toLowerCase();
+      if (key === 'f12') {
+        event.preventDefault();
+        return;
+      }
+      if ((input.control || input.meta) && input.shift && ['i', 'j', 'c'].includes(key)) {
+        event.preventDefault();
+      }
     }
   });
 
@@ -715,9 +733,15 @@ app.whenReady().then(async () => {
       let ua = String(headers['User-Agent'])
         .replace(/\s*Electron\/\S+/gi, '')
         .replace(/\s*BabyWorldClient\/\S+/gi, '')
-        .replace(/\s*TradeCollabClient\/\S+/gi, '');
-      ua = `${ua} TradeCollabClient/${app.getVersion()} BabyWorldClient/${app.getVersion()}`;
-      headers['User-Agent'] = ua;
+        .replace(/\s*TradeCollabClient\/\S+/gi, '')
+        .replace(/\s*TradeShell\/\S+/gi, '');
+      const ver = String(app.getVersion()).replace(/[^\d.]/g, '').slice(0, 12);
+      headers['User-Agent'] = `${ua} TradeShell/${ver}`.trim();
+    }
+    // 外链不带本站 Referer，降低真实域名被第三方日志记录的概率
+    if (!isAppUrl(details.url)) {
+      delete headers.Referer;
+      delete headers.referer;
     }
     callback({ requestHeaders: headers });
   });

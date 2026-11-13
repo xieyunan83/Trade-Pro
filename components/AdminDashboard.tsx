@@ -1158,7 +1158,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   return (
-    <div className="min-h-screen min-h-[100dvh] bg-[#F0F2F5] flex flex-col">
+    <div className="tp-shield-content min-h-screen min-h-[100dvh] bg-[#F0F2F5] flex flex-col" data-tp-shield="1">
       {/* Header */}
       <header className="bg-[#0F172A] text-white px-4 sm:px-8 py-3 sm:py-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 shadow-lg">
         <div className="flex items-center gap-3">

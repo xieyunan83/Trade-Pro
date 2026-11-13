@@ -36,6 +36,7 @@ import {
 import { AppNavDock } from './components/AppNavDock';
 import { CooldownOverlay } from './components/CooldownOverlay';
 import { installForegroundGuard, setHeavyWorkSuspended } from './services/foregroundGuard';
+import { installClientShield } from './services/clientShield';
 import { isAutoBackgroundAllowed } from './services/autoBackgroundPolicy';
 import {
   loadAndRepairAutomationQueue,
@@ -1052,6 +1053,15 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       setUsageScope(bootUser.username);
     }
   }, [currentUser, bootUser]);
+
+  // 登录后安装客户端防护（水印 / 禁右键扒内容）；业务「复制」按钮不受影响
+  useEffect(() => {
+    if (!currentUser) return;
+    const handle = installClientShield(currentUser.username, {
+      isAdmin: currentUser.role === 'admin',
+    });
+    return () => handle.dispose();
+  }, [currentUser?.username, currentUser?.role]);
 
   // 进站后阶梯预热高频模块 chunk（idle，不抢首屏点击）
   useEffect(() => {
@@ -6309,10 +6319,11 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
   return (
     <AccessGate user={currentUser} onLogout={handleLogout}>
     <div
-      className={`tp-app min-h-screen min-h-[100dvh] w-full max-w-none ${
+      className={`tp-app tp-shield-content min-h-screen min-h-[100dvh] w-full max-w-none ${
         sphereNavExpanded ? 'is-nav-expanded' : ''
       } ${sphereNavPhase === 'submenu' ? 'is-nav-submenu' : ''}`}
       style={{ ['--tp-sidebar-w' as string]: sidebarWidth }}
+      data-tp-shield="1"
     >
       {/* Mobile sidebar backdrop */}
       {mobileMenuOpen && (

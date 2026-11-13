@@ -3,6 +3,7 @@
  * /api/social?__origin=https://api.linkedin.com&__upstream=/v2/ugcPosts
  */
 import { enforceApiRateLimit } from './_firewall';
+import { applyStrictCors, handleCorsPreflight } from './_cors';
 export const config = {
   runtime: 'nodejs',
   maxDuration: 60,
@@ -16,15 +17,6 @@ const ALLOWED_ORIGINS = new Set([
   'https://api.twitter.com',
   'https://api.x.com',
 ]);
-
-const applyCors = (res: { setHeader: (k: string, v: string) => void }) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader(
-    'Access-Control-Allow-Headers',
-    'authorization, content-type, x-restli-protocol-version, linkedin-version, x-social-origin'
-  );
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-};
 
 const readBody = (req: { method?: string; body?: unknown }): string | undefined => {
   if (req.method === 'GET' || req.method === 'HEAD') return undefined;
@@ -41,11 +33,8 @@ const readBody = (req: { method?: string; body?: unknown }): string | undefined 
 
 export default async function handler(req: any, res: any) {
   try {
-    applyCors(res);
-    if (req.method === 'OPTIONS') {
-      res.status(204).end();
-      return;
-    }
+    if (handleCorsPreflight(req, res)) return;
+    applyStrictCors(req, res);
     if (!enforceApiRateLimit(req, res, 'social')) return;
 
     const originRaw = String(req.query?.__origin || req.headers['x-social-origin'] || '').trim();
@@ -85,14 +74,14 @@ export default async function handler(req: any, res: any) {
       body: readBody(req),
     });
     const text = await upstream.text();
-    applyCors(res);
+    applyStrictCors(req, res);
     res.status(upstream.status);
     const uct = upstream.headers.get('content-type');
     if (uct) res.setHeader('Content-Type', uct);
     res.setHeader('Cache-Control', 'no-store');
     res.send(text);
   } catch (e: any) {
-    applyCors(res);
+    applyStrictCors(req, res);
     res.status(502).json({ error: e?.message || 'social proxy failed' });
   }
 }

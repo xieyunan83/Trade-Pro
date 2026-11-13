@@ -4,6 +4,7 @@
  * 开发环境走 Vite /tokenhub-api 代理。
  */
 import { enforceApiRateLimit } from './_firewall';
+import { applyStrictCors, handleCorsPreflight } from './_cors';
 export const config = {
   runtime: 'nodejs',
   maxDuration: 300,
@@ -11,15 +12,6 @@ export const config = {
 
 const TOKENHUB_ORIGIN = 'https://tokenhub.tencentmaas.com';
 const UPSTREAM_TIMEOUT_MS = 280_000;
-
-const applyCors = (res: { setHeader: (k: string, v: string) => void }) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader(
-    'Access-Control-Allow-Headers',
-    'authorization, content-type, x-upstream-path, x-upstream-authorization'
-  );
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-};
 
 const resolveUpstreamPath = (req: any): string => {
   const hdr = req.headers?.['x-upstream-path'];
@@ -52,11 +44,8 @@ const readBody = (req: { method?: string; body?: unknown }): string | undefined 
 
 export default async function handler(req: any, res: any) {
   try {
-    applyCors(res);
-    if (req.method === 'OPTIONS') {
-      res.status(204).end();
-      return;
-    }
+    if (handleCorsPreflight(req, res)) return;
+    applyStrictCors(req, res);
     if (!enforceApiRateLimit(req, res, 'tokenhub')) return;
     const method = String(req.method || 'GET').toUpperCase();
     if (!['GET', 'POST', 'HEAD'].includes(method)) {
@@ -82,7 +71,7 @@ export default async function handler(req: any, res: any) {
         signal: controller.signal,
       });
       const text = await upstream.text();
-      applyCors(res);
+      applyStrictCors(req, res);
       res.status(upstream.status);
       res.setHeader('X-Proxied-To', TOKENHUB_ORIGIN);
       res.setHeader('Cache-Control', 'no-store');
@@ -90,7 +79,7 @@ export default async function handler(req: any, res: any) {
       if (uct) res.setHeader('Content-Type', uct);
       res.send(text);
     } catch (e: any) {
-      applyCors(res);
+      applyStrictCors(req, res);
       const aborted = e?.name === 'AbortError' || /aborted|timeout/i.test(String(e?.message || e));
       res.status(aborted ? 504 : 502).json({
         error: aborted
@@ -102,7 +91,7 @@ export default async function handler(req: any, res: any) {
     }
   } catch (e: any) {
     try {
-      applyCors(res);
+      applyStrictCors(req, res);
       if (!res.headersSent) {
         res.status(500).json({ error: e?.message || 'tokenhub proxy crashed' });
       }
