@@ -264,7 +264,9 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
     ) {
       const active = getActiveDmJobForDomain(domain);
       if (!active) {
-        setQueueMsg('库内联系人已对齐；缺邮箱线索将在后台补全，也可手动点「搜索决策人邮箱」');
+        setQueueMsg(
+          '库内联系人已对齐。有 LinkedIn / WhatsApp 即有效；缺邮箱请手动点「搜索决策人邮箱」（付费，不会自动搜索）'
+        );
       }
     } else if (existing.length) {
       setQueueMsg(`已载入库内 ${existing.length} 位联系人`);
@@ -337,6 +339,14 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
       }
     }
     if (onEnqueueEmailSearch) {
+      const waN = decisionMakers.filter((d) => (d.whatsapp || '').trim()).length;
+      const ok = window.confirm(
+        `将调用付费邮箱检索服务，可能产生费用。\n\n当前联系人 ${decisionMakers.length} 位，其中 WhatsApp ${waN} 位（有 WhatsApp 已可跟进）。\n\n确认搜索邮箱？`
+      );
+      if (!ok) {
+        setQueueMsg('已取消付费邮箱搜索。');
+        return;
+      }
       const res = onEnqueueEmailSearch();
       setQueueMsg(res.message);
       return;
@@ -498,7 +508,7 @@ export const ModuleDecisionMakers: React.FC<ModuleDecisionMakersProps> = ({
         </div>
 
         <div className="mb-4 rounded-2xl border border-slate-100 bg-slate-50/80 px-4 py-3 text-xs font-semibold text-slate-600 leading-relaxed">
-          对齐本公司联系人时会同步挖掘公开 WhatsApp（官网 Contact / wa.me 等）；查不到的不会编造。邮箱请点「搜索决策人邮箱」补全；也可点「补全 WhatsApp」再挖一轮。
+          对齐本公司联系人时会同步挖掘公开 WhatsApp（官网 Contact / wa.me 等）；有 WhatsApp 即有效联系人，查不到不会编造。邮箱为付费检索，须手动确认，不会后台自动搜索。
         </div>
         {jobActive && canDmEmailSearch && (
           <div className="mb-4 rounded-2xl border border-cyan-200/80 bg-cyan-50/80 px-4 py-3 text-xs font-semibold text-cyan-900">

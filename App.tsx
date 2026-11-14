@@ -107,7 +107,6 @@ import {
   findDmPersistForCompany,
 } from './services/dmSearchPersist';
 import { mergeDecisionMakers, mergeAnalysisWithPrevious } from './services/multiModelMerge';
-import { companyNeedsAsyncDmFill } from './services/dmEnrichPolicy';
 import { ensurePersonIdentity } from './services/personIdentity';
 import {
   enqueueDmEmailSearch,
@@ -2925,30 +2924,14 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
   };
 
   /**
-   * Phase B：打开报告后库内优先；仅缺邮/低置信时异步入队补全（不挡浏览）。
-   * 不替代用户手动「深挖」；2 小时冷却，避免反复打开重复烧分。
+   * 打开报告：不再自动烧付费邮箱额度。
+   * LinkedIn / WhatsApp 由背调与夜间 linkedin_locate 占位；邮箱须用户手动点「搜索决策人邮箱」。
    */
   const maybeEnqueueLibraryFirstDmFill = (
-    data: AnalysisResult,
-    historyId: string | null | undefined
+    _data: AnalysisResult,
+    _historyId: string | null | undefined
   ) => {
-    if (!hasPermission(currentUser, 'feature.dm_email_search')) return;
-    const domain = data.companyInfo?.website || '';
-    const host = domain
-      .toLowerCase()
-      .replace(/^(?:https?:\/\/)?(?:www\.)?/i, '')
-      .split('/')[0]
-      .trim();
-    if (!host || !host.includes('.')) return;
-    if (getActiveDmJobForDomain(host)) return;
-    if (
-      !companyNeedsAsyncDmFill(data.decisionMakers || [], {
-        lastSearchAt: data.decisionMakerEmailSearchAt,
-      })
-    ) {
-      return;
-    }
-    enqueueCurrentDmEmailSearch(data, historyId ?? null, { deepDig: false, quiet: true });
+    /* intentional no-op：禁止后台自动 Anymail */
   };
   const handleExportReport = () => {
     if (!hasPermission(currentUser, 'feature.export_ppt')) {
@@ -3740,6 +3723,8 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                 (d) =>
                   !!(d.name || '').trim() ||
                   /linkedin\.com\/in\//i.test(d.linkedin || '') ||
+                  !!(d.whatsapp || '').trim() ||
+                  !!(d.phone || '').trim() ||
                   d.emailGuess?.includes('@')
               )
             ) {
@@ -7257,6 +7242,10 @@ crmClients={crmClients}
                             <button
                               type="button"
                               onClick={() => {
+                                const ok = confirm(
+                                  '将调用付费邮箱检索服务搜索决策人邮箱，可能产生费用。\n\n有 LinkedIn / WhatsApp 的联系人已可跟进，无需邮箱。\n\n确认继续搜索邮箱？'
+                                );
+                                if (!ok) return;
                                 const res = enqueueCurrentDmEmailSearch(analysisData, viewingHistoryId);
                                 if (res.message) alert(res.message);
                               }}
@@ -7268,7 +7257,7 @@ crmClients={crmClients}
                                 (d) => !!(d.emailGuess && String(d.emailGuess).includes('@'))
                               )
                                 ? '再次深挖决策人邮箱'
-                                : '后台搜索决策人邮箱'}
+                                : '搜索决策人邮箱（付费·需确认）'}
                             </button>
                           )}
                           {hasPermission(currentUser, 'feature.export_ppt') && (

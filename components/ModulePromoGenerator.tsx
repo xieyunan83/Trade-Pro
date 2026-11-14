@@ -532,7 +532,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
   const patchDraft = (partial: Partial<AutomationPipelineConfig>) => {
     setDraft((prev) => {
       const next = { ...prev, ...partial };
-      // 关背调则后续全关；开启背调时后台自动补全联系人（不在前台暴露）
+      // 关背调则后续全关；开启背调时默认只做 LinkedIn+WhatsApp 占位（不自动烧邮箱额度）
       if (partial.doBackgroundCheck === false) {
         next.doLinkedInLocate = false;
         next.doDmMine = false;
@@ -540,7 +540,6 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
       } else if (partial.doBackgroundCheck === true) {
         next.doLinkedInLocate = true;
       }
-      if (partial.doDmMine === false) next.doCrmImport = false;
       return next;
     });
   };
@@ -584,10 +583,10 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
       keyword: draft.keyword.trim(),
       industry: draft.industry.trim(),
       productContext: draft.productContext.trim(),
-      // 背调开启时后台静默补全公司联系人（不在配置界面展示）
+      // 背调开启时后台静默补 LinkedIn+WhatsApp；邮箱仅在用户勾选确认后才付费搜索
       doLinkedInLocate: draft.doBackgroundCheck,
       doDmMine: draft.doBackgroundCheck && draft.doDmMine && canDmMine,
-      doCrmImport: draft.doBackgroundCheck && draft.doDmMine && draft.doCrmImport && canCrmImport,
+      doCrmImport: draft.doBackgroundCheck && draft.doCrmImport && canCrmImport,
     };
     setDialogOpen(false);
     setConfirming(false);
@@ -809,7 +808,10 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                       />
                       <span className="text-sm font-bold text-slate-700">
                         <Users size={14} className="inline mr-1 text-amber-600" />
-                        背调后挖掘决策人邮箱
+                        背调后付费搜索决策人邮箱（须勾选确认）
+                        <span className="block text-[11px] text-amber-700/80 font-bold mt-0.5">
+                          默认不搜索邮箱。后台会先找 LinkedIn 联系人并补 WhatsApp；有 WhatsApp 即有效联系人。
+                        </span>
                         {!canDmMine && (
                           <span className="block text-[11px] text-slate-400 font-bold mt-0.5">
                             当前账号无决策人邮箱搜索权限
@@ -819,7 +821,7 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                     </label>
                     <label
                       className={`flex items-start gap-3 ${
-                        draft.doBackgroundCheck && draft.doDmMine && canCrmImport
+                        draft.doBackgroundCheck && canCrmImport
                           ? 'cursor-pointer'
                           : 'opacity-40'
                       }`}
@@ -827,13 +829,13 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                       <input
                         type="checkbox"
                         className="mt-1 rounded border-slate-300"
-                        disabled={!draft.doBackgroundCheck || !draft.doDmMine || !canCrmImport}
+                        disabled={!draft.doBackgroundCheck || !canCrmImport}
                         checked={draft.doCrmImport && canCrmImport}
                         onChange={(e) => patchDraft({ doCrmImport: e.target.checked })}
                       />
                       <span className="text-sm font-bold text-slate-700">
                         <ShieldCheck size={14} className="inline mr-1 text-emerald-600" />
-                        挖掘到有决策人的直接导入 CRM
+                        有联系人（含仅 WhatsApp）即导入 CRM
                         {!canCrmImport && (
                           <span className="block text-[11px] text-slate-400 font-bold mt-0.5">
                             当前账号无 CRM 模块权限
@@ -877,15 +879,18 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                     },
                     {
                       n: 7,
-                      t: '背调后挖决策人',
-                      v: draft.doBackgroundCheck && draft.doDmMine && canDmMine ? '是 · 后台并行' : '否',
+                      t: '付费搜邮箱',
+                      v:
+                        draft.doBackgroundCheck && draft.doDmMine && canDmMine
+                          ? '是 · 已确认'
+                          : '否 · 仅 LinkedIn/WhatsApp',
                     },
                     {
                       n: 8,
-                      t: '有决策人导入 CRM',
+                      t: '有联系人导入 CRM',
                       v:
-                        draft.doBackgroundCheck && draft.doDmMine && draft.doCrmImport && canCrmImport
-                          ? '是'
+                        draft.doBackgroundCheck && draft.doCrmImport && canCrmImport
+                          ? '是（含仅 WhatsApp）'
                           : '否',
                     },
                   ].map((row) => (

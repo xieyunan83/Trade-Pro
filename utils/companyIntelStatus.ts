@@ -128,16 +128,31 @@ export const resolveCompanyIntelStatus = (opts: {
   const hasProduct =
     hasRichProductCatalog(opts.taskAnalysis) || hasRichProductCatalog(historyItem?.data);
 
-  const crmHasEmailContacts =
-    Array.isArray(crmClient?.contacts) &&
-    crmClient!.contacts!.some((d) => !!(d.emailGuess && String(d.emailGuess).includes('@')));
+  const isUsableContact = (d: {
+    emailGuess?: string;
+    whatsapp?: string;
+    phone?: string;
+    linkedin?: string;
+    name?: string;
+  }) =>
+    !!(d.emailGuess && String(d.emailGuess).includes('@')) ||
+    !!(d.whatsapp || '').trim() ||
+    !!(d.phone || '').trim() ||
+    /linkedin\.com\/in\//i.test(d.linkedin || '') ||
+    !!(d.name || '').trim();
 
+  const crmHasContacts =
+    Array.isArray(crmClient?.contacts) && crmClient!.contacts!.some(isUsableContact);
+
+  // 有邮箱 / WhatsApp / 电话 / LinkedIn 主页即算有效联系人（不再强制邮箱）
   const hasDm =
     !!opts.taskAnalysis?.decisionMakerEmailSearchAt ||
     (historyItem ? historyHasDmSearch(historyItem) : false) ||
-    crmHasEmailContacts ||
+    crmHasContacts ||
     (Array.isArray(opts.taskAnalysis?.decisionMakers) &&
-      opts.taskAnalysis!.decisionMakers!.some((d) => !!(d.emailGuess && String(d.emailGuess).includes('@'))));
+      opts.taskAnalysis!.decisionMakers!.some(isUsableContact)) ||
+    (Array.isArray(historyItem?.data?.decisionMakers) &&
+      historyItem!.data!.decisionMakers!.some(isUsableContact));
 
   const dmContactCount = Math.max(
     opts.taskAnalysis?.decisionMakers?.length || 0,

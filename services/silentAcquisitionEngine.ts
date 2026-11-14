@@ -238,6 +238,12 @@ export const gatherSilentCompanyChannelIntel = async (opts: {
   productKeyword?: string;
   country?: string;
   existingDecisionMakers?: DecisionMaker[];
+  /**
+   * 是否调用付费邮箱接口补全邮箱。默认 false：
+   * 后台 / 继续待处理只做 LinkedIn 占位 + WhatsApp；有 WhatsApp 即有效联系人。
+   * 仅用户手动确认「搜索决策人邮箱」时传 true。
+   */
+  fillEmails?: boolean;
 }): Promise<SilentCompanyIntel> => {
   const name = (opts.companyName || '').trim();
   const domain = (opts.domain || '')
@@ -304,8 +310,12 @@ export const gatherSilentCompanyChannelIntel = async (opts: {
     }
   }
 
-  // 1c) 缺邮箱的真实人名：走官方 person 查找（搜不到不扣分），禁止猜测+verify（verify 每次都扣）
-  if (domain && out.decisionMakers.some((d) => !d.emailGuess?.includes('@'))) {
+  // 1c) 付费邮箱：默认跳过。有 LinkedIn / WhatsApp 已是有效联系人，勿在后台偷偷烧分。
+  if (
+    opts.fillEmails &&
+    domain &&
+    out.decisionMakers.some((d) => !d.emailGuess?.includes('@'))
+  ) {
     try {
       const { findEmailWithAnymail } = await import('./geminiService');
       let filled = 0;
@@ -348,6 +358,14 @@ export const gatherSilentCompanyChannelIntel = async (opts: {
       }
     } catch (e) {
       console.warn('[silent-acq] anymail person fill skipped', e);
+    }
+  } else if (!opts.fillEmails) {
+    const waN = out.decisionMakers.filter((d) => (d.whatsapp || '').trim()).length;
+    const noEmail = out.decisionMakers.filter((d) => !d.emailGuess?.includes('@')).length;
+    if (noEmail > 0) {
+      out.intelNotes.push(
+        `emails-skip:manual(${noEmail}人待确认；WhatsApp已有${waN})`
+      );
     }
   }
 

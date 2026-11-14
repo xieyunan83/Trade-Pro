@@ -1,9 +1,10 @@
 /**
  * 夜间静默升级：上海时区 22:00–08:00，对旧客户补齐「新功能带来的缺口」
- *（公司联系人补全 / 决策人邮箱 / 品类 / 背调补全）。白天自动停泵，不抢交互流量。
+ *（LinkedIn 联系人占位 + WhatsApp / 品类 / 背调补全）。白天自动停泵，不抢交互流量。
  * 登录挂机即可，无需用户下指令。
  *
- * 邮箱：千问只猜候选，必须专业接口校验后才写入（见 emailPatternGuess）。
+ * 付费邮箱（Anymail）禁止夜间/后台自动跑；须用户手动确认搜索。
+ * 有 WhatsApp 的联系人视为有效联系人，不因缺邮箱再烧分。
  */
 import type { Client, DecisionMaker, HistoryItem } from '../types';
 import { isQwenNightPromoWindow } from './qwenModelSchedule';
@@ -28,15 +29,14 @@ export type NightGapKind =
   | 'enrichment'
   | 'catalog_match';
 
-/** 白天：几乎不烧对话 Token 的轻缺口 */
-const DAY_LIGHT_KINDS: NightGapKind[] = ['catalog_match', 'dm_email'];
-/** 夜间：重补全（吃优惠时段） */
+/** 白天：几乎不烧对话 Token 的轻缺口（不含付费邮箱） */
+const DAY_LIGHT_KINDS: NightGapKind[] = ['catalog_match'];
+/** 夜间：重补全（吃优惠时段）；不含 dm_email，避免偷偷烧 Anymail */
 const NIGHT_HEAVY_KINDS: NightGapKind[] = [
   'linkedin_locate',
   'product_dig',
   'enrichment',
   'catalog_match',
-  'dm_email',
 ];
 
 const kindsAllowedNow = (): Set<NightGapKind> => {
@@ -123,7 +123,7 @@ const MAX_PER_SCAN = 150;
 /** 本地品类匹配无烧 Token，每轮可连跑多条 */
 const CATALOG_MATCH_BURST = 80;
 /** 仅入队、几乎瞬时的缺口种类（真正干活在各自队列） */
-const LIGHT_ENQUEUE_KINDS: NightGapKind[] = ['dm_email', 'product_dig', 'enrichment'];
+const LIGHT_ENQUEUE_KINDS: NightGapKind[] = ['product_dig', 'enrichment'];
 const LIGHT_BURST = 12;
 /** 每轮最多跑几条 LinkedIn/WhatsApp 重补全（仍串行，避免撞限流） */
 const HEAVY_PER_TICK = 1;
@@ -308,25 +308,8 @@ export const assessClientNightGaps = (
     gaps.push('linkedin_locate');
   }
 
-  // 2) 决策人邮箱：有人名/主页但缺已验证邮箱（用户也可手动点搜；夜间静默补）
-  if (
-    caps.canDm &&
-    !done.has('dm_email') &&
-    domain.includes('.') &&
-    (hasNamedContact || hasLi) &&
-    !hasVerifiedEmail
-  ) {
-    gaps.push('dm_email');
-  } else if (
-    caps.canDm &&
-    !done.has('dm_email') &&
-    domain.includes('.') &&
-    intel.hasBg &&
-    !hasAnyEmail &&
-    !intel.hasDm
-  ) {
-    gaps.push('dm_email');
-  }
+  // 2) 决策人邮箱：不再自动入队。缺邮箱但有 WhatsApp/LinkedIn 已足够占位；
+  //    邮箱须用户在决策人页手动确认后再搜（付费）。
 
   // 3) 品类
   if (
