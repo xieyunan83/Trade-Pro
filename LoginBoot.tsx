@@ -23,7 +23,7 @@ import {
 import { setUsageScope } from './services/limitService';
 import { hydrateProductTaxonomy } from './data/productTaxonomy';
 import { installForegroundGuard } from './services/foregroundGuard';
-import { lazyWithRetry } from './utils/lazyWithRetry';
+import { hardReloadApp, lazyWithRetry } from './utils/lazyWithRetry';
 
 /** 部署后旧 chunk 404 时自动强刷；避免登录后卡在「工作台加载失败」 */
 const AppLazy = lazyWithRetry(
@@ -31,7 +31,15 @@ const AppLazy = lazyWithRetry(
   'app-main'
 );
 
-const QuietShell: React.FC = () => <div className="tp-login min-h-[100dvh] w-full" aria-busy="true" />;
+const QuietShell: React.FC = () => (
+  <div
+    className="tp-login min-h-[100dvh] w-full flex flex-col items-center justify-center gap-2"
+    aria-busy="true"
+  >
+    <p className="text-sm font-semibold text-slate-600">正在加载工作台…</p>
+    <p className="text-[11px] font-medium text-slate-400">首次或弱网可能需要约一分钟，请稍候</p>
+  </div>
+);
 
 const isDesktopUa = () =>
   typeof navigator !== 'undefined' &&
@@ -146,15 +154,8 @@ class AppErrorGate extends React.Component<
                 type="button"
                 className="text-xs font-semibold text-teal-700 underline"
                 onClick={() => {
-                  // 疑似旧资源/chunk 过期：强制换入口再进
-                  try {
-                    const u = new URL(window.location.href);
-                    u.searchParams.set('_boot', String(Date.now()));
-                    window.location.replace(u.toString());
-                    return;
-                  } catch {
-                    window.location.reload();
-                  }
+                  // 桌面壳清 Chromium 缓存；浏览器带 _boot 换入口
+                  hardReloadApp();
                 }}
               >
                 强制刷新重试

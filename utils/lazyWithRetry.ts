@@ -2,6 +2,8 @@ import { lazy, type ComponentType, type LazyExoticComponent } from 'react';
 
 /** 体积较大的模块：弱网下需要更长加载窗 */
 const HEAVY_CHUNK_MS: Record<string, number> = {
+  /** 主工作台包最大；Windows 桌面壳经代理拉 Vercel 常超 35s */
+  'app-main': 90_000,
   design3d: 60_000,
   design2d: 45_000,
   aivideo: 45_000,
@@ -9,6 +11,22 @@ const HEAVY_CHUNK_MS: Record<string, number> = {
   match: 40_000,
   email: 40_000,
   catalog: 40_000,
+};
+
+const isDesktopClient = (): boolean => {
+  if (typeof navigator === 'undefined') return false;
+  try {
+    if (typeof (window as any).bwDesktop?.hardRefresh === 'function') return true;
+  } catch {
+    /* ignore */
+  }
+  return /TradeCollabClient|BabyWorldClient/i.test(navigator.userAgent || '');
+};
+
+const resolveBudgetMs = (chunkKey: string): number => {
+  const base = HEAVY_CHUNK_MS[chunkKey] ?? 35_000;
+  // 桌面壳再放宽：磁盘缓存冷启动 + 国内到源站更慢
+  return isDesktopClient() ? Math.max(base, Math.round(base * 1.5)) : base;
 };
 
 export const isChunkTimeoutError = (err: unknown): boolean => {
@@ -74,11 +92,24 @@ export function lazyWithRetry<T extends ComponentType<any>>(
   chunkKey = 'lazy'
 ): LazyExoticComponent<T> {
   return lazy(async () => {
-    const budget = HEAVY_CHUNK_MS[chunkKey] ?? 35_000;
+    const budget = resolveBudgetMs(chunkKey);
     const load = () => withTimeout(factory(), budget, chunkKey);
     try {
       return await load();
-    } catch (err) {
+    } catch (firstErr) {
+      let err: unknown = firstErr;
+      // 首次超时：不立刻强刷，再试一次（弱网抖动常见）
+      if (typeof window !== 'undefined' && isChunkTimeoutError(err)) {
+        const retryFlag = `tp_chunk_retry_${chunkKey}`;
+        if (!sessionStorage.getItem(retryFlag)) {
+          sessionStorage.setItem(retryFlag, '1');
+          try {
+            return await withTimeout(factory(), budget, chunkKey);
+          } catch (err2) {
+            err = err2;
+          }
+        }
+      }
       if (typeof window !== 'undefined' && isModuleLoadRecoverableError(err)) {
         const flag = `tp_chunk_reload_${chunkKey}`;
         if (!sessionStorage.getItem(flag)) {
