@@ -861,6 +861,36 @@ export const getCrmClients = async (): Promise<Client[]> => {
   return rows.map((row) => row.client_data).filter(Boolean)
 }
 
+/** 按 local_id 差量拉取 CRM 正文（避免全表超时） */
+export const getCrmClientsByLocalIds = async (
+  localIds: string[],
+  opts?: { onProgress?: (done: number, total: number) => void; shouldAbort?: () => boolean }
+): Promise<Client[]> => {
+  if (!isSupabaseConfigured() || !localIds.length) return []
+  const ids = Array.from(new Set(localIds.map((x) => String(x || '').trim()).filter(Boolean)))
+  const client = getSupabaseClient()
+  const out: Client[] = []
+  const chunkSize = 40
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    if (opts?.shouldAbort?.()) break
+    const part = ids.slice(i, i + chunkSize)
+    const { data, error } = await client
+      .from('crm_clients')
+      .select('client_data')
+      .in('local_id', part)
+    if (error) {
+      console.error('按 id 拉取 CRM 失败:', error)
+      throw new Error(error.message || String(error))
+    }
+    for (const row of data || []) {
+      const c = (row as { client_data?: Client }).client_data
+      if (c) out.push(c)
+    }
+    opts?.onProgress?.(Math.min(i + part.length, ids.length), ids.length)
+  }
+  return out
+}
+
 export const deleteCrmClient = async (
   localId: string,
   opts?: { source?: CloudDeleteSource }

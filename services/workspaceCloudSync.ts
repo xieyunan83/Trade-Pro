@@ -9,7 +9,7 @@ import type { Client, CustomerProductProfile, HistoryItem, User, Department } fr
 import { getAutomationQueue, getHistory, saveHistoryBulk, saveProductProfilesBulk } from './db';
 import { loadProductCatalog } from './productCatalog';
 import {
-  getCrmClients,
+  getCrmClientsByLocalIds,
   getInvestigationHistoryByLocalIds,
   getProductProfilesByLocalIds,
   getSupabaseClient,
@@ -29,6 +29,7 @@ import { loadDepartmentsFromStorage } from './orgStore';
  * 索引差量 + 每轮限额，多点几次即可对齐。
  */
 const CRM_UPLOAD_CAP_PER_SYNC = 400;
+const CRM_DOWNLOAD_CAP_PER_SYNC = 500;
 const HISTORY_UPLOAD_CAP_PER_SYNC = 250;
 const HISTORY_DOWNLOAD_CAP_PER_SYNC = 400;
 const PROFILE_UPLOAD_CAP_PER_SYNC = 300;
@@ -76,7 +77,10 @@ export const workspaceSyncNeedsContinue = (r: WorkspaceSyncReport): boolean => {
   // 以条数差为准，避免「云拉失败文案」导致永远续传空转
   if (r.history.cloud > 0 && r.history.cloud > r.history.merged + 30) return true;
   if (r.history.local > r.history.cloud + 30 && r.history.cloud >= 0) return true;
+  // CRM / 画像：云端多出时必须续传下拉（此前只检测「本机多」导致 3357→2510 永远停住）
+  if (r.crm.cloud > 0 && r.crm.cloud > r.crm.merged + 30) return true;
   if (r.crm.local > r.crm.cloud + 30) return true;
+  if (r.profiles.cloud > 0 && r.profiles.cloud > r.profiles.merged + 30) return true;
   if (r.profiles.local > r.profiles.cloud + 30) return true;
   if (r.automation.local > r.automation.cloud + 50) return true;
   const err = (r.errors || []).join('\n');
@@ -867,39 +871,71 @@ const runSyncAllWorkspaceData = async (
     errors.push(`背调历史下拉：${e?.message || String(e)}`);
   }
 
-  // —— CRM 下拉合并 ——
+  // —— CRM 下拉：索引差量（禁止全表正文，3357 条必超时）——
   try {
     check();
     const localCrm = localCrmCache.length ? localCrmCache : loadAllCrmClients();
-    if (!crmCloudMetaOk || crmCloudMeta.length > 0) {
-      onProgress?.('② 下拉 CRM 正文…');
+    const localById = new Map(localCrm.filter((c) => c?.id).map((c) => [c.id, c]));
+    if (!crmCloudMetaOk) {
       try {
-        let cloudCrm = await withTimeout(
-          getCrmClients(),
-          CLOUD_PULL_TIMEOUT_MS,
-          'CRM 云端正文'
+        crmCloudMeta = await withTimeout(
+          listCrmClientsCloudMeta(),
+          CLOUD_META_TIMEOUT_MS,
+          'CRM 云端索引'
         );
-        cloudCrm = scopePull(cloudCrm);
-        report.crm.cloud = Math.max(report.crm.cloud, cloudCrm.length);
-        let mergedCrm = await mergeClientsByIdAsync(localCrm, cloudCrm, {
+        crmCloudMetaOk = true;
+      } catch (e: any) {
+        errors.push(`CRM 下拉索引：${e?.message || String(e)}`);
+      }
+    }
+    report.crm.cloud = Math.max(report.crm.cloud, crmCloudMeta.length);
+    if (crmCloudMetaOk) {
+      const missingLocal = crmCloudMeta
+        .filter((m) => m.id && !localById.has(m.id))
+        .sort((a, b) => (b.stamp || 0) - (a.stamp || 0));
+      const toFetch = missingLocal
+        .slice(0, CRM_DOWNLOAD_CAP_PER_SYNC)
+        .map((m) => m.id);
+      if (toFetch.length) {
+        onProgress?.(`② 下载 CRM 0/${toFetch.length}…`);
+        let cloudPartial = await getCrmClientsByLocalIds(toFetch, {
           shouldAbort: opts?.shouldAbort,
-          onProgress: (msg) => onProgress?.(msg.replace('同步中：', '② ')),
+          onProgress: (done, total) => {
+            onProgress?.(`② 下载 CRM ${done}/${total}…`);
+            check();
+          },
         });
-        try {
-          const { mergeCrmClientsByDomain } = await import('../utils/crmHistory');
-          const domainMerged = mergeCrmClientsByDomain(mergedCrm);
-          if (domainMerged.removedCount > 0) mergedCrm = domainMerged.clients;
-        } catch {
-          /* ignore */
-        }
-        if (mergedCrm.length > 0) {
+        cloudPartial = scopePull(cloudPartial);
+        if (cloudPartial.length) {
+          let mergedCrm = await mergeClientsByIdAsync(localCrm, cloudPartial, {
+            shouldAbort: opts?.shouldAbort,
+            onProgress: (msg) => onProgress?.(msg.replace('同步中：', '② ')),
+          });
+          try {
+            const { mergeCrmClientsByDomain } = await import('../utils/crmHistory');
+            const domainMerged = mergeCrmClientsByDomain(mergedCrm);
+            if (domainMerged.removedCount > 0) mergedCrm = domainMerged.clients;
+          } catch {
+            /* ignore */
+          }
           reconcileCrmTombstonesWithLiveClients(mergedCrm);
           saveAllCrmClients(mergedCrm);
           report.crm.merged = mergedCrm.length;
           report.crm.local = mergedCrm.length;
+          localCrmCache = mergedCrm;
+          errors.push(`CRM 本轮按权限下拉 ${cloudPartial.length} 条到本机`);
+          if (missingLocal.length > cloudPartial.length) {
+            errors.push(
+              `CRM 云端仍多出约 ${missingLocal.length - cloudPartial.length} 条，将自动续传`
+            );
+          }
+        } else {
+          errors.push('CRM 下拉：本轮未取到可见正文（权限过滤或空包）');
         }
-      } catch (e: any) {
-        errors.push(`CRM 下拉：${e?.message || String(e)}`);
+      } else {
+        onProgress?.('② CRM：本机已齐，无需下拉');
+        report.crm.merged = localCrm.length;
+        report.crm.local = localCrm.length;
       }
     }
   } catch (e: any) {
