@@ -5381,7 +5381,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
           (allZero
             ? `\n\n注意：若本机 CRM/作业列表其实有数据，却显示全 0，多半是卡在连云端；请检查网络后重试。数据不会因超时被清空。`
             : '') +
-          `\n\n建议：数据最全的电脑多点几次直到不再超时，再在另一台用 admin 同步。`
+          `\n\n建议：强制刷新页面后再点「同步全部资料」续传（每轮优先背调历史/画像，各类限额续传）。看到「背调历史」云端条数上涨即正常；传完后再在另一台用 admin 同步。`
       );
     } catch (e: any) {
       setWorkspaceSyncStatus(`同步失败：${e?.message || String(e)}`);

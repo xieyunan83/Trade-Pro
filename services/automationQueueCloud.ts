@@ -232,7 +232,10 @@ export const syncAutomationQueueToCloud = async (
  */
 export const pullMergePushAutomationQueue = async (opts?: {
   upload?: boolean;
+  /** 单次最多上传条数；不设则全量（易拖死整次同步） */
+  uploadCap?: number;
   onProgress?: (message: string) => void;
+  shouldAbort?: () => boolean;
 }): Promise<{
   tasks: AutomationResult[];
   local: number;
@@ -243,6 +246,9 @@ export const pullMergePushAutomationQueue = async (opts?: {
 }> => {
   const doUpload = opts?.upload !== false;
   const onProgress = opts?.onProgress;
+  const check = () => {
+    if (opts?.shouldAbort?.()) throw new Error('同步超时或已取消');
+  };
   onProgress?.('同步中：拉取背调作业…');
   const local = await getAutomationQueue();
   let cloud: AutomationResult[] = [];
@@ -274,18 +280,35 @@ export const pullMergePushAutomationQueue = async (opts?: {
   let uploaded = 0;
   let pushError = cloudError;
   if (doUpload && merged.length > 0) {
+    check();
     const cloudById = new Map(cloud.map((t) => [t.id, t]));
     // 云拉取成功时只上传新增/更新；失败则全量上传兜底
-    const dirty = cloudError
+    let dirty = cloudError
       ? merged
       : merged.filter((t) => {
           const prev = cloudById.get(t.id);
           if (!prev) return true;
-          return taskStamp(t) > taskStamp(prev) || automationStatusRank(t) > automationStatusRank(prev);
+          // 仅时间戳更新才重传；同戳不因 statusRank 反复全量刷（否则每轮永远几千条）
+          return taskStamp(t) > taskStamp(prev);
         });
-    onProgress?.(`同步中：上传背调作业 0/${dirty.length}…`);
+    dirty = dirty
+      .slice()
+      .sort((a, b) => taskStamp(b) - taskStamp(a));
+    const cap = opts?.uploadCap;
+    const pending = dirty.length;
+    if (typeof cap === 'number' && cap > 0 && dirty.length > cap) {
+      dirty = dirty.slice(0, cap);
+      pushError = [
+        pushError,
+        `作业队列待传 ${pending} 条，本轮限 ${cap} 条，请再点同步续传`,
+      ]
+        .filter(Boolean)
+        .join('；');
+    }
+    onProgress?.(`同步中：上传背调作业 0/${dirty.length}${pending > dirty.length ? `（共待传 ${pending}）` : ''}…`);
     const push = await syncAutomationQueueToCloud(dirty, (done, total) => {
       onProgress?.(`同步中：上传背调作业 ${done}/${total}…`);
+      check();
     });
     uploaded = push.uploaded;
     if (push.error) pushError = push.error;

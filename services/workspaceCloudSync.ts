@@ -17,8 +17,16 @@ import {
   syncProductProfilesCloud,
 } from './supabase';
 
-/** 单次同步最多上传背调历史条数，避免撑爆 6 分钟窗口；下次续传 */
-const HISTORY_UPLOAD_CAP_PER_SYNC = 120;
+/**
+ * 单次同步上传上限：作业队列曾无上限会吃光 6 分钟，导致历史/画像永远「上传 0」。
+ * 每轮限额 + 优先历史上传，多点几次即可传完。
+ */
+const CRM_UPLOAD_CAP_PER_SYNC = 400;
+const HISTORY_UPLOAD_CAP_PER_SYNC = 150;
+const PROFILE_UPLOAD_CAP_PER_SYNC = 200;
+const AUTOMATION_UPLOAD_CAP_PER_SYNC = 250;
+/** 单次云端拉取硬上限：避免 getCrmClients 等卡死吃光整次 6 分钟 */
+const CLOUD_PULL_TIMEOUT_MS = 45_000;
 import { getCloudWorkspaceId } from './workspaceId';
 import { loadAllCrmClients, saveAllCrmClients } from '../utils/workspaceScope';
 import { reconcileCrmTombstonesWithLiveClients } from '../utils/crmTombstones';
@@ -215,7 +223,29 @@ const cloneReport = (r: WorkspaceSyncReport): WorkspaceSyncReport => ({
   errors: [...r.errors],
 });
 
-/** 超时弹窗用：至少带上本机真实条数，避免全是 0 让人以为库空了 */
+/** 带超时的 Promise：超时抛错，不取消底层请求（仅放行同步流程） */
+const withTimeout = async <T,>(
+  p: Promise<T>,
+  ms: number,
+  label: string
+): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      p,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label}超时（>${Math.round(ms / 1000)}秒）`)),
+          ms
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+};
+
+/** 超时弹窗用：优先内存快照（与界面条数一致），避免 IDB 忙时读成 0 吓人 */
 const snapshotLocalCounts = async (): Promise<WorkspaceSyncReport> => {
   let localCrm = 0;
   let localHist = 0;
@@ -227,19 +257,35 @@ const snapshotLocalCounts = async (): Promise<WorkspaceSyncReport> => {
     /* ignore */
   }
   try {
-    localHist = (await getHistory()).length;
+    const { getAutomationQueueSnapshot } = await import('./automationQueueStore');
+    localAuto = getAutomationQueueSnapshot().length;
   } catch {
     /* ignore */
   }
   try {
-    localProfiles = (await loadProductCatalog()).length;
+    localHist = await withTimeout(getHistory().then((h) => h.length), 8_000, '本机背调历史计数');
   } catch {
     /* ignore */
   }
   try {
-    localAuto = (await getAutomationQueue()).length;
+    localProfiles = await withTimeout(
+      loadProductCatalog().then((p) => p.length),
+      8_000,
+      '本机产品画像计数'
+    );
   } catch {
     /* ignore */
+  }
+  if (!localAuto) {
+    try {
+      localAuto = await withTimeout(
+        getAutomationQueue().then((t) => t.length),
+        8_000,
+        '本机作业队列计数'
+      );
+    } catch {
+      /* ignore */
+    }
   }
   return {
     ok: false,
@@ -416,7 +462,11 @@ const runSyncAllWorkspaceData = async (
     let cloudCrm: Client[] = [];
     let cloudOk = false;
     try {
-      cloudCrm = await getCrmClients();
+      cloudCrm = await withTimeout(
+        getCrmClients(),
+        CLOUD_PULL_TIMEOUT_MS,
+        'CRM 云端拉取'
+      );
       cloudOk = true;
     } catch (e: any) {
       errors.push(`CRM 云端拉取：${e?.message || String(e)}`);
@@ -468,14 +518,28 @@ const runSyncAllWorkspaceData = async (
       await pauseIfUserBusy(opts?.shouldAbort);
       // 仅上传相对云端更新过的，避免每次全量重传卡死
       const cloudById = new Map(cloudCrm.map((c) => [c.id, c]));
-      const dirty = !cloudOk
-        ? mergedCrm
+      let dirty = !cloudOk
+        ? mergedCrm.slice()
         : mergedCrm.filter((c) => {
             const prev = cloudById.get(c.id);
             if (!prev) return true;
             return clientStamp(c) > clientStamp(prev);
           });
-      onProgress?.(`同步中：上传 CRM 0/${dirty.length}…`);
+      dirty = dirty
+        .slice()
+        .sort((a, b) => clientStamp(b) - clientStamp(a));
+      const pendingCrm = dirty.length;
+      if (pendingCrm > CRM_UPLOAD_CAP_PER_SYNC) {
+        dirty = dirty.slice(0, CRM_UPLOAD_CAP_PER_SYNC);
+        errors.push(
+          `CRM 待传约 ${pendingCrm} 条，本轮限 ${CRM_UPLOAD_CAP_PER_SYNC} 条，请再点同步续传`
+        );
+      }
+      onProgress?.(
+        `同步中：上传 CRM 0/${dirty.length}${
+          pendingCrm > dirty.length ? `（共待传 ${pendingCrm}）` : ''
+        }…`
+      );
       uploaded = await uploadCrmChunked(dirty, async (done, total) => {
         onProgress?.(`同步中：上传 CRM ${done}/${total}…`);
         check();
@@ -492,81 +556,7 @@ const runSyncAllWorkspaceData = async (
     errors.push(`CRM：${e?.message || String(e)}`);
   }
 
-  // —— 背调作业队列（优先：跨端共用最急）——
-  try {
-    check();
-    await pauseIfUserBusy(opts?.shouldAbort);
-    onProgress?.('同步中：读取本机背调作业…');
-    const localAutoN = (await getAutomationQueue()).length;
-    report.automation = {
-      local: localAutoN,
-      cloud: 0,
-      merged: localAutoN,
-      uploaded: 0,
-    };
-    onProgress?.(`同步中：合并/上传背调作业（本机已有 ${localAutoN}）…`);
-    const synced = await pullMergePushAutomationQueue({
-      upload: doUpload,
-      onProgress: (msg) => {
-        onProgress?.(msg);
-        check();
-      },
-    });
-    report.automation = {
-      local: synced.local,
-      cloud: synced.cloud,
-      merged: synced.merged,
-      uploaded: synced.uploaded,
-    };
-    if (synced.error) errors.push(`背调作业：${synced.error}`);
-  } catch (e: any) {
-    errors.push(`背调作业：${e?.message || String(e)}`);
-  }
-
-  // —— 产品画像 ——
-  try {
-    check();
-    await pauseIfUserBusy(opts?.shouldAbort);
-    onProgress?.('同步中：读取本机产品画像…');
-    const localProfiles = await loadProductCatalog();
-    report.profiles = {
-      local: localProfiles.length,
-      cloud: 0,
-      merged: localProfiles.length,
-      uploaded: 0,
-    };
-    onProgress?.(`同步中：拉取云端产品画像（本机已有 ${localProfiles.length}）…`);
-    let cloudProfiles: CustomerProductProfile[] = [];
-    try {
-      cloudProfiles = await getProductProfilesCloud();
-    } catch (e: any) {
-      errors.push(`产品画像云端拉取：${e?.message || String(e)}`);
-    }
-    const mergedProfiles = mergeProfilesById(localProfiles, cloudProfiles);
-    if (mergedProfiles.length) await saveProductProfilesBulk(mergedProfiles);
-    let uploaded = 0;
-    if (doUpload && mergedProfiles.length) {
-      check();
-      onProgress?.(`同步中：上传产品画像 ${mergedProfiles.length}…`);
-      uploaded = await syncProductProfilesCloud(mergedProfiles);
-      if (!uploaded) {
-        for (const p of mergedProfiles) {
-          check();
-          if (await saveProductProfileCloud(p)) uploaded += 1;
-        }
-      }
-    }
-    report.profiles = {
-      local: localProfiles.length,
-      cloud: cloudProfiles.length,
-      merged: mergedProfiles.length || localProfiles.length,
-      uploaded,
-    };
-  } catch (e: any) {
-    errors.push(`产品画像：${e?.message || String(e)}`);
-  }
-
-  // —— 背调历史（最后：体积大，失败时绝不全量重传）——
+  // —— 背调历史（优先于作业队列：避免队列吃光超时导致历史永远上传 0）——
   try {
     check();
     await pauseIfUserBusy(opts?.shouldAbort);
@@ -584,7 +574,11 @@ const runSyncAllWorkspaceData = async (
     let cloudMetaOk = false;
     try {
       onProgress?.(`同步中：拉取云端背调索引（本机 ${localHist.length}）…`);
-      cloudMeta = await listInvestigationHistoryCloudMeta();
+      cloudMeta = await withTimeout(
+        listInvestigationHistoryCloudMeta(),
+        CLOUD_PULL_TIMEOUT_MS,
+        '背调历史云端索引'
+      );
       cloudMetaOk = true;
       report.history.cloud = cloudMeta.length;
     } catch (e: any) {
@@ -597,7 +591,11 @@ const runSyncAllWorkspaceData = async (
     try {
       check();
       onProgress?.('同步中：拉取云端背调正文（分页）…');
-      cloudHist = await getInvestigationHistory();
+      cloudHist = await withTimeout(
+        getInvestigationHistory(),
+        CLOUD_PULL_TIMEOUT_MS,
+        '背调历史云端正文'
+      );
       cloudHistOk = true;
       report.history.cloud = cloudHist.length;
     } catch (e: any) {
@@ -623,6 +621,7 @@ const runSyncAllWorkspaceData = async (
       check();
       await pauseIfUserBusy(opts?.shouldAbort);
       let dirty: HistoryItem[] = [];
+      let pending = 0;
       if (cloudHistOk) {
         const cloudById = new Map(cloudHist.map((h) => [h.id, h]));
         dirty = mergedHist.filter((h) => {
@@ -638,11 +637,14 @@ const runSyncAllWorkspaceData = async (
           `背调历史正文拉取失败，本轮仅补传云端缺失的 ${dirty.length} 条（不全量重传）`
         );
       } else {
-        // 索引也失败：本轮跳过历史上传，留给作业/画像；下次再试
-        errors.push('背调历史云端不可用，本轮跳过历史上传，以免拖死作业同步');
-        dirty = [];
+        // 索引失败时仍按「云端 0」补传限额，避免永远传不上去
+        dirty = mergedHist.slice();
+        errors.push(
+          '背调历史云端索引不可用，本轮按限额补传本机历史；请再点同步续传'
+        );
       }
 
+      pending = dirty.length;
       // 按时间新→旧，每轮限额，保证可续传
       dirty = dirty
         .slice()
@@ -650,12 +652,21 @@ const runSyncAllWorkspaceData = async (
         .slice(0, HISTORY_UPLOAD_CAP_PER_SYNC);
 
       if (dirty.length) {
-        onProgress?.(`同步中：上传背调历史 0/${dirty.length}…`);
+        onProgress?.(
+          `同步中：上传背调历史 0/${dirty.length}${
+            pending > dirty.length ? `（共待传 ${pending}）` : ''
+          }…`
+        );
         uploaded = await uploadHistoryChunked(dirty, async (done, total) => {
           onProgress?.(`同步中：上传背调历史 ${done}/${total}…`);
           check();
           await pauseIfUserBusy(opts?.shouldAbort);
         });
+        if (pending > uploaded) {
+          errors.push(
+            `背调历史待传约 ${pending} 条，本轮已传 ${uploaded}，请再点同步续传`
+          );
+        }
       }
     }
     report.history = {
@@ -666,6 +677,112 @@ const runSyncAllWorkspaceData = async (
     };
   } catch (e: any) {
     errors.push(`背调历史：${e?.message || String(e)}`);
+  }
+
+  // —— 产品画像（仅脏数据 + 限额，禁止每轮 4000+ 全量）——
+  try {
+    check();
+    await pauseIfUserBusy(opts?.shouldAbort);
+    onProgress?.('同步中：读取本机产品画像…');
+    const localProfiles = await loadProductCatalog();
+    report.profiles = {
+      local: localProfiles.length,
+      cloud: 0,
+      merged: localProfiles.length,
+      uploaded: 0,
+    };
+    onProgress?.(`同步中：拉取云端产品画像（本机已有 ${localProfiles.length}）…`);
+    let cloudProfiles: CustomerProductProfile[] = [];
+    let cloudProfilesOk = false;
+    try {
+      cloudProfiles = await withTimeout(
+        getProductProfilesCloud(),
+        CLOUD_PULL_TIMEOUT_MS,
+        '产品画像云端拉取'
+      );
+      cloudProfilesOk = true;
+    } catch (e: any) {
+      errors.push(`产品画像云端拉取：${e?.message || String(e)}`);
+    }
+    const mergedProfiles = mergeProfilesById(localProfiles, cloudProfiles);
+    if (mergedProfiles.length) await saveProductProfilesBulk(mergedProfiles);
+    let uploaded = 0;
+    if (doUpload && mergedProfiles.length) {
+      check();
+      const cloudById = new Map(cloudProfiles.map((p) => [p.id, p]));
+      const profileStamp = (p: CustomerProductProfile) =>
+        Math.max(Number((p as any).updatedAt) || 0, Number((p as any).createdAt) || 0, 0);
+      let dirty = !cloudProfilesOk
+        ? mergedProfiles.slice()
+        : mergedProfiles.filter((p) => {
+            const prev = cloudById.get(p.id);
+            if (!prev) return true;
+            return profileStamp(p) > profileStamp(prev);
+          });
+      const pending = dirty.length;
+      dirty = dirty
+        .slice()
+        .sort((a, b) => profileStamp(b) - profileStamp(a))
+        .slice(0, PROFILE_UPLOAD_CAP_PER_SYNC);
+      onProgress?.(
+        `同步中：上传产品画像 0/${dirty.length}${
+          pending > dirty.length ? `（共待传 ${pending}）` : ''
+        }…`
+      );
+      uploaded = await syncProductProfilesCloud(dirty);
+      if (!uploaded && dirty.length) {
+        for (const p of dirty) {
+          check();
+          if (await saveProductProfileCloud(p)) uploaded += 1;
+        }
+      }
+      if (pending > uploaded) {
+        errors.push(
+          `产品画像待传约 ${pending} 条，本轮已传 ${uploaded}，请再点同步续传`
+        );
+      }
+    }
+    report.profiles = {
+      local: localProfiles.length,
+      cloud: cloudProfiles.length,
+      merged: mergedProfiles.length || localProfiles.length,
+      uploaded,
+    };
+  } catch (e: any) {
+    errors.push(`产品画像：${e?.message || String(e)}`);
+  }
+
+  // —— 背调作业队列（最后 + 限额：不再每轮刷几千条占满超时）——
+  try {
+    check();
+    await pauseIfUserBusy(opts?.shouldAbort);
+    onProgress?.('同步中：读取本机背调作业…');
+    const localAutoN = (await getAutomationQueue()).length;
+    report.automation = {
+      local: localAutoN,
+      cloud: 0,
+      merged: localAutoN,
+      uploaded: 0,
+    };
+    onProgress?.(`同步中：合并/上传背调作业（本机已有 ${localAutoN}）…`);
+    const synced = await pullMergePushAutomationQueue({
+      upload: doUpload,
+      uploadCap: AUTOMATION_UPLOAD_CAP_PER_SYNC,
+      shouldAbort: opts?.shouldAbort,
+      onProgress: (msg) => {
+        onProgress?.(msg);
+        check();
+      },
+    });
+    report.automation = {
+      local: synced.local,
+      cloud: synced.cloud,
+      merged: synced.merged,
+      uploaded: synced.uploaded,
+    };
+    if (synced.error) errors.push(`背调作业：${synced.error}`);
+  } catch (e: any) {
+    errors.push(`背调作业：${e?.message || String(e)}`);
   }
 
   report.ok = errors.length === 0;
