@@ -5325,16 +5325,22 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       const repaired = await loadAndRepairAutomationQueue(currentUser);
       let tasks = repaired.tasks;
       let cloudNote = '';
+      let syncOk = true;
+      let needMore = false;
       if (isSupabaseConfigured()) {
         const ws = await syncAllWorkspaceData({
           upload: true,
-          timeoutMs: 6 * 60_000,
+          timeoutMs: 8 * 60_000,
+          autoContinueRounds: 15,
+          totalTimeoutMs: 40 * 60_000,
           onProgress: (msg) => {
             setWorkspaceSyncStatus(msg);
             setSystemNotice(msg);
           },
         });
         cloudNote = '\n' + formatWorkspaceSyncReport(ws);
+        syncOk = !!ws.ok;
+        needMore = /仍有剩余差量|云端多出|待传约|请再点同步续传/.test(cloudNote);
         tasks = await getAutomationQueue();
         const deptsNow = departments.length ? departments : loadDepartmentsFromStorage();
         setCrmClients(
@@ -5348,13 +5354,12 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
         setHistory(
           filterOwnedRecords(currentUser, await getHistory(), users, deptsNow)
         );
-        const timedOut = ws.errors.some((e) => /超时/.test(e));
         setWorkspaceSyncStatus(
-          ws.ok
-            ? `同步完成 · CRM ${ws.crm.merged} · 作业 ${ws.automation.merged}`
-            : timedOut
-              ? `已超时停止 · 已传部分保留，可再点同步续传`
-              : `同步结束（有问题）· 作业云端 ${ws.automation.cloud}`
+          syncOk && !needMore
+            ? `同步完成 · CRM ${ws.crm.merged} · 历史 ${ws.history.merged}`
+            : needMore
+              ? `同步已尽量对齐 · 仍有剩余可再点一次（会自动多轮）`
+              : `同步结束 · CRM ${ws.crm.merged} · 历史 ${ws.history.merged}`
         );
       } else {
         setWorkspaceSyncStatus('本机模式（未配置云端）');
@@ -5366,14 +5371,13 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
         departments.length ? departments : loadDepartmentsFromStorage()
       );
       setAutomationResultsDeferred(scoped);
-      const timedOut = cloudNote.includes('超时');
       const allZero =
         /本机 0 \/ 云端 0 → 合并 0/.test(cloudNote) &&
         (cloudNote.match(/本机 0 \/ 云端 0 → 合并 0/g) || []).length >= 3;
       alert(
-        (timedOut
-          ? `同步已超时停止（不是失败清空）。\n已上传到云端的部分仍保留；请再点一次「同步全部资料」继续传剩余。`
-          : `已同步全部业务资料（CRM / 背调历史 / 产品画像 / 作业队列）`) +
+        (syncOk && !needMore
+          ? `已同步业务资料（支持自动多轮续传，无需反复手点）。`
+          : `已自动多轮续传，仍有剩余差量（不是失败清空）。\n可再点一次「同步全部资料」，仍会自动续传。`) +
           (repaired.repaired || repaired.claimed
             ? `\n队列修复：短ID ${repaired.repaired}，认领 ${repaired.claimed}`
             : '') +
@@ -5381,7 +5385,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
           (allZero
             ? `\n\n注意：若本机 CRM/作业列表其实有数据，却显示全 0，多半是卡在连云端；请检查网络后重试。数据不会因超时被清空。`
             : '') +
-          `\n\n建议：强制刷新后再点「同步全部资料」。本轮会按差量「下载云端多出的历史 / 上传本机多出的」；Mac/Windows 都多点几次。历史云端条数已大于本机时，应看到「下载背调历史」而不是一直上传 0。`
+          `\n\n说明：一次点击会自动连续多轮（约最长 40 分钟）；请保持窗口打开，可照常查看列表。`
       );
     } catch (e: any) {
       setWorkspaceSyncStatus(`同步失败：${e?.message || String(e)}`);

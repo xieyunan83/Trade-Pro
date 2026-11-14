@@ -21,13 +21,13 @@ import {
  * 单次同步上传/下载上限：禁止一次拉全表大 JSON（6000 条正文必超时）。
  * 索引差量 + 每轮限额，多点几次即可对齐。
  */
-const CRM_UPLOAD_CAP_PER_SYNC = 300;
-const HISTORY_UPLOAD_CAP_PER_SYNC = 150;
-const HISTORY_DOWNLOAD_CAP_PER_SYNC = 120;
-const PROFILE_UPLOAD_CAP_PER_SYNC = 200;
-const AUTOMATION_UPLOAD_CAP_PER_SYNC = 250;
-/** 轻量索引 / 中等表拉取上限 */
-const CLOUD_PULL_TIMEOUT_MS = 60_000;
+const CRM_UPLOAD_CAP_PER_SYNC = 400;
+const HISTORY_UPLOAD_CAP_PER_SYNC = 250;
+const HISTORY_DOWNLOAD_CAP_PER_SYNC = 400;
+const PROFILE_UPLOAD_CAP_PER_SYNC = 300;
+const AUTOMATION_UPLOAD_CAP_PER_SYNC = 300;
+/** 全量正文拉取易卡死：失败要快失败，把时间留给差量传输 */
+const CLOUD_PULL_TIMEOUT_MS = 25_000;
 const CLOUD_META_TIMEOUT_MS = 90_000;
 import { getCloudWorkspaceId } from './workspaceId';
 import { loadAllCrmClients, saveAllCrmClients } from '../utils/workspaceScope';
@@ -49,8 +49,58 @@ export type WorkspaceSyncOptions = {
   upload?: boolean;
   /** 阶段进度（给按钮旁状态条用） */
   onProgress?: (message: string) => void;
-  /** 整次同步硬超时（毫秒），超时返回部分结果并放行队列，默认 6 分钟 */
+  /** 单轮同步硬超时（毫秒），默认 8 分钟 */
   timeoutMs?: number;
+  /**
+   * 仍有差量时自动续传的最大轮数（含首轮）。
+   * 手动「同步全部资料」建议 12+，避免用户手点十几次。
+   */
+  autoContinueRounds?: number;
+  /** 多轮合计最长时长（默认约 40 分钟） */
+  totalTimeoutMs?: number;
+};
+
+/** 是否还有明显差量，值得自动续传 */
+export const workspaceSyncNeedsContinue = (r: WorkspaceSyncReport): boolean => {
+  const err = (r.errors || []).join('\n');
+  if (/请再点同步续传|本轮已下载|云端多出|待传约|保守补种/.test(err)) return true;
+  // 云端历史明显多于本机合并结果 → 还要下载
+  if (r.history.cloud > 0 && r.history.cloud > r.history.merged + 30) return true;
+  // 本机明显多于云端且本轮几乎没传上 → CRM/画像/作业仍可能待传
+  if (r.crm.local > r.crm.cloud + 50 && r.crm.uploaded === 0 && /CRM/.test(err)) return true;
+  if (r.profiles.local > r.profiles.cloud + 50 && r.profiles.uploaded > 0) return true;
+  return false;
+};
+
+const mergeSyncReports = (
+  acc: WorkspaceSyncReport,
+  next: WorkspaceSyncReport,
+  round: number
+): WorkspaceSyncReport => {
+  const sumBucket = (
+    a: WorkspaceSyncReport['crm'],
+    b: WorkspaceSyncReport['crm']
+  ): WorkspaceSyncReport['crm'] => ({
+    local: Math.max(a.local, b.local),
+    cloud: Math.max(a.cloud, b.cloud),
+    merged: Math.max(a.merged, b.merged),
+    uploaded: (a.uploaded || 0) + (b.uploaded || 0),
+  });
+  const errors = [
+    ...acc.errors.filter((e) => !/^自动续传/.test(e)),
+    ...next.errors,
+  ];
+  if (round > 1) {
+    errors.unshift(`自动续传完成 ${round} 轮（上传/下载条数已累加）`);
+  }
+  return {
+    ok: next.ok && acc.ok,
+    crm: sumBucket(acc.crm, next.crm),
+    history: sumBucket(acc.history, next.history),
+    profiles: sumBucket(acc.profiles, next.profiles),
+    automation: sumBucket(acc.automation, next.automation),
+    errors: Array.from(new Set(errors)).slice(0, 40),
+  };
 };
 
 const chunk = <T,>(arr: T[], size: number): T[][] => {
@@ -355,12 +405,14 @@ const pauseIfUserBusy = async (shouldAbort?: () => boolean) => {
   await yieldToUi();
 };
 
-const DEFAULT_SYNC_TIMEOUT_MS = 6 * 60 * 1000;
+const DEFAULT_SYNC_TIMEOUT_MS = 8 * 60 * 1000;
+const DEFAULT_TOTAL_TIMEOUT_MS = 40 * 60 * 1000;
 
 /**
  * 全量同步：合并本机与云端，先写回本机，再按需推上云端。
  * 硬规则：本函数路径上绝不调用任何云端 delete；本机为空时只拉取，不覆盖云端。
  * 禁止用「空合并结果」覆盖本机已有数据（云端拉取失败时尤甚）。
+ * 支持 autoContinueRounds：有差量时自动多轮续传，免手点。
  */
 export const syncAllWorkspaceData = async (
   opts?: WorkspaceSyncOptions
@@ -368,19 +420,21 @@ export const syncAllWorkspaceData = async (
   const wantUpload = opts?.upload !== false;
   const timeoutMs = opts?.timeoutMs ?? DEFAULT_SYNC_TIMEOUT_MS;
   const onProgress = opts?.onProgress;
+  const maxRounds = Math.max(1, Math.min(30, opts?.autoContinueRounds ?? 1));
+  const totalTimeoutMs = opts?.totalTimeoutMs ?? DEFAULT_TOTAL_TIMEOUT_MS;
 
-  const run = async (): Promise<WorkspaceSyncReport> => {
+  const runOneRound = async (round: number): Promise<WorkspaceSyncReport> => {
     if (wantUpload) {
-      // 轻微错峰即可，勿再随机等到近 2 秒（手动同步会像「没反应」）
       await sleep(80 + Math.floor(Math.random() * 120));
     }
     let aborted = false;
     const secs = Math.round(timeoutMs / 1000);
-    const timeoutMsg = `同步已超时停止（>${secs}秒）。已上传的部分仍保留，再点一次可继续传剩余`;
-    /** 各阶段实时写入；超时弹窗读这份，绝不能回传全 0 空报告 */
+    const timeoutMsg =
+      maxRounds > 1
+        ? `本轮同步超时（>${secs}秒）。已传部分保留，将自动续传…`
+        : `同步已超时停止（>${secs}秒）。已上传的部分仍保留，再点一次可继续传剩余`;
     const live = emptyReport([]);
 
-    // 必须用 race：网络卡在某一包时，仅靠 shouldAbort 解不开 await，界面会一直「同步中」
     const finalize = async (partial: WorkspaceSyncReport, msg: string) => {
       const snap = await snapshotLocalCounts();
       return mergeTimeoutReport(partial, snap, msg);
@@ -390,11 +444,12 @@ export const syncAllWorkspaceData = async (
       try {
         const r = await runSyncAllWorkspaceData({
           upload: wantUpload,
-          onProgress,
+          onProgress: (msg) => {
+            onProgress?.(maxRounds > 1 ? `[第${round}轮] ${msg}` : msg);
+          },
           shouldAbort: () => aborted,
           liveReport: live,
         });
-        // 超时后各阶段会 catch 继续跑完并「成功返回」空桶——必须再合并本机快照，否则弹窗全 0
         if (aborted || r.errors.some((e) => /超时|取消/.test(e))) {
           onProgress?.(timeoutMsg);
           return finalize(cloneReport(live), timeoutMsg);
@@ -420,6 +475,36 @@ export const syncAllWorkspaceData = async (
     });
 
     return Promise.race([work, timeoutGate]);
+  };
+
+  const run = async (): Promise<WorkspaceSyncReport> => {
+    const started = Date.now();
+    let acc = await runOneRound(1);
+    let round = 1;
+    let last = acc;
+    while (
+      round < maxRounds &&
+      workspaceSyncNeedsContinue(last) &&
+      Date.now() - started < totalTimeoutMs
+    ) {
+      round += 1;
+      onProgress?.(
+        `自动续传第 ${round}/${maxRounds} 轮（无需再点同步）…`
+      );
+      await sleep(400);
+      last = await runOneRound(round);
+      acc = mergeSyncReports(acc, last, round);
+    }
+    if (round > 1 && workspaceSyncNeedsContinue(last)) {
+      acc.errors.push(
+        `已自动续传 ${round} 轮仍有剩余差量；可再点一次「同步全部资料」继续（仍会自动多轮）`
+      );
+      acc.ok = false;
+    } else if (round > 1 && !workspaceSyncNeedsContinue(last)) {
+      acc.ok = true;
+      onProgress?.(`同步对齐完成（共 ${round} 轮）`);
+    }
+    return acc;
   };
 
   const p = syncChain.then(run, run) as Promise<WorkspaceSyncReport>;
