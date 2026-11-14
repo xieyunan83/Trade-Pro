@@ -45,8 +45,11 @@ const resultLine = (job: DmEmailSearchJob): string => {
   const added = job.stats.added || 0;
   const verified = job.stats.verified || 0;
   const credits = Number(job.stats.creditsCharged || 0);
+  // 扣分按官方「查找次数」计，与新增人数无关：公司搜命中 1 分（最多 20 封）
   const creditBit =
-    credits > 0 ? ` · 扣 ${Number.isInteger(credits) ? credits : credits.toFixed(1)} 分` : ' · 未扣分';
+    credits > 0
+      ? ` · 扣 ${Number.isInteger(credits) ? credits : credits.toFixed(1)} 分`
+      : ' · 未扣分';
   if (upgraded + added + verified === 0) {
     return `本次无新增邮箱${creditBit}`;
   }

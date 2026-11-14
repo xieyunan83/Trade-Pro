@@ -110,15 +110,19 @@ export const subscribeDmEmailSearchJobs = (listener: Listener): (() => void) => 
 
 export const getDmEmailSearchJobs = (): DmEmailSearchJob[] => jobs.map((j) => ({ ...j }));
 
-export const getActiveDmJobForDomain = (domain: string): DmEmailSearchJob | undefined => {
+export const getActiveDmJobForDomain = (
+  domain: string,
+  companyName?: string
+): DmEmailSearchJob | undefined => {
   failStaleRunningJobs();
   const key = cleanDomain(domain || '').toLowerCase();
-  if (!key) return undefined;
-  return jobs.find(
-    (j) =>
-      cleanDomain(j.domain).toLowerCase() === key &&
-      (j.status === 'queued' || j.status === 'running')
-  );
+  const cn = (companyName || '').trim().toLowerCase();
+  return jobs.find((j) => {
+    if (j.status !== 'queued' && j.status !== 'running') return false;
+    if (key && cleanDomain(j.domain).toLowerCase() === key) return true;
+    if (!key && cn && (j.companyName || '').trim().toLowerCase() === cn) return true;
+    return false;
+  });
 };
 
 export type EnqueueDmEmailSearchInput = {
@@ -298,27 +302,43 @@ export const enqueueDmEmailSearch = (
   }
 
   const domain = cleanDomain(input.domain || '');
-  if (!domain || !domain.includes('.')) {
-    return { ok: false, reason: '缺少有效公司域名，无法搜索决策人邮箱' };
+  const companyName = (input.companyName || '').trim();
+  const existingDms = input.existingDecisionMakers || [];
+  const hasPersonLinkedIn = existingDms.some((d) =>
+    /linkedin\.com\/in\//i.test(d.linkedin || '')
+  );
+  const validDomain = domain.includes('.') ? domain : '';
+  if (!validDomain && !companyName && !hasPersonLinkedIn) {
+    return {
+      ok: false,
+      reason: '缺少有效公司域名或 LinkedIn 主页，无法搜索决策人邮箱',
+    };
   }
 
   failStaleRunningJobs();
 
-  const existingActive = getActiveDmJobForDomain(domain);
+  const existingActive = getActiveDmJobForDomain(validDomain || domain, companyName);
   if (existingActive) {
     const phase = existingActive.status === 'queued' ? '排队' : '搜索';
     return {
       ok: false,
-      reason: `「${input.companyName || domain}」正在后台${phase}中，请稍候；完成后可再次点击「深挖邮箱」继续查找更多联系人。`,
+      reason: `「${companyName || validDomain || domain}」正在后台${phase}中，请稍候；完成后可再次点击「深挖邮箱」继续查找更多联系人。`,
       job: existingActive,
     };
   }
 
-  // 移除同域名已完成/失败记录，便于再次深挖
+  // 移除同域名/同公司已完成/失败记录，便于再次深挖
   for (let i = jobs.length - 1; i >= 0; i--) {
     const j = jobs[i];
+    const sameDomain =
+      !!validDomain &&
+      cleanDomain(j.domain).toLowerCase() === validDomain.toLowerCase();
+    const sameCompany =
+      !validDomain &&
+      !!companyName &&
+      (j.companyName || '').trim().toLowerCase() === companyName.toLowerCase();
     if (
-      cleanDomain(j.domain).toLowerCase() === domain.toLowerCase() &&
+      (sameDomain || sameCompany) &&
       (j.status === 'completed' || j.status === 'failed')
     ) {
       jobs.splice(i, 1);
@@ -328,8 +348,8 @@ export const enqueueDmEmailSearch = (
   const job: DmEmailSearchJob = {
     id: `dm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     historyId: input.historyId || null,
-    domain,
-    companyName: input.companyName || domain,
+    domain: validDomain || domain,
+    companyName: companyName || validDomain || domain,
     companyLinkedin: input.companyLinkedin || '',
     status: 'queued',
     createdAt: Date.now(),

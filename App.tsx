@@ -723,7 +723,9 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
           hist?.data?.companyInfo?.website ||
           ''
         ).trim();
-        if (!domain.includes('.')) return false;
+        const existingDms = hist?.data?.decisionMakers || client.contacts || [];
+        const hasLi = existingDms.some((d) => /linkedin\.com\/in\//i.test(d.linkedin || ''));
+        if (!domain.includes('.') && !hasLi && !(client.name || '').trim()) return false;
         const res = enqueueDmEmailSearch({
           domain,
           companyName: client.name || domain,
@@ -731,9 +733,9 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
           companyLinkedin:
             hist?.data?.socials?.linkedin ||
             hist?.data?.tradeIntelligence?.companyLinkedin,
-          deepDig: true,
+          deepDig: false,
           authorized: true,
-          existingDecisionMakers: hist?.data?.decisionMakers || client.contacts || [],
+          existingDecisionMakers: existingDms,
           resolveExisting: () => {
             const h = findHistoryForClient(client, historyRef.current);
             return h?.data?.decisionMakers || client.contacts || [];
@@ -2870,7 +2872,8 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
     const domain = src.companyInfo?.website || '';
     const companyName = src.companyInfo?.name || domain;
     const hid = historyIdOverride ?? viewingHistoryIdRef.current;
-    const deepDig = opts?.deepDig !== false;
+    // 默认只走公司搜（约 1 分）；显式 deepDig 才允许再补采购/老板 LinkedIn
+    const deepDig = opts?.deepDig === true;
 
     const res = enqueueDmEmailSearch({
       domain,
@@ -3744,7 +3747,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
           domain,
           companyName,
           historyId,
-          deepDig: true,
+          deepDig: false,
           authorized: true,
           existingDecisionMakers: seededDecisionMakers,
           resolveExisting: () => {
@@ -5911,20 +5914,25 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
     const skipSamples: string[] = [];
     for (const hist of items) {
       const domain = (hist.domain || hist.data?.companyInfo?.website || '').trim();
-      if (!domain || !domain.includes('.')) {
+      const companyName = hist.data?.companyInfo?.name || domain;
+      const existingDms = hist.data?.decisionMakers || [];
+      const hasLi = existingDms.some((d) => /linkedin\.com\/in\//i.test(d.linkedin || ''));
+      if ((!domain || !domain.includes('.')) && !hasLi && !companyName) {
         skipped += 1;
+        if (skipSamples.length < 3) {
+          skipSamples.push(`${hist.data?.companyInfo?.name || hist.domain || hist.id}：缺域名/LinkedIn`);
+        }
         continue;
       }
-      const companyName = hist.data?.companyInfo?.name || domain;
       const res = enqueueDmEmailSearch({
         domain,
         companyName,
         historyId: hist.id,
         companyLinkedin:
           hist.data?.socials?.linkedin || hist.data?.tradeIntelligence?.companyLinkedin,
-        deepDig: true,
+        deepDig: false,
         authorized: true,
-        existingDecisionMakers: hist.data?.decisionMakers || [],
+        existingDecisionMakers: existingDms,
         resolveExisting: () => {
           const h = historyRef.current.find((x) => x.id === hist.id);
           return h?.data?.decisionMakers || [];
@@ -6062,8 +6070,13 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
         hist?.data?.companyInfo?.website ||
         ''
       ).trim();
-      if (!domain || !domain.includes('.')) {
+      const existingDms = hist?.data?.decisionMakers || client.contacts || [];
+      const hasLi = existingDms.some((d) => /linkedin\.com\/in\//i.test(d.linkedin || ''));
+      if ((!domain || !domain.includes('.')) && !hasLi && !(client.name || '').trim()) {
         skipped += 1;
+        if (skipSamples.length < 3) {
+          skipSamples.push(`${client.name || domain || '未知'}：缺域名/LinkedIn`);
+        }
         continue;
       }
       const res = enqueueDmEmailSearch({
@@ -6073,9 +6086,9 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
         companyLinkedin:
           hist?.data?.socials?.linkedin ||
           hist?.data?.tradeIntelligence?.companyLinkedin,
-        deepDig: true,
+        deepDig: false,
         authorized: true,
-        existingDecisionMakers: hist?.data?.decisionMakers || client.contacts || [],
+        existingDecisionMakers: existingDms,
         resolveExisting: () => {
           const h = findHistoryForClient(client, historyRef.current);
           return h?.data?.decisionMakers || client.contacts || [];
