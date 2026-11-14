@@ -8,7 +8,7 @@ import { enforceApiRateLimit } from './_firewall';
 import { applyStrictCors, handleCorsPreflight } from './_cors';
 export const config = {
   runtime: 'nodejs',
-  maxDuration: 30,
+  maxDuration: 60,
 };
 
 const ALLOWED_ACTIONS = new Set([
@@ -126,7 +126,8 @@ export default async function handler(req: any, res: any) {
     if (action === 'SingleSendMail') {
       const toAddress = pickStr(body.toAddress);
       const subject = pickStr(body.subject);
-      const htmlBody = pickStr(body.htmlBody || body.textBody);
+      const htmlBody = pickStr(body.htmlBody);
+      const textBody = pickStr(body.textBody);
       if (!accountName) {
         res.status(400).json({
           ok: false,
@@ -134,7 +135,7 @@ export default async function handler(req: any, res: any) {
         });
         return;
       }
-      if (!toAddress || !subject || !htmlBody) {
+      if (!toAddress || !subject || (!htmlBody && !textBody)) {
         res.status(400).json({ ok: false, error: '缺少 toAddress / subject / htmlBody' });
         return;
       }
@@ -143,9 +144,37 @@ export default async function handler(req: any, res: any) {
       params.ReplyToAddress = body.replyToAddress ? 'true' : 'false';
       params.ToAddress = toAddress;
       params.Subject = subject;
-      params.HtmlBody = htmlBody;
+      if (htmlBody) params.HtmlBody = htmlBody;
+      if (textBody) params.TextBody = textBody;
       putIf(params, 'FromAlias', body.fromAlias);
       putIf(params, 'TagName', body.tagName);
+      putIf(params, 'ReplyAddress', body.replyAddress);
+      putIf(params, 'ReplyAddressAlias', body.replyAddressAlias);
+      // 点击追踪：需配合 TagName
+      if (body.clickTrace === true || body.clickTrace === 1 || body.clickTrace === '1') {
+        params.ClickTrace = '1';
+      } else if (body.clickTrace === false || body.clickTrace === 0 || body.clickTrace === '0') {
+        params.ClickTrace = '0';
+      }
+      putIf(params, 'UnSubscribeLinkType', body.unSubscribeLinkType);
+      putIf(params, 'UnSubscribeFilterLevel', body.unSubscribeFilterLevel);
+      // 真附件：Attachments.N.FileName + Attachments.N.Content（Base64）
+      const rawAtt = Array.isArray(body.attachments) ? body.attachments : [];
+      let ai = 0;
+      for (const item of rawAtt.slice(0, 5)) {
+        if (!item || typeof item !== 'object') continue;
+        const fileName = pickStr((item as any).fileName || (item as any).name);
+        let content = pickStr((item as any).content || (item as any).contentBase64);
+        if (!fileName || !content) continue;
+        // 去掉 data URL 前缀
+        const comma = content.indexOf(',');
+        if (content.startsWith('data:') && comma > 0) content = content.slice(comma + 1);
+        // 单附件过大易签名失败 / 超时；约 3.5MB Base64
+        if (content.length > 4_700_000) continue;
+        ai += 1;
+        params[`Attachments.${ai}.FileName`] = fileName;
+        params[`Attachments.${ai}.Content`] = content;
+      }
     } else if (action === 'DescAccountSummary') {
       // 无业务参数
     } else if (action === 'QueryInvalidAddress') {

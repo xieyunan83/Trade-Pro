@@ -1,11 +1,19 @@
 /**
  * 邮件营销本地持久化：任务/模板按归属过滤；配置按登录用户隔离。
  */
-import type { AliyunConfig, EmailTask, EmailTemplate, User, Department } from '../types';
+import type {
+  AliyunConfig,
+  EmailCampaignRun,
+  EmailTask,
+  EmailTemplate,
+  User,
+  Department,
+} from '../types';
 import { mergeAliyunConfigWithEnv } from './aliyunEmailEnv';
 import { canViewOwnedRecord, filterOwnedRecords } from './permissions';
 
 const TASKS_KEY = 'trade_scout_email_campaign_v1';
+const RUNS_KEY = 'trade_scout_email_campaign_runs_v1';
 const configKey = (username: string) =>
   `trade_scout_email_config_v1_${(username || 'anon').trim().toLowerCase()}`;
 
@@ -13,6 +21,7 @@ export type EmailCampaignStore = {
   config: AliyunConfig | null;
   templates: EmailTemplate[];
   tasks: EmailTask[];
+  runs?: EmailCampaignRun[];
   updatedAt: number;
 };
 
@@ -226,5 +235,35 @@ export const saveEmailCampaignStore = (store: Partial<EmailCampaignStore>): Emai
     updatedAt: Date.now(),
   };
   localStorage.setItem(TASKS_KEY, JSON.stringify(next));
+  return next;
+};
+
+export const loadEmailCampaignRuns = (viewer?: User): EmailCampaignRun[] => {
+  try {
+    const raw = localStorage.getItem(RUNS_KEY);
+    if (!raw) return [];
+    const list = JSON.parse(raw) as EmailCampaignRun[];
+    if (!Array.isArray(list)) return [];
+    if (!viewer) return list;
+    const uname = (viewer.username || '').trim().toLowerCase();
+    return list.filter((r) => {
+      const owner = (r.ownerUsername || '').trim().toLowerCase();
+      if (!owner) return true;
+      if (viewer.role === 'admin' || viewer.role === 'director') return true;
+      return owner === uname;
+    });
+  } catch {
+    return [];
+  }
+};
+
+export const saveEmailCampaignRuns = (runs: EmailCampaignRun[]): void => {
+  localStorage.setItem(RUNS_KEY, JSON.stringify(runs.slice(0, 80)));
+};
+
+export const upsertEmailCampaignRun = (run: EmailCampaignRun): EmailCampaignRun[] => {
+  const prev = loadEmailCampaignRuns();
+  const next = [run, ...prev.filter((r) => r.id !== run.id)].slice(0, 80);
+  saveEmailCampaignRuns(next);
   return next;
 };

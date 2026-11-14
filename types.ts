@@ -998,6 +998,26 @@ export interface AliyunConfig {
     addressType: 1 | 0; // 1: Random, 0: Fixed
     tagName: string; // Tag for tracking
     regionId: string; // cn-hangzhou, ap-southeast-1
+    /** 开启点击/打开追踪（需填写 tagName） */
+    clickTrace?: boolean;
+    /** 显式回信地址；空则跟发信地址 */
+    replyAddress?: string;
+    replyAddressAlias?: string;
+}
+
+/** 邮件附件（图片/文件/视频）；小文件走 DirectMail 真附件，过大则嵌入正文下载块 */
+export interface EmailAttachment {
+    id: string;
+    name: string;
+    mime: string;
+    size: number;
+    kind: 'image' | 'file' | 'video';
+    /**
+     * Base64（不含 data: 前缀）或 data URL。
+     * 视频/大文件可仅存 dataUrl 供正文内嵌预览链接（本地 blob）。
+     */
+    contentBase64?: string;
+    dataUrl?: string;
 }
 
 export interface EmailTask {
@@ -1009,9 +1029,13 @@ export interface EmailTask {
     companyName: string;
     /** 关联 CRM client id（便于回写） */
     clientId?: string;
-    status: 'pending' | 'sending' | 'success' | 'failed';
+    status: 'pending' | 'scheduled' | 'sending' | 'success' | 'failed';
     error?: string;
     sentAt?: number;
+    /** 定时发送（ms epoch）；到点后由调度器发出 */
+    scheduledAt?: number;
+    /** 所属分批发信计划 */
+    campaignRunId?: string;
     /** DirectMail RequestId */
     requestId?: string;
     /** 归属：与 CRM 一致，用于部门隔离 */
@@ -1025,8 +1049,33 @@ export interface EmailTemplate {
     subject: string;
     senderName?: string; // New field for Sender Alias override
     body: string; // HTML content
-    attachments?: string[]; // 附件文件名列表（上传能力逐步完善）
+    /** 结构化附件（图片/文件/视频） */
+    attachments?: EmailAttachment[];
     lastUpdated: number;
+    ownerUsername?: string;
+    departmentId?: string;
+}
+
+/** 分批 / 定时群发计划 */
+export interface EmailCampaignRun {
+    id: string;
+    name: string;
+    templateId: string;
+    taskIds: string[];
+    /** 每批发几封 */
+    emailsPerBatch: number;
+    /** 分几批；0 表示按每批数量自动算完 */
+    batchCount: number;
+    /** 批次间隔（毫秒） */
+    delayBetweenBatchesMs: number;
+    /** 同批内每封间隔（毫秒） */
+    delayWithinBatchMs: number;
+    /** 开始时间；未到则等待 */
+    scheduledAt: number;
+    status: 'scheduled' | 'running' | 'paused' | 'completed' | 'cancelled';
+    /** 下一封在 taskIds 中的下标 */
+    nextIndex: number;
+    createdAt: number;
     ownerUsername?: string;
     departmentId?: string;
 }

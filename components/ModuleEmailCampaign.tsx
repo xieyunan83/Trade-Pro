@@ -7,7 +7,16 @@ import React, {
   Suspense,
   lazy,
 } from 'react';
-import { Client, EmailTask, EmailTemplate, AliyunConfig, User, Department } from '../types';
+import {
+  Client,
+  EmailTask,
+  EmailTemplate,
+  EmailCampaignRun,
+  EmailAttachment,
+  AliyunConfig,
+  User,
+  Department,
+} from '../types';
 
 /** 编辑器 JS 按需加载：打开邮件营销主界面不再等 quill 大包（样式随编辑器一并注入） */
 const ReactQuill = lazy(async () => {
@@ -38,14 +47,19 @@ import {
   BarChart3,
   Ban,
   RefreshCw,
+  Paperclip,
+  CalendarClock,
 } from 'lucide-react';
 import {
   loadEmailCampaignStoreForUser,
   saveEmailCampaignStoreForUser,
+  loadEmailCampaignRuns,
+  upsertEmailCampaignRun,
 } from '../services/emailCampaignStore';
 import {
   isDirectMailConfigured,
   sendDirectMail,
+  splitAttachmentsForSend,
   fetchAccountSummary,
   queryInvalidAddresses,
   deleteInvalidAddress,
@@ -59,6 +73,17 @@ import {
   type DirectMailStatRow,
   type DirectMailDeliveryDetail,
 } from '../services/directMailService';
+import {
+  buildCampaignRun,
+  describeCampaignRun,
+  markTasksScheduled,
+  nextWaveTaskIds,
+  advanceCampaignRun,
+  DEFAULT_EMAILS_PER_BATCH,
+  DEFAULT_DELAY_BETWEEN_BATCHES_MS,
+  DEFAULT_DELAY_WITHIN_BATCH_MS,
+} from '../services/emailSendPlanner';
+import { readFileAsEmailAttachment } from '../services/emailAttachmentUtil';
 import { trackOpsEvent } from '../services/userOpsLog';
 import { filterOwnedRecords } from '../services/permissions';
 import {
@@ -122,9 +147,25 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
   const [roleFilter, setRoleFilter] = useState<'all' | 'Buyer' | 'CEO' | 'Other'>('all');
   /** 任务列表状态筛选，方便看见「待发送」并操作 */
-  const [taskFilter, setTaskFilter] = useState<'all' | 'pending' | 'success' | 'failed'>('pending');
+  const [taskFilter, setTaskFilter] = useState<
+    'all' | 'pending' | 'scheduled' | 'success' | 'failed'
+  >('pending');
   const [taskPage, setTaskPage] = useState(0);
   const [showBulkImport, setShowBulkImport] = useState(false);
+  const [campaignRuns, setCampaignRuns] = useState<EmailCampaignRun[]>(() =>
+    loadEmailCampaignRuns(currentUser)
+  );
+  const [sendPlan, setSendPlan] = useState({
+    mode: 'immediate' as 'immediate' | 'scheduled',
+    scheduledLocal: '',
+    emailsPerBatch: DEFAULT_EMAILS_PER_BATCH,
+    batchCount: 0,
+    delayBetweenBatchesMin: Math.round(DEFAULT_DELAY_BETWEEN_BATCHES_MS / 60000),
+    delayWithinBatchMs: DEFAULT_DELAY_WITHIN_BATCH_MS,
+  });
+  const [attachBusy, setAttachBusy] = useState(false);
+  const attachInputRef = useRef<HTMLInputElement | null>(null);
+  const campaignBusyRef = useRef(false);
   const [taskSearch, setTaskSearch] = useState('');
   const [taskModal, setTaskModal] = useState<null | {
     mode: 'create' | 'edit';
@@ -465,22 +506,28 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
     if (status === 'success') return '已成功';
     if (status === 'failed') return '失败';
     if (status === 'sending') return '发送中';
+    if (status === 'scheduled') return '定时中';
     return '待发送';
   };
 
   const isSendableStatus = (status: EmailTask['status']) =>
-    status === 'pending' || status === 'failed';
+    status === 'pending' || status === 'failed' || status === 'scheduled';
+
+  const tasksRef = useRef(tasks);
+  tasksRef.current = tasks;
 
   const taskCounts = useMemo(() => {
     let pending = 0;
     let success = 0;
     let failed = 0;
+    let scheduled = 0;
     for (const t of tasks) {
       if (t.status === 'success') success += 1;
       else if (t.status === 'failed') failed += 1;
+      else if (t.status === 'scheduled') scheduled += 1;
       else if (t.status === 'pending' || t.status === 'sending') pending += 1;
     }
-    return { pending, success, failed, all: tasks.length };
+    return { pending, success, failed, scheduled, all: tasks.length };
   }, [tasks]);
 
   const filteredTasks = useMemo(() => {
@@ -805,11 +852,42 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
     accessKeySecret: config?.accessKeySecret || '',
     accountName: config?.accountName || '',
     fromAlias: config?.fromAlias || '',
-    replyToAddress: config?.replyToAddress || false,
+    replyToAddress: config?.replyToAddress ?? true,
     addressType: config?.addressType || 1,
     tagName: config?.tagName || '',
     regionId: config?.regionId || 'cn-hangzhou',
+    clickTrace: !!config?.clickTrace,
+    replyAddress: config?.replyAddress || '',
+    replyAddressAlias: config?.replyAddressAlias || '',
   });
+
+  const onAddAttachments = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setAttachBusy(true);
+    try {
+      const next: EmailAttachment[] = [...(newTemplate.attachments || [])];
+      for (const file of Array.from(files)) {
+        const att = await readFileAsEmailAttachment(file);
+        next.push(att);
+        if (att.kind === 'image' && att.dataUrl) {
+          try {
+            const editor = quillRef.current?.getEditor?.();
+            const range = editor?.getSelection?.(true);
+            const index = range?.index ?? 0;
+            editor?.insertEmbed?.(index, 'image', att.dataUrl);
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+      setNewTemplate((t) => ({ ...t, attachments: next.slice(0, 8) }));
+    } catch (e: any) {
+      alert(e?.message || '添加附件失败');
+    } finally {
+      setAttachBusy(false);
+      if (attachInputRef.current) attachInputRef.current.value = '';
+    }
+  };
 
   const onSaveConfig = (newConfig: AliyunConfig) => {
     setConfig(newConfig);
@@ -843,14 +921,101 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
       subject = subject.replace(new RegExp(key, 'g'), replacements[key]);
       body = body.replace(new RegExp(key, 'g'), replacements[key]);
     });
-    return { subject, body };
+    const { apiAttachments, htmlExtra } = splitAttachmentsForSend(template.attachments || []);
+    return { subject, body: body + htmlExtra, apiAttachments };
+  };
+
+  const sendTasksNow = async (
+    targets: EmailTask[],
+    template: EmailTemplate,
+    opts?: { withinDelayMs?: number; skipConfirm?: boolean; campaignRunId?: string }
+  ) => {
+    if (!config) return { okCount: 0, failCount: 0 };
+    if (!opts?.skipConfirm) {
+      /* confirm handled by caller for planned sends */
+    }
+    const crmWrites: Array<{ companyName: string; clientId?: string; to: string; subject: string }> =
+      [];
+    let okCount = 0;
+    let failCount = 0;
+    const within = opts?.withinDelayMs ?? 400;
+    for (const task of targets) {
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === task.id
+            ? { ...t, status: 'sending', error: undefined, campaignRunId: opts?.campaignRunId || t.campaignRunId }
+            : t
+        )
+      );
+      const { subject, body, apiAttachments } = processTemplateForTask(template, task);
+      const result = await sendDirectMail({
+        config,
+        toAddress: task.recipientEmail,
+        subject,
+        htmlBody: body,
+        fromAlias: template.senderName || config.fromAlias,
+        attachments: apiAttachments,
+      });
+      if (result.ok) {
+        okCount += 1;
+        crmWrites.push({
+          companyName: task.companyName,
+          clientId: task.clientId,
+          to: task.recipientEmail,
+          subject,
+        });
+        setTasks((prev) =>
+          prev.map((t) =>
+            t.id === task.id
+              ? {
+                  ...t,
+                  status: 'success',
+                  sentAt: Date.now(),
+                  requestId: result.requestId,
+                  error: undefined,
+                  scheduledAt: undefined,
+                }
+              : t
+          )
+        );
+      } else {
+        failCount += 1;
+        const err = result.error || '发送失败';
+        setTasks((prev) =>
+          prev.map((t) =>
+            t.id === task.id
+              ? {
+                  ...t,
+                  status: 'failed',
+                  error: looksLikeInvalidAddressError(err)
+                    ? `${err}（疑似无效地址，系统可能已自动入库）`
+                    : err,
+                }
+              : t
+          )
+        );
+      }
+      if (within > 0) await new Promise((r) => setTimeout(r, within));
+    }
+    if (crmWrites.length && onEmailsSent) onEmailsSent(crmWrites);
+    if (okCount) {
+      trackOpsEvent(currentUser.username, 'email_ok', '邮件推送成功', { ok: true, count: okCount });
+    }
+    if (failCount) {
+      trackOpsEvent(currentUser.username, 'email_fail', '邮件推送失败', {
+        ok: false,
+        count: failCount,
+      });
+    }
+    return { okCount, failCount };
   };
 
   const onSendBatch = async (
     taskIds: string[],
     templateId: string,
     /** 刚写入尚未进 state 的任务快照（试发用） */
-    taskSnapshot?: EmailTask[]
+    taskSnapshot?: EmailTask[],
+    opts?: { forceImmediate?: boolean }
   ) => {
     const template = templates.find((t) => t.id === templateId);
     if (!template) {
@@ -867,12 +1032,11 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
     let targets = pool.filter((t) => taskIds.includes(t.id) && isSendableStatus(t.status));
     if (!targets.length) {
       alert(
-        '当前勾选里没有可发送任务。\n请勾选「待发送 / 失败」项，或点「全选可发」；已成功的不会重复发送。'
+        '当前勾选里没有可发送任务。\n请勾选「待发送 / 失败 / 定时」项，或点「全选可发」；已成功的不会重复发送。'
       );
       return;
     }
 
-    // 发信前过滤无效地址库
     let skippedInvalid = 0;
     const invalidProbe = await loadInvalidAddressSet(config, 5, 100);
     if (invalidProbe.ok && invalidProbe.emails.size) {
@@ -906,99 +1070,138 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
       return;
     }
 
+    const usePlan = !opts?.forceImmediate && !taskSnapshot;
+    let scheduledAt: number | undefined;
+    if (usePlan && sendPlan.mode === 'scheduled') {
+      const t = Date.parse(sendPlan.scheduledLocal);
+      if (!Number.isFinite(t) || t <= Date.now() + 30_000) {
+        alert('请选择至少 30 秒之后的定时发送时间');
+        return;
+      }
+      scheduledAt = t;
+    }
+
+    const run = buildCampaignRun({
+      templateId,
+      taskIds: targets.map((t) => t.id),
+      emailsPerBatch: usePlan ? sendPlan.emailsPerBatch : targets.length,
+      batchCount: usePlan ? sendPlan.batchCount : 1,
+      delayBetweenBatchesMs: usePlan
+        ? Math.max(0, sendPlan.delayBetweenBatchesMin) * 60_000
+        : 0,
+      delayWithinBatchMs: usePlan ? sendPlan.delayWithinBatchMs : 400,
+      scheduledAt: usePlan ? scheduledAt : undefined,
+      ownerUsername: currentUser.username,
+      departmentId: currentUser.departmentId,
+    });
+
     if (
       !confirm(
-        `将真实发送 ${targets.length} 封邮件${
-          skippedInvalid ? `（另跳过无效地址 ${skippedInvalid}）` : ''
-        }。\n仅成功投递后会回写 CRM「最近发信」。\n确认继续？`
+        `${describeCampaignRun(run)}\n附件：${(template.attachments || []).length} 个\n${
+          skippedInvalid ? `另跳过无效地址 ${skippedInvalid}\n` : ''
+        }仅成功投递后会回写 CRM。确认？`
       )
     ) {
       return;
     }
 
-    setSending(true);
-    setSendMsg(skippedInvalid ? `已跳过无效地址 ${skippedInvalid}，开始发送…` : '');
-    const crmWrites: Array<{ companyName: string; clientId?: string; to: string; subject: string }> =
-      [];
-    let okCount = 0;
-    let failCount = 0;
-
-    for (const task of targets) {
-      setTasks((prev) =>
-        prev.map((t) => (t.id === task.id ? { ...t, status: 'sending', error: undefined } : t))
-      );
-      const { subject, body } = processTemplateForTask(template, task);
-      const result = await sendDirectMail({
-        config,
-        toAddress: task.recipientEmail,
-        subject,
-        htmlBody: body,
-        fromAlias: template.senderName || config.fromAlias,
-      });
-      if (result.ok) {
-        okCount += 1;
-        crmWrites.push({
-          companyName: task.companyName,
-          clientId: task.clientId,
-          to: task.recipientEmail,
-          subject,
-        });
-        setTasks((prev) =>
-          prev.map((t) =>
-            t.id === task.id
-              ? {
-                  ...t,
-                  status: 'success',
-                  sentAt: Date.now(),
-                  requestId: result.requestId,
-                  error: undefined,
-                }
-              : t
-          )
-        );
-      } else {
-        failCount += 1;
-        const err = result.error || '发送失败';
-        setTasks((prev) =>
-          prev.map((t) =>
-            t.id === task.id
-              ? {
-                  ...t,
-                  status: 'failed',
-                  error: looksLikeInvalidAddressError(err)
-                    ? `${err}（疑似无效地址，系统可能已自动入库）`
-                    : err,
-                }
-              : t
-          )
-        );
-      }
-      // 轻微间隔，降低限流
-      await new Promise((r) => setTimeout(r, 400));
-    }
-
-    if (crmWrites.length && onEmailsSent) onEmailsSent(crmWrites);
-    if (okCount) {
-      trackOpsEvent(currentUser.username, 'email_ok', '邮件推送成功', {
-        ok: true,
-        count: okCount,
-      });
-    }
-    if (failCount) {
-      trackOpsEvent(currentUser.username, 'email_fail', '邮件推送失败', {
-        ok: false,
-        count: failCount,
-      });
-    }
+    setTasks((prev) => markTasksScheduled(prev, run));
+    upsertEmailCampaignRun(run);
+    setCampaignRuns(loadEmailCampaignRuns(currentUser));
     setSendMsg(
-      `完成：成功 ${okCount}，失败 ${failCount}${
-        skippedInvalid ? `，跳过无效 ${skippedInvalid}` : ''
-      }`
+      run.status === 'scheduled'
+        ? `已预约：${describeCampaignRun(run)}（请保持本页打开或稍后回到邮件营销）`
+        : `已开始：${describeCampaignRun(run)}`
     );
-    setSending(false);
     setSelectedTaskIds(new Set());
-    void refreshAccountSummary();
+
+    if (run.status === 'running') {
+      setSending(true);
+      await pumpCampaignRun(run.id);
+      setSending(false);
+      void refreshAccountSummary();
+    }
   };
+
+  const pumpCampaignRun = async (runId: string) => {
+    if (campaignBusyRef.current) return;
+    campaignBusyRef.current = true;
+    try {
+      let runs = loadEmailCampaignRuns(currentUser);
+      let run = runs.find((r) => r.id === runId);
+      if (!run || run.status === 'cancelled' || run.status === 'completed' || run.status === 'paused') {
+        return;
+      }
+      if (Date.now() < run.scheduledAt) return;
+
+      if (run.status === 'scheduled') {
+        run = { ...run, status: 'running' };
+        upsertEmailCampaignRun(run);
+        setCampaignRuns(loadEmailCampaignRuns(currentUser));
+      }
+
+      const template = templates.find((t) => t.id === run!.templateId);
+      if (!template || !config) {
+        upsertEmailCampaignRun({ ...run, status: 'paused' });
+        setCampaignRuns(loadEmailCampaignRuns(currentUser));
+        setSendMsg('定时计划暂停：缺少模板或接口配置');
+        return;
+      }
+
+      const waveIds = nextWaveTaskIds(run);
+      if (!waveIds.length) {
+        upsertEmailCampaignRun({ ...run, status: 'completed' });
+        setCampaignRuns(loadEmailCampaignRuns(currentUser));
+        return;
+      }
+
+      const pool = tasksRef.current.length ? tasksRef.current : tasks;
+      const waveTasks = pool.filter(
+        (t) => waveIds.includes(t.id) && isSendableStatus(t.status)
+      );
+      setSendMsg(
+        `计划发送中：第 ${Math.floor(run.nextIndex / Math.max(1, run.emailsPerBatch)) + 1} 批 · ${waveTasks.length} 封…`
+      );
+      const { okCount, failCount } = await sendTasksNow(waveTasks, template, {
+        withinDelayMs: run.delayWithinBatchMs,
+        skipConfirm: true,
+        campaignRunId: run.id,
+      });
+      const advanced = advanceCampaignRun(run, waveIds.length);
+      upsertEmailCampaignRun(advanced);
+      setCampaignRuns(loadEmailCampaignRuns(currentUser));
+      setSendMsg(
+        advanced.status === 'completed'
+          ? `计划完成：本批成功 ${okCount} / 失败 ${failCount}`
+          : `本批成功 ${okCount} / 失败 ${failCount}；下一批约 ${new Date(
+              advanced.scheduledAt
+            ).toLocaleString('zh-CN')}`
+      );
+      void refreshAccountSummary();
+    } finally {
+      campaignBusyRef.current = false;
+    }
+  };
+
+  useEffect(() => {
+    const tick = () => {
+      const runs = loadEmailCampaignRuns(currentUser);
+      setCampaignRuns(runs);
+      const due = runs.find(
+        (r) =>
+          (r.status === 'scheduled' || r.status === 'running') &&
+          Date.now() >= r.scheduledAt &&
+          r.nextIndex < r.taskIds.length
+      );
+      if (due && !campaignBusyRef.current && !sending) {
+        void pumpCampaignRun(due.id);
+      }
+    };
+    const id = window.setInterval(tick, 15_000);
+    tick();
+    return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser.username, templates, config, sending]);
 
   const toggleTask = (id: string) => {
     const next = new Set(selectedTaskIds);
@@ -1060,23 +1263,24 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
     setSelectedTaskIds(new Set([task.id]));
     setSelectedTemplateId(template.id);
     setSendMsg(`试发准备：${email}`);
-    await onSendBatch([task.id], template.id, snapshot);
+    await onSendBatch([task.id], template.id, snapshot, { forceImmediate: true });
   };
 
   const onSendOne = async (taskId: string) => {
     const template = ensureTemplateOrGuide();
     if (!template) return;
-    await onSendBatch([taskId], template.id);
+    await onSendBatch([taskId], template.id, undefined, { forceImmediate: true });
   };
 
   return (
     <div className="w-full space-y-4 sm:space-y-8 animate-fade-in">
       <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-bold text-slate-600 space-y-1">
         <p>
-          怎么用：①「邮件模板」准备内容 → ②「新建任务」或「试发一封」→ ③ 在「任务管理」里编辑/勾选/群发。可在「无效地址」「投递数据」查看发信防护与效果。
+          怎么用：①「邮件模板」写正文并添加图片/文件/视频附件 → ②「新建任务」勾选对象 → ③
+          设定定时与分批（每批封数、批次数、间隔）后群发。可在「无效地址」「投递数据」查看发信防护与效果。
         </p>
         <p className="text-slate-500">
-          数据隔离：员工仅见自己的收件人；主管见本部门。产品匹配/开发策略生成的开发信会进入「邮件模板」。
+          底座为阿里云邮件推送：SingleSendMail、额度、无效地址、统计/详情、点击追踪、真附件。定时分批由本机调度，请保持页面打开至计划跑完。
         </p>
       </div>
       {gtmImportHint ? (
@@ -1261,8 +1465,8 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
               <div>
                 <h3 className="text-base sm:text-lg font-black text-slate-800">任务管理</h3>
                 <p className="text-[11px] font-bold text-slate-500 mt-0.5">
-                  共 {taskCounts.all} 条 · 待发送 {taskCounts.pending} · 已成功 {taskCounts.success} ·
-                  失败 {taskCounts.failed}
+                  共 {taskCounts.all} 条 · 待发送 {taskCounts.pending} · 定时{' '}
+                  {taskCounts.scheduled} · 已成功 {taskCounts.success} · 失败 {taskCounts.failed}
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -1276,6 +1480,7 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
                 {(
                   [
                     ['pending', `待发送 ${taskCounts.pending}`],
+                    ['scheduled', `定时 ${taskCounts.scheduled}`],
                     ['failed', `失败 ${taskCounts.failed}`],
                     ['success', `已成功 ${taskCounts.success}`],
                     ['all', `全部 ${taskCounts.all}`],
@@ -1360,13 +1565,153 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
               </button>
               <button
                 disabled={sending || selectedSendableCount === 0 || !selectedTemplateId || !dmReady}
-                onClick={() => onSendBatch(Array.from(selectedTaskIds), selectedTemplateId)}
+                onClick={() => void onSendBatch(Array.from(selectedTaskIds), selectedTemplateId)}
                 className="lg:ml-auto bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl font-black shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50"
                 title={!dmReady ? '请先完成接口配置' : undefined}
               >
                 {sending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
-                {sending ? '发送中…' : `群发可发项 (${selectedSendableCount})`}
+                {sending
+                  ? '发送中…'
+                  : sendPlan.mode === 'scheduled'
+                    ? `预约群发 (${selectedSendableCount})`
+                    : `群发可发项 (${selectedSendableCount})`}
               </button>
+            </div>
+
+            <div className="rounded-2xl border border-indigo-100 bg-indigo-50/40 p-4 space-y-3">
+              <div className="flex items-center gap-2 text-sm font-black text-indigo-950">
+                <CalendarClock size={16} className="text-indigo-600" /> 定时 / 分批发信
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs font-bold">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    checked={sendPlan.mode === 'immediate'}
+                    onChange={() => setSendPlan((p) => ({ ...p, mode: 'immediate' }))}
+                  />
+                  立即按批发送
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    checked={sendPlan.mode === 'scheduled'}
+                    onChange={() => setSendPlan((p) => ({ ...p, mode: 'scheduled' }))}
+                  />
+                  定时开始
+                </label>
+                <input
+                  type="datetime-local"
+                  disabled={sendPlan.mode !== 'scheduled'}
+                  value={sendPlan.scheduledLocal}
+                  onChange={(e) => setSendPlan((p) => ({ ...p, scheduledLocal: e.target.value }))}
+                  className="px-3 py-2 rounded-xl border border-indigo-200 bg-white disabled:opacity-40"
+                />
+                <label className="space-y-1">
+                  <span className="text-[10px] uppercase tracking-widest text-indigo-700">
+                    每批封数
+                  </span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={200}
+                    value={sendPlan.emailsPerBatch}
+                    onChange={(e) =>
+                      setSendPlan((p) => ({
+                        ...p,
+                        emailsPerBatch: Math.max(1, Number(e.target.value) || 1),
+                      }))
+                    }
+                    className="w-full px-3 py-2 rounded-xl border border-indigo-200 bg-white"
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-[10px] uppercase tracking-widest text-indigo-700">
+                    分几批（0=发完为止）
+                  </span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={500}
+                    value={sendPlan.batchCount}
+                    onChange={(e) =>
+                      setSendPlan((p) => ({
+                        ...p,
+                        batchCount: Math.max(0, Number(e.target.value) || 0),
+                      }))
+                    }
+                    className="w-full px-3 py-2 rounded-xl border border-indigo-200 bg-white"
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-[10px] uppercase tracking-widest text-indigo-700">
+                    批间隔（分钟）
+                  </span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={1440}
+                    value={sendPlan.delayBetweenBatchesMin}
+                    onChange={(e) =>
+                      setSendPlan((p) => ({
+                        ...p,
+                        delayBetweenBatchesMin: Math.max(0, Number(e.target.value) || 0),
+                      }))
+                    }
+                    className="w-full px-3 py-2 rounded-xl border border-indigo-200 bg-white"
+                  />
+                </label>
+                <label className="space-y-1 sm:col-span-2 lg:col-span-3">
+                  <span className="text-[10px] uppercase tracking-widest text-indigo-700">
+                    同批内每封间隔（毫秒）
+                  </span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={10000}
+                    value={sendPlan.delayWithinBatchMs}
+                    onChange={(e) =>
+                      setSendPlan((p) => ({
+                        ...p,
+                        delayWithinBatchMs: Math.max(0, Number(e.target.value) || 0),
+                      }))
+                    }
+                    className="w-full max-w-xs px-3 py-2 rounded-xl border border-indigo-200 bg-white"
+                  />
+                </label>
+              </div>
+              {campaignRuns.filter((r) => r.status === 'scheduled' || r.status === 'running').length >
+              0 ? (
+                <div className="space-y-1 text-[11px] font-bold text-indigo-900">
+                  {campaignRuns
+                    .filter((r) => r.status === 'scheduled' || r.status === 'running')
+                    .slice(0, 4)
+                    .map((r) => (
+                      <div key={r.id} className="flex flex-wrap items-center gap-2">
+                        <span>
+                          {r.status === 'running' ? '进行中' : '已预约'} · {describeCampaignRun(r)} ·
+                          进度 {r.nextIndex}/{r.taskIds.length}
+                        </span>
+                        <button
+                          type="button"
+                          className="text-rose-600 underline"
+                          onClick={() => {
+                            upsertEmailCampaignRun({ ...r, status: 'cancelled' });
+                            setCampaignRuns(loadEmailCampaignRuns(currentUser));
+                            setTasks((prev) =>
+                              prev.map((t) =>
+                                t.campaignRunId === r.id && t.status === 'scheduled'
+                                  ? { ...t, status: 'pending', scheduledAt: undefined }
+                                  : t
+                              )
+                            );
+                          }}
+                        >
+                          取消
+                        </button>
+                      </div>
+                    ))}
+                </div>
+              ) : null}
             </div>
 
             <div className="rounded-2xl border border-slate-100 overflow-x-auto">
@@ -2134,6 +2479,9 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
               <h4 className="text-xl font-black text-slate-800 mb-2">{template.name}</h4>
               <div className="text-xs font-bold text-slate-400 mb-4 truncate">
                 主题: {template.subject}
+                {(template.attachments || []).length
+                  ? ` · 附件 ${(template.attachments || []).length}`
+                  : ''}
               </div>
               <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 h-32 overflow-hidden relative">
                 <div
@@ -2164,6 +2512,19 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
                 onChange={(e) => setNewTemplate({ ...newTemplate, name: e.target.value })}
                 className="w-full p-3 border rounded-xl font-bold"
               />
+
+              <div className="space-y-2">
+                <label className="text-xs font-black text-slate-400 uppercase tracking-widest">
+                  发信人别名（可覆盖接口配置）
+                </label>
+                <input
+                  type="text"
+                  placeholder="如：Kevin from BabyWorld"
+                  value={newTemplate.senderName || ''}
+                  onChange={(e) => setNewTemplate({ ...newTemplate, senderName: e.target.value })}
+                  className="w-full p-3 border rounded-xl font-bold"
+                />
+              </div>
 
               <div className="space-y-2">
                 <label className="text-xs font-black text-slate-400 uppercase tracking-widest">
@@ -2223,6 +2584,62 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
                     className="h-64 mb-12"
                   />
                 </Suspense>
+              </div>
+
+              <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm font-black text-slate-800 flex items-center gap-2">
+                    <Paperclip size={16} className="text-blue-600" /> 附件（图片 / 文件 / 视频）
+                  </div>
+                  <button
+                    type="button"
+                    disabled={attachBusy}
+                    onClick={() => attachInputRef.current?.click()}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-black disabled:opacity-50"
+                  >
+                    {attachBusy ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
+                    添加附件
+                  </button>
+                  <input
+                    ref={attachInputRef}
+                    type="file"
+                    multiple
+                    accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.rar,.txt,.csv"
+                    className="hidden"
+                    onChange={(e) => void onAddAttachments(e.target.files)}
+                  />
+                </div>
+                <p className="text-[11px] font-bold text-slate-500">
+                  约 3MB 以内作为阿里云真附件投递；更大文件或视频会写入正文预览/下载块。单文件上限 8MB。
+                </p>
+                {(newTemplate.attachments || []).length === 0 ? (
+                  <p className="text-xs font-bold text-slate-400">尚未添加附件</p>
+                ) : (
+                  <ul className="space-y-2">
+                    {(newTemplate.attachments || []).map((a) => (
+                      <li
+                        key={a.id}
+                        className="flex items-center justify-between gap-2 rounded-xl bg-white border border-slate-100 px-3 py-2 text-xs font-bold text-slate-700"
+                      >
+                        <span className="truncate">
+                          [{a.kind}] {a.name} · {Math.max(1, Math.round((a.size || 0) / 1024))} KB
+                        </span>
+                        <button
+                          type="button"
+                          className="text-rose-600 shrink-0"
+                          onClick={() =>
+                            setNewTemplate((t) => ({
+                              ...t,
+                              attachments: (t.attachments || []).filter((x) => x.id !== a.id),
+                            }))
+                          }
+                        >
+                          移除
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
 
               <button
@@ -2311,7 +2728,7 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
               </div>
               <div>
                 <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
-                  Tag Name
+                  Tag Name（追踪标签）
                 </label>
                 <input
                   type="text"
@@ -2319,6 +2736,69 @@ export const ModuleEmailCampaign: React.FC<ModuleEmailCampaignProps> = ({
                   onChange={(e) => setConfigInput({ ...configInput, tagName: e.target.value })}
                   className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold"
                 />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <label className="flex items-center gap-2 text-sm font-bold text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={!!configInput.replyToAddress}
+                  onChange={(e) =>
+                    setConfigInput({ ...configInput, replyToAddress: e.target.checked })
+                  }
+                />
+                允许回复到发信地址
+              </label>
+              <label className="flex items-center gap-2 text-sm font-bold text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={!!configInput.clickTrace}
+                  onChange={(e) => setConfigInput({ ...configInput, clickTrace: e.target.checked })}
+                />
+                开启点击/打开追踪（需 Tag）
+              </label>
+              <div>
+                <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
+                  回信地址 ReplyAddress
+                </label>
+                <input
+                  type="text"
+                  value={configInput.replyAddress || ''}
+                  onChange={(e) => setConfigInput({ ...configInput, replyAddress: e.target.value })}
+                  placeholder="可选，留空则用发信地址"
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
+                  回信别名
+                </label>
+                <input
+                  type="text"
+                  value={configInput.replyAddressAlias || ''}
+                  onChange={(e) =>
+                    setConfigInput({ ...configInput, replyAddressAlias: e.target.value })
+                  }
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
+                  发信地址类型
+                </label>
+                <select
+                  value={configInput.addressType}
+                  onChange={(e) =>
+                    setConfigInput({
+                      ...configInput,
+                      addressType: Number(e.target.value) === 0 ? 0 : 1,
+                    })
+                  }
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 font-bold bg-white"
+                >
+                  <option value={1}>随机账号（推荐）</option>
+                  <option value={0}>固定账号</option>
+                </select>
               </div>
             </div>
             <button

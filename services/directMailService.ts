@@ -4,12 +4,20 @@
  */
 import type { AliyunConfig } from '../types';
 
+export type DirectMailAttachmentPayload = {
+  fileName: string;
+  /** Base64（可含 data: 前缀） */
+  content: string;
+};
+
 export type DirectMailSendInput = {
   config: AliyunConfig;
   toAddress: string;
   subject: string;
   htmlBody: string;
+  textBody?: string;
   fromAlias?: string;
+  attachments?: DirectMailAttachmentPayload[];
 };
 
 export type DirectMailSendResult = {
@@ -124,7 +132,7 @@ const isProxyFail = (v: ProxyPayload | DirectMailApiFail): v is DirectMailApiFai
   v.ok === false;
 
 export const sendDirectMail = async (input: DirectMailSendInput): Promise<DirectMailSendResult> => {
-  const { config, toAddress, subject, htmlBody, fromAlias } = input;
+  const { config, toAddress, subject, htmlBody, textBody, fromAlias, attachments } = input;
   if (!config?.accessKeyId || !config?.accessKeySecret || !config?.accountName) {
     return { ok: false, error: '请先在「接口配置」填写 AccessKey、发信地址' };
   }
@@ -136,10 +144,18 @@ export const sendDirectMail = async (input: DirectMailSendInput): Promise<Direct
     toAddress,
     subject,
     htmlBody,
+    textBody: textBody || '',
     fromAlias: fromAlias || config.fromAlias || '',
     replyToAddress: !!config.replyToAddress,
     addressType: config.addressType === 0 ? 0 : 1,
     tagName: config.tagName || '',
+    clickTrace: !!config.clickTrace,
+    replyAddress: config.replyAddress || '',
+    replyAddressAlias: config.replyAddressAlias || '',
+    attachments: (attachments || [])
+      .filter((a) => a?.fileName && a?.content)
+      .slice(0, 5)
+      .map((a) => ({ fileName: a.fileName, content: a.content })),
   });
   if (isProxyFail(data)) {
     return { ok: false, error: data.error, requestId: data.RequestId };
@@ -149,6 +165,78 @@ export const sendDirectMail = async (input: DirectMailSendInput): Promise<Direct
     requestId: data.RequestId || (typeof data.requestId === 'string' ? data.requestId : undefined),
   };
 };
+
+/** 把模板附件拆成：真附件（≤约 3.2MB）+ 正文内嵌块（大文件/视频） */
+export const splitAttachmentsForSend = (
+  attachments: Array<{
+    name: string;
+    mime?: string;
+    kind?: string;
+    contentBase64?: string;
+    dataUrl?: string;
+    size?: number;
+  }> = []
+): { apiAttachments: DirectMailAttachmentPayload[]; htmlExtra: string } => {
+  const apiAttachments: DirectMailAttachmentPayload[] = [];
+  const htmlParts: string[] = [];
+  const maxBytes = 3_200_000;
+  for (const a of attachments) {
+    const raw = a.contentBase64 || a.dataUrl || '';
+    if (!raw) continue;
+    let b64 = raw;
+    const comma = b64.indexOf(',');
+    if (b64.startsWith('data:') && comma > 0) b64 = b64.slice(comma + 1);
+    const approxBytes = Math.floor((b64.length * 3) / 4);
+    const isVideo = a.kind === 'video' || /^video\//i.test(a.mime || '');
+    const tooBig = approxBytes > maxBytes || (a.size || 0) > maxBytes;
+    if (!isVideo && !tooBig && apiAttachments.length < 5) {
+      apiAttachments.push({ fileName: a.name, content: b64 });
+      continue;
+    }
+    // 过大或视频：正文提供本地 data URL 预览/下载提示（收件端若剥链则仍建议改用网盘）
+    const href = a.dataUrl || (a.contentBase64?.startsWith('data:') ? a.contentBase64 : '');
+    if (isVideo && href) {
+      htmlParts.push(
+        `<div style="margin:12px 0;padding:12px;border:1px solid #e2e8f0;border-radius:8px"><div style="font-weight:700;margin-bottom:6px">视频：${escapeHtml(
+          a.name
+        )}</div><video controls src="${href}" style="max-width:100%;border-radius:6px"></video></div>`
+      );
+    } else if (a.kind === 'image' && href) {
+      htmlParts.push(
+        `<div style="margin:12px 0"><img src="${href}" alt="${escapeHtml(
+          a.name
+        )}" style="max-width:100%;border-radius:6px"/></div>`
+      );
+    } else if (href) {
+      htmlParts.push(
+        `<div style="margin:12px 0"><a href="${href}" download="${escapeHtml(
+          a.name
+        )}">下载附件：${escapeHtml(a.name)}</a></div>`
+      );
+    } else {
+      htmlParts.push(
+        `<div style="margin:12px 0;color:#64748b">附件「${escapeHtml(
+          a.name
+        )}」体积较大，未能随信投递，请改用网盘链接放入正文。</div>`
+      );
+    }
+  }
+  return {
+    apiAttachments,
+    htmlExtra: htmlParts.length
+      ? `<hr style="border:none;border-top:1px solid #e2e8f0;margin:20px 0"/><div>${htmlParts.join(
+          ''
+        )}</div>`
+      : '',
+  };
+};
+
+const escapeHtml = (s: string) =>
+  String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 
 export const isDirectMailConfigured = (config: AliyunConfig | null | undefined): boolean =>
   !!(config?.accessKeyId?.trim() && config?.accessKeySecret?.trim() && config?.accountName?.trim());

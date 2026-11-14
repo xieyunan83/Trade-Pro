@@ -482,12 +482,13 @@ async function handleLocalDirectMail(
     if (action === 'SingleSendMail') {
       const toAddress = pick(body.toAddress);
       const subject = pick(body.subject);
-      const htmlBody = pick(body.htmlBody || body.textBody);
+      const htmlBody = pick(body.htmlBody);
+      const textBody = pick(body.textBody);
       if (!accountName) {
         json(400, { ok: false, error: '缺少发信地址（AccountName）' });
         return;
       }
-      if (!toAddress || !subject || !htmlBody) {
+      if (!toAddress || !subject || (!htmlBody && !textBody)) {
         json(400, { ok: false, error: '缺少 toAddress / subject / htmlBody' });
         return;
       }
@@ -496,9 +497,33 @@ async function handleLocalDirectMail(
       params.ReplyToAddress = body.replyToAddress ? 'true' : 'false';
       params.ToAddress = toAddress;
       params.Subject = subject;
-      params.HtmlBody = htmlBody;
+      if (htmlBody) params.HtmlBody = htmlBody;
+      if (textBody) params.TextBody = textBody;
       putIf(params, 'FromAlias', body.fromAlias);
       putIf(params, 'TagName', body.tagName);
+      putIf(params, 'ReplyAddress', body.replyAddress);
+      putIf(params, 'ReplyAddressAlias', body.replyAddressAlias);
+      if (body.clickTrace === true || body.clickTrace === 1 || body.clickTrace === '1') {
+        params.ClickTrace = '1';
+      } else if (body.clickTrace === false || body.clickTrace === 0 || body.clickTrace === '0') {
+        params.ClickTrace = '0';
+      }
+      putIf(params, 'UnSubscribeLinkType', body.unSubscribeLinkType);
+      putIf(params, 'UnSubscribeFilterLevel', body.unSubscribeFilterLevel);
+      const rawAtt = Array.isArray(body.attachments) ? body.attachments : [];
+      let ai = 0;
+      for (const item of rawAtt.slice(0, 5)) {
+        if (!item || typeof item !== 'object') continue;
+        const fileName = pick((item as any).fileName || (item as any).name);
+        let content = pick((item as any).content || (item as any).contentBase64);
+        if (!fileName || !content) continue;
+        const comma = content.indexOf(',');
+        if (content.startsWith('data:') && comma > 0) content = content.slice(comma + 1);
+        if (content.length > 4_700_000) continue;
+        ai += 1;
+        params[`Attachments.${ai}.FileName`] = fileName;
+        params[`Attachments.${ai}.Content`] = content;
+      }
     } else if (action === 'QueryInvalidAddress') {
       putIf(params, 'StartTime', body.startTime || body.StartTime);
       putIf(params, 'EndTime', body.endTime || body.EndTime);
