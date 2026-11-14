@@ -1,7 +1,17 @@
 import { User, Department } from '../types';
 import { isSupabaseConfigured, fetchAppUsersFromCloud, saveAppUsersToCloud } from './supabase';
 import { fetchUsersFromCloud, saveUsersToCloud } from './githubService';
-import { loadDepartmentsFromStorage, saveDepartmentsToStorage, getDepartmentsUpdatedAt } from './orgStore';
+import {
+  loadDepartmentsFromStorage,
+  saveDepartmentsToStorage,
+  getDepartmentsUpdatedAt,
+  loadEnterprisesFromStorage,
+  saveEnterprisesToStorage,
+  loadPlansFromStorage,
+  savePlansToStorage,
+  ensureDefaultEnterprise,
+} from './orgStore';
+import type { Enterprise, UserPlan } from '../types';
 import { defaultPermissionsForRole } from './permissions';
 
 const USERS_KEY = 'trade_scout_users';
@@ -168,12 +178,18 @@ const syncUsersToCloudBackground = (
   depts: Department[]
 ) => {
   void (async () => {
-    if (isSupabaseConfigured()) {
-      await withTimeout(
-        saveAppUsersToCloud(normalized, updatedAt, depts),
-        8_000,
-        'Supabase 用户同步'
-      );
+    try {
+      const enterprises = loadEnterprisesFromStorage();
+      const plans = loadPlansFromStorage();
+      if (isSupabaseConfigured()) {
+        await withTimeout(
+          saveAppUsersToCloud(normalized, updatedAt, depts, enterprises, plans),
+          8_000,
+          'Supabase 用户同步'
+        );
+      }
+    } catch (e) {
+      console.warn('[auth] org cloud sync skipped', e);
     }
     await withTimeout(saveUsersToCloud(normalized), 8_000, 'GitHub 用户同步');
   })();
@@ -198,6 +214,29 @@ export async function persistDepartments(departments: Department[], updatedAt: n
   const users = loadUsersFromStorage();
   await persistUsers(users, updatedAt, departments);
   return departments;
+}
+
+export async function persistEnterprises(
+  enterprises: Enterprise[],
+  updatedAt: number = Date.now()
+): Promise<Enterprise[]> {
+  const list = ensureDefaultEnterprise(enterprises);
+  saveEnterprisesToStorage(list, updatedAt);
+  const users = loadUsersFromStorage();
+  const depts = loadDepartmentsFromStorage();
+  await persistUsers(users, updatedAt, depts);
+  return list;
+}
+
+export async function persistPlans(
+  plans: UserPlan[],
+  updatedAt: number = Date.now()
+): Promise<UserPlan[]> {
+  savePlansToStorage(plans, updatedAt);
+  const users = loadUsersFromStorage();
+  const depts = loadDepartmentsFromStorage();
+  await persistUsers(users, updatedAt, depts);
+  return plans;
 }
 
 export function findUserByName(users: User[], username: string): User | undefined {
@@ -264,7 +303,13 @@ export async function syncUsersAcrossDevices(): Promise<User[]> {
     }
   }
 
-  let cloud: { users: User[]; departments?: Department[]; updatedAt: number } | null = null;
+  let cloud: {
+    users: User[];
+    departments?: Department[];
+    enterprises?: Enterprise[];
+    plans?: UserPlan[];
+    updatedAt: number;
+  } | null = null;
   if (isSupabaseConfigured()) {
     cloud = await fetchAppUsersFromCloud();
   }
@@ -272,15 +317,34 @@ export async function syncUsersAcrossDevices(): Promise<User[]> {
     cloud = await fetchGitHubUsersBundle();
   }
 
+  const applyCloudOrgs = (
+    cloudDepts: Department[],
+    cloudEnterprises: Enterprise[] | undefined,
+    cloudPlans: UserPlan[] | undefined,
+    cloudAt: number
+  ) => {
+    if (cloudDepts.length || getDepartmentsUpdatedAt() <= cloudAt) {
+      saveDepartmentsToStorage(cloudDepts, cloudAt);
+    }
+    if (Array.isArray(cloudEnterprises) && cloudEnterprises.length) {
+      saveEnterprisesToStorage(ensureDefaultEnterprise(cloudEnterprises), cloudAt);
+    }
+    if (Array.isArray(cloudPlans) && cloudPlans.length) {
+      savePlansToStorage(cloudPlans, cloudAt);
+    }
+  };
+
   if (cloud?.users?.length) {
     const cloudUsers = normalizeUsers(await ensureUserPasswords(cloud.users));
     const cloudDepts = Array.isArray(cloud.departments) ? cloud.departments : [];
+    const cloudEnterprises = cloud.enterprises;
+    const cloudPlans = cloud.plans;
     const cloudAt = cloud.updatedAt || Date.now();
 
     // 本机无账号（新浏览器 / 桌面客户端）：直接采用云端，绝不造默认户再回写
     if (localWasEmpty) {
       saveUsersToStorage(cloudUsers, cloudAt);
-      if (cloudDepts.length) saveDepartmentsToStorage(cloudDepts, cloudAt);
+      applyCloudOrgs(cloudDepts, cloudEnterprises, cloudPlans, cloudAt);
       return cloudUsers;
     }
 
@@ -293,15 +357,13 @@ export async function syncUsersAcrossDevices(): Promise<User[]> {
     }
     if (localDefault && !cloudDefault) {
       saveUsersToStorage(cloudUsers, cloudAt);
-      if (cloudDepts.length) saveDepartmentsToStorage(cloudDepts, cloudAt);
+      applyCloudOrgs(cloudDepts, cloudEnterprises, cloudPlans, cloudAt);
       return cloudUsers;
     }
 
     if (cloudAt >= localAt) {
       saveUsersToStorage(cloudUsers, cloudAt);
-      if (cloudDepts.length || getDepartmentsUpdatedAt() <= cloudAt) {
-        saveDepartmentsToStorage(cloudDepts, cloudAt);
-      }
+      applyCloudOrgs(cloudDepts, cloudEnterprises, cloudPlans, cloudAt);
       return cloudUsers;
     }
 

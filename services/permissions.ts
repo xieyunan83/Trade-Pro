@@ -185,7 +185,8 @@ const withPlatformV2Modules = (perms: PermissionKey[]): PermissionKey[] => {
 };
 
 export const effectivePermissions = (user: User): PermissionKey[] => {
-  if (user.role === 'admin') return [...ALL_PERMISSION_KEYS];
+  // 超管 / 总监：业务模块全开（密钥级能力另用 isSuperAdmin 闸门）
+  if (user.role === 'admin' || user.role === 'director') return [...ALL_PERMISSION_KEYS];
   if (user.permissions !== undefined && user.permissions !== null) {
     return withPlatformV2Modules([...user.permissions]);
   }
@@ -194,7 +195,7 @@ export const effectivePermissions = (user: User): PermissionKey[] => {
 
 export const hasPermission = (user: User | null | undefined, key: PermissionKey): boolean => {
   if (!user || user.disabled) return false;
-  if (user.role === 'admin') return true;
+  if (user.role === 'admin' || user.role === 'director') return true;
   return effectivePermissions(user).includes(key);
 };
 
@@ -308,11 +309,18 @@ export const filterOwnedRecords = <T extends OwnedRecordMeta>(
 ): T[] => records.filter((r) => canViewOwnedRecord(viewer, r, allUsers, departments));
 
 export const roleLabel = (role: UserRole): string => {
-  if (role === 'admin') return '系统管理员';
-  if (role === 'director') return '总管';
+  if (role === 'admin') return '超级管理员';
+  if (role === 'director') return '总监管理员';
   if (role === 'manager') return '部门主管';
   return '部门员工';
 };
+
+/** 超级管理员：密钥/计费/删库级；总监：业务全量可见 */
+export const isSuperAdmin = (user: User | null | undefined): boolean =>
+  !!user && !user.disabled && user.role === 'admin';
+
+export const isDirectorOrAbove = (user: User | null | undefined): boolean =>
+  !!user && !user.disabled && (user.role === 'admin' || user.role === 'director');
 
 /** 管理员 / 总管 / 部门主管可查看完整决策人邮箱；普通员工一律脱敏为 * */
 export const canViewFullDecisionMakerEmails = (user: User | null | undefined): boolean => {

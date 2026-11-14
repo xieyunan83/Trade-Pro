@@ -180,7 +180,13 @@ import {
   filterOwnedRecords,
   getDepartmentMemberUsernames,
   hasPermission,
+  isDirectorOrAbove,
+  isSuperAdmin,
 } from './services/permissions';
+import {
+  assertCanDig,
+  incrementPlanUsage,
+} from './services/planQuotaGate';
 import {
   archiveToDiscoveryState,
   emptyDiscoveryState,
@@ -1275,6 +1281,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                 if (cancelled) return;
                 const ws = await syncAllWorkspaceData({
                   upload: false,
+                  viewer: currentUser,
                   timeoutMs: 3 * 60_000,
                   onProgress: (msg) => {
                     reportSyncStatus(msg);
@@ -1331,6 +1338,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
                 if (qAfter.length) queueTasks = qAfter;
                 void syncAllWorkspaceData({
                   upload: true,
+                  viewer: currentUser,
                   timeoutMs: 6 * 60_000,
                   onProgress: (msg) => {
                     reportSyncStatus(msg);
@@ -2141,6 +2149,11 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
     const limit = checkLimit('analysis');
     if (!limit.allowed) {
       alert(`今日背调次数已达上限（${limit.current}/${limit.max}）。请联系管理员提高限额，或明日再试。`);
+      return;
+    }
+    const planDig = assertCanDig(currentUser);
+    if (!planDig.allowed) {
+      alert(planDig.message || '套餐背调额度已用尽');
       return;
     }
     const kw = (override?.searchKeyword || discoveryState.product || '').trim();
@@ -3564,6 +3577,11 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       console.warn('analysis limit reached, skip', task.website);
       return;
     }
+    const planDig = assertCanDig(currentUser);
+    if (!planDig.allowed) {
+      console.warn('plan dig quota reached, skip', task.website, planDig.message);
+      return;
+    }
 
     syncAutomationResults((prev) =>
       prev.map((t) => (t.id === task.id ? { ...t, status: 'analyzing' } : t))
@@ -3656,6 +3674,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       }
 
       incrementUsage('analysis');
+      incrementPlanUsage(currentUser, 'dig');
       await updateCrmStatus(result);
 
       let enrichedResult = result;
@@ -4217,6 +4236,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
             }
 
             incrementUsage('analysis');
+            incrementPlanUsage(currentUser, 'dig');
             await updateCrmStatus(result);
             // Excel 行业/品类/备注等非联系人字段补进 CRM
             if (task.importSeed) {
@@ -4936,6 +4956,11 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       alert(`今日背调次数已达上限（${limit.current}/${limit.max}）。请联系管理员提高限额，或明日再试。`);
       return;
     }
+    const planDig = assertCanDig(currentUser);
+    if (!planDig.allowed) {
+      alert(planDig.message || '套餐背调额度已用尽');
+      return;
+    }
 
     const analyzeCount = payload.toAnalyze.length;
     let useNightWindow = false;
@@ -5330,6 +5355,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
       if (isSupabaseConfigured()) {
         const ws = await syncAllWorkspaceData({
           upload: true,
+          viewer: currentUser,
           timeoutMs: 8 * 60_000,
           autoContinueRounds: 15,
           totalTimeoutMs: 40 * 60_000,
@@ -6355,7 +6381,7 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
     setSystemNotice('未开启挂机。本机仅作业务浏览；重任务请在专用挂机端确认执行。');
   };
 
-  if (currentUser.role === 'admin' && !adminInWorkspace) {
+  if (isDirectorOrAbove(currentUser) && !adminInWorkspace) {
     return (
       <AdminDashboard 
         onLogout={handleLogout} 
@@ -6365,8 +6391,8 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
         onEnterWorkspace={() => {
           setAdminInWorkspace(true);
           setActiveModule(ModuleType.HOME);
-          // 每次进入业务台都询问是否挂机（不因本机会话/上次已开而静默跳过）
-          setWorkerPromptOpen(true);
+          // 超管进业务台询问挂机；总监直接进工作台
+          if (isSuperAdmin(currentUser)) setWorkerPromptOpen(true);
         }}
       />
     );

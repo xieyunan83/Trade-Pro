@@ -160,6 +160,8 @@ export const getAllApiConfigs = async (): Promise<ApiConfig[]> => {
 export type CloudUsersBundle = {
   users: import('../types').User[];
   departments?: import('../types').Department[];
+  enterprises?: import('../types').Enterprise[];
+  plans?: import('../types').UserPlan[];
   updatedAt: number;
 }
 
@@ -180,8 +182,10 @@ export const fetchAppUsersFromCloud = async (): Promise<CloudUsersBundle | null>
     const users = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.users) ? parsed.users : null
     if (!users?.length) return null
     const departments = Array.isArray(parsed?.departments) ? parsed.departments : []
+    const enterprises = Array.isArray(parsed?.enterprises) ? parsed.enterprises : []
+    const plans = Array.isArray(parsed?.plans) ? parsed.plans : []
     const updatedAt = Number(data.model_id) || Number(parsed?.updatedAt) || 0
-    return { users, departments, updatedAt }
+    return { users, departments, enterprises, plans, updatedAt }
   } catch (e) {
     console.warn('拉取云端用户失败', e)
     return null
@@ -192,11 +196,13 @@ export const fetchAppUsersFromCloud = async (): Promise<CloudUsersBundle | null>
 export const saveAppUsersToCloud = async (
   users: import('../types').User[],
   updatedAt: number = Date.now(),
-  departments: import('../types').Department[] = []
+  departments: import('../types').Department[] = [],
+  enterprises: import('../types').Enterprise[] = [],
+  plans: import('../types').UserPlan[] = []
 ): Promise<boolean> => {
   if (!isSupabaseConfigured() || !users.length) return false
   try {
-    const payload = JSON.stringify({ users, departments, updatedAt })
+    const payload = JSON.stringify({ users, departments, enterprises, plans, updatedAt })
     const { error } = await supabase
       .from('api_configs')
       .upsert(

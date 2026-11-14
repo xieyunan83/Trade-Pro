@@ -227,11 +227,16 @@ export const syncAutomationQueueToCloud = async (
 };
 
 /**
- * 拉取云端 ∪ 合并本机 → 写回本机；再按需推上云端。
- * 云端拉取失败时保留本机，绝不把空结果写爆本地库。
+ * 作业队列同步。
+ * - writeLocal=false：只对照云端上传本机多出的（①补全云端），不写回本机
+ * - writeLocal=true：合并后写本机；可用 scopeFilter 按权限裁剪云端集（②下拉）
  */
 export const pullMergePushAutomationQueue = async (opts?: {
   upload?: boolean;
+  /** 默认 true。①补云端阶段应 false，避免先把无权限数据灌进本机 */
+  writeLocal?: boolean;
+  /** 下拉时按权限过滤云端行 */
+  scopeFilter?: (rows: AutomationResult[]) => AutomationResult[];
   /** 单次最多上传条数；不设则全量（易拖死整次同步） */
   uploadCap?: number;
   onProgress?: (message: string) => void;
@@ -245,6 +250,7 @@ export const pullMergePushAutomationQueue = async (opts?: {
   error?: string;
 }> => {
   const doUpload = opts?.upload !== false;
+  const writeLocal = opts?.writeLocal !== false;
   const onProgress = opts?.onProgress;
   const check = () => {
     if (opts?.shouldAbort?.()) throw new Error('同步超时或已取消');
@@ -259,66 +265,74 @@ export const pullMergePushAutomationQueue = async (opts?: {
     cloudError = e?.message || String(e);
     console.warn('[automation-cloud] fetch failed', e);
   }
+  const scopedCloud = opts?.scopeFilter ? opts.scopeFilter(cloud) : cloud;
   onProgress?.(
-    `同步中：合并背调作业（本机 ${local.length} / 云 ${cloud.length}）…`
+    `同步中：合并背调作业（本机 ${local.length} / 云 ${scopedCloud.length}${
+      scopedCloud.length !== cloud.length ? `，权限裁剪自 ${cloud.length}` : ''
+    }）…`
   );
-  const merged = mergeAutomationQueues(local, cloud);
+  const merged = mergeAutomationQueues(local, scopedCloud);
 
-  if (merged.length > 0) {
-    await saveAutomationTasksBulk(merged);
-  } else if (local.length > 0) {
-    return {
-      tasks: local,
-      local: local.length,
-      cloud: cloud.length,
-      merged: local.length,
-      uploaded: 0,
-      error: cloudError || '合并结果为空，已保留本机队列',
-    };
+  if (writeLocal) {
+    if (merged.length > 0) {
+      await saveAutomationTasksBulk(merged);
+    } else if (local.length > 0) {
+      return {
+        tasks: local,
+        local: local.length,
+        cloud: cloud.length,
+        merged: local.length,
+        uploaded: 0,
+        error: cloudError || '合并结果为空，已保留本机队列',
+      };
+    }
   }
 
   let uploaded = 0;
   let pushError = cloudError;
-  if (doUpload && merged.length > 0) {
+  // 上传对照用「全量云端」（补全主库），不按权限裁剪
+  if (doUpload && local.length > 0) {
     check();
     const cloudById = new Map(cloud.map((t) => [t.id, t]));
-    // 云拉取成功时只上传新增/更新；失败则全量上传兜底
     let dirty = cloudError
-      ? merged
-      : merged.filter((t) => {
+      ? local.slice()
+      : local.filter((t) => {
           const prev = cloudById.get(t.id);
           if (!prev) return true;
-          // 仅时间戳更新才重传；同戳不因 statusRank 反复全量刷（否则每轮永远几千条）
           return taskStamp(t) > taskStamp(prev);
         });
-    dirty = dirty
-      .slice()
-      .sort((a, b) => taskStamp(b) - taskStamp(a));
+    dirty = dirty.slice().sort((a, b) => taskStamp(b) - taskStamp(a));
     const cap = opts?.uploadCap;
     const pending = dirty.length;
     if (typeof cap === 'number' && cap > 0 && dirty.length > cap) {
       dirty = dirty.slice(0, cap);
       pushError = [
         pushError,
-        `作业队列待传 ${pending} 条，本轮限 ${cap} 条，请再点同步续传`,
+        `作业队列待传约 ${pending} 条，本轮限 ${cap} 条，将自动续传`,
       ]
         .filter(Boolean)
         .join('；');
     }
-    onProgress?.(`同步中：上传背调作业 0/${dirty.length}${pending > dirty.length ? `（共待传 ${pending}）` : ''}…`);
-    const push = await syncAutomationQueueToCloud(dirty, (done, total) => {
-      onProgress?.(`同步中：上传背调作业 ${done}/${total}…`);
-      check();
-    });
-    uploaded = push.uploaded;
-    if (push.error) pushError = push.error;
+    if (dirty.length) {
+      onProgress?.(
+        `同步中：上传背调作业 0/${dirty.length}${
+          pending > dirty.length ? `（共待传 ${pending}）` : ''
+        }…`
+      );
+      const push = await syncAutomationQueueToCloud(dirty, (done, total) => {
+        onProgress?.(`同步中：上传背调作业 ${done}/${total}…`);
+        check();
+      });
+      uploaded = push.uploaded;
+      if (push.error) pushError = push.error;
+    }
   }
 
   return {
-    tasks: merged.length ? merged : local,
-    local: local.length,
+    tasks: writeLocal ? (merged.length ? merged : local) : local,
+    local: writeLocal ? merged.length || local.length : local.length,
     cloud: cloud.length,
-    merged: merged.length || local.length,
+    merged: writeLocal ? merged.length || local.length : local.length,
     uploaded,
     error: pushError,
   };

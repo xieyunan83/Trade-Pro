@@ -146,14 +146,16 @@ export const AppNavDock = memo(function AppNavDock({
           }
           onLogout={onLogout}
         />
-        {currentUser.role === 'admin' && adminInWorkspace && onExitAdminWorkspace && (
+        {(currentUser.role === 'admin' || currentUser.role === 'director') &&
+          adminInWorkspace &&
+          onExitAdminWorkspace && (
           <div className="px-1.5 pb-2">
             <button
               type="button"
               onClick={onExitAdminWorkspace}
               className="w-full text-[9px] font-black text-cyan-200/90 bg-cyan-500/10 border border-cyan-400/20 rounded-lg py-1.5 hover:bg-cyan-500/20"
             >
-              返回管理后台
+              {currentUser.role === 'admin' ? '返回管理后台' : '返回组织台'}
             </button>
           </div>
         )}

@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Loader2, UserPlus, X } from 'lucide-react';
-import type { Department, User, UserRole } from '../types';
+import type { Department, Enterprise, User, UserPlan, UserRole } from '../types';
 import { defaultPermissionsForRole } from '../services/permissions';
 import { defaultAccessSchedule } from '../services/deviceBind';
 import { findUserByName, hashPassword, normalizeUser, persistUsers } from '../services/auth';
 import { sanitizeUsernameInput } from '../services/appFirewall';
+import { DEFAULT_ENTERPRISE_ID } from '../services/orgStore';
 
 export type AddUserFormResult = {
   users: User[];
@@ -16,8 +17,13 @@ interface AddUserModalProps {
   onClose: () => void;
   users: User[];
   departments: Department[];
-  /** 组织权限页：可选角色与部门；用户列表页可简化 */
+  enterprises?: Enterprise[];
+  plans?: UserPlan[];
+  defaultEnterpriseId?: string;
+  /** 组织权限页：可选角色与部门 */
   allowRolePick?: boolean;
+  /** 仅超管可创建系统管理员 */
+  allowAdminRole?: boolean;
   onCreated: (result: AddUserFormResult) => void;
 }
 
@@ -26,27 +32,43 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
   onClose,
   users,
   departments,
+  enterprises = [],
+  plans = [],
+  defaultEnterpriseId = DEFAULT_ENTERPRISE_ID,
   allowRolePick = true,
+  allowAdminRole = false,
   onCreated,
 }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [role, setRole] = useState<UserRole>('user');
+  const [enterpriseId, setEnterpriseId] = useState(defaultEnterpriseId);
   const [departmentId, setDepartmentId] = useState('');
+  const [planId, setPlanId] = useState('');
   const [deviceBindRequired, setDeviceBindRequired] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+
+  const deptsInEnterprise = useMemo(
+    () =>
+      departments.filter(
+        (d) => (d.enterpriseId || DEFAULT_ENTERPRISE_ID) === enterpriseId
+      ),
+    [departments, enterpriseId]
+  );
 
   useEffect(() => {
     if (!open) return;
     setUsername('');
     setPassword('');
     setRole('user');
+    setEnterpriseId(defaultEnterpriseId);
     setDepartmentId('');
+    setPlanId('');
     setDeviceBindRequired(false);
     setSaving(false);
     setError('');
-  }, [open]);
+  }, [open, defaultEnterpriseId]);
 
   if (!open) return null;
 
@@ -68,6 +90,10 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
       setError('密码至少需要 6 位');
       return;
     }
+    if (role === 'admin' && !allowAdminRole) {
+      setError('无权创建系统管理员');
+      return;
+    }
 
     setSaving(true);
     try {
@@ -77,7 +103,9 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
         password: await hashPassword(password.trim()),
         isFirstLogin: true,
         createdAt: Date.now(),
+        enterpriseId: enterpriseId || DEFAULT_ENTERPRISE_ID,
         departmentId: departmentId || undefined,
+        planId: planId || undefined,
         permissions: defaultPermissionsForRole(allowRolePick ? role : 'user'),
         deviceBindRequired,
         boundDevices: [],
@@ -119,7 +147,9 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
 
         <form onSubmit={handleSubmit} className="p-4 sm:p-5 space-y-4">
           <label className="block space-y-1">
-            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">用户名</span>
+            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+              用户名
+            </span>
             <input
               autoFocus
               value={username}
@@ -131,7 +161,9 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
           </label>
 
           <label className="block space-y-1">
-            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">登录密码</span>
+            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+              登录密码
+            </span>
             <input
               type="password"
               value={password}
@@ -145,7 +177,9 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
           {allowRolePick && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <label className="block space-y-1">
-                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">角色</span>
+                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                  角色
+                </span>
                 <select
                   value={role}
                   onChange={(e) => setRole(e.target.value as UserRole)}
@@ -154,11 +188,36 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
                 >
                   <option value="user">部门员工</option>
                   <option value="manager">部门主管</option>
-                  <option value="director">总管</option>
+                  <option value="director">总监管理员</option>
+                  {allowAdminRole && <option value="admin">超级管理员</option>}
                 </select>
               </label>
               <label className="block space-y-1">
-                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">部门</span>
+                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                  企业
+                </span>
+                <select
+                  value={enterpriseId}
+                  onChange={(e) => {
+                    setEnterpriseId(e.target.value);
+                    setDepartmentId('');
+                  }}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-bold bg-white"
+                  disabled={saving || enterprises.length === 0}
+                >
+                  {(enterprises.length ? enterprises : [{ id: DEFAULT_ENTERPRISE_ID, name: '默认企业', createdAt: 0 }]).map(
+                    (e) => (
+                      <option key={e.id} value={e.id}>
+                        {e.displayName || e.name}
+                      </option>
+                    )
+                  )}
+                </select>
+              </label>
+              <label className="block space-y-1">
+                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                  部门
+                </span>
                 <select
                   value={departmentId}
                   onChange={(e) => setDepartmentId(e.target.value)}
@@ -166,9 +225,27 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
                   disabled={saving}
                 >
                   <option value="">未分配</option>
-                  {departments.map((d) => (
+                  {deptsInEnterprise.map((d) => (
                     <option key={d.id} value={d.id}>
                       {d.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block space-y-1">
+                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                  套餐
+                </span>
+                <select
+                  value={planId}
+                  onChange={(e) => setPlanId(e.target.value)}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-bold bg-white"
+                  disabled={saving}
+                >
+                  <option value="">不绑定</option>
+                  {plans.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
                     </option>
                   ))}
                 </select>
@@ -192,7 +269,11 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
             </span>
           </label>
 
-          {error && <div className="text-xs font-bold text-red-600 bg-red-50 rounded-xl px-3 py-2">{error}</div>}
+          {error && (
+            <div className="text-xs font-bold text-red-600 bg-red-50 rounded-xl px-3 py-2">
+              {error}
+            </div>
+          )}
 
           <div className="flex gap-2 pt-1">
             <button

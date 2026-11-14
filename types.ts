@@ -102,11 +102,35 @@ export type PermissionKey =
   | 'feature.records_center'
   | 'feature.manage_team_users';
 
+/** 企业：部门之上的组织阶层（多企业共用一套后台时隔离） */
+export interface Enterprise {
+  id: string;
+  name: string;
+  /** 企业备注 / 对外显示名 */
+  displayName?: string;
+  createdAt: number;
+}
+
 export interface Department {
   id: string;
   name: string;
+  /** 所属企业；未设置视为默认企业 */
+  enterpriseId?: string;
   /** 部门主管用户名 */
   managerUsername?: string;
+  createdAt: number;
+}
+
+/** 套餐（售卖骨架）：控制搜索/背调/解锁额度 */
+export interface UserPlan {
+  id: string;
+  name: string;
+  /** 每月可搜索次数；-1 不限 */
+  searchQuotaMonthly: number;
+  /** 每月可背调次数；-1 不限 */
+  digQuotaMonthly: number;
+  /** 每月可从主库解锁完整资料次数；-1 不限 */
+  unlockQuotaMonthly: number;
   createdAt: number;
 }
 
@@ -114,8 +138,12 @@ export interface User {
   username: string;
   password?: string;
   role: UserRole;
+  /** 所属企业（可与部门上的企业一致；总监/管理员可跨企业） */
+  enterpriseId?: string;
   /** 所属部门 */
   departmentId?: string;
+  /** 绑定套餐；未设置则不按套餐计量（内部账号） */
+  planId?: string;
   /**
    * 显式授权列表；未设置时使用角色默认权限，空数组表示无任何额外授权。
    * 部门主管可调整下属的该字段（不能授予管理下属权限以外的管理权）。

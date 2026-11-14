@@ -1,8 +1,11 @@
 /**
  * 工作区全量云同步：CRM / 背调历史 / 产品画像 / 背调作业队列
- * 登录与「同步全部资料」时：先拉取合并写本机（尽快出界面），再按需推上云端。
+ *
+ * 硬顺序（产品定调）：
+ * ① 先把「本机有、云端没有」的补上云端 → 云端永远最全
+ * ② 再按当前用户权限，把主库可见数据拉回本机 → 本地操作像原生应用
  */
-import type { Client, CustomerProductProfile, HistoryItem } from '../types';
+import type { Client, CustomerProductProfile, HistoryItem, User, Department } from '../types';
 import { getAutomationQueue, getHistory, saveHistoryBulk, saveProductProfilesBulk } from './db';
 import { loadProductCatalog } from './productCatalog';
 import {
@@ -17,6 +20,9 @@ import {
   saveCrmClientsBulk,
   syncProductProfilesCloud,
 } from './supabase';
+import { filterOwnedRecords } from './permissions';
+import { loadUsersFromStorage } from './auth';
+import { loadDepartmentsFromStorage } from './orgStore';
 
 /**
  * 单次同步上传/下载上限：禁止一次拉全表大 JSON（6000 条正文必超时）。
@@ -48,6 +54,10 @@ export type WorkspaceSyncReport = {
 export type WorkspaceSyncOptions = {
   /** 默认 true。登录时可 false：只拉云端写本机，上传放到后台，避免界面卡在 0 */
   upload?: boolean;
+  /** 默认 true。为 false 时只补云端、不拉回（少见） */
+  download?: boolean;
+  /** 当前登录用户：下拉阶段按权限过滤可见集 */
+  viewer?: User | null;
   /** 阶段进度（给按钮旁状态条用） */
   onProgress?: (message: string) => void;
   /** 单轮同步硬超时（毫秒），默认 8 分钟 */
@@ -70,7 +80,8 @@ export const workspaceSyncNeedsContinue = (r: WorkspaceSyncReport): boolean => {
   if (r.profiles.local > r.profiles.cloud + 30) return true;
   if (r.automation.local > r.automation.cloud + 50) return true;
   const err = (r.errors || []).join('\n');
-  if (/待传约\s*[1-9]|云端多出约\s*[1-9]|本轮已下载\s*[1-9]/.test(err)) return true;
+  if (/待传约\s*[1-9]|云端(?:仍)?多出约\s*[1-9]|本轮(?:已下载|按权限下拉)\s*[1-9]/.test(err))
+    return true;
   return false;
 };
 
@@ -411,10 +422,10 @@ const DEFAULT_SYNC_TIMEOUT_MS = 8 * 60 * 1000;
 const DEFAULT_TOTAL_TIMEOUT_MS = 40 * 60 * 1000;
 
 /**
- * 全量同步：合并本机与云端，先写回本机，再按需推上云端。
- * 硬规则：本函数路径上绝不调用任何云端 delete；本机为空时只拉取，不覆盖云端。
- * 禁止用「空合并结果」覆盖本机已有数据（云端拉取失败时尤甚）。
- * 支持 autoContinueRounds：有差量时自动多轮续传，免手点。
+ * 全量同步（两阶段）：
+ * ① 本机有、云端没有 → 先上传补全主库
+ * ② 再按 viewer 权限把主库可见集拉回本机
+ * 硬规则：绝不云端 delete；空合并不覆盖本机；支持 autoContinueRounds 自动续传。
  */
 export const syncAllWorkspaceData = async (
   opts?: WorkspaceSyncOptions
@@ -446,6 +457,8 @@ export const syncAllWorkspaceData = async (
       try {
         const r = await runSyncAllWorkspaceData({
           upload: wantUpload,
+          download: opts?.download,
+          viewer: opts?.viewer,
           onProgress: (msg) => {
             onProgress?.(maxRounds > 1 ? `[第${round}轮] ${msg}` : msg);
           },
@@ -549,6 +562,20 @@ const runSyncAllWorkspaceData = async (
     return report;
   }
 
+  const doDownload = opts?.download !== false;
+  const viewer = opts?.viewer || null;
+  const allUsers = loadUsersFromStorage();
+  const allDepts: Department[] =
+    loadDepartmentsFromStorage().length > 0
+      ? loadDepartmentsFromStorage()
+      : [];
+  const scopePull = <T extends { ownerUsername?: string; departmentId?: string }>(
+    rows: T[]
+  ): T[] => {
+    if (!viewer) return rows;
+    return filterOwnedRecords(viewer, rows, allUsers, allDepts);
+  };
+
   // 一进来先钉本机条数（CRM 同步读、作业内存快照），超时弹窗绝不靠猜
   try {
     const localCrmN = loadAllCrmClients().length;
@@ -564,401 +591,404 @@ const runSyncAllWorkspaceData = async (
     /* ignore */
   }
 
-  // —— 背调历史（最先：只走索引差量，禁止全表正文）——
+  // ========== ① 补全云端：本机有、云端没有 → 先上传 ==========
+  onProgress?.('① 补全云端：上传本机多出的资料…');
+
+  // —— 背调历史上传 ——
+  let histCloudMeta: { id: string; stamp: number }[] = [];
+  let histCloudMetaOk = false;
+  let localHistCache: HistoryItem[] = [];
   try {
     check();
     await pauseIfUserBusy(opts?.shouldAbort);
-    onProgress?.('同步中：读取本机背调历史…');
-    const localHist = await getHistory();
+    localHistCache = await getHistory();
     report.history = {
-      local: localHist.length,
+      local: localHistCache.length,
       cloud: 0,
-      merged: localHist.length,
+      merged: localHistCache.length,
       uploaded: 0,
     };
-
-    let cloudMeta: { id: string; stamp: number }[] = [];
-    let cloudMetaOk = false;
     try {
-      onProgress?.(`同步中：拉取云端背调索引（本机 ${localHist.length}）…`);
-      cloudMeta = await withTimeout(
+      onProgress?.(
+        `① 云端索引：背调历史（本机 ${localHistCache.length}）…`
+      );
+      histCloudMeta = await withTimeout(
         listInvestigationHistoryCloudMeta(),
         CLOUD_META_TIMEOUT_MS,
         '背调历史云端索引'
       );
-      cloudMetaOk = true;
-      report.history.cloud = cloudMeta.length;
+      histCloudMetaOk = true;
+      report.history.cloud = histCloudMeta.length;
     } catch (e: any) {
       errors.push(`背调历史云端索引：${e?.message || String(e)}`);
     }
-
-    const localById = new Map(localHist.filter((h) => h?.id).map((h) => [h.id, h]));
-    const cloudIds = new Set(cloudMeta.map((m) => m.id));
-
-    // 云有本无：按 id 限额下载（Mac 常见：云 6000+ / 本机更少）
-    let downloaded = 0;
-    let cloudPartial: HistoryItem[] = [];
-    if (cloudMetaOk) {
-      const missingLocal = cloudMeta
-        .filter((m) => m.id && !localById.has(m.id))
-        .sort((a, b) => (b.stamp || 0) - (a.stamp || 0));
-      const pendingDown = missingLocal.length;
-      const toFetch = missingLocal.slice(0, HISTORY_DOWNLOAD_CAP_PER_SYNC).map((m) => m.id);
-      if (toFetch.length) {
-        check();
-        onProgress?.(
-          `同步中：下载背调历史 0/${toFetch.length}${
-            pendingDown > toFetch.length ? `（云端多出约 ${pendingDown}）` : ''
-          }…`
-        );
-        try {
-          cloudPartial = await getInvestigationHistoryByLocalIds(toFetch, {
-            shouldAbort: opts?.shouldAbort,
-            onProgress: (done, total) => {
-              onProgress?.(`同步中：下载背调历史 ${done}/${total}…`);
-              check();
-            },
-          });
-          downloaded = cloudPartial.length;
-          if (pendingDown > downloaded) {
-            errors.push(
-              `背调历史云端多出约 ${pendingDown} 条，本轮已下载 ${downloaded}，请再点同步续传`
-            );
-          }
-        } catch (e: any) {
-          errors.push(`背调历史差量下载：${e?.message || String(e)}`);
-        }
-      }
-    }
-
-    check();
-    await pauseIfUserBusy(opts?.shouldAbort);
-    const mergedHist = cloudPartial.length
-      ? mergeHistoryById(localHist, cloudPartial)
-      : localHist;
-    await yieldToUi();
-    if (cloudPartial.length && mergedHist.length > 0) {
-      await pauseIfUserBusy(opts?.shouldAbort);
-      await saveHistoryBulk(mergedHist);
-    }
-    onProgress?.(
-      `同步中：合并背调历史（本机 ${localHist.length} / 云 ${report.history.cloud} / 本轮下载 ${downloaded}）…`
-    );
-
+    const cloudIds = new Set(histCloudMeta.map((m) => m.id));
     let uploaded = 0;
-    if (doUpload && mergedHist.length > 0) {
-      check();
-      await pauseIfUserBusy(opts?.shouldAbort);
-      let dirty: HistoryItem[] = [];
-      if (cloudMetaOk) {
-        // 索引无 updated_at：只补「云端没有的 id」，避免误全量重传
-        dirty = mergedHist.filter((h) => h?.id && !cloudIds.has(h.id));
-      } else {
-        dirty = mergedHist.slice();
-        errors.push('背调历史云端索引不可用，本轮按限额补传本机历史；请再点同步续传');
+    if (doUpload && localHistCache.length > 0) {
+      let dirty = histCloudMetaOk
+        ? localHistCache.filter((h) => h?.id && !cloudIds.has(h.id))
+        : localHistCache.slice();
+      if (!histCloudMetaOk) {
+        errors.push('背调历史云端索引不可用，本轮按限额补传本机历史');
       }
-
       const pending = dirty.length;
       dirty = dirty
         .slice()
         .sort((a, b) => histStamp(b) - histStamp(a))
         .slice(0, HISTORY_UPLOAD_CAP_PER_SYNC);
-
       if (dirty.length) {
         onProgress?.(
-          `同步中：上传背调历史 0/${dirty.length}${
+          `① 上传背调历史 0/${dirty.length}${
             pending > dirty.length ? `（共待传 ${pending}）` : ''
           }…`
         );
         uploaded = await uploadHistoryChunked(dirty, async (done, total) => {
-          onProgress?.(`同步中：上传背调历史 ${done}/${total}…`);
+          onProgress?.(`① 上传背调历史 ${done}/${total}…`);
           check();
           await pauseIfUserBusy(opts?.shouldAbort);
         });
         if (pending > uploaded) {
           errors.push(
-            `背调历史待传约 ${pending} 条，本轮已传 ${uploaded}，请再点同步续传`
+            `背调历史待传约 ${pending} 条，本轮已传 ${uploaded}，将自动续传`
           );
         }
-      } else if (cloudMetaOk && downloaded === 0) {
-        onProgress?.('同步中：背调历史无需上传（云端已覆盖本机 id）…');
+        // 上传后刷新索引，便于本轮后续下拉判断
+        for (const h of dirty.slice(0, uploaded)) {
+          if (h?.id) cloudIds.add(h.id);
+          histCloudMeta.push({ id: h.id, stamp: histStamp(h) });
+        }
+        report.history.cloud = Math.max(report.history.cloud, cloudIds.size);
+      } else {
+        onProgress?.('① 背调历史：云端已覆盖本机，无需上传');
       }
     }
-    if (downloaded > 0) {
-      errors.push(`背调历史本轮从云端下载 ${downloaded} 条到本机`);
-    }
-    report.history = {
-      local: localHist.length,
-      cloud: report.history.cloud,
-      merged: mergedHist.length || localHist.length,
-      uploaded,
-    };
+    report.history.uploaded = uploaded;
   } catch (e: any) {
-    errors.push(`背调历史：${e?.message || String(e)}`);
+    errors.push(`背调历史上传：${e?.message || String(e)}`);
   }
 
-  // —— CRM（历史之后立刻做：云端长期 0 时优先限额补种）——
+  // —— CRM 上传（只补云端缺口）——
+  let crmCloudMeta: { id: string; stamp: number }[] = [];
+  let crmCloudMetaOk = false;
+  let localCrmCache: Client[] = [];
   try {
     check();
-    await pauseIfUserBusy(opts?.shouldAbort);
-    onProgress?.('同步中：读取本机 CRM…');
-    const localCrm = loadAllCrmClients();
-    report.crm = { local: localCrm.length, cloud: 0, merged: localCrm.length, uploaded: 0 };
-
-    let cloudMeta: { id: string; stamp: number }[] = [];
-    let cloudMetaOk = false;
+    localCrmCache = loadAllCrmClients();
+    report.crm = {
+      local: localCrmCache.length,
+      cloud: 0,
+      merged: localCrmCache.length,
+      uploaded: 0,
+    };
     try {
-      onProgress?.(`同步中：拉取云端 CRM 索引（本机已有 ${localCrm.length}）…`);
-      cloudMeta = await withTimeout(
+      onProgress?.(`① 云端索引：CRM（本机 ${localCrmCache.length}）…`);
+      crmCloudMeta = await withTimeout(
         listCrmClientsCloudMeta(),
         CLOUD_META_TIMEOUT_MS,
         'CRM 云端索引'
       );
-      cloudMetaOk = true;
-      report.crm.cloud = cloudMeta.length;
+      crmCloudMetaOk = true;
+      report.crm.cloud = crmCloudMeta.length;
     } catch (e: any) {
       errors.push(`CRM 云端索引：${e?.message || String(e)}`);
     }
-
-    // 正文仅在索引显示云端有数据时再拉（用于合并下发）；云端 0 则直接上传
-    let cloudCrm: Client[] = [];
-    let cloudOk = false;
-    if (cloudMetaOk && cloudMeta.length > 0 && cloudMeta.length < localCrm.length + 500) {
-      try {
-        check();
-        onProgress?.(`同步中：拉取云端 CRM 正文（索引 ${cloudMeta.length}）…`);
-        cloudCrm = await withTimeout(getCrmClients(), CLOUD_PULL_TIMEOUT_MS, 'CRM 云端正文');
-        cloudOk = true;
-        report.crm.cloud = cloudCrm.length;
-      } catch (e: any) {
-        errors.push(`CRM 云端正文：${e?.message || String(e)}`);
-      }
-    }
-
-    check();
-    await pauseIfUserBusy(opts?.shouldAbort);
-    onProgress?.(
-      `同步中：合并 CRM（本机 ${localCrm.length} / 云索引 ${cloudMetaOk ? cloudMeta.length : '—'}）…`
-    );
-    let mergedCrm = await mergeClientsByIdAsync(localCrm, cloudCrm, {
-      shouldAbort: opts?.shouldAbort,
-      onProgress,
-    });
-    try {
-      const { mergeCrmClientsByDomain } = await import('../utils/crmHistory');
-      const domainMerged = mergeCrmClientsByDomain(mergedCrm);
-      if (domainMerged.removedCount > 0) {
-        console.info(
-          `[workspace-sync] CRM domain dedupe: groups=${domainMerged.mergedGroups} removed=${domainMerged.removedCount}`
-        );
-        mergedCrm = domainMerged.clients;
-        try {
-          const { remapEmailTaskClientIds } = await import('./emailCampaignStore');
-          remapEmailTaskClientIds(domainMerged.remaps);
-        } catch {
-          /* ignore */
-        }
-      }
-    } catch (e) {
-      console.warn('[workspace-sync] CRM domain dedupe skipped', e);
-    }
-    if (mergedCrm.length > 0) {
-      reconcileCrmTombstonesWithLiveClients(mergedCrm);
-      saveAllCrmClients(mergedCrm);
-    } else if (localCrm.length > 0) {
-      errors.push('CRM：合并结果为空，已保留本机数据');
-    }
-
-    let uploaded = 0;
-    if (doUpload && mergedCrm.length > 0) {
-      check();
-      const cloudIds = new Set(cloudMeta.map((m) => m.id));
-      const cloudById = new Map(cloudCrm.map((c) => [c.id, c]));
-      let dirty = cloudMetaOk
-        ? mergedCrm.filter((c) => {
-            if (!c?.id) return false;
-            if (!cloudIds.has(c.id)) return true;
-            if (!cloudOk) return false;
-            const prev = cloudById.get(c.id);
-            if (!prev) return true;
-            return clientStamp(c) > clientStamp(prev);
-          })
-        : mergedCrm.slice();
+    if (doUpload && localCrmCache.length > 0) {
+      const cloudIds = new Set(crmCloudMeta.map((m) => m.id));
+      let dirty = crmCloudMetaOk
+        ? localCrmCache.filter((c) => c?.id && !cloudIds.has(c.id))
+        : localCrmCache.slice();
       dirty = dirty.slice().sort((a, b) => clientStamp(b) - clientStamp(a));
-      const pendingCrm = dirty.length;
-      if (pendingCrm > CRM_UPLOAD_CAP_PER_SYNC) {
+      const pending = dirty.length;
+      if (pending > CRM_UPLOAD_CAP_PER_SYNC) {
         dirty = dirty.slice(0, CRM_UPLOAD_CAP_PER_SYNC);
         errors.push(
-          `CRM 待传约 ${pendingCrm} 条，本轮限 ${CRM_UPLOAD_CAP_PER_SYNC} 条，请再点同步续传`
+          `CRM 待传约 ${pending} 条，本轮限 ${CRM_UPLOAD_CAP_PER_SYNC} 条，将自动续传`
         );
       }
       if (dirty.length) {
-        onProgress?.(
-          `同步中：上传 CRM ${dirty.length} 条${
-            pendingCrm > dirty.length ? `（共待传 ${pendingCrm}）` : ''
-          }…`
-        );
-        uploaded = await uploadCrmChunked(dirty, async (done, total) => {
-          onProgress?.(`同步中：上传 CRM ${done}/${total}…`);
+        onProgress?.(`① 上传 CRM 0/${dirty.length}…`);
+        report.crm.uploaded = await uploadCrmChunked(dirty, async (done, total) => {
+          onProgress?.(`① 上传 CRM ${done}/${total}…`);
           check();
           await pauseIfUserBusy(opts?.shouldAbort);
         });
-      } else if (cloudMetaOk) {
-        onProgress?.(`同步中：CRM 无需上传（云端索引 ${cloudMeta.length}）…`);
+        report.crm.cloud = Math.max(report.crm.cloud, cloudIds.size + report.crm.uploaded);
+      } else {
+        onProgress?.('① CRM：云端已覆盖本机，无需上传');
       }
     }
-    report.crm = {
-      local: localCrm.length,
-      cloud: cloudMetaOk ? Math.max(cloudMeta.length, cloudCrm.length) : cloudCrm.length,
-      merged: mergedCrm.length || localCrm.length,
-      uploaded,
-    };
   } catch (e: any) {
-    errors.push(`CRM：${e?.message || String(e)}`);
+    errors.push(`CRM 上传：${e?.message || String(e)}`);
   }
 
-  // —— 产品画像（索引差量，禁止每轮全文 + 失败全量补种）——
+  // —— 产品画像上传 ——
+  let profileCloudMeta: { id: string; stamp: number }[] = [];
+  let profileCloudMetaOk = false;
+  let localProfilesCache: CustomerProductProfile[] = [];
   try {
     check();
-    await pauseIfUserBusy(opts?.shouldAbort);
-    onProgress?.('同步中：读取本机产品画像…');
-    const localProfiles = await loadProductCatalog();
+    localProfilesCache = await loadProductCatalog();
     report.profiles = {
-      local: localProfiles.length,
+      local: localProfilesCache.length,
       cloud: 0,
-      merged: localProfiles.length,
+      merged: localProfilesCache.length,
       uploaded: 0,
     };
-
-    let cloudMeta: { id: string; stamp: number }[] = [];
-    let cloudMetaOk = false;
     try {
-      onProgress?.(`同步中：拉取云端画像索引（本机 ${localProfiles.length}）…`);
-      cloudMeta = await withTimeout(
+      onProgress?.(`① 云端索引：产品画像（本机 ${localProfilesCache.length}）…`);
+      profileCloudMeta = await withTimeout(
         listProductProfilesCloudMeta(),
         CLOUD_META_TIMEOUT_MS,
         '产品画像云端索引'
       );
-      cloudMetaOk = true;
-      report.profiles.cloud = cloudMeta.length;
+      profileCloudMetaOk = true;
+      report.profiles.cloud = profileCloudMeta.length;
     } catch (e: any) {
       errors.push(`产品画像云端索引：${e?.message || String(e)}`);
     }
-
-    const localById = new Map(
-      localProfiles.filter((p) => p?.id).map((p) => [p.id, p])
-    );
-    const cloudIds = new Set(cloudMeta.map((m) => m.id));
-    let downloaded = 0;
-    let cloudPartial: CustomerProductProfile[] = [];
-    if (cloudMetaOk) {
-      const missingLocal = cloudMeta
-        .filter((m) => m.id && !localById.has(m.id))
-        .sort((a, b) => (b.stamp || 0) - (a.stamp || 0))
-        .slice(0, PROFILE_UPLOAD_CAP_PER_SYNC)
-        .map((m) => m.id);
-      if (missingLocal.length) {
-        onProgress?.(`同步中：下载产品画像 0/${missingLocal.length}…`);
-        try {
-          cloudPartial = await getProductProfilesByLocalIds(missingLocal, {
-            shouldAbort: opts?.shouldAbort,
-            onProgress: (done, total) => {
-              onProgress?.(`同步中：下载产品画像 ${done}/${total}…`);
-              check();
-            },
-          });
-          downloaded = cloudPartial.length;
-        } catch (e: any) {
-          errors.push(`产品画像差量下载：${e?.message || String(e)}`);
-        }
-      }
-    }
-
-    const mergedProfiles = cloudPartial.length
-      ? mergeProfilesById(localProfiles, cloudPartial)
-      : localProfiles;
-    if (cloudPartial.length) await saveProductProfilesBulk(mergedProfiles);
-
-    let uploaded = 0;
-    if (doUpload && mergedProfiles.length) {
-      check();
-      const profileStamp = (p: CustomerProductProfile) =>
-        Math.max(Number((p as any).updatedAt) || 0, Number((p as any).createdAt) || 0, 0);
-      let dirty = cloudMetaOk
-        ? mergedProfiles.filter((p) => p?.id && !cloudIds.has(p.id))
-        : mergedProfiles.slice();
+    if (doUpload && localProfilesCache.length > 0) {
+      const cloudIds = new Set(profileCloudMeta.map((m) => m.id));
+      let dirty = profileCloudMetaOk
+        ? localProfilesCache.filter((p) => p?.id && !cloudIds.has(p.id))
+        : localProfilesCache.slice();
       const pending = dirty.length;
-      dirty = dirty
-        .slice()
-        .sort((a, b) => profileStamp(b) - profileStamp(a))
-        .slice(0, PROFILE_UPLOAD_CAP_PER_SYNC);
+      dirty = dirty.slice(0, PROFILE_UPLOAD_CAP_PER_SYNC);
       if (dirty.length) {
-        onProgress?.(
-          `同步中：上传产品画像 ${dirty.length} 条${
-            pending > dirty.length ? `（共待传 ${pending}）` : ''
-          }…`
-        );
-        uploaded = await syncProductProfilesCloud(dirty);
-        if (pending > uploaded) {
+        onProgress?.(`① 上传产品画像 ${dirty.length} 条…`);
+        report.profiles.uploaded = await syncProductProfilesCloud(dirty);
+        if (pending > report.profiles.uploaded) {
           errors.push(
-            `产品画像待传约 ${pending} 条，本轮已传 ${uploaded}，请再点同步续传`
+            `产品画像待传约 ${pending} 条，本轮已传 ${report.profiles.uploaded}，将自动续传`
           );
         }
-      } else if (cloudMetaOk) {
-        onProgress?.(`同步中：产品画像无需上传（云端索引 ${cloudMeta.length}）…`);
+        report.profiles.cloud = Math.max(
+          report.profiles.cloud,
+          cloudIds.size + report.profiles.uploaded
+        );
+      } else {
+        onProgress?.('① 产品画像：云端已覆盖本机，无需上传');
       }
     }
-    if (downloaded > 0) {
-      errors.push(`产品画像本轮从云端下载 ${downloaded} 条到本机`);
-    }
-    report.profiles = {
-      local: localProfiles.length,
-      cloud: cloudMetaOk ? cloudMeta.length : 0,
-      merged: mergedProfiles.length || localProfiles.length,
-      uploaded,
-    };
   } catch (e: any) {
-    errors.push(`产品画像：${e?.message || String(e)}`);
+    errors.push(`产品画像上传：${e?.message || String(e)}`);
   }
 
-  // —— 背调作业队列（最后 + 限额：不再每轮刷几千条占满超时）——
+  // —— 作业队列：先推本机多出的（不写本机）——
   try {
     check();
-    await pauseIfUserBusy(opts?.shouldAbort);
-    onProgress?.('同步中：读取本机背调作业…');
-    const localAutoN = (await getAutomationQueue()).length;
-    report.automation = {
-      local: localAutoN,
-      cloud: 0,
-      merged: localAutoN,
-      uploaded: 0,
-    };
-    onProgress?.(`同步中：合并/上传背调作业（本机已有 ${localAutoN}）…`);
+    onProgress?.('① 上传背调作业队列…');
     const synced = await pullMergePushAutomationQueue({
       upload: doUpload,
+      writeLocal: false,
       uploadCap: AUTOMATION_UPLOAD_CAP_PER_SYNC,
       shouldAbort: opts?.shouldAbort,
       onProgress: (msg) => {
-        onProgress?.(msg);
+        onProgress?.(`① ${msg.replace(/^同步中：/, '')}`);
         check();
       },
     });
     report.automation = {
       local: synced.local,
       cloud: synced.cloud,
-      merged: synced.merged,
+      merged: synced.local,
       uploaded: synced.uploaded,
     };
-    if (synced.error) errors.push(`背调作业：${synced.error}`);
+    if (synced.error) errors.push(`背调作业上传：${synced.error}`);
   } catch (e: any) {
-    errors.push(`背调作业：${e?.message || String(e)}`);
+    errors.push(`背调作业上传：${e?.message || String(e)}`);
+  }
+
+  if (!doDownload) {
+    report.ok = errors.length === 0;
+    onProgress?.('已完成①补全云端（本轮不下拉）');
+    return report;
+  }
+
+  // ========== ② 按权限下拉主库 → 本机 ==========
+  onProgress?.(
+    viewer
+      ? `② 按权限下拉主库（${viewer.username} / ${viewer.role}）…`
+      : '② 下拉主库到本机…'
+  );
+
+  // —— 背调历史下载 ——
+  try {
+    check();
+    const localHist = localHistCache.length ? localHistCache : await getHistory();
+    const localById = new Map(localHist.filter((h) => h?.id).map((h) => [h.id, h]));
+    if (!histCloudMetaOk) {
+      try {
+        histCloudMeta = await withTimeout(
+          listInvestigationHistoryCloudMeta(),
+          CLOUD_META_TIMEOUT_MS,
+          '背调历史云端索引'
+        );
+        histCloudMetaOk = true;
+      } catch (e: any) {
+        errors.push(`背调历史下拉索引：${e?.message || String(e)}`);
+      }
+    }
+    report.history.cloud = Math.max(report.history.cloud, histCloudMeta.length);
+    if (histCloudMetaOk) {
+      const missingLocal = histCloudMeta
+        .filter((m) => m.id && !localById.has(m.id))
+        .sort((a, b) => (b.stamp || 0) - (a.stamp || 0));
+      const toFetch = missingLocal
+        .slice(0, HISTORY_DOWNLOAD_CAP_PER_SYNC)
+        .map((m) => m.id);
+      if (toFetch.length) {
+        onProgress?.(`② 下载背调历史 0/${toFetch.length}…`);
+        let cloudPartial = await getInvestigationHistoryByLocalIds(toFetch, {
+          shouldAbort: opts?.shouldAbort,
+          onProgress: (done, total) => {
+            onProgress?.(`② 下载背调历史 ${done}/${total}…`);
+            check();
+          },
+        });
+        cloudPartial = scopePull(cloudPartial);
+        if (cloudPartial.length) {
+          const mergedHist = mergeHistoryById(localHist, cloudPartial);
+          await saveHistoryBulk(mergedHist);
+          report.history.merged = mergedHist.length;
+          report.history.local = mergedHist.length;
+          errors.push(`背调历史本轮按权限下拉 ${cloudPartial.length} 条到本机`);
+          if (missingLocal.length > cloudPartial.length) {
+            errors.push(
+              `背调历史云端仍多出约 ${missingLocal.length - cloudPartial.length} 条，将自动续传`
+            );
+          }
+        }
+      } else {
+        onProgress?.('② 背调历史：本机已齐，无需下拉');
+        report.history.merged = localHist.length;
+      }
+    }
+  } catch (e: any) {
+    errors.push(`背调历史下拉：${e?.message || String(e)}`);
+  }
+
+  // —— CRM 下拉合并 ——
+  try {
+    check();
+    const localCrm = localCrmCache.length ? localCrmCache : loadAllCrmClients();
+    if (!crmCloudMetaOk || crmCloudMeta.length > 0) {
+      onProgress?.('② 下拉 CRM 正文…');
+      try {
+        let cloudCrm = await withTimeout(
+          getCrmClients(),
+          CLOUD_PULL_TIMEOUT_MS,
+          'CRM 云端正文'
+        );
+        cloudCrm = scopePull(cloudCrm);
+        report.crm.cloud = Math.max(report.crm.cloud, cloudCrm.length);
+        let mergedCrm = await mergeClientsByIdAsync(localCrm, cloudCrm, {
+          shouldAbort: opts?.shouldAbort,
+          onProgress: (msg) => onProgress?.(msg.replace('同步中：', '② ')),
+        });
+        try {
+          const { mergeCrmClientsByDomain } = await import('../utils/crmHistory');
+          const domainMerged = mergeCrmClientsByDomain(mergedCrm);
+          if (domainMerged.removedCount > 0) mergedCrm = domainMerged.clients;
+        } catch {
+          /* ignore */
+        }
+        if (mergedCrm.length > 0) {
+          reconcileCrmTombstonesWithLiveClients(mergedCrm);
+          saveAllCrmClients(mergedCrm);
+          report.crm.merged = mergedCrm.length;
+          report.crm.local = mergedCrm.length;
+        }
+      } catch (e: any) {
+        errors.push(`CRM 下拉：${e?.message || String(e)}`);
+      }
+    }
+  } catch (e: any) {
+    errors.push(`CRM 下拉：${e?.message || String(e)}`);
+  }
+
+  // —— 产品画像下拉 ——
+  try {
+    check();
+    const localProfiles = localProfilesCache.length
+      ? localProfilesCache
+      : await loadProductCatalog();
+    const localById = new Map(
+      localProfiles.filter((p) => p?.id).map((p) => [p.id, p])
+    );
+    if (!profileCloudMetaOk) {
+      try {
+        profileCloudMeta = await withTimeout(
+          listProductProfilesCloudMeta(),
+          CLOUD_META_TIMEOUT_MS,
+          '产品画像云端索引'
+        );
+        profileCloudMetaOk = true;
+      } catch (e: any) {
+        errors.push(`产品画像下拉索引：${e?.message || String(e)}`);
+      }
+    }
+    report.profiles.cloud = Math.max(report.profiles.cloud, profileCloudMeta.length);
+    if (profileCloudMetaOk) {
+      const missing = profileCloudMeta
+        .filter((m) => m.id && !localById.has(m.id))
+        .slice(0, PROFILE_UPLOAD_CAP_PER_SYNC)
+        .map((m) => m.id);
+      if (missing.length) {
+        onProgress?.(`② 下载产品画像 0/${missing.length}…`);
+        let partial = await getProductProfilesByLocalIds(missing, {
+          shouldAbort: opts?.shouldAbort,
+          onProgress: (done, total) => {
+            onProgress?.(`② 下载产品画像 ${done}/${total}…`);
+            check();
+          },
+        });
+        partial = scopePull(partial);
+        if (partial.length) {
+          const merged = mergeProfilesById(localProfiles, partial);
+          await saveProductProfilesBulk(merged);
+          report.profiles.merged = merged.length;
+          report.profiles.local = merged.length;
+          errors.push(`产品画像本轮按权限下拉 ${partial.length} 条到本机`);
+        }
+      } else {
+        onProgress?.('② 产品画像：本机已齐，无需下拉');
+        report.profiles.merged = localProfiles.length;
+      }
+    }
+  } catch (e: any) {
+    errors.push(`产品画像下拉：${e?.message || String(e)}`);
+  }
+
+  // —— 作业队列按权限下拉合并 ——
+  try {
+    check();
+    onProgress?.('② 下拉合并背调作业…');
+    const synced = await pullMergePushAutomationQueue({
+      upload: false,
+      writeLocal: true,
+      scopeFilter: scopePull,
+      shouldAbort: opts?.shouldAbort,
+      onProgress: (msg) => {
+        onProgress?.(`② ${msg.replace(/^同步中：/, '')}`);
+        check();
+      },
+    });
+    report.automation = {
+      local: synced.local,
+      cloud: Math.max(report.automation.cloud, synced.cloud),
+      merged: synced.merged,
+      uploaded: report.automation.uploaded,
+    };
+    if (synced.error) errors.push(`背调作业下拉：${synced.error}`);
+  } catch (e: any) {
+    errors.push(`背调作业下拉：${e?.message || String(e)}`);
   }
 
   report.ok = errors.length === 0;
   onProgress?.(
     report.ok
-      ? `同步完成 · CRM ${report.crm.merged} · 作业 ${report.automation.merged}`
-      : `同步结束（有问题 ${errors.length}）· CRM ${report.crm.merged} · 作业 ${report.automation.merged}`
+      ? `同步完成 · 云端已补全 · 本机已按权限对齐（CRM ${report.crm.merged} / 历史 ${report.history.merged}）`
+      : `同步结束（有问题 ${errors.length}）· CRM ${report.crm.merged} · 历史 ${report.history.merged}`
   );
   return report;
 };

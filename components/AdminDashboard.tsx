@@ -1,9 +1,9 @@
 
 import React, { useState, useEffect } from 'react';
-import { GlobalConfig, ApiConfig, TaskType, User, KnowledgeFile, Department } from '../types';
+import { GlobalConfig, ApiConfig, TaskType, User, KnowledgeFile, Department, Enterprise, UserPlan } from '../types';
 import { 
   Settings, Shield, Key, Bell, Save, Plus, Trash2, Globe, Server, 
-  CheckCircle2, AlertTriangle, LogOut, Users, Database, 
+  CheckCircle2, AlertTriangle, LogOut, Database, 
   RefreshCw, X, FileText, Upload, Play, Loader2, Download, Cloud,
   Youtube, Music, Video, FileSpreadsheet, FilePieChart, FileCode, Image, Mail, Building2,
   Radio,
@@ -29,11 +29,13 @@ import {
   setPoolKeys,
 } from '../services/apiKeyPool';
 import { ApiKeyPoolEditor } from './ApiKeyPoolEditor';
-import { hashPassword, persistUsers, updateUserPassword } from '../services/auth';
-import { loadDepartmentsFromStorage } from '../services/orgStore';
-import { roleLabel } from '../services/permissions';
+import {
+  loadDepartmentsFromStorage,
+  loadEnterprisesFromStorage,
+  loadPlansFromStorage,
+} from '../services/orgStore';
+import { isSuperAdmin } from '../services/permissions';
 import { OrgPermissionPanel } from './OrgPermissionPanel';
-import { AddUserModal } from './AddUserModal';
 import {
   getAliyunProxyMode,
   setAliyunProxyMode,
@@ -53,7 +55,7 @@ import {
   syncAllWorkspaceData,
 } from '../services/workspaceCloudSync';
 
-type AdminTab = 'api' | 'data' | 'users' | 'org' | 'kb' | 'hub';
+type AdminTab = 'api' | 'data' | 'org' | 'kb' | 'hub';
 
 const KB_ACCEPT = [
   '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
@@ -95,8 +97,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   setUsers,
   onEnterWorkspace,
 }) => {
-  const [activeTab, setActiveTab] = useState<AdminTab>('hub');
+  const superAdmin = isSuperAdmin(currentUser);
+  const [activeTab, setActiveTab] = useState<AdminTab>(() =>
+    isSuperAdmin(currentUser) ? 'hub' : 'org'
+  );
   const [departments, setDepartments] = useState<Department[]>(() => loadDepartmentsFromStorage());
+  const [enterprises, setEnterprises] = useState<Enterprise[]>(() => loadEnterprisesFromStorage());
+  const [plans, setPlans] = useState<UserPlan[]>(() => loadPlansFromStorage());
   const [localConfig, setLocalConfig] = useState<GlobalConfig>({
     lastUpdated: Date.now(),
     dailyLimits: { search: 500, analysis: 500 },
@@ -161,11 +168,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [kbConvertReport, setKbConvertReport] = useState<string | null>(null);
   const [kbConvertConfirmOpen, setKbConvertConfirmOpen] = useState(false);
   const [kbConvertStatus, setKbConvertStatus] = useState<string | null>(null);
-  const [addUserOpen, setAddUserOpen] = useState(false);
-  const [resetPwdUser, setResetPwdUser] = useState<string | null>(null);
-  const [resetPwdValue, setResetPwdValue] = useState('');
-  const [resetPwdMsg, setResetPwdMsg] = useState<string | null>(null);
-  const [isResettingPwd, setIsResettingPwd] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -894,49 +896,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setLocalApiConfigs(next);
   };
 
-  const handleDeleteUser = async (username: string) => {
-    if (username === 'admin') return;
-    if (confirm(`确定要删除用户 ${username} 吗？`)) {
-      const next = users.filter(u => u.username !== username);
-      setUsers(next);
-      await persistUsers(next);
-    }
-  };
-
-  const handleAddUser = () => setAddUserOpen(true);
-
-  const handleResetPassword = (username: string) => {
-    setResetPwdUser(username);
-    setResetPwdValue('');
-    setResetPwdMsg(null);
-  };
-
-  const submitResetPassword = async () => {
-    if (!resetPwdUser || isResettingPwd) return;
-    const pwd = resetPwdValue.trim();
-    if (pwd.length < 6) {
-      setResetPwdMsg('密码至少需要 6 位');
-      return;
-    }
-    setIsResettingPwd(true);
-    setResetPwdMsg(null);
-    try {
-      const hashed = await hashPassword(pwd);
-      const next = updateUserPassword(users, resetPwdUser, hashed);
-      setUsers(next);
-      await persistUsers(next, Date.now(), departments);
-      setResetPwdMsg(`已重置 ${resetPwdUser} 的密码（本机已保存，云端后台同步）`);
-      window.setTimeout(() => {
-        setResetPwdUser(null);
-        setResetPwdValue('');
-        setResetPwdMsg(null);
-      }, 900);
-    } catch (e: any) {
-      setResetPwdMsg(`重置失败：${e?.message || String(e)}`);
-    } finally {
-      setIsResettingPwd(false);
-    }
-  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -1166,8 +1125,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <Shield size={22} className="sm:w-6 sm:h-6" />
           </div>
           <div>
-            <h1 className="text-base sm:text-lg font-black tracking-tight">管理员控制台</h1>
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">System Management</p>
+            <h1 className="text-base sm:text-lg font-black tracking-tight">
+              {superAdmin ? '超级管理员控制台' : '总监组织台'}
+            </h1>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+              {superAdmin ? 'Keys · Org · Data' : 'Enterprise · Dept · Users'}
+            </p>
           </div>
         </div>
         <div className="flex items-center gap-4 w-full sm:w-auto justify-between sm:justify-end">
@@ -1200,12 +1163,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           {/* Tabs */}
           <div className="flex border-b bg-slate-50/50 overflow-x-auto scrollbar-hide">
             {([
-              { id: 'hub' as AdminTab, label: '今日看板', short: '看板', icon: Radio },
-              { id: 'api' as AdminTab, label: 'API 密钥配置', short: 'API', icon: Key },
-              { id: 'data' as AdminTab, label: '数据接入', short: '数据', icon: Database },
-              { id: 'org' as AdminTab, label: '组织权限', short: '组织', icon: Building2 },
-              { id: 'users' as AdminTab, label: '用户列表', short: '用户', icon: Users },
-              { id: 'kb' as AdminTab, label: '知识库', short: '知识库', icon: FileText },
+              ...(superAdmin
+                ? [
+                    { id: 'hub' as AdminTab, label: '今日看板', short: '看板', icon: Radio },
+                    { id: 'api' as AdminTab, label: 'API 密钥配置', short: 'API', icon: Key },
+                    { id: 'data' as AdminTab, label: '数据接入', short: '数据', icon: Database },
+                    { id: 'kb' as AdminTab, label: '知识库', short: '知识库', icon: FileText },
+                  ]
+                : []),
+              { id: 'org' as AdminTab, label: '组织与用户', short: '组织', icon: Building2 },
             ]).map(tab => (
               <button
                 key={tab.id}
@@ -1220,7 +1186,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
 
           <div className="p-4 sm:p-6 md:p-10">
-            {activeTab === 'hub' && (
+            {activeTab === 'hub' && superAdmin && (
               <div className="space-y-6 animate-fade-in">
                 <div className="rounded-2xl border border-cyan-100 bg-cyan-50/60 p-5">
                   <h3 className="text-lg font-black text-slate-900 flex items-center gap-2">
@@ -1261,7 +1227,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 />
               </div>
             )}
-            {activeTab === 'api' && (
+            {activeTab === 'api' && superAdmin && (
               <div className="space-y-8 animate-fade-in">
                 <AdminProviderQuotaPanel currentUser={currentUser} />
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -1974,7 +1940,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             )}
 
-            {activeTab === 'data' && (
+            {activeTab === 'data' && superAdmin && (
               <div className="animate-fade-in -m-4 sm:-m-6 md:-m-10">
                 <DataProvidersPanel currentUser={currentUser} />
               </div>
@@ -1987,87 +1953,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 setUsers={setUsers}
                 departments={departments}
                 setDepartments={setDepartments}
+                enterprises={enterprises}
+                setEnterprises={setEnterprises}
+                plans={plans}
+                setPlans={setPlans}
                 mode="admin"
               />
             )}
 
-            {activeTab === 'users' && (
-              <div className="space-y-4 sm:space-y-8 animate-fade-in">
-                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
-                  <h3 className="text-xl sm:text-2xl font-black text-slate-800 flex items-center gap-2">
-                    <Users className="text-blue-600" /> 系统用户管理
-                  </h3>
-                  <button onClick={handleAddUser} className="bg-blue-600 hover:bg-blue-700 text-white px-4 sm:px-6 py-3 rounded-xl font-black flex items-center justify-center gap-2 shadow-lg shadow-blue-100 touch-manipulation w-full sm:w-auto">
-                    <Plus size={20} /> 添加用户
-                  </button>
-                </div>
-
-                {/* Mobile cards */}
-                <div className="md:hidden space-y-3">
-                  {users.map(user => (
-                    <div key={user.username} className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
-                      <div className="flex items-center justify-between gap-3 mb-3">
-                        <div className="font-black text-slate-800">{user.username}</div>
-                        <span className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest ${user.role === 'admin' ? 'bg-purple-100 text-purple-700' : user.role === 'director' ? 'bg-cyan-100 text-cyan-700' : user.role === 'manager' ? 'bg-violet-100 text-violet-700' : 'bg-slate-100 text-slate-600'}`}>
-                          {roleLabel(user.role)}
-                        </span>
-                      </div>
-                      <div className="flex gap-3">
-                        <button onClick={() => handleResetPassword(user.username)} className="flex-1 text-center py-2 rounded-xl bg-blue-50 text-blue-600 text-xs font-black touch-manipulation">
-                          重置密码
-                        </button>
-                        {user.username !== 'admin' && (
-                          <button onClick={() => handleDeleteUser(user.username)} className="px-4 py-2 rounded-xl bg-red-50 text-red-500 touch-manipulation">
-                            <Trash2 size={18} />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="hidden md:block bg-white border border-slate-100 rounded-2xl sm:rounded-[32px] overflow-hidden shadow-sm overflow-x-auto">
-                  <table className="w-full text-left border-collapse min-w-[480px]">
-                    <thead>
-                      <tr className="bg-slate-50/50 border-b border-slate-100">
-                        <th className="px-4 lg:px-8 py-4 lg:py-6 text-xs font-black text-slate-400 uppercase tracking-widest">用户名</th>
-                        <th className="px-4 lg:px-8 py-4 lg:py-6 text-xs font-black text-slate-400 uppercase tracking-widest">角色</th>
-                        <th className="px-4 lg:px-8 py-4 lg:py-6 text-xs font-black text-slate-400 uppercase tracking-widest text-right">操作</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {users.map((user) => (
-                        <tr key={user.username} className="border-b border-slate-50 last:border-none hover:bg-slate-50/30 transition-all">
-                          <td className="px-4 lg:px-8 py-4 lg:py-6 font-black text-slate-800">{user.username}</td>
-                          <td className="px-4 lg:px-8 py-4 lg:py-6">
-                            <span className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest ${user.role === 'admin' ? 'bg-purple-100 text-purple-700' : user.role === 'director' ? 'bg-cyan-100 text-cyan-700' : user.role === 'manager' ? 'bg-violet-100 text-violet-700' : 'bg-slate-100 text-slate-600'}`}>
-                              {roleLabel(user.role)}
-                            </span>
-                          </td>
-                          <td className="px-4 lg:px-8 py-4 lg:py-6 text-right">
-                            <div className="flex items-center justify-end gap-2">
-                              <button
-                                onClick={() => handleResetPassword(user.username)}
-                                className="text-slate-400 hover:text-blue-600 transition-all text-[10px] font-black uppercase touch-manipulation"
-                              >
-                                重置密码
-                              </button>
-                              {user.username !== 'admin' && (
-                                <button onClick={() => handleDeleteUser(user.username)} className="text-slate-300 hover:text-red-500 transition-all touch-manipulation">
-                                  <Trash2 size={18} />
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
-            {activeTab === 'kb' && (
+            {activeTab === 'kb' && superAdmin && (
               <div className="space-y-4 sm:space-y-8 animate-fade-in">
                 <div className="flex justify-between items-center">
                   <h3 className="text-xl sm:text-2xl font-black text-slate-800 flex items-center gap-2">
@@ -2318,63 +2212,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       </main>
 
-      <AddUserModal
-        open={addUserOpen}
-        onClose={() => setAddUserOpen(false)}
-        users={users}
-        departments={departments}
-        allowRolePick
-        onCreated={({ users: next, created }) => {
-          setUsers(next);
-          setSaveConfigMsg({ ok: true, text: `用户 ${created.username} 已创建（本机已保存，云端后台同步）` });
-        }}
-      />
-
-      {resetPwdUser && (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/50 p-4">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl space-y-4">
-            <h3 className="text-lg font-black text-slate-800">重置密码 · {resetPwdUser}</h3>
-            <input
-              type="password"
-              value={resetPwdValue}
-              onChange={(e) => setResetPwdValue(e.target.value)}
-              placeholder="新密码（至少 6 位）"
-              className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold"
-              autoFocus
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void submitResetPassword();
-              }}
-            />
-            {resetPwdMsg && (
-              <p className={`text-xs font-bold ${resetPwdMsg.includes('失败') || resetPwdMsg.includes('至少') ? 'text-rose-600' : 'text-emerald-700'}`}>
-                {resetPwdMsg}
-              </p>
-            )}
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                disabled={isResettingPwd}
-                onClick={() => {
-                  setResetPwdUser(null);
-                  setResetPwdValue('');
-                  setResetPwdMsg(null);
-                }}
-                className="rounded-xl px-4 py-2 text-sm font-bold text-slate-500 hover:bg-slate-100"
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                disabled={isResettingPwd}
-                onClick={() => void submitResetPassword()}
-                className="rounded-xl bg-slate-900 px-5 py-2 text-sm font-black text-white hover:bg-blue-600 disabled:opacity-50"
-              >
-                {isResettingPwd ? '保存中…' : '确认重置'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
