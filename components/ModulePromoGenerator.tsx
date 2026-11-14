@@ -28,7 +28,9 @@ import {
   FileSpreadsheet,
   PackageSearch,
   Sparkles,
+  Star,
 } from 'lucide-react';
+import { patchCrmClient } from '../services/crmStore';
 import { ContinentCountryMultiSelect } from './ContinentCountryMultiSelect';
 import { findCountryByEn } from '../data/countriesByContinent';
 import {
@@ -1423,6 +1425,12 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                               已入CRM
                             </span>
                           )}
+                          {row.intel.crmClient?.starred && (
+                            <span className="inline-flex items-center gap-0.5 text-[9px] font-black bg-amber-50 text-amber-700 border border-amber-100 px-1.5 py-0.5 rounded">
+                              <Star size={9} className="fill-amber-400 text-amber-500" />
+                              收藏
+                            </span>
+                          )}
                           {row.source === 'crm' && (
                             <span className="inline-flex text-[9px] font-black bg-slate-100 text-slate-500 border border-slate-200 px-1.5 py-0.5 rounded">
                               来自CRM
@@ -1542,6 +1550,37 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                       </td>
                       <td className="px-3 py-2.5 text-right overflow-hidden">
                         <div className="flex justify-end gap-0.5 flex-wrap">
+                          {row.intel.crmClient && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const c = row.intel.crmClient!;
+                                const on = !c.starred;
+                                patchCrmClient({
+                                  ...c,
+                                  starred: on,
+                                  starredAt: on ? Date.now() : undefined,
+                                });
+                              }}
+                              className={`p-2 rounded-lg transition-colors ${
+                                row.intel.crmClient.starred
+                                  ? 'text-amber-500 hover:bg-amber-50'
+                                  : 'text-slate-300 hover:text-amber-500 hover:bg-amber-50'
+                              }`}
+                              title={
+                                row.intel.crmClient.starred
+                                  ? '取消重点收藏'
+                                  : '重点收藏（CRM 可筛选）'
+                              }
+                            >
+                              <Star
+                                size={16}
+                                className={
+                                  row.intel.crmClient.starred ? 'fill-amber-400' : ''
+                                }
+                              />
+                            </button>
+                          )}
                           {(row.intel.hasBg ||
                             (task?.status === 'completed' && task.analysis) ||
                             row.intel.historyItem) && (

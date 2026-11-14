@@ -340,7 +340,7 @@ import {
 } from './services/sessionStore';
 import { AdminDashboard } from './components/AdminDashboard';
 import { 
-  LayoutDashboard, PackageSearch, Users, PenTool, Network, Search, Loader2, Menu, Globe, Zap, FileSpreadsheet, History, Clock, ChevronRight, AlertTriangle, RefreshCw, LogOut, Briefcase, Ruler, CheckCircle2, Hourglass, StopCircle, PlayCircle, Layers, Mail, Cloud, Download, Info, Link2, X, Database, Image, Trash2, Ban, Target
+  LayoutDashboard, PackageSearch, Users, PenTool, Network, Search, Loader2, Menu, Globe, Zap, FileSpreadsheet, History, Clock, ChevronRight, AlertTriangle, RefreshCw, LogOut, Briefcase, Ruler, CheckCircle2, Hourglass, StopCircle, PlayCircle, Layers, Mail, Cloud, Download, Info, Link2, X, Database, Image, Trash2, Ban, Target, Star
 } from 'lucide-react';
 import { ALWAYS_ACTIVE_MODULES } from './services/moduleNav';
 import {
@@ -2987,6 +2987,67 @@ const App: React.FC<AppProps> = ({ bootUser = null, onBootLogout }) => {
           return applyCrmDomainDedupe([newClient, ...prev]).clients;
       });
       alert("已加入客户管理（含背调标记与 " + (analysisData.decisionMakers?.length || 0) + " 位决策人）");
+  };
+
+  /** 背调页重点收藏：写入 CRM（未入 CRM 则顺带导入） */
+  const currentReportCrmStarred = useMemo(() => {
+    if (!analysisData) return false;
+    const idx = findCrmClientIndex(
+      crmClients,
+      analysisData.companyInfo?.website,
+      analysisData.companyInfo?.name
+    );
+    return idx >= 0 ? !!crmClients[idx]?.starred : false;
+  }, [analysisData, crmClients]);
+
+  const toggleStarCurrentReport = () => {
+    const data = analysisDataRef.current || analysisData;
+    if (!data?.companyInfo) return;
+    const website = data.companyInfo.website || '';
+    const name = data.companyInfo.name || '';
+    if (!website && !name) {
+      alert('无法收藏：缺少公司名称或网站。');
+      return;
+    }
+    setCrmClients((prev) => {
+      const idx = findCrmClientIndex(prev, website, name);
+      if (idx >= 0) {
+        const cur = prev[idx];
+        const on = !cur.starred;
+        const updated = [...prev];
+        updated[idx] = {
+          ...cur,
+          starred: on,
+          starredAt: on ? Date.now() : undefined,
+        };
+        return updated;
+      }
+      clearCrmTombstonesForClients([{ id: '', website, name }]);
+      const newClient: Client = stampOwnership({
+        id: Date.now().toString(),
+        name: name || website,
+        website,
+        country: (data.companyInfo.headquarters || '').split(',').pop()?.trim() || 'Global',
+        type: '进口商',
+        status: '新建/潜在',
+        productType: data.businessScope?.coreProducts?.[0] || 'N/A',
+        industry: data.companyInfo.nature || 'N/A',
+        priceRange: data.businessScope?.priceSensitivity || 'Medium',
+        isSampleNeeded: false,
+        hasAnalyzed: true,
+        hasBackgroundCheck: true,
+        lastBackgroundCheckAt: Date.now(),
+        contacts: data.decisionMakers || [],
+        lastOrderDate: '',
+        lastContactSent: '',
+        lastContactReceived: '',
+        nextFollowUpDate: new Date().toISOString().split('T')[0],
+        activityLog: `Starred from report ${new Date().toLocaleDateString()}.`,
+        starred: true,
+        starredAt: Date.now(),
+      } as Client);
+      return applyCrmDomainDedupe([newClient, ...prev]).clients;
+    });
   };
   
   // RESTORED: Handle batch adding clients from Discovery
@@ -7152,6 +7213,30 @@ crmClients={crmClients}
                         </div>
                               )}
                               <div className="mt-1 sm:mt-2 flex items-center gap-2 flex-shrink-0 relative z-10">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    toggleStarCurrentReport();
+                                  }}
+                                  title={
+                                    currentReportCrmStarred
+                                      ? '取消重点收藏（CRM 可按收藏筛选）'
+                                      : '重点收藏：写入 CRM，方便后期查找跟进'
+                                  }
+                                  className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-black touch-manipulation ${
+                                    currentReportCrmStarred
+                                      ? 'border-amber-300 bg-amber-100 text-amber-800 hover:bg-amber-200'
+                                      : 'border-slate-200 bg-white text-slate-600 hover:border-amber-300 hover:text-amber-700'
+                                  }`}
+                                >
+                                  <Star
+                                    size={14}
+                                    className={currentReportCrmStarred ? 'fill-amber-400 text-amber-500' : ''}
+                                  />
+                                  {currentReportCrmStarred ? '已收藏' : '收藏'}
+                                </button>
                                 <button
                                   type="button"
                                   onClick={(e) => {

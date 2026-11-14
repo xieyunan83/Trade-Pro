@@ -465,6 +465,10 @@ export interface Client {
   searchedKeywords?: string[];
   /** 管理标签 */
   tags?: string[];
+  /** 重点收藏：背调页 / CRM 可标记，便于后期跟进查找 */
+  starred?: boolean;
+  /** 收藏时间（ms） */
+  starredAt?: number;
   /**
    * 与产品库对齐的官方品类 ID（在售侧）
    * 来自背调/品类深挖证据映射，禁止手填臆造

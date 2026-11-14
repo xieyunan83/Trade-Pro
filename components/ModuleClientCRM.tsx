@@ -15,6 +15,7 @@ import {
   UserPlus,
   Sparkles,
   Loader2,
+  Star,
 } from 'lucide-react';
 import {
   buildHistoryLookupIndex,
@@ -374,6 +375,8 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   const [filterDm, setFilterDm] = useState<'all' | 'yes' | 'found' | 'empty' | 'no'>('all');
   const [filterOwner, setFilterOwner] = useState<string>('all');
   const [filterStatus, setFilterStatus] = useState<Client['status'] | 'all' | 'overdue'>('all');
+  /** 重点收藏筛选 */
+  const [filterStarred, setFilterStarred] = useState<'all' | 'yes'>('all');
   const [selectedClientIds, setSelectedClientIds] = useState<Set<string>>(new Set());
   const [page, setPage] = useState(1);
   const [contactsEditorId, setContactsEditorId] = useState<string | null>(null);
@@ -493,9 +496,45 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
     ? new Date(filterDateTo).getTime() + 24 * 60 * 60 * 1000 - 1
     : undefined;
 
+  const clientMatchesQuery = useCallback(
+    (client: Client, q: string, historyItem?: HistoryItem) => {
+      if (!q) return true;
+      const owner = resolveOwner(client, historyItem);
+      const contactBits = (client.contacts || [])
+        .map((c) => [c.name, c.firstName, c.lastName, c.title, c.emailGuess].filter(Boolean).join(' '))
+        .join(' ');
+      const hay = [
+        client.name,
+        client.website,
+        client.productType,
+        client.country,
+        client.industry,
+        client.searchKeyword,
+        ...(client.searchedKeywords || []),
+        owner,
+        contactBits,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return hay.includes(q);
+    },
+    [resolveOwner]
+  );
+
+  /** 仅关键词命中（忽略其它筛选）— 用于解释「营销工具能搜到、CRM 没有」 */
+  const queryOnlyMatchCount = useMemo(() => {
+    const q = debouncedSearch.trim().toLowerCase();
+    if (!q) return 0;
+    return clients.filter((client) => {
+      const historyItem = intelById.get(client.id)?.historyItem;
+      return clientMatchesQuery(client, q, historyItem);
+    }).length;
+  }, [clients, debouncedSearch, intelById, clientMatchesQuery]);
+
   const filteredClients = useMemo(() => {
     const q = debouncedSearch.trim().toLowerCase();
-    return clients.filter((client) => {
+    const matched = clients.filter((client) => {
       const row = intelById.get(client.id);
       const historyItem = row?.historyItem;
       const hasBg = !!row?.hasBg;
@@ -503,15 +542,8 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
       const hasDm = !!row?.hasDm;
       const dmStatus = row?.dmStatus;
       const bgAt = row?.bgAt;
-      if (q) {
-        const owner = resolveOwner(client, historyItem).toLowerCase();
-        const hit =
-          client.name.toLowerCase().includes(q) ||
-          (client.website || '').toLowerCase().includes(q) ||
-          (client.productType || '').toLowerCase().includes(q) ||
-          owner.includes(q);
-        if (!hit) return false;
-      }
+      if (q && !clientMatchesQuery(client, q, historyItem)) return false;
+      if (filterStarred === 'yes' && !client.starred) return false;
       if (filterCountry !== 'all' && !countryMatchesFilter(client.country, filterCountry)) return false;
       if (filterType !== 'all' && client.type !== filterType) return false;
       if (filterProductType !== 'all') {
@@ -549,10 +581,19 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
       }
       return true;
     });
+    // 收藏置顶，同收藏按收藏时间新→旧
+    return matched.sort((a, b) => {
+      const sa = a.starred ? 1 : 0;
+      const sb = b.starred ? 1 : 0;
+      if (sa !== sb) return sb - sa;
+      if (sa && sb) return (b.starredAt || 0) - (a.starredAt || 0);
+      return 0;
+    });
   }, [
     clients,
     intelById,
     debouncedSearch,
+    filterStarred,
     filterCountry,
     filterType,
     filterProductType,
@@ -565,7 +606,13 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
     dateFromMs,
     dateToMs,
     resolveOwner,
+    clientMatchesQuery,
   ]);
+
+  const filterBlocksQuery =
+    !!debouncedSearch.trim() &&
+    queryOnlyMatchCount > 0 &&
+    filteredClients.length === 0;
 
   useEffect(() => {
     if (!onNavOrderChange) return;
@@ -605,6 +652,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
     setPage(1);
   }, [
     debouncedSearch,
+    filterStarred,
     filterCountry,
     filterType,
     filterIndustry,
@@ -631,6 +679,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
   }, [clients]);
 
   const overdueCount = useMemo(() => clients.filter(isOverdueFollowUp).length, [clients]);
+  const starredCount = useMemo(() => clients.filter((c) => !!c.starred).length, [clients]);
 
   const selectedClients = useMemo(
     () => filteredClients.filter((c) => selectedClientIds.has(c.id)),
@@ -642,6 +691,17 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
       setClients((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
     },
     [setClients]
+  );
+
+  const toggleStarred = useCallback(
+    (client: Client) => {
+      const next = !client.starred;
+      patchClient(client.id, {
+        starred: next,
+        starredAt: next ? Date.now() : undefined,
+      });
+    },
+    [patchClient]
   );
 
   const onDeleteClient = useCallback(
@@ -725,10 +785,17 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
     setFilterDm('all');
     setFilterOwner('all');
     setFilterStatus('all');
+    setFilterStarred('all');
+  };
+
+  const clearDateFilters = () => {
+    setFilterDateFrom('');
+    setFilterDateTo('');
   };
 
   const hasActiveFilters =
     !!debouncedSearch ||
+    filterStarred !== 'all' ||
     filterCountry !== 'all' ||
     filterType !== 'all' ||
     filterIndustry !== 'all' ||
@@ -740,6 +807,8 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
     filterDm !== 'all' ||
     filterOwner !== 'all' ||
     filterStatus !== 'all';
+
+  const hasDateFilters = !!filterDateFrom || !!filterDateTo;
 
   const handleExport = () => {
     const list = selectedClients.length > 0 ? selectedClients : filteredClients;
@@ -764,6 +833,16 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
             {filteredEnrichedCount !== clients.length && (
               <span className="text-blue-600 ml-1">· 筛选 {filteredEnrichedCount}</span>
             )}
+            {starredCount > 0 ? (
+              <button
+                type="button"
+                onClick={() => setFilterStarred('yes')}
+                className="ml-1.5 text-amber-600 hover:underline"
+                title="仅看重点收藏"
+              >
+                · 收藏 {starredCount}
+              </button>
+            ) : null}
             {overdueCount > 0 ? (
               <button
                 type="button"
@@ -841,7 +920,7 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full pl-10 pr-3 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 font-bold text-sm"
-              placeholder="搜索客户、网址、产品类型或拥有人..."
+              placeholder="搜索客户名、网址、联系人、关键词、拥有人…"
             />
           </div>
           <button
@@ -933,27 +1012,81 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
               placeholder="所有行业"
             />
           </div>
-          <label className="flex flex-col gap-0.5 text-[10px] font-black text-slate-400 uppercase tracking-widest">
+          <label
+            className={`flex flex-col gap-0.5 text-[10px] font-black uppercase tracking-widest ${
+              hasDateFilters ? 'text-amber-700' : 'text-slate-400'
+            }`}
+          >
             背调时间起
             <input
               type="date"
               value={filterDateFrom}
               onChange={(e) => setFilterDateFrom(e.target.value)}
-              className="px-2 py-2 rounded-xl border border-slate-200 font-bold text-sm text-slate-700 bg-white normal-case tracking-normal"
+              className={`px-2 py-2 rounded-xl border font-bold text-sm normal-case tracking-normal ${
+                hasDateFilters
+                  ? 'border-amber-300 bg-amber-50 text-amber-900'
+                  : 'border-slate-200 bg-white text-slate-700'
+              }`}
             />
           </label>
-          <label className="flex flex-col gap-0.5 text-[10px] font-black text-slate-400 uppercase tracking-widest">
+          <label
+            className={`flex flex-col gap-0.5 text-[10px] font-black uppercase tracking-widest ${
+              hasDateFilters ? 'text-amber-700' : 'text-slate-400'
+            }`}
+          >
             背调时间止
             <input
               type="date"
               value={filterDateTo}
               onChange={(e) => setFilterDateTo(e.target.value)}
-              className="px-2 py-2 rounded-xl border border-slate-200 font-bold text-sm text-slate-700 bg-white normal-case tracking-normal"
+              className={`px-2 py-2 rounded-xl border font-bold text-sm normal-case tracking-normal ${
+                hasDateFilters
+                  ? 'border-amber-300 bg-amber-50 text-amber-900'
+                  : 'border-slate-200 bg-white text-slate-700'
+              }`}
             />
           </label>
         </div>
 
+        {filterBlocksQuery && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 flex flex-col sm:flex-row sm:items-center gap-2 sm:justify-between">
+            <div className="text-xs font-bold text-amber-950 leading-snug">
+              关键词「{debouncedSearch.trim()}」在 CRM 中命中{' '}
+              <span className="font-black">{queryOnlyMatchCount}</span> 家，但被当前筛选条件挡住
+              {hasDateFilters ? '（常见原因：背调时间范围）' : ''}。
+              营销工具列表不含日期筛选，所以那里能搜到。
+            </div>
+            <div className="flex flex-wrap gap-2 shrink-0">
+              {hasDateFilters && (
+                <button
+                  type="button"
+                  onClick={clearDateFilters}
+                  className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-black"
+                >
+                  清除时间筛选
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="px-3 py-1.5 rounded-lg border border-amber-300 bg-white hover:bg-amber-100 text-amber-900 text-xs font-black"
+              >
+                清除全部筛选
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+          <select
+            value={filterStarred}
+            onChange={(e) => setFilterStarred(e.target.value as 'all' | 'yes')}
+            className="px-3 py-2 rounded-xl border border-slate-200 font-bold text-xs sm:text-sm bg-white"
+            title="重点收藏"
+          >
+            <option value="all">收藏：全部</option>
+            <option value="yes">仅看收藏</option>
+          </select>
           <select
             value={filterBg}
             onChange={(e) => setFilterBg(e.target.value as 'all' | 'yes' | 'no')}
@@ -1144,14 +1277,34 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
       {/* Mobile card view */}
       <div className="md:hidden space-y-2.5">
         {pagedEnriched.length === 0 ? (
-          <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center text-slate-400 font-bold text-sm">
-            {clients.length === 0 ? '暂无客户数据' : '没有符合筛选条件的客户'}
+          <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center text-slate-400 font-bold text-sm space-y-2">
+            <div>
+              {clients.length === 0
+                ? '暂无客户数据'
+                : filterBlocksQuery
+                  ? `关键词有 ${queryOnlyMatchCount} 家匹配，但被筛选挡住`
+                  : '没有符合筛选条件的客户'}
+            </div>
+            {hasActiveFilters && clients.length > 0 && (
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="text-blue-600 hover:underline text-xs font-black"
+              >
+                清除全部筛选后再试
+              </button>
+            )}
           </div>
         ) : (
           pagedEnriched.map(({ client, historyItem, hasBg, hasProduct, dmStatus, dmContactCount, bgAt, canOpenReport }) => {
             const owner = resolveOwner(client, historyItem);
             return (
-            <div key={client.id} className="bg-white rounded-2xl border border-slate-200 p-3.5 shadow-sm">
+            <div
+              key={client.id}
+              className={`bg-white rounded-2xl border p-3.5 shadow-sm ${
+                client.starred ? 'border-amber-300 ring-1 ring-amber-100' : 'border-slate-200'
+              }`}
+            >
               <div className="flex items-start justify-between gap-2 mb-2">
                 <div className="flex items-start gap-2.5 min-w-0">
                   <input
@@ -1172,6 +1325,9 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                       }`}
                       title={canOpenReport ? '查看背调资料' : undefined}
                     >
+                      {client.starred ? (
+                        <Star size={12} className="inline text-amber-500 fill-amber-400 mr-1 -mt-0.5" />
+                      ) : null}
                       {client.name}
                     </button>
                     <div className="text-[11px] text-slate-500 font-bold truncate mt-0.5">{client.website}</div>
@@ -1197,6 +1353,18 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                   </div>
                 </div>
                 <div className="flex items-start gap-1 flex-shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => toggleStarred(client)}
+                    className={`p-1 ${
+                      client.starred
+                        ? 'text-amber-500 hover:text-amber-600'
+                        : 'text-slate-300 hover:text-amber-500'
+                    }`}
+                    title={client.starred ? '取消收藏' : '重点收藏'}
+                  >
+                    <Star size={16} className={client.starred ? 'fill-amber-400' : ''} />
+                  </button>
                   <button
                     type="button"
                     onClick={() => setContactsEditorId(client.id)}
@@ -1267,14 +1435,34 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
             {pagedEnriched.length === 0 ? (
               <tr>
                 <td colSpan={10} className="px-6 py-12 text-center text-slate-400 font-bold text-sm">
-                  {clients.length === 0 ? '暂无客户数据' : '没有符合筛选条件的客户'}
+                  <div>
+                    {clients.length === 0
+                      ? '暂无客户数据'
+                      : filterBlocksQuery
+                        ? `关键词有 ${queryOnlyMatchCount} 家匹配，但被筛选挡住`
+                        : '没有符合筛选条件的客户'}
+                  </div>
+                  {hasActiveFilters && clients.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={clearFilters}
+                      className="mt-2 text-blue-600 hover:underline text-xs font-black"
+                    >
+                      清除全部筛选后再试
+                    </button>
+                  )}
                 </td>
               </tr>
             ) : (
               pagedEnriched.map(({ client, historyItem, hasBg, hasProduct, dmStatus, dmContactCount, bgAt, canOpenReport }) => {
                 const owner = resolveOwner(client, historyItem);
                 return (
-                <tr key={client.id} className="hover:bg-slate-50/60 transition-colors align-top">
+                <tr
+                  key={client.id}
+                  className={`hover:bg-slate-50/60 transition-colors align-top ${
+                    client.starred ? 'bg-amber-50/40' : ''
+                  }`}
+                >
                   <td className="px-3 py-2.5">
                     <input
                       type="checkbox"
@@ -1284,6 +1472,20 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                     />
                   </td>
                   <td className="px-3 py-2.5">
+                    <div className="flex items-start gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => toggleStarred(client)}
+                        className={`mt-0.5 shrink-0 ${
+                          client.starred
+                            ? 'text-amber-500 hover:text-amber-600'
+                            : 'text-slate-300 hover:text-amber-500'
+                        }`}
+                        title={client.starred ? '取消收藏' : '重点收藏'}
+                      >
+                        <Star size={15} className={client.starred ? 'fill-amber-400' : ''} />
+                      </button>
+                      <div className="min-w-0">
                     <button
                       type="button"
                       onClick={() => canOpenReport && openClientReport(client, historyItem)}
@@ -1298,6 +1500,8 @@ export const ModuleClientCRM: React.FC<ModuleClientCRMProps> = ({
                       {client.name}
                     </button>
                     <KeywordTags client={client} />
+                      </div>
+                    </div>
                   </td>
                   <td className="px-3 py-2.5 text-xs font-bold text-slate-600 whitespace-nowrap">{client.country || '—'}</td>
                   <td className="px-3 py-2.5 text-xs font-bold text-violet-700 truncate" title={client.productType}>
