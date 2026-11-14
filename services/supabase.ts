@@ -815,6 +815,31 @@ export const syncCrmClients = async (clients: Client[]): Promise<boolean> => {
   return await saveCrmClientsBulk(clients)
 }
 
+/** 轻量 CRM 索引：只拉 id + 时间，用于差量同步 */
+export const listCrmClientsCloudMeta = async (): Promise<
+  { id: string; stamp: number }[]
+> => {
+  if (!isSupabaseConfigured()) return []
+  const { rows, error } = await selectAllRows<{
+    local_id: string
+    updated_at?: string
+  }>(getSupabaseClient(), 'crm_clients', 'local_id, updated_at', {
+    orderCol: 'updated_at',
+    ascending: false,
+    pageSize: 1000,
+  })
+  if (error) {
+    console.error('获取 CRM 索引失败:', error)
+    throw new Error(error)
+  }
+  return rows
+    .map((row) => ({
+      id: (row.local_id || '').trim(),
+      stamp: row.updated_at ? Date.parse(row.updated_at) || 0 : 0,
+    }))
+    .filter((r) => r.id)
+}
+
 export const getCrmClients = async (): Promise<Client[]> => {
   if (!isSupabaseConfigured()) return []
   const { rows, error } = await selectAllRows<{ client_data: Client }>(
@@ -919,11 +944,88 @@ export const saveProductProfileCloud = async (profile: CustomerProductProfile): 
 
 export const syncProductProfilesCloud = async (profiles: CustomerProductProfile[]): Promise<number> => {
   if (!isSupabaseConfigured() || !profiles.length) return 0
+  const client = getSupabaseClient()
+  const uid = cloudUid()
   let ok = 0
-  for (const p of profiles) {
-    if (await saveProductProfileCloud(p)) ok += 1
+  const size = 40
+  for (let i = 0; i < profiles.length; i += size) {
+    const part = profiles.slice(i, i + size).filter((p) => (p?.id || '').trim())
+    if (!part.length) continue
+    const rows = part.map((profile) => ({
+      user_id: uid,
+      local_id: profile.id,
+      website: profile.website || '',
+      company_name: profile.companyName || '',
+      profile_data: profile,
+      updated_at: new Date().toISOString(),
+    }))
+    const { error } = await client.from('product_profiles').upsert(rows, {
+      onConflict: 'user_id,local_id',
+    })
+    if (error) {
+      // 批量失败时降级逐条，尽量多传
+      for (const p of part) {
+        if (await saveProductProfileCloud(p)) ok += 1
+      }
+      continue
+    }
+    ok += part.length
   }
   return ok
+}
+
+/** 轻量画像索引：差量同步用，避免每次拉 4000+ 大 JSON */
+export const listProductProfilesCloudMeta = async (): Promise<
+  { id: string; stamp: number }[]
+> => {
+  if (!isSupabaseConfigured()) return []
+  const { rows, error } = await selectAllRows<{
+    local_id: string
+    updated_at?: string
+  }>(getSupabaseClient(), 'product_profiles', 'local_id, updated_at', {
+    orderCol: 'updated_at',
+    ascending: false,
+    pageSize: 1000,
+  })
+  if (error) {
+    console.error('获取产品画像索引失败:', error)
+    throw new Error(error)
+  }
+  return rows
+    .map((row) => ({
+      id: (row.local_id || '').trim(),
+      stamp: row.updated_at ? Date.parse(row.updated_at) || 0 : 0,
+    }))
+    .filter((r) => r.id)
+}
+
+export const getProductProfilesByLocalIds = async (
+  localIds: string[],
+  opts?: { onProgress?: (done: number, total: number) => void; shouldAbort?: () => boolean }
+): Promise<CustomerProductProfile[]> => {
+  if (!isSupabaseConfigured() || !localIds.length) return []
+  const ids = Array.from(new Set(localIds.map((x) => String(x || '').trim()).filter(Boolean)))
+  const client = getSupabaseClient()
+  const out: CustomerProductProfile[] = []
+  const chunkSize = 40
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    if (opts?.shouldAbort?.()) break
+    const part = ids.slice(i, i + chunkSize)
+    const { data, error } = await client
+      .from('product_profiles')
+      .select('profile_data')
+      .in('local_id', part)
+    if (error) {
+      console.error('按 id 拉取产品画像失败:', error)
+      throw new Error(error.message || String(error))
+    }
+    for (const row of data || []) {
+      const p = (row as { profile_data?: CustomerProductProfile }).profile_data
+      if (p) out.push(p)
+    }
+    opts?.onProgress?.(Math.min(i + part.length, ids.length), ids.length)
+  }
+  return out
 }
 
 export const getProductProfilesCloud = async (): Promise<CustomerProductProfile[]> => {

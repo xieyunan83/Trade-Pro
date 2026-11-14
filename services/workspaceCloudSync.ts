@@ -8,12 +8,13 @@ import { loadProductCatalog } from './productCatalog';
 import {
   getCrmClients,
   getInvestigationHistoryByLocalIds,
-  getProductProfilesCloud,
+  getProductProfilesByLocalIds,
   getSupabaseClient,
   isSupabaseConfigured,
+  listCrmClientsCloudMeta,
   listInvestigationHistoryCloudMeta,
+  listProductProfilesCloudMeta,
   saveCrmClientsBulk,
-  saveProductProfileCloud,
   syncProductProfilesCloud,
 } from './supabase';
 
@@ -62,13 +63,14 @@ export type WorkspaceSyncOptions = {
 
 /** 是否还有明显差量，值得自动续传 */
 export const workspaceSyncNeedsContinue = (r: WorkspaceSyncReport): boolean => {
-  const err = (r.errors || []).join('\n');
-  if (/请再点同步续传|本轮已下载|云端多出|待传约|保守补种/.test(err)) return true;
-  // 云端历史明显多于本机合并结果 → 还要下载
+  // 以条数差为准，避免「云拉失败文案」导致永远续传空转
   if (r.history.cloud > 0 && r.history.cloud > r.history.merged + 30) return true;
-  // 本机明显多于云端且本轮几乎没传上 → CRM/画像/作业仍可能待传
-  if (r.crm.local > r.crm.cloud + 50 && r.crm.uploaded === 0 && /CRM/.test(err)) return true;
-  if (r.profiles.local > r.profiles.cloud + 50 && r.profiles.uploaded > 0) return true;
+  if (r.history.local > r.history.cloud + 30 && r.history.cloud >= 0) return true;
+  if (r.crm.local > r.crm.cloud + 30) return true;
+  if (r.profiles.local > r.profiles.cloud + 30) return true;
+  if (r.automation.local > r.automation.cloud + 50) return true;
+  const err = (r.errors || []).join('\n');
+  if (/待传约\s*[1-9]|云端多出约\s*[1-9]|本轮已下载\s*[1-9]/.test(err)) return true;
   return false;
 };
 
@@ -695,110 +697,49 @@ const runSyncAllWorkspaceData = async (
     errors.push(`背调历史：${e?.message || String(e)}`);
   }
 
-  // —— 产品画像（仅脏数据 + 限额，禁止每轮 4000+ 全量）——
-  try {
-    check();
-    await pauseIfUserBusy(opts?.shouldAbort);
-    onProgress?.('同步中：读取本机产品画像…');
-    const localProfiles = await loadProductCatalog();
-    report.profiles = {
-      local: localProfiles.length,
-      cloud: 0,
-      merged: localProfiles.length,
-      uploaded: 0,
-    };
-    onProgress?.(`同步中：拉取云端产品画像（本机已有 ${localProfiles.length}）…`);
-    let cloudProfiles: CustomerProductProfile[] = [];
-    let cloudProfilesOk = false;
-    try {
-      cloudProfiles = await withTimeout(
-        getProductProfilesCloud(),
-        CLOUD_PULL_TIMEOUT_MS,
-        '产品画像云端拉取'
-      );
-      cloudProfilesOk = true;
-    } catch (e: any) {
-      errors.push(`产品画像云端拉取：${e?.message || String(e)}`);
-    }
-    const mergedProfiles = mergeProfilesById(localProfiles, cloudProfiles);
-    if (mergedProfiles.length) await saveProductProfilesBulk(mergedProfiles);
-    let uploaded = 0;
-    if (doUpload && mergedProfiles.length) {
-      check();
-      const cloudById = new Map(cloudProfiles.map((p) => [p.id, p]));
-      const profileStamp = (p: CustomerProductProfile) =>
-        Math.max(Number((p as any).updatedAt) || 0, Number((p as any).createdAt) || 0, 0);
-      let dirty = !cloudProfilesOk
-        ? mergedProfiles.slice()
-        : mergedProfiles.filter((p) => {
-            const prev = cloudById.get(p.id);
-            if (!prev) return true;
-            return profileStamp(p) > profileStamp(prev);
-          });
-      const pending = dirty.length;
-      const profileCap = !cloudProfilesOk
-        ? Math.min(PROFILE_UPLOAD_CAP_PER_SYNC, 100)
-        : PROFILE_UPLOAD_CAP_PER_SYNC;
-      dirty = dirty
-        .slice()
-        .sort((a, b) => profileStamp(b) - profileStamp(a))
-        .slice(0, profileCap);
-      if (!cloudProfilesOk && pending > 0) {
-        errors.push(
-          `产品画像云拉失败，本轮保守补种 ${dirty.length}/${pending} 条，请再点同步续传`
-        );
-      }
-      onProgress?.(
-        `同步中：上传产品画像 0/${dirty.length}${
-          pending > dirty.length ? `（共待传 ${pending}）` : ''
-        }…`
-      );
-      uploaded = await syncProductProfilesCloud(dirty);
-      if (!uploaded && dirty.length) {
-        for (const p of dirty) {
-          check();
-          if (await saveProductProfileCloud(p)) uploaded += 1;
-        }
-      }
-      if (pending > uploaded) {
-        errors.push(
-          `产品画像待传约 ${pending} 条，本轮已传 ${uploaded}，请再点同步续传`
-        );
-      }
-    }
-    report.profiles = {
-      local: localProfiles.length,
-      cloud: cloudProfiles.length,
-      merged: mergedProfiles.length || localProfiles.length,
-      uploaded,
-    };
-  } catch (e: any) {
-    errors.push(`产品画像：${e?.message || String(e)}`);
-  }
-
-  // —— CRM（历史/画像之后：云拉易卡，失败本轮不盲传全量）——
+  // —— CRM（历史之后立刻做：云端长期 0 时优先限额补种）——
   try {
     check();
     await pauseIfUserBusy(opts?.shouldAbort);
     onProgress?.('同步中：读取本机 CRM…');
     const localCrm = loadAllCrmClients();
     report.crm = { local: localCrm.length, cloud: 0, merged: localCrm.length, uploaded: 0 };
-    onProgress?.(`同步中：拉取云端 CRM（本机已有 ${localCrm.length}）…`);
+
+    let cloudMeta: { id: string; stamp: number }[] = [];
+    let cloudMetaOk = false;
+    try {
+      onProgress?.(`同步中：拉取云端 CRM 索引（本机已有 ${localCrm.length}）…`);
+      cloudMeta = await withTimeout(
+        listCrmClientsCloudMeta(),
+        CLOUD_META_TIMEOUT_MS,
+        'CRM 云端索引'
+      );
+      cloudMetaOk = true;
+      report.crm.cloud = cloudMeta.length;
+    } catch (e: any) {
+      errors.push(`CRM 云端索引：${e?.message || String(e)}`);
+    }
+
+    // 正文仅在索引显示云端有数据时再拉（用于合并下发）；云端 0 则直接上传
     let cloudCrm: Client[] = [];
     let cloudOk = false;
-    try {
-      cloudCrm = await withTimeout(
-        getCrmClients(),
-        CLOUD_PULL_TIMEOUT_MS,
-        'CRM 云端拉取'
-      );
-      cloudOk = true;
-    } catch (e: any) {
-      errors.push(`CRM 云端拉取：${e?.message || String(e)}`);
+    if (cloudMetaOk && cloudMeta.length > 0 && cloudMeta.length < localCrm.length + 500) {
+      try {
+        check();
+        onProgress?.(`同步中：拉取云端 CRM 正文（索引 ${cloudMeta.length}）…`);
+        cloudCrm = await withTimeout(getCrmClients(), CLOUD_PULL_TIMEOUT_MS, 'CRM 云端正文');
+        cloudOk = true;
+        report.crm.cloud = cloudCrm.length;
+      } catch (e: any) {
+        errors.push(`CRM 云端正文：${e?.message || String(e)}`);
+      }
     }
+
     check();
     await pauseIfUserBusy(opts?.shouldAbort);
-    onProgress?.(`同步中：合并 CRM（本机 ${localCrm.length} / 云 ${cloudCrm.length}）…`);
+    onProgress?.(
+      `同步中：合并 CRM（本机 ${localCrm.length} / 云索引 ${cloudMetaOk ? cloudMeta.length : '—'}）…`
+    );
     let mergedCrm = await mergeClientsByIdAsync(localCrm, cloudCrm, {
       shouldAbort: opts?.shouldAbort,
       onProgress,
@@ -817,51 +758,43 @@ const runSyncAllWorkspaceData = async (
         } catch {
           /* ignore */
         }
-        // 同步路径禁止删云端 CRM（delete 默认 source=user 会真删）
       }
     } catch (e) {
       console.warn('[workspace-sync] CRM domain dedupe skipped', e);
     }
     if (mergedCrm.length > 0) {
-      const cleared = reconcileCrmTombstonesWithLiveClients(mergedCrm);
-      if (cleared > 0) {
-        console.info(`[workspace-sync] cleared ${cleared} stale CRM tombstones after union merge`);
-      }
+      reconcileCrmTombstonesWithLiveClients(mergedCrm);
       saveAllCrmClients(mergedCrm);
     } else if (localCrm.length > 0) {
       errors.push('CRM：合并结果为空，已保留本机数据');
-    } else if (!cloudOk) {
-      errors.push('CRM：云端不可用且本机为空');
     }
+
     let uploaded = 0;
     if (doUpload && mergedCrm.length > 0) {
       check();
-      await pauseIfUserBusy(opts?.shouldAbort);
+      const cloudIds = new Set(cloudMeta.map((m) => m.id));
       const cloudById = new Map(cloudCrm.map((c) => [c.id, c]));
-      // 云拉失败时仍限额补种，否则 CRM 云端会永远 0
-      let dirty = !cloudOk
-        ? mergedCrm.slice()
-        : mergedCrm.filter((c) => {
+      let dirty = cloudMetaOk
+        ? mergedCrm.filter((c) => {
+            if (!c?.id) return false;
+            if (!cloudIds.has(c.id)) return true;
+            if (!cloudOk) return false;
             const prev = cloudById.get(c.id);
             if (!prev) return true;
             return clientStamp(c) > clientStamp(prev);
-          });
+          })
+        : mergedCrm.slice();
       dirty = dirty.slice().sort((a, b) => clientStamp(b) - clientStamp(a));
       const pendingCrm = dirty.length;
-      const cap = !cloudOk
-        ? Math.min(CRM_UPLOAD_CAP_PER_SYNC, 150)
-        : CRM_UPLOAD_CAP_PER_SYNC;
-      if (pendingCrm > cap) {
-        dirty = dirty.slice(0, cap);
+      if (pendingCrm > CRM_UPLOAD_CAP_PER_SYNC) {
+        dirty = dirty.slice(0, CRM_UPLOAD_CAP_PER_SYNC);
         errors.push(
-          `CRM 待传约 ${pendingCrm} 条，本轮限 ${cap} 条${
-            !cloudOk ? '（云拉失败，保守补种）' : ''
-          }，请再点同步续传`
+          `CRM 待传约 ${pendingCrm} 条，本轮限 ${CRM_UPLOAD_CAP_PER_SYNC} 条，请再点同步续传`
         );
       }
       if (dirty.length) {
         onProgress?.(
-          `同步中：上传 CRM 0/${dirty.length}${
+          `同步中：上传 CRM ${dirty.length} 条${
             pendingCrm > dirty.length ? `（共待传 ${pendingCrm}）` : ''
           }…`
         );
@@ -870,16 +803,122 @@ const runSyncAllWorkspaceData = async (
           check();
           await pauseIfUserBusy(opts?.shouldAbort);
         });
+      } else if (cloudMetaOk) {
+        onProgress?.(`同步中：CRM 无需上传（云端索引 ${cloudMeta.length}）…`);
       }
     }
     report.crm = {
       local: localCrm.length,
-      cloud: cloudCrm.length,
+      cloud: cloudMetaOk ? Math.max(cloudMeta.length, cloudCrm.length) : cloudCrm.length,
       merged: mergedCrm.length || localCrm.length,
       uploaded,
     };
   } catch (e: any) {
     errors.push(`CRM：${e?.message || String(e)}`);
+  }
+
+  // —— 产品画像（索引差量，禁止每轮全文 + 失败全量补种）——
+  try {
+    check();
+    await pauseIfUserBusy(opts?.shouldAbort);
+    onProgress?.('同步中：读取本机产品画像…');
+    const localProfiles = await loadProductCatalog();
+    report.profiles = {
+      local: localProfiles.length,
+      cloud: 0,
+      merged: localProfiles.length,
+      uploaded: 0,
+    };
+
+    let cloudMeta: { id: string; stamp: number }[] = [];
+    let cloudMetaOk = false;
+    try {
+      onProgress?.(`同步中：拉取云端画像索引（本机 ${localProfiles.length}）…`);
+      cloudMeta = await withTimeout(
+        listProductProfilesCloudMeta(),
+        CLOUD_META_TIMEOUT_MS,
+        '产品画像云端索引'
+      );
+      cloudMetaOk = true;
+      report.profiles.cloud = cloudMeta.length;
+    } catch (e: any) {
+      errors.push(`产品画像云端索引：${e?.message || String(e)}`);
+    }
+
+    const localById = new Map(
+      localProfiles.filter((p) => p?.id).map((p) => [p.id, p])
+    );
+    const cloudIds = new Set(cloudMeta.map((m) => m.id));
+    let downloaded = 0;
+    let cloudPartial: CustomerProductProfile[] = [];
+    if (cloudMetaOk) {
+      const missingLocal = cloudMeta
+        .filter((m) => m.id && !localById.has(m.id))
+        .sort((a, b) => (b.stamp || 0) - (a.stamp || 0))
+        .slice(0, PROFILE_UPLOAD_CAP_PER_SYNC)
+        .map((m) => m.id);
+      if (missingLocal.length) {
+        onProgress?.(`同步中：下载产品画像 0/${missingLocal.length}…`);
+        try {
+          cloudPartial = await getProductProfilesByLocalIds(missingLocal, {
+            shouldAbort: opts?.shouldAbort,
+            onProgress: (done, total) => {
+              onProgress?.(`同步中：下载产品画像 ${done}/${total}…`);
+              check();
+            },
+          });
+          downloaded = cloudPartial.length;
+        } catch (e: any) {
+          errors.push(`产品画像差量下载：${e?.message || String(e)}`);
+        }
+      }
+    }
+
+    const mergedProfiles = cloudPartial.length
+      ? mergeProfilesById(localProfiles, cloudPartial)
+      : localProfiles;
+    if (cloudPartial.length) await saveProductProfilesBulk(mergedProfiles);
+
+    let uploaded = 0;
+    if (doUpload && mergedProfiles.length) {
+      check();
+      const profileStamp = (p: CustomerProductProfile) =>
+        Math.max(Number((p as any).updatedAt) || 0, Number((p as any).createdAt) || 0, 0);
+      let dirty = cloudMetaOk
+        ? mergedProfiles.filter((p) => p?.id && !cloudIds.has(p.id))
+        : mergedProfiles.slice();
+      const pending = dirty.length;
+      dirty = dirty
+        .slice()
+        .sort((a, b) => profileStamp(b) - profileStamp(a))
+        .slice(0, PROFILE_UPLOAD_CAP_PER_SYNC);
+      if (dirty.length) {
+        onProgress?.(
+          `同步中：上传产品画像 ${dirty.length} 条${
+            pending > dirty.length ? `（共待传 ${pending}）` : ''
+          }…`
+        );
+        uploaded = await syncProductProfilesCloud(dirty);
+        if (pending > uploaded) {
+          errors.push(
+            `产品画像待传约 ${pending} 条，本轮已传 ${uploaded}，请再点同步续传`
+          );
+        }
+      } else if (cloudMetaOk) {
+        onProgress?.(`同步中：产品画像无需上传（云端索引 ${cloudMeta.length}）…`);
+      }
+    }
+    if (downloaded > 0) {
+      errors.push(`产品画像本轮从云端下载 ${downloaded} 条到本机`);
+    }
+    report.profiles = {
+      local: localProfiles.length,
+      cloud: cloudMetaOk ? cloudMeta.length : 0,
+      merged: mergedProfiles.length || localProfiles.length,
+      uploaded,
+    };
+  } catch (e: any) {
+    errors.push(`产品画像：${e?.message || String(e)}`);
   }
 
   // —— 背调作业队列（最后 + 限额：不再每轮刷几千条占满超时）——

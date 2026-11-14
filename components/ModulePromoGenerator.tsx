@@ -1060,8 +1060,9 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                   disabled={isAutomating || queueSyncing}
                   className="inline-flex items-center gap-1.5 bg-teal-50 border border-teal-200 text-teal-800 px-4 py-2 rounded-xl text-xs font-bold hover:bg-teal-100 disabled:opacity-50"
                   title={
-                    queueSyncStatus ||
-                    '同步 CRM、背调历史、产品画像、作业队列到云端；资料最全的电脑先点，其它端再点'
+                    queueSyncing
+                      ? '同步进行中，进度见下方完整状态条'
+                      : '同步 CRM、背调历史、产品画像、作业队列到云端；资料最全的电脑先点，其它端再点'
                   }
                 >
                   {queueSyncing ? (
@@ -1071,11 +1072,6 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
                   )}
                   {queueSyncing ? '同步中…' : '同步全部资料'}
                 </button>
-              )}
-              {queueSyncing && queueSyncStatus && (
-                <span className="text-[10px] font-bold text-teal-700 max-w-[14rem] truncate" title={queueSyncStatus}>
-                  {queueSyncStatus}
-                </span>
               )}
               <button
                 onClick={onRunPending}
@@ -1088,6 +1084,16 @@ export const ModulePromoGenerator: React.FC<ModulePromoGeneratorProps> = ({
               >
                 继续待处理任务
               </button>
+              {queueSyncing && queueSyncStatus ? (
+                <div className="w-full basis-full rounded-xl border border-teal-200 bg-teal-50/90 px-3 py-2.5 shadow-sm">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-teal-600 mb-0.5">
+                    云端同步进度
+                  </p>
+                  <p className="text-xs sm:text-sm font-semibold text-teal-950 leading-relaxed break-words whitespace-pre-wrap">
+                    {queueSyncStatus}
+                  </p>
+                </div>
+              ) : null}
             </div>
           </div>
 
