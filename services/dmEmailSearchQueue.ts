@@ -227,13 +227,16 @@ const pump = async () => {
           job.searchedAt = research.searchedAt;
           job.searchHistoryAppend = research.searchedAt;
           const foundEmails = (research.decisionMakers || []).filter((d) => d.emailGuess?.includes('@')).length;
-          if (foundEmails === 0 && (research.stats?.added || 0) + (research.stats?.upgraded || 0) === 0) {
+          if (research.stats?.transportError) {
+            job.error = research.stats.transportError;
+          } else if (foundEmails === 0 && (research.stats?.added || 0) + (research.stats?.upgraded || 0) === 0) {
+            // 前台不暴露供应商名；通道故障已在 transportError 单独提示
             job.error = keyStatus.anymail
-              ? 'Anymail 未返回联系人' +
+              ? '优选线索未返回联系人' +
                 (keyStatus.hunter
-                  ? `，Hunter 亦无新增（hunterFound=${research.stats?.hunterFound ?? 0}；额度用尽时会静默跳过）`
-                  : '（未配置 Hunter）')
-              : '仅配置了 Hunter，本次未找到联系人（额度用尽时会静默跳过）';
+                  ? `，补充渠道亦无新增（补充=${research.stats?.hunterFound ?? 0}；额度用尽时会跳过）`
+                  : '')
+              : '补充渠道本次未找到联系人（额度用尽时会跳过）';
           }
           notify();
 

@@ -848,6 +848,21 @@ const pickAnymailValidEmails = (data: any): string[] => {
   return [];
 };
 
+/** Vercel 代理崩溃时返回 HTML/纯文本，会被误当成「搜不到」 */
+const detectAnymailTransportFailure = (status: number, body: string): string | null => {
+  const t = String(body || '');
+  if (/FUNCTION_INVOCATION_FAILED|A server error has occurred/i.test(t)) {
+    return '邮箱检索通道故障（服务端函数未启动），请稍后重试或联系管理员';
+  }
+  if (status === 502 || status === 503 || status === 504) {
+    return `邮箱检索通道暂不可用（HTTP ${status}）`;
+  }
+  if (status === 401 || status === 403) {
+    return `邮箱检索鉴权失败（HTTP ${status}），请检查后台 API Key`;
+  }
+  return null;
+};
+
 type AnymailFindResult = {
   email: string;
   emailStatus: string;
@@ -1057,7 +1072,12 @@ const fetchAnymailCompanyEmails = async (
     emailType?: 'any' | 'personal' | 'generic';
     timeoutMs?: number;
   }
-): Promise<{ people: DecisionMaker[]; creditsCharged: number; emailStatus: string }> => {
+): Promise<{
+  people: DecisionMaker[];
+  creditsCharged: number;
+  emailStatus: string;
+  transportError?: string;
+}> => {
   const apiKey = getEmailSearchKeys().anymailFinder;
   const clean = cleanDomain(domain);
   const companyName = (opts?.companyName || '').trim();
@@ -1079,9 +1099,27 @@ const fetchAnymailCompanyEmails = async (
     if (!response.ok) {
       const errText = await response.text().catch(() => '');
       console.warn('Anymail company find HTTP', response.status, errText.slice(0, 200));
-      return { people: [], creditsCharged: 0, emailStatus: 'error' };
+      const transport = detectAnymailTransportFailure(response.status, errText);
+      return {
+        people: [],
+        creditsCharged: 0,
+        emailStatus: transport ? 'transport_error' : 'error',
+        transportError: transport || undefined,
+      };
     }
-    const data = await response.json();
+    const rawText = await response.text();
+    let data: any = {};
+    try {
+      data = JSON.parse(rawText);
+    } catch {
+      const transport = detectAnymailTransportFailure(response.status, rawText);
+      return {
+        people: [],
+        creditsCharged: 0,
+        emailStatus: transport ? 'transport_error' : 'error',
+        transportError: transport || '邮箱检索返回非 JSON',
+      };
+    }
     const creditsCharged = Number(data.credits_charged || 0);
     const emailStatus = String(data.email_status || 'not_found').toLowerCase();
     if (creditsCharged > 0) {
@@ -1120,7 +1158,15 @@ const fetchAnymailCompanyEmails = async (
     return { people, creditsCharged, emailStatus };
   } catch (e) {
     console.error('Anymail company find error', e);
-    return { people: [], creditsCharged: 0, emailStatus: 'error' };
+    const msg = String((e as any)?.message || e);
+    return {
+      people: [],
+      creditsCharged: 0,
+      emailStatus: 'error',
+      transportError: /Failed to fetch|NetworkError|超时|timeout|AbortError/i.test(msg)
+        ? `邮箱检索网络失败：${msg.slice(0, 120)}`
+        : undefined,
+    };
   }
 };
 
@@ -1476,6 +1522,8 @@ export type DecisionMakerResearchStats = {
   reFoundAfterInvalid: number;
   /** 本次实际被官方扣掉的积分（来自 credits_charged 累加） */
   creditsCharged: number;
+  /** 代理/上游硬故障（勿当成「库里没联系人」） */
+  transportError?: string;
 };
 
 export type DecisionMakerResearchResult = {
@@ -1621,6 +1669,9 @@ export const researchDecisionMakerEmails = async (opts: {
           emailType: 'any',
         });
         stats.creditsCharged += companyHit.creditsCharged || 0;
+        if (companyHit.transportError && !stats.transportError) {
+          stats.transportError = companyHit.transportError;
+        }
         let companyPeople = companyHit.people;
         if (companyPeople.length) {
           companyPeople = await enrichCompanyContactsWithWebIntel(

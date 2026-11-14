@@ -1,7 +1,7 @@
-import { applyStrictCors, handleCorsPreflight } from './_cors';
 /**
  * Vercel Serverless：同域转发 Anymail Finder
- * 【硬约束】禁止外部 import，避免 FUNCTION_INVOCATION_FAILED（与 tavily/landing 一致）。
+ * 【硬约束】禁止任何相对/绝对 import（Vercel 打包易漏文件 → FUNCTION_INVOCATION_FAILED）。
+ * CORS / 限流内联，与 api/qwen.ts、api/_cors.ts 保持同步。
  */
 export const config = {
   runtime: 'nodejs',
@@ -10,6 +10,53 @@ export const config = {
 
 const ORIGIN = 'https://api.anymailfinder.com';
 const UPSTREAM_TIMEOUT_MS = 170_000;
+
+const CORS_ALLOWED = new Set([
+  'https://babyworld.ltd',
+  'https://www.babyworld.ltd',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+]);
+
+const applyCors = (req: any, res: { setHeader: (k: string, v: string) => void }): boolean => {
+  const origin = String(req?.headers?.origin || '').trim().replace(/\/$/, '');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'content-type, authorization, x-goog-api-key, x-qwen-origin, x-upstream-authorization, x-upstream-path, apikey, x-industry-token'
+  );
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+  res.setHeader('Access-Control-Max-Age', '600');
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'no-store');
+  if (!origin) return true;
+  const extra = String(process.env.ALLOWED_ORIGINS || process.env.CORS_ALLOWED_ORIGINS || '')
+    .split(/[,;\s]+/)
+    .map((s) => s.trim().replace(/\/$/, ''))
+    .filter(Boolean);
+  if (CORS_ALLOWED.has(origin) || extra.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    return true;
+  }
+  if (process.env.CORS_ALLOW_VERCEL_PREVIEWS === '1' && /\.vercel\.app$/i.test(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    return true;
+  }
+  return false;
+};
+
+const handleCorsPreflight = (req: any, res: any): boolean => {
+  if (String(req.method || '').toUpperCase() !== 'OPTIONS') return false;
+  const ok = applyCors(req, res);
+  if (!ok) {
+    res.status(403).json({ ok: false, error: 'Origin not allowed' });
+    return true;
+  }
+  res.status(204).end();
+  return true;
+};
 
 const readBody = (req: { method?: string; body?: unknown }): string | undefined => {
   if (req.method === 'GET' || req.method === 'HEAD') return undefined;
@@ -51,7 +98,6 @@ const resolveUpstreamPath = (req: any): string => {
 const normalizeAnymailAuth = (auth: string): string =>
   String(auth).replace(/^Bearer\s+/i, '').trim();
 
-/** 本函数内轻量限流（禁止 import _firewall） */
 type Bucket = { count: number; resetAt: number };
 const buckets = new Map<string, Bucket>();
 const checkLocalRate = (key: string, max = 120): { ok: boolean; retryAfterSec: number } => {
@@ -91,7 +137,7 @@ const clientKey = (req: any): string => {
 export default async function handler(req: any, res: any) {
   try {
     if (handleCorsPreflight(req, res)) return;
-    applyStrictCors(req, res);
+    applyCors(req, res);
 
     const rl = checkLocalRate(clientKey(req), 120);
     if (!rl.ok) {
@@ -129,7 +175,7 @@ export default async function handler(req: any, res: any) {
       });
 
       const text = await upstream.text();
-      applyStrictCors(req, res);
+      applyCors(req, res);
       res.status(upstream.status);
       res.setHeader('X-Proxied-To', ORIGIN);
       res.setHeader('Cache-Control', 'no-store');
@@ -137,7 +183,7 @@ export default async function handler(req: any, res: any) {
       if (uct) res.setHeader('Content-Type', uct);
       res.send(text);
     } catch (e: any) {
-      applyStrictCors(req, res);
+      applyCors(req, res);
       const aborted = e?.name === 'AbortError' || /aborted|timeout/i.test(String(e?.message || e));
       res.status(aborted ? 504 : 502).json({
         error: aborted
@@ -149,10 +195,10 @@ export default async function handler(req: any, res: any) {
     }
   } catch (e: any) {
     try {
-      applyStrictCors(req, res);
+      applyCors(req, res);
       if (!res.headersSent) res.status(500).json({ error: e?.message || 'anymail proxy crashed' });
     } catch {
       /* ignore */
     }
   }
-};
+}

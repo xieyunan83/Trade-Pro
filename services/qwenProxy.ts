@@ -215,6 +215,8 @@ export function buildAnymailFetchHeaders(apiKey: string, targetUrl: string): Rec
   return {
     'Content-Type': 'application/json',
     Authorization: rawKey,
+    // 部分边缘节点会剥 Authorization；代理优先读此头
+    'X-Upstream-Authorization': rawKey,
   };
 }
 
