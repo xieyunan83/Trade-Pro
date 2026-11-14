@@ -305,10 +305,13 @@ const mergeTimeoutReport = (
   const pick = (
     a: WorkspaceSyncReport['crm'],
     b: WorkspaceSyncReport['crm']
-  ): WorkspaceSyncReport['crm'] => {
-    if (a.local || a.cloud || a.merged || a.uploaded) return { ...a };
-    return { ...b };
-  };
+  ): WorkspaceSyncReport['crm'] => ({
+    local: Math.max(a.local || 0, b.local || 0),
+    cloud: Math.max(a.cloud || 0, b.cloud || 0),
+    merged: Math.max(a.merged || 0, b.merged || 0),
+    // 上传以 live 为准（快照恒为 0）
+    uploaded: Math.max(a.uploaded || 0, b.uploaded || 0),
+  });
   return {
     ok: false,
     crm: pick(live.crm, localSnap.crm),
@@ -333,16 +336,16 @@ const yieldToUi = () =>
     setTimeout(resolve, 0);
   });
 
-/** 用户正在点选/打字时，同步必须停住；否则合并大库会把整页饿死 */
+/** 用户正在点选/打字时，同步略停；上限约 12s，禁止再空等到吃光整轮超时 */
 const pauseIfUserBusy = async (shouldAbort?: () => boolean) => {
   try {
     const { shouldDeferHeavyWork } = await import('./foregroundGuard');
     let spins = 0;
     while (shouldDeferHeavyWork()) {
       if (shouldAbort?.()) throw new Error('同步超时或已取消');
-      await sleep(280);
+      await sleep(200);
       spins += 1;
-      if (spins > 450) break;
+      if (spins > 60) break;
     }
   } catch (e: any) {
     if (/超时|取消/.test(String(e?.message || e))) throw e;
@@ -376,24 +379,33 @@ export const syncAllWorkspaceData = async (
     const live = emptyReport([]);
 
     // 必须用 race：网络卡在某一包时，仅靠 shouldAbort 解不开 await，界面会一直「同步中」
+    const finalize = async (partial: WorkspaceSyncReport, msg: string) => {
+      const snap = await snapshotLocalCounts();
+      return mergeTimeoutReport(partial, snap, msg);
+    };
+
     const work = (async (): Promise<WorkspaceSyncReport> => {
       try {
-        return await runSyncAllWorkspaceData({
+        const r = await runSyncAllWorkspaceData({
           upload: wantUpload,
           onProgress,
           shouldAbort: () => aborted,
           liveReport: live,
         });
+        // 超时后各阶段会 catch 继续跑完并「成功返回」空桶——必须再合并本机快照，否则弹窗全 0
+        if (aborted || r.errors.some((e) => /超时|取消/.test(e))) {
+          onProgress?.(timeoutMsg);
+          return finalize(cloneReport(live), timeoutMsg);
+        }
+        return r;
       } catch (e: any) {
         const msg = e?.message || String(e);
         if (aborted || /超时|取消/.test(msg)) {
           onProgress?.(timeoutMsg);
-          const snap = await snapshotLocalCounts();
-          return mergeTimeoutReport(live, snap, timeoutMsg);
+          return finalize(cloneReport(live), timeoutMsg);
         }
         onProgress?.(`同步中断：${msg}`);
-        const snap = await snapshotLocalCounts();
-        return mergeTimeoutReport(live, snap, msg);
+        return finalize(cloneReport(live), msg);
       }
     })();
 
@@ -401,9 +413,7 @@ export const syncAllWorkspaceData = async (
       window.setTimeout(() => {
         aborted = true;
         onProgress?.(timeoutMsg);
-        void snapshotLocalCounts().then((snap) => {
-          resolve(mergeTimeoutReport(cloneReport(live), snap, timeoutMsg));
-        });
+        void finalize(cloneReport(live), timeoutMsg).then(resolve);
       }, timeoutMs);
     });
 
@@ -450,113 +460,22 @@ const runSyncAllWorkspaceData = async (
     return report;
   }
 
-  // —— CRM ——
+  // 一进来先钉本机条数（CRM 同步读、作业内存快照），超时弹窗绝不靠猜
   try {
-    check();
-    await pauseIfUserBusy(opts?.shouldAbort);
-    onProgress?.('同步中：读取本机 CRM…');
-    const localCrm = loadAllCrmClients();
-    // 先记下本机条数，避免卡在云端拉取时超时弹窗全是 0
-    report.crm = { local: localCrm.length, cloud: 0, merged: localCrm.length, uploaded: 0 };
-    onProgress?.(`同步中：拉取云端 CRM（本机已有 ${localCrm.length}）…`);
-    let cloudCrm: Client[] = [];
-    let cloudOk = false;
-    try {
-      cloudCrm = await withTimeout(
-        getCrmClients(),
-        CLOUD_PULL_TIMEOUT_MS,
-        'CRM 云端拉取'
-      );
-      cloudOk = true;
-    } catch (e: any) {
-      errors.push(`CRM 云端拉取：${e?.message || String(e)}`);
-    }
-    check();
-    await pauseIfUserBusy(opts?.shouldAbort);
-    onProgress?.(`同步中：合并 CRM（本机 ${localCrm.length} / 云 ${cloudCrm.length}）…`);
-    let mergedCrm = await mergeClientsByIdAsync(localCrm, cloudCrm, {
-      shouldAbort: opts?.shouldAbort,
-      onProgress,
-    });
-    try {
-      const { mergeCrmClientsByDomain } = await import('../utils/crmHistory');
-      const domainMerged = mergeCrmClientsByDomain(mergedCrm);
-      if (domainMerged.removedCount > 0) {
-        console.info(
-          `[workspace-sync] CRM domain dedupe: groups=${domainMerged.mergedGroups} removed=${domainMerged.removedCount}`
-        );
-        mergedCrm = domainMerged.clients;
-        try {
-          const { remapEmailTaskClientIds } = await import('./emailCampaignStore');
-          remapEmailTaskClientIds(domainMerged.remaps);
-        } catch {
-          /* ignore */
-        }
-        const loserIds = Object.keys(domainMerged.remaps);
-        if (loserIds.length) {
-          const { deleteCrmClient } = await import('./supabase');
-          await Promise.all(loserIds.map((id) => deleteCrmClient(id).catch(() => false)));
-        }
-      }
-    } catch (e) {
-      console.warn('[workspace-sync] CRM domain dedupe skipped', e);
-    }
-    if (mergedCrm.length > 0) {
-      const cleared = reconcileCrmTombstonesWithLiveClients(mergedCrm);
-      if (cleared > 0) {
-        console.info(`[workspace-sync] cleared ${cleared} stale CRM tombstones after union merge`);
-      }
-      saveAllCrmClients(mergedCrm);
-    } else if (localCrm.length > 0) {
-      errors.push('CRM：合并结果为空，已保留本机数据');
-    } else if (!cloudOk) {
-      errors.push('CRM：云端不可用且本机为空');
-    }
-    let uploaded = 0;
-    if (doUpload && mergedCrm.length > 0) {
-      check();
-      await pauseIfUserBusy(opts?.shouldAbort);
-      // 仅上传相对云端更新过的，避免每次全量重传卡死
-      const cloudById = new Map(cloudCrm.map((c) => [c.id, c]));
-      let dirty = !cloudOk
-        ? mergedCrm.slice()
-        : mergedCrm.filter((c) => {
-            const prev = cloudById.get(c.id);
-            if (!prev) return true;
-            return clientStamp(c) > clientStamp(prev);
-          });
-      dirty = dirty
-        .slice()
-        .sort((a, b) => clientStamp(b) - clientStamp(a));
-      const pendingCrm = dirty.length;
-      if (pendingCrm > CRM_UPLOAD_CAP_PER_SYNC) {
-        dirty = dirty.slice(0, CRM_UPLOAD_CAP_PER_SYNC);
-        errors.push(
-          `CRM 待传约 ${pendingCrm} 条，本轮限 ${CRM_UPLOAD_CAP_PER_SYNC} 条，请再点同步续传`
-        );
-      }
-      onProgress?.(
-        `同步中：上传 CRM 0/${dirty.length}${
-          pendingCrm > dirty.length ? `（共待传 ${pendingCrm}）` : ''
-        }…`
-      );
-      uploaded = await uploadCrmChunked(dirty, async (done, total) => {
-        onProgress?.(`同步中：上传 CRM ${done}/${total}…`);
-        check();
-        await pauseIfUserBusy(opts?.shouldAbort);
-      });
-    }
-    report.crm = {
-      local: localCrm.length,
-      cloud: cloudCrm.length,
-      merged: mergedCrm.length || localCrm.length,
-      uploaded,
-    };
-  } catch (e: any) {
-    errors.push(`CRM：${e?.message || String(e)}`);
+    const localCrmN = loadAllCrmClients().length;
+    report.crm = { local: localCrmN, cloud: 0, merged: localCrmN, uploaded: 0 };
+  } catch {
+    /* ignore */
+  }
+  try {
+    const { getAutomationQueueSnapshot } = await import('./automationQueueStore');
+    const n = getAutomationQueueSnapshot().length;
+    report.automation = { local: n, cloud: 0, merged: n, uploaded: 0 };
+  } catch {
+    /* ignore */
   }
 
-  // —— 背调历史（优先于作业队列：避免队列吃光超时导致历史永远上传 0）——
+  // —— 背调历史（最先：CRM 云拉易卡死，历史必须抢到时间窗）——
   try {
     check();
     await pauseIfUserBusy(opts?.shouldAbort);
@@ -750,6 +669,106 @@ const runSyncAllWorkspaceData = async (
     };
   } catch (e: any) {
     errors.push(`产品画像：${e?.message || String(e)}`);
+  }
+
+  // —— CRM（历史/画像之后：云拉易卡，失败本轮不盲传全量）——
+  try {
+    check();
+    await pauseIfUserBusy(opts?.shouldAbort);
+    onProgress?.('同步中：读取本机 CRM…');
+    const localCrm = loadAllCrmClients();
+    report.crm = { local: localCrm.length, cloud: 0, merged: localCrm.length, uploaded: 0 };
+    onProgress?.(`同步中：拉取云端 CRM（本机已有 ${localCrm.length}）…`);
+    let cloudCrm: Client[] = [];
+    let cloudOk = false;
+    try {
+      cloudCrm = await withTimeout(
+        getCrmClients(),
+        CLOUD_PULL_TIMEOUT_MS,
+        'CRM 云端拉取'
+      );
+      cloudOk = true;
+    } catch (e: any) {
+      errors.push(`CRM 云端拉取：${e?.message || String(e)}`);
+    }
+    check();
+    await pauseIfUserBusy(opts?.shouldAbort);
+    onProgress?.(`同步中：合并 CRM（本机 ${localCrm.length} / 云 ${cloudCrm.length}）…`);
+    let mergedCrm = await mergeClientsByIdAsync(localCrm, cloudCrm, {
+      shouldAbort: opts?.shouldAbort,
+      onProgress,
+    });
+    try {
+      const { mergeCrmClientsByDomain } = await import('../utils/crmHistory');
+      const domainMerged = mergeCrmClientsByDomain(mergedCrm);
+      if (domainMerged.removedCount > 0) {
+        console.info(
+          `[workspace-sync] CRM domain dedupe: groups=${domainMerged.mergedGroups} removed=${domainMerged.removedCount}`
+        );
+        mergedCrm = domainMerged.clients;
+        try {
+          const { remapEmailTaskClientIds } = await import('./emailCampaignStore');
+          remapEmailTaskClientIds(domainMerged.remaps);
+        } catch {
+          /* ignore */
+        }
+        // 同步路径禁止删云端 CRM（delete 默认 source=user 会真删）
+      }
+    } catch (e) {
+      console.warn('[workspace-sync] CRM domain dedupe skipped', e);
+    }
+    if (mergedCrm.length > 0) {
+      const cleared = reconcileCrmTombstonesWithLiveClients(mergedCrm);
+      if (cleared > 0) {
+        console.info(`[workspace-sync] cleared ${cleared} stale CRM tombstones after union merge`);
+      }
+      saveAllCrmClients(mergedCrm);
+    } else if (localCrm.length > 0) {
+      errors.push('CRM：合并结果为空，已保留本机数据');
+    } else if (!cloudOk) {
+      errors.push('CRM：云端不可用且本机为空');
+    }
+    let uploaded = 0;
+    if (doUpload && mergedCrm.length > 0 && cloudOk) {
+      check();
+      await pauseIfUserBusy(opts?.shouldAbort);
+      const cloudById = new Map(cloudCrm.map((c) => [c.id, c]));
+      let dirty = mergedCrm.filter((c) => {
+        const prev = cloudById.get(c.id);
+        if (!prev) return true;
+        return clientStamp(c) > clientStamp(prev);
+      });
+      dirty = dirty.slice().sort((a, b) => clientStamp(b) - clientStamp(a));
+      const pendingCrm = dirty.length;
+      if (pendingCrm > CRM_UPLOAD_CAP_PER_SYNC) {
+        dirty = dirty.slice(0, CRM_UPLOAD_CAP_PER_SYNC);
+        errors.push(
+          `CRM 待传约 ${pendingCrm} 条，本轮限 ${CRM_UPLOAD_CAP_PER_SYNC} 条，请再点同步续传`
+        );
+      }
+      if (dirty.length) {
+        onProgress?.(
+          `同步中：上传 CRM 0/${dirty.length}${
+            pendingCrm > dirty.length ? `（共待传 ${pendingCrm}）` : ''
+          }…`
+        );
+        uploaded = await uploadCrmChunked(dirty, async (done, total) => {
+          onProgress?.(`同步中：上传 CRM ${done}/${total}…`);
+          check();
+          await pauseIfUserBusy(opts?.shouldAbort);
+        });
+      }
+    } else if (doUpload && !cloudOk && localCrm.length > 0) {
+      errors.push('CRM 云端不可用，本轮跳过 CRM 上传（已优先传历史/画像）；请网络恢复后再同步');
+    }
+    report.crm = {
+      local: localCrm.length,
+      cloud: cloudCrm.length,
+      merged: mergedCrm.length || localCrm.length,
+      uploaded,
+    };
+  } catch (e: any) {
+    errors.push(`CRM：${e?.message || String(e)}`);
   }
 
   // —— 背调作业队列（最后 + 限额：不再每轮刷几千条占满超时）——
