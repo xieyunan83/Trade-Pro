@@ -554,6 +554,39 @@ export const getInvestigationHistory = async (): Promise<HistoryItem[]> => {
   return rows.map((row) => row.report_data).filter(Boolean)
 }
 
+/**
+ * 按 local_id 批量拉背调正文（同步差量用）。
+ * 禁止为「对齐两端」每次全表拉 6000+ 大 JSON。
+ */
+export const getInvestigationHistoryByLocalIds = async (
+  localIds: string[],
+  opts?: { onProgress?: (done: number, total: number) => void; shouldAbort?: () => boolean }
+): Promise<HistoryItem[]> => {
+  if (!isSupabaseConfigured() || !localIds.length) return []
+  const ids = Array.from(new Set(localIds.map((x) => String(x || '').trim()).filter(Boolean)))
+  const client = getSupabaseClient()
+  const out: HistoryItem[] = []
+  const chunkSize = 40
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    if (opts?.shouldAbort?.()) break
+    const part = ids.slice(i, i + chunkSize)
+    const { data, error } = await client
+      .from('investigation_history')
+      .select('report_data')
+      .in('local_id', part)
+    if (error) {
+      console.error('按 id 拉取背调历史失败:', error)
+      throw new Error(error.message || String(error))
+    }
+    for (const row of data || []) {
+      const item = (row as { report_data?: HistoryItem }).report_data
+      if (item) out.push(item)
+    }
+    opts?.onProgress?.(Math.min(i + part.length, ids.length), ids.length)
+  }
+  return out
+}
+
 export const deleteInvestigationHistory = async (
   localId: string,
   opts?: { source?: CloudDeleteSource }
@@ -788,7 +821,7 @@ export const getCrmClients = async (): Promise<Client[]> => {
     getSupabaseClient(),
     'crm_clients',
     'client_data, updated_at',
-    { orderCol: 'updated_at', ascending: false }
+    { orderCol: 'updated_at', ascending: false, pageSize: 200 }
   )
   if (error) {
     console.error('获取 CRM 失败:', error)
@@ -899,7 +932,7 @@ export const getProductProfilesCloud = async (): Promise<CustomerProductProfile[
     getSupabaseClient(),
     'product_profiles',
     'profile_data, updated_at',
-    { orderCol: 'updated_at', ascending: false }
+    { orderCol: 'updated_at', ascending: false, pageSize: 150 }
   )
   if (error) {
     console.error('获取产品画像失败:', error)

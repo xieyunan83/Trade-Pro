@@ -7,7 +7,7 @@ import { getAutomationQueue, getHistory, saveHistoryBulk, saveProductProfilesBul
 import { loadProductCatalog } from './productCatalog';
 import {
   getCrmClients,
-  getInvestigationHistory,
+  getInvestigationHistoryByLocalIds,
   getProductProfilesCloud,
   getSupabaseClient,
   isSupabaseConfigured,
@@ -18,15 +18,17 @@ import {
 } from './supabase';
 
 /**
- * 单次同步上传上限：作业队列曾无上限会吃光 6 分钟，导致历史/画像永远「上传 0」。
- * 每轮限额 + 优先历史上传，多点几次即可传完。
+ * 单次同步上传/下载上限：禁止一次拉全表大 JSON（6000 条正文必超时）。
+ * 索引差量 + 每轮限额，多点几次即可对齐。
  */
-const CRM_UPLOAD_CAP_PER_SYNC = 400;
+const CRM_UPLOAD_CAP_PER_SYNC = 300;
 const HISTORY_UPLOAD_CAP_PER_SYNC = 150;
+const HISTORY_DOWNLOAD_CAP_PER_SYNC = 120;
 const PROFILE_UPLOAD_CAP_PER_SYNC = 200;
 const AUTOMATION_UPLOAD_CAP_PER_SYNC = 250;
-/** 单次云端拉取硬上限：避免 getCrmClients 等卡死吃光整次 6 分钟 */
-const CLOUD_PULL_TIMEOUT_MS = 45_000;
+/** 轻量索引 / 中等表拉取上限 */
+const CLOUD_PULL_TIMEOUT_MS = 60_000;
+const CLOUD_META_TIMEOUT_MS = 90_000;
 import { getCloudWorkspaceId } from './workspaceId';
 import { loadAllCrmClients, saveAllCrmClients } from '../utils/workspaceScope';
 import { reconcileCrmTombstonesWithLiveClients } from '../utils/crmTombstones';
@@ -475,7 +477,7 @@ const runSyncAllWorkspaceData = async (
     /* ignore */
   }
 
-  // —— 背调历史（最先：CRM 云拉易卡死，历史必须抢到时间窗）——
+  // —— 背调历史（最先：只走索引差量，禁止全表正文）——
   try {
     check();
     await pauseIfUserBusy(opts?.shouldAbort);
@@ -488,14 +490,13 @@ const runSyncAllWorkspaceData = async (
       uploaded: 0,
     };
 
-    // 1) 先拉轻量索引（不易超时）
     let cloudMeta: { id: string; stamp: number }[] = [];
     let cloudMetaOk = false;
     try {
       onProgress?.(`同步中：拉取云端背调索引（本机 ${localHist.length}）…`);
       cloudMeta = await withTimeout(
         listInvestigationHistoryCloudMeta(),
-        CLOUD_PULL_TIMEOUT_MS,
+        CLOUD_META_TIMEOUT_MS,
         '背调历史云端索引'
       );
       cloudMetaOk = true;
@@ -504,35 +505,57 @@ const runSyncAllWorkspaceData = async (
       errors.push(`背调历史云端索引：${e?.message || String(e)}`);
     }
 
-    // 2) 再尝试正文（小页）；失败也不清空本机
-    let cloudHist: HistoryItem[] = [];
-    let cloudHistOk = false;
-    try {
-      check();
-      onProgress?.('同步中：拉取云端背调正文（分页）…');
-      cloudHist = await withTimeout(
-        getInvestigationHistory(),
-        CLOUD_PULL_TIMEOUT_MS,
-        '背调历史云端正文'
-      );
-      cloudHistOk = true;
-      report.history.cloud = cloudHist.length;
-    } catch (e: any) {
-      errors.push(`背调历史云端拉取：${e?.message || String(e)}`);
+    const localById = new Map(localHist.filter((h) => h?.id).map((h) => [h.id, h]));
+    const cloudIds = new Set(cloudMeta.map((m) => m.id));
+
+    // 云有本无：按 id 限额下载（Mac 常见：云 6000+ / 本机更少）
+    let downloaded = 0;
+    let cloudPartial: HistoryItem[] = [];
+    if (cloudMetaOk) {
+      const missingLocal = cloudMeta
+        .filter((m) => m.id && !localById.has(m.id))
+        .sort((a, b) => (b.stamp || 0) - (a.stamp || 0));
+      const pendingDown = missingLocal.length;
+      const toFetch = missingLocal.slice(0, HISTORY_DOWNLOAD_CAP_PER_SYNC).map((m) => m.id);
+      if (toFetch.length) {
+        check();
+        onProgress?.(
+          `同步中：下载背调历史 0/${toFetch.length}${
+            pendingDown > toFetch.length ? `（云端多出约 ${pendingDown}）` : ''
+          }…`
+        );
+        try {
+          cloudPartial = await getInvestigationHistoryByLocalIds(toFetch, {
+            shouldAbort: opts?.shouldAbort,
+            onProgress: (done, total) => {
+              onProgress?.(`同步中：下载背调历史 ${done}/${total}…`);
+              check();
+            },
+          });
+          downloaded = cloudPartial.length;
+          if (pendingDown > downloaded) {
+            errors.push(
+              `背调历史云端多出约 ${pendingDown} 条，本轮已下载 ${downloaded}，请再点同步续传`
+            );
+          }
+        } catch (e: any) {
+          errors.push(`背调历史差量下载：${e?.message || String(e)}`);
+        }
+      }
     }
 
     check();
     await pauseIfUserBusy(opts?.shouldAbort);
-    const mergedHist = cloudHistOk
-      ? mergeHistoryById(localHist, cloudHist)
+    const mergedHist = cloudPartial.length
+      ? mergeHistoryById(localHist, cloudPartial)
       : localHist;
     await yieldToUi();
-    if (cloudHistOk && mergedHist.length > 0) {
+    if (cloudPartial.length && mergedHist.length > 0) {
       await pauseIfUserBusy(opts?.shouldAbort);
       await saveHistoryBulk(mergedHist);
     }
     onProgress?.(
-      `同步中：合并背调历史（本机 ${localHist.length} / 云 ${report.history.cloud}）…`
+      `同步中：合并背调历史（本机 ${localHist.length} / 云 ${report.history.cloud} / 本轮下载 ${downloaded}）…`
     );
 
     let uploaded = 0;
@@ -540,31 +563,15 @@ const runSyncAllWorkspaceData = async (
       check();
       await pauseIfUserBusy(opts?.shouldAbort);
       let dirty: HistoryItem[] = [];
-      let pending = 0;
-      if (cloudHistOk) {
-        const cloudById = new Map(cloudHist.map((h) => [h.id, h]));
-        dirty = mergedHist.filter((h) => {
-          const prev = cloudById.get(h.id);
-          if (!prev) return true;
-          return histStamp(h) > histStamp(prev);
-        });
-      } else if (cloudMetaOk) {
-        // 正文拉取失败：用索引判定缺哪些，只补缺的，禁止「失败就全量重传」
-        const cloudIds = new Set(cloudMeta.map((m) => m.id));
-        dirty = mergedHist.filter((h) => h.id && !cloudIds.has(h.id));
-        errors.push(
-          `背调历史正文拉取失败，本轮仅补传云端缺失的 ${dirty.length} 条（不全量重传）`
-        );
+      if (cloudMetaOk) {
+        // 索引无 updated_at：只补「云端没有的 id」，避免误全量重传
+        dirty = mergedHist.filter((h) => h?.id && !cloudIds.has(h.id));
       } else {
-        // 索引失败时仍按「云端 0」补传限额，避免永远传不上去
         dirty = mergedHist.slice();
-        errors.push(
-          '背调历史云端索引不可用，本轮按限额补传本机历史；请再点同步续传'
-        );
+        errors.push('背调历史云端索引不可用，本轮按限额补传本机历史；请再点同步续传');
       }
 
-      pending = dirty.length;
-      // 按时间新→旧，每轮限额，保证可续传
+      const pending = dirty.length;
       dirty = dirty
         .slice()
         .sort((a, b) => histStamp(b) - histStamp(a))
@@ -586,7 +593,12 @@ const runSyncAllWorkspaceData = async (
             `背调历史待传约 ${pending} 条，本轮已传 ${uploaded}，请再点同步续传`
           );
         }
+      } else if (cloudMetaOk && downloaded === 0) {
+        onProgress?.('同步中：背调历史无需上传（云端已覆盖本机 id）…');
       }
+    }
+    if (downloaded > 0) {
+      errors.push(`背调历史本轮从云端下载 ${downloaded} 条到本机`);
     }
     report.history = {
       local: localHist.length,
@@ -639,10 +651,18 @@ const runSyncAllWorkspaceData = async (
             return profileStamp(p) > profileStamp(prev);
           });
       const pending = dirty.length;
+      const profileCap = !cloudProfilesOk
+        ? Math.min(PROFILE_UPLOAD_CAP_PER_SYNC, 100)
+        : PROFILE_UPLOAD_CAP_PER_SYNC;
       dirty = dirty
         .slice()
         .sort((a, b) => profileStamp(b) - profileStamp(a))
-        .slice(0, PROFILE_UPLOAD_CAP_PER_SYNC);
+        .slice(0, profileCap);
+      if (!cloudProfilesOk && pending > 0) {
+        errors.push(
+          `产品画像云拉失败，本轮保守补种 ${dirty.length}/${pending} 条，请再点同步续传`
+        );
+      }
       onProgress?.(
         `同步中：上传产品画像 0/${dirty.length}${
           pending > dirty.length ? `（共待传 ${pending}）` : ''
@@ -729,21 +749,29 @@ const runSyncAllWorkspaceData = async (
       errors.push('CRM：云端不可用且本机为空');
     }
     let uploaded = 0;
-    if (doUpload && mergedCrm.length > 0 && cloudOk) {
+    if (doUpload && mergedCrm.length > 0) {
       check();
       await pauseIfUserBusy(opts?.shouldAbort);
       const cloudById = new Map(cloudCrm.map((c) => [c.id, c]));
-      let dirty = mergedCrm.filter((c) => {
-        const prev = cloudById.get(c.id);
-        if (!prev) return true;
-        return clientStamp(c) > clientStamp(prev);
-      });
+      // 云拉失败时仍限额补种，否则 CRM 云端会永远 0
+      let dirty = !cloudOk
+        ? mergedCrm.slice()
+        : mergedCrm.filter((c) => {
+            const prev = cloudById.get(c.id);
+            if (!prev) return true;
+            return clientStamp(c) > clientStamp(prev);
+          });
       dirty = dirty.slice().sort((a, b) => clientStamp(b) - clientStamp(a));
       const pendingCrm = dirty.length;
-      if (pendingCrm > CRM_UPLOAD_CAP_PER_SYNC) {
-        dirty = dirty.slice(0, CRM_UPLOAD_CAP_PER_SYNC);
+      const cap = !cloudOk
+        ? Math.min(CRM_UPLOAD_CAP_PER_SYNC, 150)
+        : CRM_UPLOAD_CAP_PER_SYNC;
+      if (pendingCrm > cap) {
+        dirty = dirty.slice(0, cap);
         errors.push(
-          `CRM 待传约 ${pendingCrm} 条，本轮限 ${CRM_UPLOAD_CAP_PER_SYNC} 条，请再点同步续传`
+          `CRM 待传约 ${pendingCrm} 条，本轮限 ${cap} 条${
+            !cloudOk ? '（云拉失败，保守补种）' : ''
+          }，请再点同步续传`
         );
       }
       if (dirty.length) {
@@ -758,8 +786,6 @@ const runSyncAllWorkspaceData = async (
           await pauseIfUserBusy(opts?.shouldAbort);
         });
       }
-    } else if (doUpload && !cloudOk && localCrm.length > 0) {
-      errors.push('CRM 云端不可用，本轮跳过 CRM 上传（已优先传历史/画像）；请网络恢复后再同步');
     }
     report.crm = {
       local: localCrm.length,
